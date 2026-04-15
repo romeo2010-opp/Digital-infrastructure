@@ -1,0 +1,660 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model audit_log {
+  id             BigInt         @id @default(autoincrement()) @db.UnsignedBigInt
+  station_id     BigInt         @db.UnsignedBigInt
+  actor_staff_id BigInt?        @db.UnsignedBigInt
+  action_type    String         @db.VarChar(64)
+  payload        String?        @db.LongText
+  created_at     DateTime       @default(now()) @db.Timestamp(3)
+  station_staff  station_staff? @relation(fields: [actor_staff_id], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "fk_audit_staff")
+  stations       stations       @relation(fields: [station_id], references: [id], onUpdate: Restrict, map: "fk_audit_station")
+
+  @@index([actor_staff_id], map: "fk_audit_staff")
+  @@index([station_id, action_type], map: "idx_audit_station_action")
+  @@index([station_id, created_at], map: "idx_audit_station_time")
+}
+
+model fuel_deliveries {
+  id                   BigInt         @id @default(autoincrement()) @db.UnsignedBigInt
+  station_id           BigInt         @db.UnsignedBigInt
+  tank_id              BigInt         @db.UnsignedBigInt
+  delivered_time       DateTime       @default(now()) @db.Timestamp(3)
+  litres               Decimal        @db.Decimal(12, 2)
+  supplier_name        String?        @db.VarChar(120)
+  reference_code       String?        @db.VarChar(64)
+  recorded_by_staff_id BigInt?        @db.UnsignedBigInt
+  note                 String?        @db.VarChar(255)
+  created_at           DateTime       @default(now()) @db.Timestamp(3)
+  station_staff        station_staff? @relation(fields: [recorded_by_staff_id], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "fk_del_staff")
+  stations             stations       @relation(fields: [station_id], references: [id], onUpdate: Restrict, map: "fk_del_station")
+  tanks                tanks          @relation(fields: [tank_id], references: [id], onUpdate: Restrict, map: "fk_del_tank")
+
+  @@index([recorded_by_staff_id], map: "fk_del_staff")
+  @@index([tank_id], map: "fk_del_tank")
+  @@index([station_id, tank_id, delivered_time], map: "idx_del_station_tank_time")
+}
+
+model fuel_types {
+  id            Int             @id @db.UnsignedTinyInt
+  code          String          @unique(map: "code") @db.VarChar(16)
+  name          String          @db.VarChar(32)
+  pump_nozzles  pump_nozzles[]
+  promotion_campaigns promotion_campaigns[]
+  pumps         pumps[]
+  queue_entries queue_entries[]
+  tanks         tanks[]
+  transactions  transactions[]
+}
+
+model incidents {
+  id                  BigInt             @id @default(autoincrement()) @db.UnsignedBigInt
+  station_id          BigInt             @db.UnsignedBigInt
+  public_id           String             @unique(map: "public_id") @db.Char(26)
+  severity            incidents_severity @default(LOW)
+  category            incidents_category @default(OTHER)
+  title               String             @db.VarChar(160)
+  description         String?            @db.Text
+  status              incidents_status   @default(OPEN)
+  created_by_staff_id BigInt?            @db.UnsignedBigInt
+  created_at          DateTime           @default(now()) @db.Timestamp(3)
+  updated_at          DateTime           @default(now()) @db.Timestamp(3)
+  station_staff       station_staff?     @relation(fields: [created_by_staff_id], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "fk_inc_staff")
+  stations            stations           @relation(fields: [station_id], references: [id], onUpdate: Restrict, map: "fk_inc_station")
+
+  @@index([created_by_staff_id], map: "fk_inc_staff")
+  @@index([station_id, status, created_at], map: "idx_inc_station_status_time")
+}
+
+model demand_anomaly_events {
+  id                 BigInt                             @id @default(autoincrement()) @db.UnsignedBigInt
+  station_id         BigInt                             @db.UnsignedBigInt
+  fuel_type          String                             @db.VarChar(16)
+  severity           demand_anomaly_events_severity
+  start_time         DateTime                           @db.Timestamp(3)
+  end_time           DateTime?                          @db.Timestamp(3)
+  current_velocity   Decimal                            @db.Decimal(14, 4)
+  expected_mean      Decimal                            @db.Decimal(14, 4)
+  expected_std       Decimal                            @db.Decimal(14, 4)
+  z_score            Decimal?                           @db.Decimal(14, 6)
+  ewma_value         Decimal?                           @db.Decimal(14, 6)
+  cusum_value        Decimal?                           @db.Decimal(14, 6)
+  rules_triggered_json String?                          @db.LongText
+  created_at         DateTime                           @default(now()) @db.Timestamp(3)
+  stations           stations                           @relation(fields: [station_id], references: [id], onUpdate: Restrict, map: "fk_demand_anomaly_station")
+
+  @@index([station_id, start_time], map: "idx_demand_anomaly_station_time")
+  @@index([station_id, fuel_type, end_time], map: "idx_demand_anomaly_station_open")
+}
+
+model inventory_readings {
+  id                   BigInt                          @id @default(autoincrement()) @db.UnsignedBigInt
+  station_id           BigInt                          @db.UnsignedBigInt
+  tank_id              BigInt                          @db.UnsignedBigInt
+  reading_type         inventory_readings_reading_type
+  reading_time         DateTime                        @default(now()) @db.Timestamp(3)
+  litres               Decimal                         @db.Decimal(12, 2)
+  recorded_by_staff_id BigInt?                         @db.UnsignedBigInt
+  note                 String?                         @db.VarChar(255)
+  created_at           DateTime                        @default(now()) @db.Timestamp(3)
+  station_staff        station_staff?                  @relation(fields: [recorded_by_staff_id], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "fk_inv_staff")
+  stations             stations                        @relation(fields: [station_id], references: [id], onUpdate: Restrict, map: "fk_inv_station")
+  tanks                tanks                           @relation(fields: [tank_id], references: [id], onUpdate: Restrict, map: "fk_inv_tank")
+
+  @@index([recorded_by_staff_id], map: "fk_inv_staff")
+  @@index([tank_id], map: "fk_inv_tank")
+  @@index([station_id, tank_id, reading_time], map: "idx_inv_station_tank_time")
+}
+
+model pump_dispense_events {
+  id          BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  station_id  BigInt    @db.UnsignedBigInt
+  pump_id     BigInt    @db.UnsignedBigInt
+  nozzle_id   BigInt?   @db.UnsignedBigInt
+  started_at  DateTime  @default(now()) @db.Timestamp(3)
+  ended_at    DateTime? @db.Timestamp(3)
+  litres      Decimal?  @db.Decimal(12, 3)
+  raw_payload String?   @db.LongText
+  created_at  DateTime  @default(now()) @db.Timestamp(3)
+  pump_nozzles pump_nozzles? @relation(fields: [nozzle_id], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "fk_pde_nozzle")
+  pumps       pumps     @relation(fields: [pump_id], references: [id], onUpdate: Restrict, map: "fk_pde_pump")
+  stations    stations  @relation(fields: [station_id], references: [id], onUpdate: Restrict, map: "fk_pde_station")
+
+  @@index([nozzle_id], map: "fk_pde_nozzle")
+  @@index([pump_id], map: "fk_pde_pump")
+  @@index([station_id, nozzle_id, started_at], map: "idx_pde_station_nozzle_time")
+  @@index([station_id, pump_id, started_at], map: "idx_pde_station_pump_time")
+}
+
+model pumps {
+  id                   BigInt                 @id @default(autoincrement()) @db.UnsignedBigInt
+  station_id           BigInt                 @db.UnsignedBigInt
+  public_id            String                 @unique(map: "public_id") @db.Char(26)
+  pump_number          Int                    @db.UnsignedInt
+  fuel_type_id         Int?                   @db.UnsignedTinyInt
+  tank_id              BigInt?                @db.UnsignedBigInt
+  status               pumps_status           @default(ACTIVE)
+  status_reason        String?                @db.VarChar(120)
+  is_active            Boolean                @default(true)
+  created_at           DateTime               @default(now()) @db.Timestamp(3)
+  updated_at           DateTime               @default(now()) @db.Timestamp(3)
+  pump_dispense_events pump_dispense_events[]
+  pump_nozzles         pump_nozzles[]
+  fuel_types           fuel_types?            @relation(fields: [fuel_type_id], references: [id], onUpdate: Restrict, map: "fk_pumps_fuel")
+  stations             stations               @relation(fields: [station_id], references: [id], onUpdate: Restrict, map: "fk_pumps_station")
+  tanks                tanks?                 @relation(fields: [tank_id], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "fk_pumps_tank")
+  transactions         transactions[]
+
+  @@unique([station_id, pump_number], map: "uq_station_pump_number")
+  @@index([fuel_type_id], map: "fk_pumps_fuel")
+  @@index([tank_id], map: "fk_pumps_tank")
+  @@index([station_id, status], map: "idx_pumps_station_status")
+}
+
+model pump_nozzles {
+  id                  BigInt                      @id @default(autoincrement()) @db.UnsignedBigInt
+  station_id          BigInt                      @db.UnsignedBigInt
+  pump_id             BigInt                      @db.UnsignedBigInt
+  public_id           String                      @unique(map: "public_id") @db.Char(26)
+  nozzle_number       String                      @db.VarChar(64)
+  side                String?                     @db.VarChar(8)
+  fuel_type_id        Int                         @db.UnsignedTinyInt
+  tank_id             BigInt?                     @db.UnsignedBigInt
+  status              pump_nozzles_status         @default(ACTIVE)
+  hardware_channel    String?                     @db.VarChar(64)
+  is_active           Boolean                     @default(true)
+  created_at          DateTime                    @default(now()) @db.Timestamp(3)
+  updated_at          DateTime                    @default(now()) @db.Timestamp(3)
+  fuel_types          fuel_types                  @relation(fields: [fuel_type_id], references: [id], onUpdate: Restrict, map: "fk_pump_nozzles_fuel")
+  pumps               pumps                       @relation(fields: [pump_id], references: [id], onUpdate: Restrict, map: "fk_pump_nozzles_pump")
+  stations            stations                    @relation(fields: [station_id], references: [id], onUpdate: Restrict, map: "fk_pump_nozzles_station")
+  tanks               tanks?                      @relation(fields: [tank_id], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "fk_pump_nozzles_tank")
+  pump_dispense_events pump_dispense_events[]
+  transactions        transactions[]
+
+  @@unique([station_id, pump_id, nozzle_number], map: "uq_pump_nozzle_number")
+  @@index([fuel_type_id], map: "fk_pump_nozzles_fuel")
+  @@index([pump_id], map: "fk_pump_nozzles_pump")
+  @@index([station_id, fuel_type_id], map: "idx_pump_nozzles_station_fuel")
+  @@index([station_id, pump_id, status], map: "idx_pump_nozzles_station_pump_status")
+  @@index([tank_id], map: "idx_pump_nozzles_tank")
+}
+
+model queue_entries {
+  id               BigInt               @id @default(autoincrement()) @db.UnsignedBigInt
+  station_id       BigInt               @db.UnsignedBigInt
+  public_id        String               @unique(map: "public_id") @db.Char(26)
+  user_id          BigInt?              @db.UnsignedBigInt
+  masked_plate     String?              @db.VarChar(32)
+  fuel_type_id     Int                  @db.UnsignedTinyInt
+  position         Int                  @db.UnsignedInt
+  status           queue_entries_status @default(WAITING)
+  joined_at        DateTime             @default(now()) @db.Timestamp(3)
+  called_at        DateTime?            @db.Timestamp(3)
+  grace_expires_at DateTime?            @db.Timestamp(3)
+  served_at        DateTime?            @db.Timestamp(3)
+  cancelled_at     DateTime?            @db.Timestamp(3)
+  last_moved_at    DateTime?            @db.Timestamp(3)
+  metadata         String?              @db.LongText
+  fuel_types       fuel_types           @relation(fields: [fuel_type_id], references: [id], onUpdate: Restrict, map: "fk_queue_fuel")
+  stations         stations             @relation(fields: [station_id], references: [id], onUpdate: Restrict, map: "fk_queue_station")
+  users            users?               @relation(fields: [user_id], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "fk_queue_user")
+  transactions     transactions[]
+
+  @@index([fuel_type_id], map: "fk_queue_fuel")
+  @@index([user_id], map: "fk_queue_user")
+  @@index([station_id, joined_at], map: "idx_queue_station_joined")
+  @@index([station_id, status, position], map: "idx_queue_station_status_pos")
+}
+
+model report_notes {
+  id                  BigInt         @id @default(autoincrement()) @db.UnsignedBigInt
+  station_id          BigInt         @db.UnsignedBigInt
+  note_date           DateTime       @db.Date
+  note_text           String         @db.Text
+  created_by_staff_id BigInt?        @db.UnsignedBigInt
+  created_at          DateTime       @default(now()) @db.Timestamp(3)
+  station_staff       station_staff? @relation(fields: [created_by_staff_id], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "fk_notes_staff")
+  stations            stations       @relation(fields: [station_id], references: [id], onUpdate: Restrict, map: "fk_notes_station")
+
+  @@unique([station_id, note_date], map: "uq_notes_station_date")
+  @@index([created_by_staff_id], map: "fk_notes_staff")
+}
+
+model staff_roles {
+  id            Int             @id @db.UnsignedTinyInt
+  code          String          @unique(map: "code") @db.VarChar(16)
+  name          String          @db.VarChar(32)
+  auth_sessions auth_sessions[]
+  station_staff station_staff[]
+}
+
+model station_queue_settings {
+  station_id       BigInt                               @id @db.UnsignedBigInt
+  is_queue_enabled Boolean                              @default(true)
+  grace_minutes    Int                                  @default(10) @db.UnsignedSmallInt
+  capacity         Int                                  @default(100) @db.UnsignedInt
+  joins_paused     Boolean                              @default(false)
+  priority_mode    station_queue_settings_priority_mode @default(ON)
+  hybrid_queue_n   Int                                  @default(2) @db.UnsignedSmallInt
+  hybrid_walkin_n  Int                                  @default(1) @db.UnsignedSmallInt
+  petrol_enabled   Boolean                              @default(true)
+  diesel_enabled   Boolean                              @default(true)
+  updated_at       DateTime                             @default(now()) @db.Timestamp(3)
+  stations         stations                             @relation(fields: [station_id], references: [id], onUpdate: Restrict, map: "fk_queue_settings_station")
+}
+
+model station_staff {
+  id                 BigInt               @id @default(autoincrement()) @db.UnsignedBigInt
+  station_id         BigInt               @db.UnsignedBigInt
+  user_id            BigInt               @db.UnsignedBigInt
+  role_id            Int                  @db.UnsignedTinyInt
+  is_active          Boolean              @default(true)
+  created_at         DateTime             @default(now()) @db.Timestamp(3)
+  updated_at         DateTime             @default(now()) @db.Timestamp(3)
+  audit_log          audit_log[]
+  fuel_deliveries    fuel_deliveries[]
+  incidents          incidents[]
+  inventory_readings inventory_readings[]
+  report_notes       report_notes[]
+  staff_roles        staff_roles          @relation(fields: [role_id], references: [id], onUpdate: Restrict, map: "fk_staff_role")
+  stations           stations             @relation(fields: [station_id], references: [id], onUpdate: Restrict, map: "fk_staff_station")
+  users              users                @relation(fields: [user_id], references: [id], onUpdate: Restrict, map: "fk_staff_user")
+  transactions       transactions[]
+
+  @@unique([station_id, user_id], map: "uq_station_staff")
+  @@index([role_id], map: "fk_staff_role")
+  @@index([user_id], map: "fk_staff_user")
+  @@index([station_id, role_id], map: "idx_station_staff_station_role")
+}
+
+model stations {
+  id                     BigInt                  @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id              String                  @unique(map: "public_id") @db.Char(26)
+  name                   String                  @db.VarChar(120)
+  operator_name          String?                 @db.VarChar(120)
+  country_code           String?                 @db.Char(2)
+  city                   String?                 @db.VarChar(80)
+  address                String?                 @db.VarChar(255)
+  timezone               String                  @default("Africa/Blantyre") @db.VarChar(64)
+  is_active              Boolean                 @default(true)
+  created_at             DateTime                @default(now()) @db.Timestamp(3)
+  updated_at             DateTime                @default(now()) @db.Timestamp(3)
+  audit_log              audit_log[]
+  auth_sessions          auth_sessions[]
+  fuel_deliveries        fuel_deliveries[]
+  incidents              incidents[]
+  inventory_readings     inventory_readings[]
+  pump_dispense_events   pump_dispense_events[]
+  pump_nozzles           pump_nozzles[]
+  promotion_campaigns    promotion_campaigns[]
+  pumps                  pumps[]
+  demand_anomaly_events  demand_anomaly_events[]
+  queue_entries          queue_entries[]
+  report_notes           report_notes[]
+  station_queue_settings station_queue_settings?
+  station_staff          station_staff[]
+  tanks                  tanks[]
+  transactions           transactions[]
+
+  @@index([is_active], map: "idx_stations_active")
+}
+
+model tanks {
+  id                 BigInt               @id @default(autoincrement()) @db.UnsignedBigInt
+  station_id         BigInt               @db.UnsignedBigInt
+  public_id          String               @unique(map: "public_id") @db.Char(26)
+  fuel_type_id       Int                  @db.UnsignedTinyInt
+  name               String               @db.VarChar(80)
+  capacity_litres    Decimal?             @db.Decimal(12, 2)
+  is_active          Boolean              @default(true)
+  created_at         DateTime             @default(now()) @db.Timestamp(3)
+  updated_at         DateTime             @default(now()) @db.Timestamp(3)
+  fuel_deliveries    fuel_deliveries[]
+  inventory_readings inventory_readings[]
+  pump_nozzles       pump_nozzles[]
+  pumps              pumps[]
+  fuel_types         fuel_types           @relation(fields: [fuel_type_id], references: [id], onUpdate: Restrict, map: "fk_tanks_fuel")
+  stations           stations             @relation(fields: [station_id], references: [id], onUpdate: Restrict, map: "fk_tanks_station")
+
+  @@index([fuel_type_id], map: "fk_tanks_fuel")
+  @@index([station_id, fuel_type_id], map: "idx_tanks_station_fuel")
+}
+
+model transactions {
+  id                   BigInt                      @id @default(autoincrement()) @db.UnsignedBigInt
+  station_id           BigInt                      @db.UnsignedBigInt
+  public_id            String                      @unique(map: "public_id") @db.Char(26)
+  pump_id              BigInt?                     @db.UnsignedBigInt
+  nozzle_id            BigInt?                     @db.UnsignedBigInt
+  user_id              BigInt?                     @db.UnsignedBigInt
+  reservation_public_id String?                    @db.VarChar(64)
+  payment_reference    String?                     @db.VarChar(128)
+  fuel_type_id         Int                         @db.UnsignedTinyInt
+  occurred_at          DateTime                    @default(now()) @db.Timestamp(3)
+  litres               Decimal                     @db.Decimal(12, 3)
+  price_per_litre      Decimal                     @db.Decimal(12, 4)
+  base_price_per_litre Decimal?                    @db.Decimal(14, 4)
+  total_amount         Decimal                     @db.Decimal(14, 2)
+  requested_litres     Decimal?                    @db.Decimal(12, 3)
+  subtotal             Decimal?                    @db.Decimal(14, 2)
+  total_direct_discount Decimal                    @default(0) @db.Decimal(14, 2)
+  station_discount_total Decimal                   @default(0) @db.Decimal(14, 2)
+  smartlink_discount_total Decimal                 @default(0) @db.Decimal(14, 2)
+  cashback_total       Decimal                     @default(0) @db.Decimal(14, 2)
+  final_amount_paid    Decimal?                    @db.Decimal(14, 2)
+  effective_price_per_litre Decimal?               @db.Decimal(14, 4)
+  promo_labels_applied String?                     @db.LongText
+  pricing_snapshot_json String?                    @db.LongText
+  receipt_verification_ref String?                 @db.VarChar(96)
+  cashback_status      promotion_cashback_status   @default(NONE)
+  cashback_destination promotion_cashback_destination @default(NONE)
+  cashback_credited_at DateTime?                   @db.Timestamp(3)
+  payment_method       transactions_payment_method @default(CASH)
+  recorded_by_staff_id BigInt?                     @db.UnsignedBigInt
+  queue_entry_id       BigInt?                     @db.UnsignedBigInt
+  note                 String?                     @db.VarChar(255)
+  status               transactions_status         @default(RECORDED)
+  settlement_impact_status transactions_settlement_impact_status @default(UNCHANGED)
+  workflow_reason_code String?                     @db.VarChar(64)
+  workflow_note        String?                     @db.Text
+  status_updated_at    DateTime?                   @db.Timestamp(3)
+  status_updated_by_role_code String?              @db.VarChar(64)
+  cancelled_at         DateTime?                   @db.Timestamp(3)
+  created_at           DateTime                    @default(now()) @db.Timestamp(3)
+  fuel_types           fuel_types                  @relation(fields: [fuel_type_id], references: [id], onUpdate: Restrict, map: "fk_tx_fuel")
+  pump_nozzles         pump_nozzles?               @relation(fields: [nozzle_id], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "fk_tx_nozzle")
+  pumps                pumps?                      @relation(fields: [pump_id], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "fk_tx_pump")
+  queue_entries        queue_entries?              @relation(fields: [queue_entry_id], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "fk_tx_queue")
+  station_staff        station_staff?              @relation(fields: [recorded_by_staff_id], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "fk_tx_staff")
+  stations             stations                    @relation(fields: [station_id], references: [id], onUpdate: Restrict, map: "fk_tx_station")
+  users                users?                      @relation(fields: [user_id], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "fk_tx_user")
+  promotion_redemptions promotion_redemptions[]
+
+  @@index([fuel_type_id], map: "fk_tx_fuel")
+  @@index([nozzle_id], map: "fk_tx_nozzle")
+  @@index([payment_reference], map: "idx_tx_payment_reference")
+  @@index([pump_id], map: "fk_tx_pump")
+  @@index([queue_entry_id], map: "fk_tx_queue")
+  @@index([recorded_by_staff_id], map: "fk_tx_staff")
+  @@index([receipt_verification_ref], map: "idx_tx_receipt_verification_ref")
+  @@index([user_id], map: "fk_tx_user")
+  @@index([reservation_public_id], map: "idx_tx_reservation_public_id")
+  @@index([station_id, nozzle_id, occurred_at], map: "idx_tx_station_nozzle_time")
+  @@index([station_id, fuel_type_id, occurred_at], map: "idx_tx_station_fuel_time")
+  @@index([station_id, occurred_at], map: "idx_tx_station_time")
+  @@index([user_id, occurred_at], map: "idx_tx_user_time")
+}
+
+model users {
+  id            BigInt          @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id     String          @unique(map: "public_id") @db.Char(26)
+  full_name     String?         @db.VarChar(120)
+  phone_e164    String?         @unique(map: "phone_e164") @db.VarChar(20)
+  email         String?         @unique(map: "email") @db.VarChar(160)
+  password_hash String?         @db.VarChar(255)
+  is_active     Boolean         @default(true)
+  created_at    DateTime        @default(now()) @db.Timestamp(3)
+  updated_at    DateTime        @default(now()) @db.Timestamp(3)
+  auth_sessions auth_sessions[]
+  created_promotion_campaigns promotion_campaigns[] @relation("promotion_campaigns_created_by")
+  promotion_redemptions promotion_redemptions[]
+  queue_entries queue_entries[]
+  station_staff station_staff[]
+  transactions  transactions[]
+}
+
+model promotion_campaigns {
+  id                    BigInt                           @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id             String                           @unique(map: "public_id") @db.Char(26)
+  station_id            BigInt                           @db.UnsignedBigInt
+  name                  String                           @db.VarChar(120)
+  description           String?                          @db.VarChar(500)
+  campaign_label        String                           @db.VarChar(120)
+  promotion_kind        promotion_campaigns_promotion_kind @default(DISCOUNT)
+  fuel_type_id          Int?                             @db.UnsignedTinyInt
+  funding_source        promotion_campaigns_funding_source @default(STATION)
+  station_share_pct     Decimal                          @default(100.0000) @db.Decimal(7, 4)
+  smartlink_share_pct   Decimal                          @default(0.0000) @db.Decimal(7, 4)
+  discount_mode         promotion_campaigns_discount_mode?
+  discount_value        Decimal?                         @db.Decimal(14, 4)
+  cashback_mode         promotion_campaigns_cashback_mode?
+  cashback_value        Decimal?                         @db.Decimal(14, 4)
+  cashback_destination  promotion_cashback_destination   @default(WALLET)
+  flash_price_per_litre Decimal?                         @db.Decimal(14, 4)
+  starts_at             DateTime                         @db.Timestamp(3)
+  ends_at               DateTime                         @db.Timestamp(3)
+  is_active             Boolean                          @default(true)
+  status                promotion_campaigns_status       @default(DRAFT)
+  max_redemptions       Int?                             @db.UnsignedInt
+  max_litres            Decimal?                         @db.Decimal(14, 3)
+  redeemed_count        Int                              @default(0) @db.UnsignedInt
+  redeemed_litres       Decimal                          @default(0.000) @db.Decimal(14, 3)
+  eligibility_rules_json String?                        @db.LongText
+  created_by_user_id    BigInt?                          @db.UnsignedBigInt
+  created_at            DateTime                         @default(now()) @db.Timestamp(3)
+  updated_at            DateTime                         @default(now()) @db.Timestamp(3)
+  fuel_types            fuel_types?                      @relation(fields: [fuel_type_id], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "fk_promotion_campaigns_fuel")
+  stations              stations                         @relation(fields: [station_id], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "fk_promotion_campaigns_station")
+  users                 users?                           @relation("promotion_campaigns_created_by", fields: [created_by_user_id], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "fk_promotion_campaigns_created_by")
+  promotion_redemptions promotion_redemptions[]
+
+  @@index([created_by_user_id], map: "fk_promotion_campaigns_created_by")
+  @@index([fuel_type_id], map: "fk_promotion_campaigns_fuel")
+  @@index([station_id, fuel_type_id, status], map: "idx_promotion_campaigns_station_fuel")
+  @@index([station_id, status, is_active], map: "idx_promotion_campaigns_station_status")
+  @@index([station_id, starts_at, ends_at], map: "idx_promotion_campaigns_station_time")
+}
+
+model promotion_redemptions {
+  id                     BigInt                         @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id              String                         @unique(map: "public_id") @db.Char(26)
+  transaction_id         BigInt                         @db.UnsignedBigInt
+  campaign_id            BigInt                         @db.UnsignedBigInt
+  user_id                BigInt?                        @db.UnsignedBigInt
+  litres_covered         Decimal                        @default(0.000) @db.Decimal(14, 3)
+  direct_discount_amount Decimal                        @default(0.00) @db.Decimal(14, 2)
+  cashback_amount        Decimal                        @default(0.00) @db.Decimal(14, 2)
+  station_funded_amount  Decimal                        @default(0.00) @db.Decimal(14, 2)
+  smartlink_funded_amount Decimal                       @default(0.00) @db.Decimal(14, 2)
+  cashback_status        promotion_cashback_status      @default(NONE)
+  cashback_destination   promotion_cashback_destination @default(NONE)
+  cashback_credited_at   DateTime?                      @db.Timestamp(3)
+  snapshot_json          String?                        @db.LongText
+  created_at             DateTime                       @default(now()) @db.Timestamp(3)
+  promotion_campaigns    promotion_campaigns            @relation(fields: [campaign_id], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "fk_promotion_redemptions_campaign")
+  transactions           transactions                   @relation(fields: [transaction_id], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "fk_promotion_redemptions_transaction")
+  users                  users?                         @relation(fields: [user_id], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "fk_promotion_redemptions_user")
+
+  @@index([campaign_id, created_at], map: "idx_promotion_redemptions_campaign")
+  @@index([transaction_id, created_at], map: "idx_promotion_redemptions_transaction")
+  @@index([user_id, created_at], map: "idx_promotion_redemptions_user")
+}
+
+model auth_sessions {
+  id                 BigInt       @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id          String       @unique(map: "public_id") @db.Char(26)
+  user_id            BigInt       @db.UnsignedBigInt
+  station_id         BigInt?      @db.UnsignedBigInt
+  role_id            Int?         @db.UnsignedTinyInt
+  refresh_token_hash String       @db.VarChar(255)
+  user_agent         String?      @db.VarChar(255)
+  ip_address         String?      @db.VarChar(64)
+  revoked_at         DateTime?
+  expires_at         DateTime
+  created_at         DateTime     @default(now()) @db.Timestamp(3)
+  updated_at         DateTime     @default(now()) @db.Timestamp(3)
+  staff_roles        staff_roles? @relation(fields: [role_id], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "fk_auth_sessions_role")
+  stations           stations?    @relation(fields: [station_id], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "fk_auth_sessions_station")
+  users              users        @relation(fields: [user_id], references: [id], onUpdate: Restrict, map: "fk_auth_sessions_user")
+
+  @@index([role_id], map: "fk_auth_sessions_role")
+  @@index([station_id], map: "fk_auth_sessions_station")
+  @@index([expires_at], map: "idx_auth_sessions_expires")
+  @@index([user_id], map: "idx_auth_sessions_user")
+}
+
+model IngestedEvent {
+  id          String   @id @default(cuid())
+  eventId     String   @unique @map("event_id")
+  stationId   String   @map("station_id")
+  deviceId    String   @map("device_id")
+  actorUserId String   @map("actor_user_id")
+  type        String
+  payload     Json
+  occurredAt  DateTime @map("occurred_at")
+  receivedAt  DateTime @default(now()) @map("received_at")
+
+  @@map("ingested_events")
+}
+
+model SupportTicket {
+  id            String   @id @default(cuid())
+  stationId     String   @map("station_id")
+  userId        String   @map("user_id")
+  category      String
+  severity      String
+  title         String
+  description   String
+  screenshotUrl String?  @map("screenshot_url")
+  status        String   @default("OPEN")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  @@index([stationId, createdAt], map: "idx_support_station_created")
+  @@index([status], map: "idx_support_status")
+  @@map("support_tickets")
+}
+
+enum incidents_severity {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum inventory_readings_reading_type {
+  OPENING
+  CLOSING
+}
+
+enum incidents_category {
+  VARIANCE
+  PUMP
+  QUEUE
+  PAYMENT
+  OTHER
+}
+
+enum station_queue_settings_priority_mode {
+  OFF
+  ON
+  HYBRID
+}
+
+enum pumps_status {
+  ACTIVE
+  PAUSED
+  OFFLINE
+}
+
+enum pump_nozzles_status {
+  ACTIVE
+  PAUSED
+  OFFLINE
+  DISPENSING
+}
+
+enum incidents_status {
+  OPEN
+  RESOLVED
+  DISMISSED
+}
+
+enum queue_entries_status {
+  WAITING
+  CALLED
+  LATE
+  NO_SHOW
+  SERVED
+  CANCELLED
+}
+
+enum transactions_payment_method {
+  CASH
+  MOBILE_MONEY
+  CARD
+  OTHER
+  SMARTPAY
+}
+
+enum transactions_status {
+  RECORDED
+  UNDER_REVIEW
+  FROZEN
+  CANCELLED
+  REVERSED
+}
+
+enum transactions_settlement_impact_status {
+  UNCHANGED
+  ADJUSTED
+  REVERSED
+}
+
+enum promotion_campaigns_promotion_kind {
+  DISCOUNT
+  FLASH_PRICE
+  CASHBACK
+}
+
+enum promotion_campaigns_funding_source {
+  STATION
+  SMARTLINK
+  SHARED
+}
+
+enum promotion_campaigns_discount_mode {
+  PERCENTAGE_PER_LITRE
+  FIXED_PER_LITRE
+  FIXED_BASKET
+  FLASH_PRICE_PER_LITRE
+}
+
+enum promotion_campaigns_cashback_mode {
+  PERCENTAGE
+  FIXED_AMOUNT
+}
+
+enum promotion_campaigns_status {
+  DRAFT
+  ACTIVE
+  INACTIVE
+  EXPIRED
+  ARCHIVED
+}
+
+enum promotion_cashback_status {
+  NONE
+  EARNED
+  CREDITED
+  PENDING_LOYALTY
+  FAILED
+}
+
+enum promotion_cashback_destination {
+  WALLET
+  LOYALTY
+  NONE
+}
+
+enum demand_anomaly_events_severity {
+  WARNING
+  CRITICAL
+}

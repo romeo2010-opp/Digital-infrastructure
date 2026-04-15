@@ -1,0 +1,16 @@
+export const navigationItems = [
+  { key: "overview", label: "Overview", path: "/", icon: "overview", section: "Command Center" },
+  { key: "chat", label: "Team Chat", path: "/team-chat", icon: "chat", section: "Command Center" },
+  { key: "networkOperations", label: "Network Operations", path: "/network-operations", icon: "network", section: "Operations" },
+  { key: "stations", label: "Stations", path: "/stations", icon: "stations", section: "Operations" },
+  { key: "stationOnboarding", label: "Onboarding", path: "/station-onboarding", icon: "onboarding", section: "Operations" },
+  { key: "fieldOperations", label: "Field Operations", path: "/field-operations", icon: "field", section: "Operations" },
+  { key: "support", label: "Support & Disputes", path: "/support-disputes", icon: "support", section: "Oversight" },
+  { key: "finance", label: "Finance & Settlements", path: "/finance-settlements", icon: "finance", section: "Oversight" },
+  { key: "risk", label: "Risk & Compliance", path: "/risk-compliance", icon: "risk", section: "Oversight" },
+  { key: "walletOperations", label: "Wallet Operations", path: "/wallet-operations", icon: "finance", section: "Oversight" },
+  { key: "analytics", label: "Analytics & Forecasting", path: "/analytics-forecasting", icon: "analytics", section: "Intelligence" },
+  { key: "audit", label: "Audit Logs", path: "/audit-logs", icon: "audit", section: "Governance" },
+  { key: "staff", label: "Internal Staff", path: "/internal-staff", icon: "staff", section: "Governance" },
+  { key: "systemHealth", label: "System Health", path: "/system-health", icon: "health", section: "Governance" },
+]

@@ -1,0 +1,84 @@
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+#root.home-no-overflow {
+  height: 100dvh;
+  overflow: hidden;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  font-family: 'Nunito Sans', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  color: #0f1720;
+  background: #f3f5f7;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+h1,
+h2,
+h3,
+h4,
+p {
+  margin: 0;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+input::placeholder {
+  color: #8b96a2;
+}
+
+body[data-user-theme='light'] {
+  color-scheme: light;
+}
+
+body[data-user-theme='dark'] {
+  color-scheme: dark;
+  color: #e7eef7;
+  background: #071019;
+  --app-bg: #071019;
+  --surface: #101923;
+  --surface-muted: #16212c;
+  --text-main: #edf4fb;
+  --text-subtle: #97a8b9;
+  --line: #253241;
+  --brand: #28b566;
+  --brand-soft: rgba(40, 181, 102, 0.16);
+  --danger: #ff7a83;
+  --shadow: 0 18px 36px rgba(0, 0, 0, 0.34);
+  --desktop-bg: #071019;
+  --desktop-surface: #101923;
+  --desktop-line: #253241;
+  --desktop-text: #edf4fb;
+  --desktop-subtle: #97a8b9;
+  --desktop-brand: #28b566;
+  --settings-card-bg: #101923;
+  --settings-card-border: #253241;
+  --settings-card-shadow: 0 18px 36px rgba(0, 0, 0, 0.28);
+  --settings-heading-color: #edf4fb;
+  --settings-muted-color: #97a8b9;
+  --settings-label-color: #c7d4df;
+  --settings-input-bg: #16212c;
+  --settings-input-border: #2a3847;
+  --settings-input-text: #edf4fb;
+  --settings-input-focus: rgba(40, 181, 102, 0.24);
+  --settings-meta-surface: #16212c;
+  --settings-meta-border: #263443;
+}
+
+body[data-user-theme='dark'] input::placeholder {
+  color: #74869a;
+}

@@ -1,0 +1,43 @@
+System Error
+occurredAtUtc is not defined
+
+POST /api/stations/SL-MW-LLWE-7882/queue/FS5BQ4P4881G7YW08M0FYRJ5N7/served · x5
+
+[ERROR] {
+  name: 'ReferenceError',
+  message: 'occurredAtUtc is not defined',
+  code: undefined,
+  stack: 'ReferenceError: occurredAtUtc is not defined\n' +
+    '    at createPromotionAwareTransaction (file:///home/calyx/Desktop/Digital-infrastructure/back-end/src/modules/promotions/transactionPricing.service.js:390:9)\n' +
+    '    at async createReservationServiceTransaction (file:///home/calyx/Desktop/Digital-infrastructure/back-end/src/modules/queue/routes.js:725:19)\n' +
+    '    at async finalizeReservationSettlement (file:///home/calyx/Desktop/Digital-infrastructure/back-end/src/modules/queue/routes.js:1027:32)\n' +
+    '    at async file:///home/calyx/Desktop/Digital-infrastructure/back-end/src/modules/queue/routes.js:1800:29\n' +
+    '    at async Proxy._transactionWithCallback (/home/calyx/Desktop/Digital-infrastructure/back-end/node_modules/@prisma/client/runtime/library.js:130:8120)\n' +
+    '    at async file:///home/calyx/Desktop/Digital-infrastructure/back-end/src/modules/queue/routes.js:1799:9\n' +
+    '    at async wrapped (file:///home/calyx/Desktop/Digital-infrastructure/back-end/src/utils/asyncHandler.js:4:7)',
+  path: '/api/stations/SL-MW-LLWE-7882/queue/FS5BQ4P4881G7YW08M0FYRJ5N7/served',
+  method: 'POST'
+}
+POST /api/stations/SL-MW-LLWE-7882/queue/FS5BQ4P4881G7YW08M0FYRJ5N7/served 500 829.049 ms - 51
+
+System Error
+formatDateTimeSqlInTimeZone is not defined
+
+POST /api/stations/SL-MW-LLWE-7882/queue/AD03YP5RTWXFAKV0T36XZ55GY7/served
+
+[ERROR] {
+  name: 'ReferenceError',
+  message: 'occurredAtDate is not defined',
+  code: undefined,
+  stack: 'ReferenceError: occurredAtDate is not defined\n' +
+    '    at createPromotionAwareTransaction (file:///home/calyx/Desktop/Digital-infrastructure/back-end/src/modules/promotions/transactionPricing.service.js:516:55)\n' +
+    '    at async createReservationServiceTransaction (file:///home/calyx/Desktop/Digital-infrastructure/back-end/src/modules/queue/routes.js:725:19)\n' +
+    '    at async finalizeReservationSettlement (file:///home/calyx/Desktop/Digital-infrastructure/back-end/src/modules/queue/routes.js:1027:32)\n' +
+    '    at async file:///home/calyx/Desktop/Digital-infrastructure/back-end/src/modules/queue/routes.js:1800:29\n' +
+    '    at async Proxy._transactionWithCallback (/home/calyx/Desktop/Digital-infrastructure/back-end/node_modules/@prisma/client/runtime/library.js:130:8120)\n' +
+    '    at async file:///home/calyx/Desktop/Digital-infrastructure/back-end/src/modules/queue/routes.js:1799:9\n' +
+    '    at async wrapped (file:///home/calyx/Desktop/Digital-infrastructure/back-end/src/utils/asyncHandler.js:4:7)',
+  path: '/api/stations/SL-MW-LLWE-7882/queue/8DM5SNTKCD1TZ8CSZXDMPWHFTR/served',
+  method: 'POST'
+}
+POST /api/stations/SL-MW-LLWE-7882/queue/8DM5SNTKCD1TZ8CSZXDMPWHFTR/served 500 166.045 ms - 52

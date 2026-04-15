@@ -1,0 +1,16 @@
+{
+  "name": "SmartLink User App",
+  "short_name": "SmartLink",
+  "start_url": "/m/home",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f3f5f7",
+  "theme_color": "#1a9f59",
+  "icons": [
+    {
+      "src": "/smartlogo.png",
+      "sizes": "133x133",
+      "type": "image/png"
+    }
+  ]
+}
