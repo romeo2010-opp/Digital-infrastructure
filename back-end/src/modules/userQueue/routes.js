@@ -641,6 +641,20 @@ export function applyQueuePumpScanToAttendantWorkflow({
   }
 }
 
+export function assertQueuePumpScanSessionMatchesAuth(metadata = {}, auth = null) {
+  const scannedBySessionPublicId = String(metadata?.lastPumpScan?.scannedBySessionPublicId || "").trim()
+  if (!scannedBySessionPublicId) return
+
+  const authSessionPublicId = String(auth?.sessionPublicId || "").trim()
+  if (!authSessionPublicId) {
+    throw badRequest("Authenticated session context is required to continue this pump session.")
+  }
+
+  if (scannedBySessionPublicId !== authSessionPublicId) {
+    throw badRequest("This pump verification belongs to a different active session. Scan the pump QR again from this device.")
+  }
+}
+
 function normalizeQueuePaymentMode(value, fallback = "PAY_AT_PUMP") {
   const normalized = String(value || "").trim().toUpperCase()
   if (normalized === "PREPAY") return "PREPAY"
@@ -3983,6 +3997,8 @@ router.post(
       fuelType: String(assignedNozzle.fuel_code || queueEntry.fuel_type_code || "").trim().toUpperCase() || null,
       scannedAt,
       rawToken: parsedScan.rawValue,
+      scannedByUserPublicId: String(req.auth?.userPublicId || "").trim() || null,
+      scannedBySessionPublicId: String(req.auth?.sessionPublicId || "").trim() || null,
     }
 
     const attendantWorkflowSync = applyQueuePumpScanToAttendantWorkflow({
@@ -4087,6 +4103,7 @@ router.post(
     }
 
     const metadata = parseJsonObject(queueEntry.metadata)
+    assertQueuePumpScanSessionMatchesAuth(metadata, req.auth)
     const verifiedPumpPublicId = String(metadata?.lastPumpScan?.pumpPublicId || "").trim()
     if (!verifiedPumpPublicId) {
       throw badRequest("Verify the assigned pump QR before sending fuel details.")
@@ -4232,6 +4249,10 @@ router.post(
         nozzleStatus: String(nozzle.status || "").trim().toUpperCase() || null,
         fuelType: String(nozzle.fuel_code || queueEntry.fuel_type_code || "").trim().toUpperCase() || null,
         scannedAt: metadata?.lastPumpScan?.scannedAt || new Date().toISOString(),
+        scannedByUserPublicId:
+          String(metadata?.lastPumpScan?.scannedByUserPublicId || req.auth?.userPublicId || "").trim() || null,
+        scannedBySessionPublicId:
+          String(metadata?.lastPumpScan?.scannedBySessionPublicId || req.auth?.sessionPublicId || "").trim() || null,
       }
       metadata.serviceRequest = {
         liters: requestedLiters,
@@ -4255,6 +4276,7 @@ router.post(
         settlementBatchPublicId: null,
         walletAvailableBalanceAfterPayment: walletHold?.walletAfterHold?.availableBalance ?? null,
         dispensingStartedAt: null,
+        userSessionPublicId: String(req.auth?.sessionPublicId || "").trim() || null,
       }
 
       await tx.$executeRaw`

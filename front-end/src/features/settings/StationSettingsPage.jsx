@@ -20,6 +20,25 @@ const FALLBACK_TIME_ZONES = Object.freeze([
   "UTC",
 ]);
 
+function LoadingScreen() {
+  return (
+    <div className="settings-loading-container">
+      <div className="settings-loading-content">
+        <div className="settings-loading-spinner">
+          <div className="settings-spinner-circle"></div>
+        </div>
+        <h2>Loading Settings</h2>
+        <p>Fetching your station configuration...</p>
+        <div className="settings-loading-skeleton-section">
+          <div className="settings-skeleton-item"></div>
+          <div className="settings-skeleton-item"></div>
+          <div className="settings-skeleton-item"></div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function getSupportedTimeZones(currentValue) {
   const current = String(currentValue || "").trim();
   let zones = [];
@@ -2100,7 +2119,7 @@ export default function StationSettingsPage({ modal = false, onClose = null }) {
           </header>
 
           {loading || !data ? (
-            <p>Loading settings...</p>
+            <LoadingScreen />
           ) : (
             <>
               <div className="settings-tabs">{sectionButtons}</div>
@@ -2114,7 +2133,8 @@ export default function StationSettingsPage({ modal = false, onClose = null }) {
         </>
       ) : (
         <div className="settings-chatgpt-layout">
-          <aside
+          {loading || !data ? null : (
+            <aside
             className="settings-chatgpt-sidebar"
             aria-label="Settings sections"
           >
@@ -2124,9 +2144,12 @@ export default function StationSettingsPage({ modal = false, onClose = null }) {
             </div>
             <nav className="settings-chatgpt-nav">{sectionButtons}</nav>
           </aside>
-          <section className="settings-chatgpt-panel">
+        )}
+          
+          <section className={
+            loading || !data ? 'settings-chatgpt settings-loading-modal' : 'settings-chatgpt-panel'}>
             {loading || !data ? (
-              <p>Loading settings...</p>
+              <LoadingScreen />
             ) : (
               <>
                 <header className="settings-chatgpt-panel-header">

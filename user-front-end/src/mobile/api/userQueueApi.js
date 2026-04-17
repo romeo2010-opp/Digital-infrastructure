@@ -1,7 +1,7 @@
 import { getStoredAccessToken, setStoredAccessToken } from '../authSession'
 import { assertUserAppAccessToken } from '../userSessionGuard'
 
-const dataSourceMode = (import.meta.env.VITE_DATA_SOURCE || 'mock').toLowerCase()
+const dataSourceMode = (import.meta.env.VITE_DATA_SOURCE || 'api').toLowerCase()
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || ''
 const devApiTarget = import.meta.env.VITE_DEV_API_TARGET || ''
 const envAccessToken = import.meta.env.VITE_USER_ACCESS_TOKEN || ''

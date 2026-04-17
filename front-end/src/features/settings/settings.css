@@ -97,6 +97,8 @@
   gap: 2px;
 }
 
+
+
 .settings-chatgpt-nav .settings-tab-button {
   min-height: 48px;
   height: auto !important;
@@ -642,4 +644,118 @@
     width: min(100%, 280px);
     height: auto;
   }
+}
+
+/* Loading Screen Styles */
+@keyframes settings-spin {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes settings-pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+@keyframes settings-skeleton-shimmer {
+  0% {
+    background-position: -1000px 0;
+  }
+  100% {
+    background-position: 1000px 0;
+  }
+}
+
+.settings-loading-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 600px;
+  padding: 40px 20px;
+}
+
+.settings-loading-content {
+  text-align: center;
+  max-width: 400px;
+}
+
+.settings-loading-spinner {
+  margin: 0 auto 32px;
+  width: 80px;
+  height: 80px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.settings-spinner-circle {
+  width: 100%;
+  height: 100%;
+  border: 4px solid rgba(87, 119, 159, 0.12);
+  border-top-color: #57779f;
+  border-right-color: #57779f;
+  border-radius: 50%;
+  animation: settings-spin 1.2s linear infinite;
+}
+
+.settings-loading-content h2 {
+  margin: 0 0 12px;
+  font-size: 24px;
+  font-weight: 600;
+  color: #1f2937;
+}
+
+.settings-loading-content p {
+  margin: 0 0 32px;
+  font-size: 14px;
+  color: #6b7280;
+}
+
+.settings-loading-skeleton-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 24px;
+}
+
+.settings-skeleton-item {
+  height: 12px;
+  border-radius: 6px;
+  background: linear-gradient(
+    90deg,
+    rgba(87, 119, 159, 0.08) 0%,
+    rgba(87, 119, 159, 0.16) 50%,
+    rgba(87, 119, 159, 0.08) 100%
+  );
+  background-size: 200% 100%;
+  animation: settings-skeleton-shimmer 2s infinite;
+}
+
+.settings-skeleton-item:nth-child(1) {
+  width: 100%;
+}
+
+.settings-skeleton-item:nth-child(2) {
+  width: 85%;
+  margin: 0 auto;
+}
+
+.settings-skeleton-item:nth-child(3) {
+  width: 70%;
+  margin: 0 auto;
+}
+
+/* Modal loading state */
+.settings-loading-modal {
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }

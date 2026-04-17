@@ -2,7 +2,7 @@ import { getStoredAccessToken, setStoredAccessToken } from '../authSession'
 import { assertUserAppAccessToken } from '../userSessionGuard'
 import { userAuthApi } from './userAuthApi'
 
-const dataSourceMode = (import.meta.env.VITE_DATA_SOURCE || 'mock').toLowerCase()
+const dataSourceMode = (import.meta.env.VITE_DATA_SOURCE || 'api').toLowerCase()
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || ''
 const envAccessToken = import.meta.env.VITE_USER_ACCESS_TOKEN || ''
 const allowEnvTokenFallback =

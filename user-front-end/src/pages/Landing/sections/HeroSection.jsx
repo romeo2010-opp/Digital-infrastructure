@@ -1,5 +1,6 @@
 import { motion as _motion, useReducedMotion, useScroll, useTransform } from 'framer-motion'
 import { useTranslation } from 'react-i18next'
+import { TypewriterText } from '../components/TypewriterText'
 
 export function HeroSection({ onPrimaryAction, onSecondaryAction }) {
   const { t } = useTranslation()
@@ -42,9 +43,9 @@ export function HeroSection({ onPrimaryAction, onSecondaryAction }) {
             <_motion.h1 variants={childVariant}>
               <span className='landing-hero-title-accent'>{t('landing.hero.titleLead')}</span>
               <span className='landing-hero-title-stack'>
-                <span>{t('landing.hero.titleLine1')}</span>
-                <span>{t('landing.hero.titleLine2')}</span>
-                <span>{t('landing.hero.titleLine3')}</span>
+                <span><TypewriterText text={t('landing.hero.titleLine1')} speed={120} delay={200} /></span>
+                <span><TypewriterText text={t('landing.hero.titleLine2')} speed={120} delay={2200} /></span>
+                <span><TypewriterText text={t('landing.hero.titleLine3')} speed={120} delay={4200} /></span>
               </span>
             </_motion.h1>
             <_motion.p className='landing-hero-subtitle' variants={childVariant}>

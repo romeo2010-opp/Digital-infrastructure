@@ -1,6 +1,9 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { applyQueuePumpScanToAttendantWorkflow } from "../modules/userQueue/routes.js"
+import {
+  applyQueuePumpScanToAttendantWorkflow,
+  assertQueuePumpScanSessionMatchesAuth,
+} from "../modules/userQueue/routes.js"
 
 test("pump QR scan promotes an arrived queue order to pump_assigned", () => {
   const scannedAt = "2026-04-09T08:30:00.000Z"
@@ -61,4 +64,37 @@ test("pump QR scan backfills customer arrival and attaches pump details for acce
   assert.equal(result.metadata.serviceRequest.pumpPublicId, "ST-P02")
   assert.equal(result.metadata.serviceRequest.nozzlePublicId, "ST-P02-N02")
   assert.equal(result.metadata.serviceRequest.fuelType, "DIESEL")
+})
+
+test("pump verification session guard allows the original authenticated session", () => {
+  assert.doesNotThrow(() => {
+    assertQueuePumpScanSessionMatchesAuth(
+      {
+        lastPumpScan: {
+          scannedBySessionPublicId: "SESSION-001",
+        },
+      },
+      {
+        sessionPublicId: "SESSION-001",
+      }
+    )
+  })
+})
+
+test("pump verification session guard rejects a different authenticated session", () => {
+  assert.throws(
+    () => {
+      assertQueuePumpScanSessionMatchesAuth(
+        {
+          lastPumpScan: {
+            scannedBySessionPublicId: "SESSION-001",
+          },
+        },
+        {
+          sessionPublicId: "SESSION-002",
+        }
+      )
+    },
+    /different active session/
+  )
 })
