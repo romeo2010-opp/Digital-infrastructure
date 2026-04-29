@@ -1,6 +1,7 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import {
+  applyQueueDispenseRequestToAttendantWorkflow,
   applyQueuePumpScanToAttendantWorkflow,
   assertQueuePumpScanSessionMatchesAuth,
 } from "../modules/userQueue/routes.js"
@@ -97,4 +98,52 @@ test("pump verification session guard rejects a different authenticated session"
     },
     /different active session/
   )
+})
+
+test("queue dispense request binds a pump session and promotes the workflow to dispensing", () => {
+  const startedAt = "2026-04-09T09:00:00.000Z"
+  const result = applyQueueDispenseRequestToAttendantWorkflow({
+    queueStatus: "WAITING",
+    startedAt,
+    metadata: {
+      lastPumpScan: {
+        pumpPublicId: "ST-P03",
+        pumpNumber: 3,
+        nozzlePublicId: "ST-P03-N01",
+        nozzleNumber: "1",
+        fuelType: "PETROL",
+        scannedAt: "2026-04-09T08:58:00.000Z",
+      },
+      serviceRequest: {
+        liters: 25,
+        paymentMode: "PAY_AT_PUMP",
+        paymentStatus: "PENDING_AT_PUMP",
+      },
+    },
+    pumpAssignment: {
+      pumpPublicId: "ST-P03",
+      pumpNumber: 3,
+      nozzlePublicId: "ST-P03-N01",
+      nozzleNumber: "1",
+      fuelType: "petrol",
+    },
+    pumpSessionBinding: {
+      pumpSessionPublicId: "PS-QUEUE-001",
+      sessionReference: "PS-QUEUE-REF-001",
+      telemetryCorrelationId: "TEL-QUEUE-001",
+    },
+  })
+
+  assert.equal(result.currentState, "pending")
+  assert.equal(result.nextState, "dispensing")
+  assert.equal(result.metadata.attendantWorkflow.state, "dispensing")
+  assert.equal(result.metadata.attendantWorkflow.serviceStartedAt, startedAt)
+  assert.equal(result.metadata.attendantWorkflow.customerArrivedAt, "2026-04-09T08:58:00.000Z")
+  assert.equal(result.metadata.attendantWorkflow.pumpSession.publicId, "PS-QUEUE-001")
+  assert.equal(result.metadata.attendantWorkflow.pumpSession.sessionReference, "PS-QUEUE-REF-001")
+  assert.equal(result.metadata.serviceRequest.paymentStatus, "DISPENSING")
+  assert.equal(result.metadata.serviceRequest.dispensingStartedAt, startedAt)
+  assert.equal(result.metadata.serviceRequest.pumpSessionPublicId, "PS-QUEUE-001")
+  assert.equal(result.metadata.lastPumpScan.pumpStatus, "DISPENSING")
+  assert.equal(result.metadata.lastPumpScan.nozzleStatus, "DISPENSING")
 })

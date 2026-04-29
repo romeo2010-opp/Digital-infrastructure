@@ -8,6 +8,7 @@ import {
   isPilotPumpBlockedForHybrid,
   isQueueSessionCustomerUnlocked,
   useFuelStore,
+  type ActiveSession,
 } from "../store/fuelStore"
 
 function resolveQueueAmountMwk({
@@ -202,21 +203,26 @@ export function useKioskOperations() {
   const finalizeCurrentSession = useCallback(async ({
     litres,
     amountMwk,
+    paymentMethod,
     refreshAfter = true,
+    sessionOverride = null,
   }: {
     litres: number
     amountMwk?: number
+    paymentMethod?: "SMARTPAY" | "CASH" | "MOBILE_MONEY" | "CARD" | "OTHER"
     refreshAfter?: boolean
+    sessionOverride?: ActiveSession | null
   }) => {
-    if (!activeSession) {
+    const targetSession = sessionOverride || activeSession
+    if (!targetSession) {
       throw new Error("No active session is selected.")
     }
 
-    if (activeSession.kind === "live_manual_wallet") {
-      if (!activeSession.pumpSessionPublicId) {
+    if (targetSession.kind === "live_manual_wallet") {
+      if (!targetSession.pumpSessionPublicId) {
         throw new Error("The live manual wallet session is missing a pump-session reference.")
       }
-      await kioskApi.finalizeFuelOrder(activeSession.pumpSessionPublicId, {
+      await kioskApi.finalizeFuelOrder(targetSession.pumpSessionPublicId, {
         dispensedLitres: typeof litres === "number" && litres > 0 ? litres : undefined,
         amountMwk: typeof amountMwk === "number" && amountMwk > 0 ? amountMwk : undefined,
         note: "Completed from SmartLink kiosk authorization flow.",
@@ -224,10 +230,10 @@ export function useKioskOperations() {
       if (refreshAfter) {
         await refreshData({ silent: true })
       }
-      return
+      return null
     }
 
-    if (!activeSession.backendOrderPublicId || !activeSession.backendOrderType) {
+    if (!targetSession.backendOrderPublicId || !targetSession.backendOrderType) {
       throw new Error("Queue order reference is missing from the selected session.")
     }
 
@@ -235,21 +241,23 @@ export function useKioskOperations() {
       typeof amountMwk === "number" && amountMwk > 0
         ? amountMwk
         : resolveQueueAmountMwk({
-            requestedAmountMwk: activeSession.requestedAmountMwk,
+            requestedAmountMwk: targetSession.requestedAmountMwk,
             requestedLitres: litres,
-            fuelType: activeSession.fuelType,
+            fuelType: targetSession.fuelType,
             petrolPricePerLitre,
             dieselPricePerLitre,
           })
 
-    await attendantApi.completeService(activeSession.backendOrderType, activeSession.backendOrderPublicId, {
+    const response = await attendantApi.completeService(targetSession.backendOrderType, targetSession.backendOrderPublicId, {
       litres: typeof litres === "number" && litres > 0 ? litres : undefined,
       amount: typeof derivedAmount === "number" && derivedAmount > 0 ? derivedAmount : undefined,
+      paymentMethod,
       note: "Completed from SmartLink kiosk pump authorization flow.",
     })
     if (refreshAfter) {
       await refreshData({ silent: true })
     }
+    return response?.completion || null
   }, [activeSession, dieselPricePerLitre, petrolPricePerLitre, refreshData])
 
   const updateCurrentSessionDetails = useCallback(async ({

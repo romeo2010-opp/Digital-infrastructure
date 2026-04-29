@@ -10,6 +10,7 @@ import { attachUserAlertsWebSocket } from "./realtime/userAlertsWebSocket.js"
 import { attachInternalChatWebSocket } from "./realtime/internalChatWebSocket.js"
 import { startMonitoringStateWatcher } from "./modules/monitoring/monitoring.service.js"
 import { startQueueLiveUpdateWatcher } from "./realtime/queueLiveUpdateWatcher.js"
+import { isTwilioVoiceConfigured } from "./modules/assistant/twilio-voice.service.js"
 
 const port = Number(process.env.PORT || 4000)
 const host = process.env.HOST || "0.0.0.0"
@@ -37,6 +38,14 @@ async function bootstrap() {
   server.listen(port, host, () => {
     // eslint-disable-next-line no-console
     console.log(`SmartLink API listening on http://${host}:${port}`)
+    // eslint-disable-next-line no-console
+    console.log("[voice-update] startup config", {
+      liveUpdateProvider: process.env.LIVE_UPDATE_PROVIDER || null,
+      twilioConfigured: isTwilioVoiceConfigured(),
+      publicBaseUrl: process.env.PUBLIC_BASE_URL || null,
+      webhookValidationEnabled: String(process.env.TWILIO_VALIDATE_WEBHOOKS || "true").trim().toLowerCase() !== "false",
+      watchIntervalMs: Number(process.env.QUEUE_LIVE_UPDATE_WATCH_INTERVAL_MS || 5000),
+    })
     if (wsState?.enabled) {
       // eslint-disable-next-line no-console
       console.log(`SmartLink realtime feed listening on ws://${host}:${port}${wsState.path}`)

@@ -328,6 +328,62 @@ test("createQueueServiceTransaction rejects SmartPay completion without a captur
   )
 })
 
+test("createQueueServiceTransaction allows manually selected SmartPay completion when no wallet prepay settlement exists", async () => {
+  let transactionLookupCount = 0
+  const db = {
+    $queryRaw: async (strings) => {
+      const queryText = Array.isArray(strings) ? strings.join("?") : String(strings || "")
+
+      if (queryText.includes("FROM transactions")) {
+        transactionLookupCount += 1
+        return []
+      }
+
+      if (queryText.includes("FROM fuel_types")) {
+        return [{ id: 1 }]
+      }
+
+      if (queryText.includes("FROM pump_nozzles")) {
+        return []
+      }
+
+      if (queryText.includes("INSERT INTO transactions")) {
+        return { insertId: 321 }
+      }
+
+      throw new Error(`Unexpected query in test: ${queryText}`)
+    },
+  }
+
+  const transaction = await createQueueServiceTransaction(db, {
+    stationId: 15,
+    queueEntry: {
+      id: 100,
+      public_id: "01QUEUEMANUALSMARTPAY0000001",
+      user_id: 700,
+      fuel_code: "PETROL",
+      metadata: JSON.stringify({
+        serviceRequest: {
+          paymentMode: "PAY_AT_PUMP",
+          prepaySelected: false,
+          paymentStatus: "PENDING_AT_PUMP",
+        },
+      }),
+    },
+    actorUserId: 700,
+    litres: 20,
+    amount: 90000,
+    paymentMethod: "SMARTPAY",
+    paymentReference: null,
+    occurredAt: new Date("2026-04-29T08:00:00.000Z"),
+  })
+
+  assert.equal(transactionLookupCount > 0, true)
+  assert.equal(transaction.paymentMethod, "SMARTPAY")
+  assert.equal(transaction.paymentReference, null)
+  assert.equal(transaction.existing, false)
+})
+
 test("shouldCreateQueueServiceTransaction skips queue transactions until litres and amount are available", () => {
   assert.equal(
     shouldCreateQueueServiceTransaction({

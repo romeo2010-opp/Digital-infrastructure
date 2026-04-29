@@ -41,11 +41,7 @@ const AMOUNT_PRESETS = ["5000", "10000", "15000", "20000"];
 const LITRE_PRESETS = ["5", "10", "20", "40"];
 const NUMPAD_KEYS = ["1", "2", "3", "4", "5", "6", "7", "8", "9"];
 
-interface EditSessionDialogProps {
-  autoOpenKey?: string | null
-}
-
-export function EditSessionDialog({ autoOpenKey = null }: EditSessionDialogProps) {
+export function EditSessionDialog() {
   const [isOpen, setIsOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const { activeSession, updateActiveSession } = useFuelStore();
@@ -73,11 +69,6 @@ export function EditSessionDialog({ autoOpenKey = null }: EditSessionDialogProps
         : ""
     );
   }, [activeSession, isOpen]);
-
-  useEffect(() => {
-    if (!autoOpenKey) return
-    setIsOpen(true)
-  }, [autoOpenKey])
 
   if (!activeSession) return null;
 

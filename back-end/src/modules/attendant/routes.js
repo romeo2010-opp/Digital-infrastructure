@@ -84,6 +84,7 @@ const attendantReadRole = requireRole(["MANAGER", "ATTENDANT", "VIEWER"])
 const attendantWriteRole = requireRole(["MANAGER", "ATTENDANT"])
 const ATTENDANT_SETTLEMENT_TRANSACTION_MAX_WAIT_MS = 10_000
 const ATTENDANT_SETTLEMENT_TRANSACTION_TIMEOUT_MS = 20_000
+const SCAN_AND_GO_QR_PREFIX = "smartlink:scan-go"
 
 router.use("/stations/:stationPublicId/attendant", requireStationScope)
 router.use(
@@ -119,7 +120,7 @@ const startServiceBodySchema = z.object({
 const completeServiceBodySchema = z.object({
   litres: z.number().positive().optional(),
   amount: z.number().positive().optional(),
-  paymentMethod: z.enum(["CASH", "MOBILE_MONEY", "CARD", "OTHER"]).optional(),
+  paymentMethod: z.enum(["SMARTPAY", "CASH", "MOBILE_MONEY", "CARD", "OTHER"]).optional(),
   note: z.string().trim().max(1000).optional(),
 })
 
@@ -137,6 +138,10 @@ const updateServiceRequestBodySchema = z.object({
   message: "Provide at least one editable service-request field.",
 }).refine((body) => !(body.requestedLitres !== undefined && body.amountMwk !== undefined), {
   message: "Send either requestedLitres or amountMwk, not both.",
+})
+
+const scanAndGoResolveQuerySchema = z.object({
+  code: z.string().trim().min(1).max(128),
 })
 
 const issueBodySchema = z.object({
@@ -161,6 +166,181 @@ function parseJsonString(value) {
   } catch {
     return {}
   }
+}
+
+function resolveScanAndGoCode({
+  receiptVerificationRef = null,
+  transactionPublicId = null,
+  paymentReference = null,
+} = {}) {
+  return (
+    String(receiptVerificationRef || "").trim()
+    || String(transactionPublicId || "").trim()
+    || String(paymentReference || "").trim()
+    || null
+  )
+}
+
+function parseScanAndGoCodeInput(value) {
+  const raw = String(value || "").trim()
+  if (!raw) return ""
+
+  const smartlinkMatch = raw.match(/^smartlink:scan-go:(.+)$/i)
+  if (smartlinkMatch?.[1]) {
+    return String(smartlinkMatch[1] || "").trim()
+  }
+
+  try {
+    const parsedUrl = new URL(raw)
+    const code = String(
+      parsedUrl.searchParams.get("code")
+      || parsedUrl.searchParams.get("reference")
+      || parsedUrl.searchParams.get("receipt")
+      || ""
+    ).trim()
+    if (code) return code
+  } catch {
+    // Ignore malformed URL values.
+  }
+
+  return raw
+}
+
+async function renderScanAndGoQrImageDataUrl(code) {
+  const scopedCode = String(code || "").trim()
+  if (!scopedCode) return null
+
+  try {
+    const qrModule = await import("qrcode")
+    const qrEncoder = qrModule?.toDataURL ? qrModule : qrModule?.default
+    if (!qrEncoder?.toDataURL) return null
+    return qrEncoder.toDataURL(`${SCAN_AND_GO_QR_PREFIX}:${scopedCode}`, {
+      errorCorrectionLevel: "M",
+      margin: 2,
+      width: 480,
+      color: {
+        dark: "#111111",
+        light: "#FFFFFF",
+      },
+    })
+  } catch {
+    return null
+  }
+}
+
+async function buildCompletionScanAndGoPayload({
+  transaction = null,
+  customerName = "",
+  fuelType = "",
+  pumpAssignment = null,
+  completedAt = null,
+  litres = null,
+  amountMwk = null,
+} = {}) {
+  const receiptVerificationRef = String(transaction?.receiptVerificationRef || "").trim() || null
+  const transactionPublicId = String(transaction?.publicId || "").trim() || null
+  const paymentReference = String(transaction?.paymentReference || "").trim() || null
+  const code = resolveScanAndGoCode({
+    receiptVerificationRef,
+    transactionPublicId,
+    paymentReference,
+  })
+
+  return {
+    customerName: String(customerName || "").trim() || "Customer",
+    fuelType: String(fuelType || "").trim().toUpperCase() || null,
+    litres: toNumberOrNull(litres) ?? toNumberOrNull(transaction?.litres) ?? null,
+    amountMwk: toNumberOrNull(amountMwk) ?? toNumberOrNull(transaction?.amount) ?? null,
+    completedAt: toIsoOrNull(completedAt) || transaction?.occurredAt || null,
+    pump: pumpAssignment?.pumpPublicId
+      ? {
+          pumpPublicId: pumpAssignment.pumpPublicId,
+          pumpNumber: pumpAssignment.pumpNumber,
+          nozzlePublicId: pumpAssignment.nozzlePublicId,
+          nozzleNumber: pumpAssignment.nozzleNumber,
+        }
+      : null,
+    transaction: transactionPublicId
+      ? {
+          publicId: transactionPublicId,
+          receiptVerificationRef,
+          paymentReference,
+          paymentMethod: String(transaction?.paymentMethod || "").trim().toUpperCase() || null,
+          isPaid: Boolean(paymentReference),
+        }
+      : null,
+    scanAndGo: code
+      ? {
+          code,
+          qrPayload: `${SCAN_AND_GO_QR_PREFIX}:${code}`,
+          qrImageDataUrl: await renderScanAndGoQrImageDataUrl(code),
+        }
+      : null,
+  }
+}
+
+async function resolveStationScanAndGoSummary(stationId, code, db = prisma) {
+  const scopedCode = parseScanAndGoCodeInput(code)
+  if (!scopedCode) throw badRequest("Scan & Go code is required.")
+
+  const rows = await db.$queryRaw`
+    SELECT
+      t.public_id,
+      t.receipt_verification_ref,
+      t.payment_reference,
+      t.payment_method,
+      t.litres,
+      t.total_amount,
+      t.final_amount_paid,
+      t.occurred_at,
+      p.public_id AS pump_public_id,
+      p.pump_number,
+      pn.public_id AS nozzle_public_id,
+      pn.nozzle_number
+    FROM transactions t
+    LEFT JOIN pumps p ON p.id = t.pump_id
+    LEFT JOIN pump_nozzles pn ON pn.id = t.nozzle_id
+    WHERE t.station_id = ${stationId}
+      AND (
+        t.public_id = ${scopedCode}
+        OR t.receipt_verification_ref = ${scopedCode}
+        OR t.payment_reference = ${scopedCode}
+      )
+    ORDER BY COALESCE(t.occurred_at, t.settled_at, t.created_at) DESC, t.id DESC
+    LIMIT 1
+  `
+
+  const row = rows?.[0] || null
+  if (!row?.public_id) {
+    throw notFound(`Scan & Go transaction not found: ${scopedCode}`)
+  }
+
+  return buildCompletionScanAndGoPayload({
+    transaction: {
+      publicId: String(row.public_id || "").trim() || null,
+      receiptVerificationRef: String(row.receipt_verification_ref || "").trim() || null,
+      paymentReference: String(row.payment_reference || "").trim() || null,
+      paymentMethod: String(row.payment_method || "").trim().toUpperCase() || null,
+      litres: toNumberOrNull(row.litres),
+      amount:
+        toNumberOrNull(row.final_amount_paid)
+        ?? toNumberOrNull(row.total_amount)
+        ?? null,
+      occurredAt: toIsoOrNull(row.occurred_at),
+    },
+    pumpAssignment: {
+      pumpPublicId: String(row.pump_public_id || "").trim() || null,
+      pumpNumber: toNumberOrNull(row.pump_number),
+      nozzlePublicId: String(row.nozzle_public_id || "").trim() || null,
+      nozzleNumber: String(row.nozzle_number || "").trim() || null,
+    },
+    completedAt: row.occurred_at,
+    litres: toNumberOrNull(row.litres),
+    amountMwk:
+      toNumberOrNull(row.final_amount_paid)
+      ?? toNumberOrNull(row.total_amount)
+      ?? null,
+  })
 }
 
 function toIsoOrNull(value) {
@@ -785,6 +965,8 @@ async function listRecentTransactions(stationId) {
       litres,
       total_amount,
       payment_method,
+      payment_reference,
+      receipt_verification_ref,
       pump_id,
       nozzle_id,
       occurred_at
@@ -911,6 +1093,8 @@ function buildTransactionIndexes(rows) {
       litres: toNumberOrNull(row.litres),
       amountMwk: toNumberOrNull(row.total_amount),
       paymentMethod: String(row.payment_method || "").trim() || null,
+      paymentReference: String(row.payment_reference || "").trim() || null,
+      receiptVerificationRef: String(row.receipt_verification_ref || "").trim() || null,
       pumpId: Number(row.pump_id || 0) || null,
       nozzleId: Number(row.nozzle_id || 0) || null,
       occurredAt: toIsoOrNull(row.occurred_at),
@@ -1726,6 +1910,17 @@ router.get(
     const station = await resolveStationContext(req.params.stationPublicId)
     const snapshot = await buildAttendantDashboardSnapshot(station, req.auth || {})
     return ok(res, snapshot)
+  })
+)
+
+router.get(
+  "/stations/:stationPublicId/attendant/scan-and-go/resolve",
+  attendantReadRole,
+  asyncHandler(async (req, res) => {
+    const station = await resolveStationContext(req.params.stationPublicId)
+    const query = scanAndGoResolveQuerySchema.parse(req.query || {})
+    const completion = await resolveStationScanAndGoSummary(station.id, query.code)
+    return ok(res, { completion })
   })
 )
 
@@ -2569,6 +2764,7 @@ router.post(
 
     let forecourtTransaction = null
     let settlementCapture = null
+    let completionPayload = null
     const completionTime = new Date()
     const storedPumpSession = resolveStoredPumpSessionIdentity(rawMetadata)
     let completedDispensedLitres = body.litres ?? null
@@ -2624,6 +2820,7 @@ router.post(
       )
     } else {
       let queueCompletionMetadata = null
+      const queueWorkflow = normalizeAttendantWorkflow(rawMetadata)
       const queuePaymentMethod = resolveQueueSettlementPaymentMethod({
         paymentMethod: body.paymentMethod || null,
         queueEntry: order.row,
@@ -2635,12 +2832,18 @@ router.post(
         occurredAt: completionTime,
       })
       completedDispensedLitres = resolvedQueueLitres ?? body.litres ?? completedDispensedLitres
-      const shouldCreate = shouldCreateQueueServiceTransaction({
-        queueEntry: order.row,
-        litres: resolvedQueueLitres,
-        amount: body.amount,
-        paymentMethod: queuePaymentMethod,
-      })
+      const shouldCreate =
+        (
+          queueWorkflow.manualMode === true
+          && Number.isFinite(Number(resolvedQueueLitres || 0))
+          && Number(resolvedQueueLitres || 0) > 0
+        )
+        || shouldCreateQueueServiceTransaction({
+          queueEntry: order.row,
+          litres: resolvedQueueLitres,
+          amount: body.amount,
+          paymentMethod: queuePaymentMethod,
+        })
       if (shouldCreate) {
         forecourtTransaction = await prisma.$transaction(
           async (tx) => {
@@ -2827,7 +3030,28 @@ router.post(
       actorStaffId: actor.actorStaffId,
     })
 
-    return ok(res, await refreshDashboardForWrite(req, station))
+    completionPayload = await buildCompletionScanAndGoPayload({
+      transaction: forecourtTransaction,
+      customerName: buildCustomerLabel({
+        userName: order.row?.user_name,
+        fallbackIdentifier:
+          order.orderType === ATTENDANT_ORDER_TYPES.QUEUE
+            ? String(order.row?.masked_plate || "").trim()
+            : String(order.row?.identifier || "").trim(),
+        userPublicId: order.row?.user_public_id,
+      }),
+      fuelType: order.row?.fuel_code,
+      pumpAssignment: existingAssignment,
+      completedAt: completionTime,
+      litres: completedDispensedLitres,
+      amountMwk: forecourtTransaction?.amount ?? body.amount ?? null,
+    })
+
+    const dashboard = await refreshDashboardForWrite(req, station)
+    return ok(res, {
+      ...dashboard,
+      completion: completionPayload,
+    })
   })
 )
 

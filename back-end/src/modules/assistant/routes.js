@@ -5,6 +5,7 @@ import { ok } from "../../utils/http.js"
 import { confirmAssistantAction, respondToAssistant, handleUssdRequest } from "./service.js"
 import {
   buildTwilioVoiceResponse,
+  streamTwilioLiveUpdateMusicAudio,
   validateTwilioWebhookRequest,
 } from "./twilio-voice.service.js"
 
@@ -43,6 +44,14 @@ publicAssistantRouter.post(
       res.type("text/xml")
       return res.status(200).send(responseXml)
     } catch (error) {
+      // eslint-disable-next-line no-console
+      console.error("[twilio-webhook] twiml request failed", {
+        path: req.originalUrl || req.url || null,
+        method: req.method || "POST",
+        errorMessage: error?.message || "Unknown webhook error",
+        errorCode: error?.code ?? null,
+        errorStatus: error?.status ?? null,
+      })
       if (Number(error?.status || 0) === 400) {
         return res.status(403).json({ ok: false, error: error.message || "Invalid Twilio signature" })
       }
@@ -63,11 +72,57 @@ publicAssistantRouter.post(
       res.type("text/xml")
       return res.status(200).send(responseXml)
     } catch (error) {
+      // eslint-disable-next-line no-console
+      console.error("[twilio-webhook] events request failed", {
+        path: req.originalUrl || req.url || null,
+        method: req.method || "POST",
+        errorMessage: error?.message || "Unknown webhook error",
+        errorCode: error?.code ?? null,
+        errorStatus: error?.status ?? null,
+      })
       if (Number(error?.status || 0) === 400) {
         return res.status(403).json({ ok: false, error: error.message || "Invalid Twilio signature" })
       }
       throw error
     }
+  })
+)
+
+publicAssistantRouter.post(
+  "/twilio/voice/live-queue/music",
+  asyncHandler(async (req, res) => {
+    try {
+      validateTwilioWebhookRequest(req)
+      const responseXml = await buildTwilioVoiceResponse({
+        kind: "music",
+        req,
+      })
+      res.type("text/xml")
+      return res.status(200).send(responseXml)
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.error("[twilio-webhook] music request failed", {
+        path: req.originalUrl || req.url || null,
+        method: req.method || "POST",
+        errorMessage: error?.message || "Unknown webhook error",
+        errorCode: error?.code ?? null,
+        errorStatus: error?.status ?? null,
+      })
+      if (Number(error?.status || 0) === 400) {
+        return res.status(403).json({ ok: false, error: error.message || "Invalid Twilio signature" })
+      }
+      throw error
+    }
+  })
+)
+
+publicAssistantRouter.get(
+  "/twilio/voice/live-queue/music/audio",
+  asyncHandler(async (req, res) => {
+    await streamTwilioLiveUpdateMusicAudio({
+      req,
+      res,
+    })
   })
 )
 

@@ -20,6 +20,33 @@ function toNumberOrNull(value) {
   return Number.isFinite(numeric) ? numeric : null
 }
 
+function parseJsonObject(value) {
+  if (!value) return {}
+  if (typeof value === "object" && !Array.isArray(value)) return value
+  try {
+    const parsed = JSON.parse(String(value || ""))
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+function normalizeSubscriptionMetadata(value) {
+  const metadata = parseJsonObject(value)
+  const musicPlayback = metadata.musicPlayback && typeof metadata.musicPlayback === "object"
+    ? metadata.musicPlayback
+    : {}
+
+  return {
+    ...metadata,
+    musicPlayback: {
+      offsetSeconds: toNumberOrNull(musicPlayback.offsetSeconds) ?? 0,
+      startedAt: String(musicPlayback.startedAt || "").trim() || null,
+      sourceUrl: String(musicPlayback.sourceUrl || "").trim() || null,
+    },
+  }
+}
+
 export function normalizeLiveUpdateLanguage(value) {
   const normalized = String(value || "").trim().toLowerCase()
   if (normalized === "ny" || normalized === "chichewa") return "ny"
@@ -38,6 +65,7 @@ export function getPreferredLiveUpdateProviderCode() {
 
 function mapSubscriptionRow(row) {
   if (!row) return null
+  const metadata = normalizeSubscriptionMetadata(row.metadata)
   return {
     publicId: String(row.public_id || "").trim() || null,
     userId: Number(row.user_id || 0) || null,
@@ -54,6 +82,7 @@ function mapSubscriptionRow(row) {
     lastKnownStatus: String(row.last_known_status || "").trim().toUpperCase() || null,
     lastCalledAt: row.last_called_at ? new Date(row.last_called_at).toISOString() : null,
     lastProviderReference: String(row.last_provider_reference || "").trim() || null,
+    metadata,
   }
 }
 
@@ -96,6 +125,7 @@ export async function getActiveQueueLiveUpdateSubscription({ userId, queueJoinId
       qlus.last_known_status,
       qlus.last_called_at,
       qlus.last_provider_reference,
+      qlus.metadata,
       qe.public_id AS queue_join_public_id
     FROM queue_live_update_subscriptions qlus
     INNER JOIN queue_entries qe ON qe.id = qlus.queue_entry_id
@@ -130,6 +160,7 @@ export async function getQueueLiveUpdateSubscriptionByPublicId(subscriptionPubli
       qlus.last_known_status,
       qlus.last_called_at,
       qlus.last_provider_reference,
+      qlus.metadata,
       qe.public_id AS queue_join_public_id
     FROM queue_live_update_subscriptions qlus
     INNER JOIN queue_entries qe ON qe.id = qlus.queue_entry_id
@@ -298,6 +329,7 @@ export async function listActiveQueueLiveUpdateSubscriptions() {
       qlus.last_known_status,
       qlus.last_called_at,
       qlus.last_provider_reference,
+      qlus.metadata,
       qe.public_id AS queue_join_public_id
     FROM queue_live_update_subscriptions qlus
     INNER JOIN queue_entries qe ON qe.id = qlus.queue_entry_id
@@ -318,6 +350,7 @@ export function buildVoiceUpdateScript({ snapshot, previousPosition = null, lang
   const etaMinutes = toNumberOrNull(snapshot?.etaMinutes)
   const targetReached = position !== null && position <= 4
   const positionChanged = position !== null && position !== previousPosition
+  const shouldLoopMusic = position !== null && position > 2 && status !== "CALLED"
 
   if (normalizedLanguageCode === "ny") {
     const lines = ["SmartLink ikukupatsani uthenga wa queue."]
@@ -333,7 +366,8 @@ export function buildVoiceUpdateScript({ snapshot, previousPosition = null, lang
     }
     return {
       previewText: lines.join(" "),
-      shouldPlayMusic: positionChanged && status !== "CALLED",
+      shouldPlayMusic: shouldLoopMusic,
+      shouldLoopMusic,
       shouldCallToStation: targetReached || status === "CALLED",
     }
   }
@@ -352,7 +386,8 @@ export function buildVoiceUpdateScript({ snapshot, previousPosition = null, lang
 
   return {
     previewText: lines.join(" "),
-    shouldPlayMusic: positionChanged && status !== "CALLED",
+    shouldPlayMusic: shouldLoopMusic,
+    shouldLoopMusic,
     shouldCallToStation: targetReached || status === "CALLED",
   }
 }
@@ -464,6 +499,25 @@ export async function recordQueueLiveUpdateProviderReference({
       updated_at = CURRENT_TIMESTAMP(3)
     WHERE public_id = ${scopedSubscriptionPublicId}
   `
+}
+
+export async function updateQueueLiveUpdateSubscriptionMetadata({
+  subscriptionPublicId,
+  metadata,
+} = {}) {
+  const scopedSubscriptionPublicId = String(subscriptionPublicId || "").trim()
+  if (!scopedSubscriptionPublicId) return null
+
+  const normalizedMetadata = normalizeSubscriptionMetadata(metadata)
+  await prisma.$executeRaw`
+    UPDATE queue_live_update_subscriptions
+    SET
+      metadata = ${JSON.stringify(normalizedMetadata)},
+      updated_at = CURRENT_TIMESTAMP(3)
+    WHERE public_id = ${scopedSubscriptionPublicId}
+  `
+
+  return getQueueLiveUpdateSubscriptionByPublicId(scopedSubscriptionPublicId)
 }
 
 export function shouldDispatchQueueLiveUpdate(subscription, snapshot) {

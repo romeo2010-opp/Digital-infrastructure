@@ -90,7 +90,7 @@ const noShowBodySchema = z.object({
 
 const servedBodySchema = z.object({
   litres: z.number().positive().optional(),
-  paymentMethod: z.enum(["CASH", "MOBILE_MONEY", "CARD", "OTHER"]).optional(),
+  paymentMethod: z.enum(["SMARTPAY", "CASH", "MOBILE_MONEY", "CARD", "OTHER"]).optional(),
   amount: z.number().positive().optional(),
 })
 
@@ -1175,7 +1175,11 @@ export async function createQueueServiceTransaction(
     queueEntry,
     paymentReference: effectivePaymentReference,
   })
-  if (normalizedPaymentMethod === "SMARTPAY" && !effectivePaymentReference) {
+  if (
+    normalizedPaymentMethod === "SMARTPAY"
+    && !effectivePaymentReference
+    && hasQueueWalletSettlementEvidence(queueEntry)
+  ) {
     throw badRequest("Queue SmartPay transaction requires a captured wallet payment reference before completion.")
   }
   const existing = await findLinkedTransaction(db, stationId, {
@@ -1450,6 +1454,28 @@ function hasQueuePrepayIntent(queueEntry = null) {
     || metadata?.prepaySelected === true
 }
 
+function hasQueueWalletSettlementEvidence(queueEntry = null) {
+  const metadata = parseReservationMetadata(queueEntry?.metadata)
+  const serviceRequest =
+    metadata?.serviceRequest && typeof metadata.serviceRequest === "object"
+      ? metadata.serviceRequest
+      : {}
+  const walletSettlement =
+    metadata?.walletSettlement && typeof metadata.walletSettlement === "object"
+      ? metadata.walletSettlement
+      : {}
+  const resolvedPaymentStatus = String(serviceRequest.paymentStatus || "").trim().toUpperCase()
+
+  return hasQueuePrepayIntent(queueEntry)
+    || Boolean(String(serviceRequest.holdReference || "").trim())
+    || Boolean(String(serviceRequest.walletTransactionReference || "").trim())
+    || Boolean(String(serviceRequest.settlementBatchPublicId || "").trim())
+    || Boolean(String(walletSettlement.holdReference || "").trim())
+    || Boolean(String(walletSettlement.transactionReference || "").trim())
+    || Boolean(String(walletSettlement.settlementBatchPublicId || "").trim())
+    || ["HELD", "POSTED", "CAPTURED", "SETTLED"].includes(resolvedPaymentStatus)
+}
+
 export function shouldCreateQueueServiceTransaction({
   queueEntry = null,
   litres = null,
@@ -1467,7 +1493,28 @@ export function shouldCreateQueueServiceTransaction({
   if (normalizedPaymentMethod === "SMARTPAY") return true
   if (hasQueuePrepayIntent(queueEntry)) return true
 
-  const normalizedAmount = Number(amount)
+  const metadata = parseReservationMetadata(queueEntry?.metadata)
+  const serviceRequest =
+    metadata?.serviceRequest && typeof metadata.serviceRequest === "object"
+      ? metadata.serviceRequest
+      : {}
+  const derivedAmountCandidates = [
+    amount,
+    serviceRequest.estimatedAmount,
+    serviceRequest.amountMwk,
+    serviceRequest.requestedAmountMwk,
+    serviceRequest.requestedAmount,
+    metadata?.amountMwk,
+    metadata?.requestedAmountMwk,
+    queueEntry?.amount,
+    queueEntry?.requested_amount_mwk,
+  ]
+  const normalizedAmount = Number(
+    derivedAmountCandidates.find((value) => {
+      const numericValue = Number(value)
+      return Number.isFinite(numericValue) && numericValue > 0
+    }) || 0
+  )
   return Number.isFinite(normalizedAmount) && normalizedAmount > 0
 }
 
@@ -2459,7 +2506,6 @@ router.post(
       queueEntry: entry,
     })
     const servedAt = new Date()
-    const queuePaymentReference = await resolveQueueServicePaymentReference(prisma, entry)
     const queueMetadata = parseReservationMetadata(entry.metadata)
     const resolvedQueueLitres = await resolveQueueServiceLitres(prisma, {
       stationId: station.id,
@@ -2494,6 +2540,9 @@ router.post(
         })
         settlementCapture = finalizedSettlement.settlementCapture
         const nextMetadata = finalizedSettlement.metadata || queueMetadata
+        const queuePaymentReference =
+          finalizedSettlement.settlementCapture?.transaction?.reference
+          || await resolveQueueServicePaymentReference(tx, entry)
 
         forecourtTransaction = await createQueueServiceTransaction(tx, {
           stationId: station.id,

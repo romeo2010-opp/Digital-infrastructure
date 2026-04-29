@@ -5058,6 +5058,66 @@ body[data-user-theme='dark'] .app-airdrop-copy {
   word-break: break-word;
 }
 
+.scan-go-hero-card,
+.scan-go-entry-card,
+.scan-go-result-card {
+  gap: 16px;
+}
+
+.scan-go-form {
+  display: grid;
+  gap: 14px;
+}
+
+.scan-go-scanner-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.scan-go-scanner-preview {
+  position: relative;
+  overflow: hidden;
+  border-radius: 18px;
+  border: 1px solid #d7dee7;
+  background: #0f172a;
+  min-height: 260px;
+}
+
+.scan-go-scanner-video {
+  width: 100%;
+  height: 260px;
+  object-fit: cover;
+  display: block;
+}
+
+.scan-go-scanner-reticle {
+  position: absolute;
+  inset: 24px;
+  border: 2px solid rgba(255, 255, 255, 0.75);
+  border-radius: 18px;
+  box-shadow: 0 0 0 9999px rgba(15, 23, 42, 0.18);
+}
+
+.scan-go-scanner-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.scan-go-scanner-copy strong {
+  color: #16324f;
+  font-size: 14px;
+}
+
+.scan-go-scanner-copy span {
+  color: #64748b;
+  font-size: 13px;
+}
+
+.scan-go-result-grid small,
+.scan-go-meta span {
+  color: #64748b;
+}
+
 .wallet-send-grid {
   display: grid;
   gap: 12px;

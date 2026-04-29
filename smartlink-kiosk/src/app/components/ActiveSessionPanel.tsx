@@ -151,12 +151,6 @@ export function ActiveSessionPanel() {
 
   const canEditSession = activeSession.kind === "queue_draft" && activeSession.status === "waiting"
   const canCancelSession = activeSession.kind === "queue_draft" && activeSession.status === "waiting"
-  const autoOpenWalkInEditorKey =
-    activeSession.kind === "queue_draft"
-    && activeSession.status === "waiting"
-    && activeSession.queueUserType === "walkin"
-      ? activeSession.customerId
-      : null
   const assignedPumpLabel = activeSession.assignedPump ? `Pump ${activeSession.assignedPump}` : "Not assigned"
 
   const requestedValue = formatRequestedValue(
@@ -241,7 +235,7 @@ export function ActiveSessionPanel() {
                 {requestedValue}
               </div>
             </div>
-            {canEditSession ? <EditSessionDialog autoOpenKey={autoOpenWalkInEditorKey} /> : null}
+            {canEditSession ? <EditSessionDialog /> : null}
           </div>
 
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">

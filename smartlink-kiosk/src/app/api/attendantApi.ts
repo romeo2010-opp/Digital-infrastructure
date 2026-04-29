@@ -36,6 +36,17 @@ export const attendantApi = {
     const stationPublicId = stationPublicIdOrThrow()
     return httpClient.get(`/api/stations/${stationPublicId}/attendant/dashboard`)
   },
+  resolveScanAndGo(code: string) {
+    assertReadAccess()
+    const scopedCode = String(code || "").trim()
+    if (!scopedCode) {
+      throw new Error("Scan & Go code is required.")
+    }
+    const stationPublicId = stationPublicIdOrThrow()
+    return httpClient.get(
+      `/api/stations/${stationPublicId}/attendant/scan-and-go/resolve?code=${encodeURIComponent(scopedCode)}`,
+    )
+  },
   acceptOrder(orderType: string, orderPublicId: string) {
     assertWriteAccess()
     return httpClient.post(`${orderPath(stationPublicIdOrThrow(), orderType, orderPublicId)}/accept`, {})
@@ -68,6 +79,7 @@ export const attendantApi = {
   completeService(orderType: string, orderPublicId: string, payload: {
     litres?: number
     amount?: number
+    paymentMethod?: "SMARTPAY" | "CASH" | "MOBILE_MONEY" | "CARD" | "OTHER"
     note?: string
   }) {
     assertWriteAccess()

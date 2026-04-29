@@ -30,6 +30,46 @@ test("voice update script includes position change, music, and station escalatio
   assert.match(script.previewText, /position 4/i)
   assert.match(script.previewText, /Area 18 Service Station/)
   assert.equal(script.shouldPlayMusic, true)
+  assert.equal(script.shouldLoopMusic, true)
+  assert.equal(script.shouldCallToStation, true)
+})
+
+test("voice update script keeps music playing while queue position is above 2", () => {
+  const script = buildVoiceUpdateScript({
+    languageCode: "en",
+    previousPosition: 5,
+    snapshot: {
+      queueStatus: "WAITING",
+      position: 3,
+      etaMinutes: 12,
+      fuelType: "PETROL",
+      station: {
+        name: "Area 18 Service Station",
+      },
+    },
+  })
+
+  assert.equal(script.shouldLoopMusic, true)
+  assert.equal(script.shouldPlayMusic, true)
+})
+
+test("voice update script stops looping music when queue position reaches 2", () => {
+  const script = buildVoiceUpdateScript({
+    languageCode: "en",
+    previousPosition: 3,
+    snapshot: {
+      queueStatus: "WAITING",
+      position: 2,
+      etaMinutes: 4,
+      fuelType: "PETROL",
+      station: {
+        name: "Area 18 Service Station",
+      },
+    },
+  })
+
+  assert.equal(script.shouldLoopMusic, false)
+  assert.equal(script.shouldPlayMusic, false)
   assert.equal(script.shouldCallToStation, true)
 })
 

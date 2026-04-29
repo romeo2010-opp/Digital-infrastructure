@@ -556,6 +556,49 @@ function mapPumpSessionBinding(session) {
   }
 }
 
+async function reopenPumpSessionBinding({
+  session,
+  startedAt,
+  telemetryCorrelationId = "",
+} = {}) {
+  if (!session?.id) return null
+
+  const scopedStartedAt = parseTelemetryTimestamp(startedAt)
+  const nextTelemetryCorrelationId = resolvePumpSessionTelemetryCorrelationId({
+    sessionTelemetryCorrelationId: session.telemetryCorrelationId,
+    telemetryCorrelationId,
+  })
+  const nextStartTime =
+    session.startTime instanceof Date && session.startTime.getTime() <= scopedStartedAt.getTime()
+      ? session.startTime
+      : scopedStartedAt
+  const nextStatus = session.dispensedLitres > 0 ? "DISPENSING" : "STARTED"
+
+  await prisma.$executeRaw`
+    UPDATE pump_sessions
+    SET
+      session_status = ${nextStatus},
+      start_time = ${nextStartTime},
+      end_time = NULL,
+      dispense_duration_seconds = NULL,
+      error_code = NULL,
+      error_message = NULL,
+      telemetry_correlation_id = ${nextTelemetryCorrelationId}
+    WHERE id = ${session.id}
+  `
+
+  return {
+    ...session,
+    status: nextStatus,
+    startTime: nextStartTime,
+    endTime: null,
+    durationSeconds: null,
+    errorCode: null,
+    errorMessage: null,
+    telemetryCorrelationId: nextTelemetryCorrelationId,
+  }
+}
+
 export async function ensurePumpSessionBinding({
   stationId,
   pumpPublicId,
@@ -585,12 +628,23 @@ export async function ensurePumpSessionBinding({
         telemetryCorrelationId,
         pumpId: Number(pumpRow.id || 0),
         nozzleId: Number(nozzleRow.id || 0),
-        happenedAt: scopedStartedAt,
-      })
+      happenedAt: scopedStartedAt,
+    })
     : null
 
   if (session && TERMINAL_PUMP_SESSION_STATUSES.has(String(session.status || "").trim().toUpperCase())) {
-    session = null
+    const sessionMatchesBinding =
+      Number(session.pumpId || 0) === Number(pumpRow.id || 0)
+      && Number(session.nozzleId || 0) === Number(nozzleRow.id || 0)
+    if (!sessionMatchesBinding) {
+      session = null
+    } else {
+      session = await reopenPumpSessionBinding({
+        session,
+        startedAt: scopedStartedAt,
+        telemetryCorrelationId: String(telemetryCorrelationId || "").trim(),
+      })
+    }
   }
 
   if (!session) {

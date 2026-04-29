@@ -12,6 +12,7 @@ const DEFAULT_INTERVAL_MS = Number(process.env.QUEUE_LIVE_UPDATE_WATCH_INTERVAL_
 export function startQueueLiveUpdateWatcher() {
   let running = false
   let stopped = false
+  let hasLoggedStartup = false
 
   async function tick() {
     if (running || stopped) return
@@ -23,6 +24,15 @@ export function startQueueLiveUpdateWatcher() {
         throw error
       })
 
+      if (!hasLoggedStartup) {
+        hasLoggedStartup = true
+        // eslint-disable-next-line no-console
+        console.info("[voice-update] watcher started", {
+          intervalMs: Math.max(2000, DEFAULT_INTERVAL_MS),
+          activeSubscriptions: subscriptions.length,
+        })
+      }
+
       for (const subscription of subscriptions) {
         try {
           const snapshot = await buildUserQueueStatusSnapshot({
@@ -32,9 +42,22 @@ export function startQueueLiveUpdateWatcher() {
             },
           })
 
-          if (!shouldDispatchQueueLiveUpdate(subscription, snapshot)) {
+          const shouldDispatch = shouldDispatchQueueLiveUpdate(subscription, snapshot)
+          if (!shouldDispatch) {
             continue
           }
+
+          // eslint-disable-next-line no-console
+          console.info("[voice-update] dispatching live update", {
+            subscriptionPublicId: subscription.publicId,
+            queueJoinId: subscription.queueJoinId,
+            providerCode: subscription.providerCode,
+            phoneNumber: subscription.phoneNumber ? `***${String(subscription.phoneNumber).replace(/\D+/g, "").slice(-4)}` : null,
+            previousPosition: subscription.lastKnownPosition ?? null,
+            previousStatus: subscription.lastKnownStatus ?? null,
+            nextPosition: snapshot?.position ?? null,
+            nextStatus: snapshot?.queueStatus || null,
+          })
 
           const result = await dispatchQueueLiveUpdate({
             subscription,
@@ -46,19 +69,47 @@ export function startQueueLiveUpdateWatcher() {
             snapshot,
             providerReference: result.providerReference,
           })
+
+          // eslint-disable-next-line no-console
+          console.info("[voice-update] live update dispatched", {
+            subscriptionPublicId: subscription.publicId,
+            providerReference: result.providerReference || null,
+            nextPosition: snapshot?.position ?? null,
+            nextStatus: snapshot?.queueStatus || null,
+          })
         } catch (error) {
           const message = String(error?.message || "")
           if (message.includes("Queue entry was not found") || message.includes("Queue status was not found")) {
             await deactivateSubscriptionByPublicId(subscription.publicId).catch(() => {})
+            // eslint-disable-next-line no-console
+            console.warn("[voice-update] deactivated stale subscription", {
+              subscriptionPublicId: subscription.publicId,
+              queueJoinId: subscription.queueJoinId,
+              reason: message,
+            })
             continue
           }
           // eslint-disable-next-line no-console
-          console.error("[voice-update] live update tick failed", message || error)
+          console.error("[voice-update] live update tick failed", {
+            subscriptionPublicId: subscription.publicId,
+            queueJoinId: subscription.queueJoinId,
+            providerCode: subscription.providerCode,
+            phoneNumber: subscription.phoneNumber ? `***${String(subscription.phoneNumber).replace(/\D+/g, "").slice(-4)}` : null,
+            errorMessage: message || "Unknown live update error",
+            errorCode: error?.code ?? null,
+            errorStatus: error?.status ?? null,
+            stack: error?.stack || null,
+          })
         }
       }
     } catch (error) {
       // eslint-disable-next-line no-console
-      console.error("[voice-update] watcher tick failed", error?.message || error)
+      console.error("[voice-update] watcher tick failed", {
+        errorMessage: error?.message || "Unknown watcher error",
+        errorCode: error?.code ?? null,
+        errorStatus: error?.status ?? null,
+        stack: error?.stack || null,
+      })
     } finally {
       running = false
     }

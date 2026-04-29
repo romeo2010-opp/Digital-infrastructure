@@ -388,6 +388,26 @@ export const userQueueApi = {
     })
   },
 
+  async resolveScanAndGo(code, options = {}) {
+    const scopedCode = String(code || '').trim()
+    if (!scopedCode) throw new Error('Scan & Go code is required')
+    return request('/api/user/scan-and-go/resolve', {
+      method: 'POST',
+      body: { code: scopedCode },
+      signal: options.signal,
+    })
+  },
+
+  async payScanAndGo(code, options = {}) {
+    const scopedCode = String(code || '').trim()
+    if (!scopedCode) throw new Error('Scan & Go code is required')
+    return request('/api/user/scan-and-go/pay', {
+      method: 'POST',
+      body: { code: scopedCode },
+      signal: options.signal,
+    })
+  },
+
   async getReservations(options = {}) {
     return request('/api/user/reservations', {
       method: 'GET',

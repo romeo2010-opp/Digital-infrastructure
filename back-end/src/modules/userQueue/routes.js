@@ -55,6 +55,7 @@ import {
 } from "../common/userPushSubscriptions.js"
 import {
   createQueuePrepayWalletHold,
+  createWalletPayment,
   createWalletUserTransfer,
   createReservationWalletHold,
   createPrototypeWalletTopup,
@@ -84,6 +85,7 @@ import { initialUserRefundStatus } from "../internal/refundWorkflow.js"
 import { streamSmartPayReceiptPdf } from "./receipt.export.pdf.js"
 import { getUserTransactionReceiptPayloadByLink } from "../transactions/receipt.service.js"
 import { getPromotionPricingPreview } from "../promotions/service.js"
+import { ensurePumpSessionBinding } from "../monitoring/monitoring.service.js"
 import {
   ATTENDANT_ORDER_STATES,
   ATTENDANT_ORDER_TYPES,
@@ -91,7 +93,10 @@ import {
   deriveAttendantOrderState,
   normalizeAttendantWorkflow,
 } from "../attendant/service.js"
-import { markHybridOrderReadyOnSite } from "../queue/hybrid/integration.service.js"
+import {
+  markHybridOrderFueling,
+  markHybridOrderReadyOnSite,
+} from "../queue/hybrid/integration.service.js"
 import { ReadinessSignalType } from "../queue/hybrid/domain.js"
 
 const router = Router()
@@ -323,6 +328,10 @@ const queuePumpScanBodySchema = z.object({
 const queueDispenseRequestBodySchema = z.object({
   liters: z.number().positive().max(500),
   prepay: z.boolean().optional(),
+})
+
+const scanAndGoResolveBodySchema = z.object({
+  code: z.string().trim().min(1).max(600),
 })
 
 const reportIssueSchema = z.object({
@@ -632,6 +641,119 @@ export function applyQueuePumpScanToAttendantWorkflow({
       nozzlePublicId: nextPumpAssignment.nozzlePublicId,
       fuelType: nextPumpAssignment.fuelType,
     }
+  }
+
+  return {
+    metadata: nextMetadata,
+    currentState,
+    nextState,
+  }
+}
+
+export function applyQueueDispenseRequestToAttendantWorkflow({
+  metadata = {},
+  queueStatus = "",
+  startedAt = "",
+  pumpAssignment = {},
+  pumpSessionBinding = {},
+} = {}) {
+  const nextMetadata = metadata && typeof metadata === "object" ? { ...metadata } : {}
+  const nextStartedAt = String(startedAt || "").trim() || new Date().toISOString()
+  const existingWorkflow =
+    nextMetadata.attendantWorkflow && typeof nextMetadata.attendantWorkflow === "object"
+      ? { ...nextMetadata.attendantWorkflow }
+      : {}
+  const currentWorkflow = normalizeAttendantWorkflow(nextMetadata)
+  const currentState = deriveAttendantOrderState({
+    orderType: ATTENDANT_ORDER_TYPES.QUEUE,
+    baseStatus: queueStatus,
+    metadata: nextMetadata,
+    refundStatus: currentWorkflow.refundRequest?.status || "",
+  })
+
+  const nextPumpAssignment = {
+    ...(existingWorkflow.pumpAssignment && typeof existingWorkflow.pumpAssignment === "object"
+      ? existingWorkflow.pumpAssignment
+      : {}),
+    pumpPublicId: String(pumpAssignment.pumpPublicId || "").trim() || null,
+    pumpNumber: Number.isFinite(Number(pumpAssignment.pumpNumber))
+      ? Number(pumpAssignment.pumpNumber)
+      : null,
+    nozzlePublicId: String(pumpAssignment.nozzlePublicId || "").trim() || null,
+    nozzleNumber: String(pumpAssignment.nozzleNumber || "").trim() || null,
+    fuelType: String(pumpAssignment.fuelType || "").trim().toUpperCase() || null,
+    confirmedAt:
+      String(
+        pumpAssignment.confirmedAt
+        || existingWorkflow?.pumpAssignment?.confirmedAt
+        || nextMetadata?.lastPumpScan?.scannedAt
+        || ""
+      ).trim()
+      || nextStartedAt,
+  }
+
+  const assignedState =
+    currentState === ATTENDANT_ORDER_STATES.PUMP_ASSIGNED
+    || currentState === ATTENDANT_ORDER_STATES.DISPENSING
+      ? currentState
+      : canTransitionAttendantOrder(currentState, ATTENDANT_ORDER_STATES.PUMP_ASSIGNED)
+        ? ATTENDANT_ORDER_STATES.PUMP_ASSIGNED
+        : currentState
+
+  const nextState =
+    assignedState === ATTENDANT_ORDER_STATES.DISPENSING
+    || canTransitionAttendantOrder(assignedState, ATTENDANT_ORDER_STATES.DISPENSING)
+      ? ATTENDANT_ORDER_STATES.DISPENSING
+      : assignedState
+
+  nextMetadata.attendantWorkflow = {
+    ...existingWorkflow,
+    state: nextState,
+    customerArrivedAt:
+      String(existingWorkflow.customerArrivedAt || "").trim()
+      || nextPumpAssignment.confirmedAt
+      || nextStartedAt,
+    serviceStartedAt: nextStartedAt,
+    pumpAssignment: nextPumpAssignment,
+    pumpSession: {
+      publicId: String(pumpSessionBinding.pumpSessionPublicId || "").trim() || null,
+      sessionReference: String(pumpSessionBinding.sessionReference || "").trim() || null,
+      telemetryCorrelationId: String(pumpSessionBinding.telemetryCorrelationId || "").trim() || null,
+      boundAt: nextStartedAt,
+    },
+  }
+
+  nextMetadata.lastPumpScan = {
+    ...(nextMetadata.lastPumpScan && typeof nextMetadata.lastPumpScan === "object"
+      ? nextMetadata.lastPumpScan
+      : {}),
+    pumpPublicId: nextPumpAssignment.pumpPublicId,
+    pumpNumber: nextPumpAssignment.pumpNumber,
+    pumpStatus: "DISPENSING",
+    nozzlePublicId: nextPumpAssignment.nozzlePublicId,
+    nozzleNumber: nextPumpAssignment.nozzleNumber,
+    nozzleStatus: "DISPENSING",
+    fuelType: nextPumpAssignment.fuelType,
+    scannedAt:
+      String(nextMetadata?.lastPumpScan?.scannedAt || "").trim()
+      || nextPumpAssignment.confirmedAt
+      || nextStartedAt,
+  }
+
+  nextMetadata.serviceRequest = {
+    ...(nextMetadata.serviceRequest && typeof nextMetadata.serviceRequest === "object"
+      ? nextMetadata.serviceRequest
+      : {}),
+    pumpPublicId: nextPumpAssignment.pumpPublicId,
+    nozzlePublicId: nextPumpAssignment.nozzlePublicId,
+    fuelType: nextPumpAssignment.fuelType,
+    paymentStatus: nextState === ATTENDANT_ORDER_STATES.DISPENSING
+      ? "DISPENSING"
+      : nextMetadata?.serviceRequest?.paymentStatus || "PENDING_AT_PUMP",
+    dispensingStartedAt: nextStartedAt,
+    pumpSessionPublicId: String(pumpSessionBinding.pumpSessionPublicId || "").trim() || null,
+    sessionReference: String(pumpSessionBinding.sessionReference || "").trim() || null,
+    telemetryCorrelationId: String(pumpSessionBinding.telemetryCorrelationId || "").trim() || null,
   }
 
   return {
@@ -1091,6 +1213,117 @@ function parsePriceAmount(value) {
   if (!match) return null
   const amount = Number(match[1])
   return Number.isFinite(amount) ? amount : null
+}
+
+function parseScanAndGoCodeInput(value) {
+  const raw = String(value || "").trim()
+  if (!raw) return ""
+
+  const smartlinkMatch = raw.match(/^smartlink:scan-go:(.+)$/i)
+  if (smartlinkMatch?.[1]) {
+    return String(smartlinkMatch[1] || "").trim()
+  }
+
+  try {
+    const parsedUrl = new URL(raw)
+    const code = String(
+      parsedUrl.searchParams.get("code")
+      || parsedUrl.searchParams.get("reference")
+      || parsedUrl.searchParams.get("receipt")
+      || ""
+    ).trim()
+    if (code) return code
+  } catch {
+    // Ignore malformed URL values.
+  }
+
+  return raw
+}
+
+async function resolveUserScanAndGoTransaction({ code, userId, forUpdate = false, db = prisma } = {}) {
+  const scopedCode = parseScanAndGoCodeInput(code)
+  if (!scopedCode) throw badRequest("Scan & Go code is required.")
+
+  const lockClause = forUpdate ? "FOR UPDATE" : ""
+  const rows = await db.$queryRawUnsafe(
+    `
+      SELECT
+        t.id,
+        t.public_id,
+        t.user_id,
+        t.station_id,
+        t.payment_method,
+        t.payment_reference,
+        t.receipt_verification_ref,
+        t.total_amount,
+        t.final_amount_paid,
+        t.litres,
+        t.occurred_at,
+        t.settled_at,
+        t.created_at,
+        p.pump_number,
+        pn.nozzle_number,
+        ft.code AS fuel_code,
+        st.public_id AS station_public_id,
+        st.name AS station_name,
+        COALESCE(NULLIF(st.city, ''), NULLIF(st.address, ''), st.name) AS station_area
+      FROM transactions t
+      LEFT JOIN pumps p ON p.id = t.pump_id
+      LEFT JOIN pump_nozzles pn ON pn.id = t.nozzle_id
+      LEFT JOIN fuel_types ft ON ft.id = t.fuel_type_id
+      LEFT JOIN stations st ON st.id = t.station_id
+      WHERE (
+        t.public_id = ?
+        OR t.receipt_verification_ref = ?
+        OR t.payment_reference = ?
+      )
+      ORDER BY COALESCE(t.occurred_at, t.settled_at, t.created_at) DESC, t.id DESC
+      LIMIT 1
+      ${lockClause}
+    `,
+    scopedCode,
+    scopedCode,
+    scopedCode,
+  )
+
+  const row = rows?.[0] || null
+  if (!row?.id) {
+    throw badRequest("Scan & Go transaction not found.")
+  }
+
+  return row
+}
+
+function buildScanAndGoTransactionPayload(row) {
+  if (!row?.id) return null
+  const paymentReference = String(row.payment_reference || "").trim() || null
+  const receiptVerificationRef = String(row.receipt_verification_ref || "").trim() || null
+  return {
+    transactionPublicId: String(row.public_id || "").trim() || null,
+    station: {
+      publicId: String(row.station_public_id || "").trim() || null,
+      name: String(row.station_name || "").trim() || null,
+      area: String(row.station_area || "").trim() || null,
+    },
+    fuelType: String(row.fuel_code || "").trim().toUpperCase() || null,
+    pumpNumber: Number(row.pump_number || 0) || null,
+    nozzleNumber: String(row.nozzle_number || "").trim() || null,
+    litres: Number(row.litres || 0) || 0,
+    amountMwk:
+      Number(row.final_amount_paid || 0)
+      || Number(row.total_amount || 0)
+      || 0,
+    paymentMethod: String(row.payment_method || "").trim().toUpperCase() || null,
+    paymentReference,
+    receiptVerificationRef,
+    isPaid: Boolean(paymentReference),
+    canPay: !paymentReference,
+    completedAt:
+      toIsoOrNull(row.occurred_at)
+      || toIsoOrNull(row.settled_at)
+      || toIsoOrNull(row.created_at),
+    scanCode: receiptVerificationRef || String(row.public_id || "").trim() || null,
+  }
 }
 
 function resolveFuelPricePerLitre(pricesJson, fuelType) {
@@ -3890,6 +4123,148 @@ router.get(
 )
 
 router.post(
+  "/user/scan-and-go/resolve",
+  asyncHandler(async (req, res) => {
+    const authUserId = Number(req.auth?.userId || 0)
+    if (!Number.isFinite(authUserId) || authUserId <= 0) {
+      throw badRequest("Authenticated user context is required")
+    }
+
+    const body = scanAndGoResolveBodySchema.parse(req.body || {})
+    const transaction = await resolveUserScanAndGoTransaction({
+      code: body.code,
+      userId: authUserId,
+    })
+
+    return ok(res, {
+      transaction: buildScanAndGoTransactionPayload(transaction),
+    })
+  })
+)
+
+router.post(
+  "/user/scan-and-go/pay",
+  asyncHandler(async (req, res) => {
+    const authUserId = Number(req.auth?.userId || 0)
+    if (!Number.isFinite(authUserId) || authUserId <= 0) {
+      throw badRequest("Authenticated user context is required")
+    }
+
+    const body = scanAndGoResolveBodySchema.parse(req.body || {})
+    await ensureWalletTablesReady()
+
+    const result = await prisma.$transaction(async (tx) => {
+      const transaction = await resolveUserScanAndGoTransaction({
+        code: body.code,
+        userId: authUserId,
+        forUpdate: true,
+        db: tx,
+      })
+
+      if (String(transaction.payment_reference || "").trim()) {
+        return {
+          alreadyPaid: true,
+          transaction,
+          walletPayment: null,
+        }
+      }
+
+      const amountMwk =
+        Number(transaction.final_amount_paid || 0)
+        || Number(transaction.total_amount || 0)
+        || 0
+      if (!Number.isFinite(amountMwk) || amountMwk <= 0) {
+        throw badRequest("This Scan & Go transaction does not have a payable amount.")
+      }
+
+      const walletPayment = await createWalletPayment(
+        {
+          userId: authUserId,
+          amount: amountMwk,
+          actorUserId: authUserId,
+          description: `Scan & Go payment for transaction ${String(transaction.public_id || "").trim()}.`,
+          relatedEntityType: "TRANSACTION",
+          relatedEntityId: String(transaction.public_id || "").trim() || null,
+          idempotencyKey: `SCAN_GO:${String(transaction.public_id || "").trim()}`,
+          metadata: {
+            source: "SCAN_AND_GO",
+            receiptVerificationRef: String(transaction.receipt_verification_ref || "").trim() || null,
+            stationPublicId: String(transaction.station_public_id || "").trim() || null,
+          },
+          settlementContext: {
+            stationId: Number(transaction.station_id || 0) || null,
+            relatedEntityType: "TRANSACTION",
+            relatedEntityId: String(transaction.public_id || "").trim() || null,
+            source: "SCAN_AND_GO",
+          },
+        },
+        { tx }
+      )
+
+      const paymentReference = String(walletPayment?.transaction?.reference || "").trim() || null
+      if (!paymentReference) {
+        throw badRequest("Scan & Go wallet payment could not be created.")
+      }
+
+      await tx.$executeRaw`
+        UPDATE transactions
+        SET
+          user_id = ${authUserId},
+          payment_method = 'SMARTPAY',
+          payment_reference = ${paymentReference},
+          settled_at = COALESCE(settled_at, CURRENT_TIMESTAMP(3))
+        WHERE id = ${Number(transaction.id)}
+      `
+
+      const refreshed = await resolveUserScanAndGoTransaction({
+        code: String(transaction.public_id || "").trim(),
+        userId: authUserId,
+        forUpdate: false,
+        db: tx,
+      })
+
+      return {
+        alreadyPaid: false,
+        transaction: refreshed,
+        walletPayment,
+        audit: {
+          stationId: Number(transaction.station_id || 0) || null,
+          transactionPublicId: String(transaction.public_id || "").trim() || null,
+          receiptVerificationRef: String(transaction.receipt_verification_ref || "").trim() || null,
+          paymentReference,
+        },
+      }
+    })
+
+    if (result.audit?.stationId) {
+      await writeAuditLog({
+        stationId: result.audit.stationId,
+        actionType: "USER_SCAN_AND_GO_PAYMENT",
+        payload: {
+          transactionPublicId: result.audit.transactionPublicId,
+          receiptVerificationRef: result.audit.receiptVerificationRef,
+          paymentReference: result.audit.paymentReference,
+          actorUserId: authUserId,
+        },
+      })
+    }
+
+    return ok(res, {
+      paid: result.alreadyPaid !== true,
+      alreadyPaid: result.alreadyPaid === true,
+      transaction: buildScanAndGoTransactionPayload(result.transaction),
+      walletPayment: result.walletPayment
+        ? {
+            reference: result.walletPayment.transaction?.reference || null,
+            amount: result.walletPayment.transaction?.amount || null,
+            walletAfterPayment: result.walletPayment.walletAfterPayment || null,
+          }
+        : null,
+    })
+  })
+)
+
+router.post(
   "/user/queue/:queueJoinId/pump-scan",
   asyncHandler(async (req, res) => {
     const queueJoinId = String(req.params.queueJoinId || "").trim()
@@ -4222,6 +4597,17 @@ router.post(
       assertWalletEligibleForQueuePrepay(walletSummary)
     }
 
+    const dispensingStartedAt = new Date()
+    const pumpSessionBinding = await ensurePumpSessionBinding({
+      stationId: queueEntry.station_id,
+      pumpPublicId: verifiedPumpPublicId,
+      nozzlePublicId: String(nozzle.public_id || "").trim() || null,
+      sessionPublicId: String(metadata?.serviceRequest?.pumpSessionPublicId || "").trim() || null,
+      sessionReference: String(metadata?.serviceRequest?.sessionReference || "").trim() || null,
+      telemetryCorrelationId: String(metadata?.serviceRequest?.telemetryCorrelationId || "").trim() || null,
+      startedAt: dispensingStartedAt,
+    })
+
     let walletHold = null
     await prisma.$transaction(async (tx) => {
       if (effectivePaymentMode === "PREPAY") {
@@ -4275,16 +4661,56 @@ router.post(
         walletTransactionReference: null,
         settlementBatchPublicId: null,
         walletAvailableBalanceAfterPayment: walletHold?.walletAfterHold?.availableBalance ?? null,
-        dispensingStartedAt: null,
+        dispensingStartedAt: dispensingStartedAt.toISOString(),
+        pumpPublicId: verifiedPumpPublicId,
+        pumpSessionPublicId: pumpSessionBinding.pumpSessionPublicId,
+        sessionReference: pumpSessionBinding.sessionReference,
+        telemetryCorrelationId: pumpSessionBinding.telemetryCorrelationId,
         userSessionPublicId: String(req.auth?.sessionPublicId || "").trim() || null,
       }
 
+      const attendantWorkflowSync = applyQueueDispenseRequestToAttendantWorkflow({
+        metadata,
+        queueStatus,
+        startedAt: dispensingStartedAt.toISOString(),
+        pumpAssignment: {
+          pumpPublicId: verifiedPumpPublicId,
+          pumpNumber: Number.isFinite(Number(pump.pump_number)) ? Number(pump.pump_number) : null,
+          nozzlePublicId: String(nozzle.public_id || "").trim() || null,
+          nozzleNumber: String(nozzle.nozzle_number || "").trim() || null,
+          fuelType: String(nozzle.fuel_code || queueEntry.fuel_type_code || "").trim().toUpperCase() || null,
+          confirmedAt: metadata?.lastPumpScan?.scannedAt || dispensingStartedAt.toISOString(),
+        },
+        pumpSessionBinding,
+      })
+
       await tx.$executeRaw`
         UPDATE queue_entries
-        SET metadata = ${JSON.stringify(metadata)}
+        SET metadata = ${JSON.stringify(attendantWorkflowSync.metadata)}
         WHERE id = ${queueEntry.id}
       `
+
+      await tx.$executeRaw`
+        UPDATE pump_nozzles
+        SET status = CASE
+          WHEN public_id = ${String(nozzle.public_id || "").trim()} THEN 'DISPENSING'
+          WHEN pump_id = ${Number(pump.id || 0)}
+            AND status = 'DISPENSING' THEN 'ACTIVE'
+          ELSE status
+        END
+        WHERE station_id = ${queueEntry.station_id}
+          AND (public_id = ${String(nozzle.public_id || "").trim()} OR pump_id = ${Number(pump.id || 0)})
+          AND is_active = 1
+      `
     })
+
+    await markHybridOrderFueling({
+      stationId: queueEntry.station_id,
+      orderType: ATTENDANT_ORDER_TYPES.QUEUE,
+      orderPublicId: queueJoinId,
+      pumpPublicId: verifiedPumpPublicId,
+      occurredAt: dispensingStartedAt,
+    }).catch(() => null)
 
     await writeAuditLog({
       stationId: queueEntry.station_id,
@@ -4294,6 +4720,9 @@ router.post(
         userPublicId: req.auth?.userPublicId || null,
         pumpPublicId: verifiedPumpPublicId,
         nozzlePublicId: String(nozzle.public_id || "").trim() || null,
+        pumpSessionPublicId: pumpSessionBinding.pumpSessionPublicId,
+        sessionReference: pumpSessionBinding.sessionReference,
+        telemetryCorrelationId: pumpSessionBinding.telemetryCorrelationId,
         requestedLiters,
         paymentMode: effectivePaymentMode,
         holdReference: walletHold?.hold?.reference || null,

@@ -40,6 +40,10 @@ export interface QueueItem {
   selectedNozzleNumber?: string | null
   pumpSessionPublicId?: string | null
   pumpSessionReference?: string | null
+  completedTransactionPublicId?: string | null
+  completedReceiptVerificationRef?: string | null
+  completedPaymentReference?: string | null
+  completedAmountMwk?: number | null
 }
 
 export interface NearbyWalletOrder {
@@ -149,6 +153,10 @@ export interface ActiveSession {
   pumpSessionPublicId?: string | null
   pumpSessionReference?: string | null
   fuelOrderPublicId?: string | null
+  completedTransactionPublicId?: string | null
+  completedReceiptVerificationRef?: string | null
+  completedPaymentReference?: string | null
+  completedAmountMwk?: number | null
 }
 
 interface StationFuelPrices {
@@ -479,6 +487,12 @@ function mapQueueItems(queueSnapshot: Record<string, any>, attendantDashboard?: 
       selectedNozzleNumber: String(order?.selectedPump?.nozzleNumber || "").trim() || null,
       pumpSessionPublicId: String(order?.workflow?.pumpSession?.publicId || "").trim() || null,
       pumpSessionReference: String(order?.workflow?.pumpSession?.sessionReference || "").trim() || null,
+      completedTransactionPublicId: String(order?.transaction?.publicId || "").trim() || null,
+      completedReceiptVerificationRef:
+        String(order?.transaction?.receiptVerificationRef || "").trim() || null,
+      completedPaymentReference:
+        String(order?.transaction?.paymentReference || "").trim() || null,
+      completedAmountMwk: toPositiveNumber(order?.transaction?.amountMwk) || null,
     }))
 }
 
@@ -784,6 +798,10 @@ function buildQueueDraft(
     backendOrderPublicId: queueItem.backendOrderPublicId || null,
     pumpSessionPublicId: queueItem.pumpSessionPublicId || null,
     pumpSessionReference: queueItem.pumpSessionReference || null,
+    completedTransactionPublicId: queueItem.completedTransactionPublicId || null,
+    completedReceiptVerificationRef: queueItem.completedReceiptVerificationRef || null,
+    completedPaymentReference: queueItem.completedPaymentReference || null,
+    completedAmountMwk: queueItem.completedAmountMwk || null,
   }
 }
 
@@ -796,16 +814,42 @@ function refreshQueueDraftFromQueueItem(
   if (!session || session.kind !== "queue_draft") return null
 
   const nextQueueItem = queue.find((item) => item.id === session.customerId) || null
-  if (!nextQueueItem) return null
+  if (!nextQueueItem) {
+    return session.status === "dispensing" || session.status === "completed"
+      ? session
+      : null
+  }
 
   const refreshedDraft = buildQueueDraft(nextQueueItem, pumps, hybridPilotQueue)
   if (!refreshedDraft) return null
+  const refreshedHasAssignment =
+    Boolean(String(refreshedDraft.assignedPumpPublicId || "").trim())
+    || (Number(refreshedDraft.assignedPump || 0) > 0)
+  const currentHasAssignment =
+    Boolean(String(session.assignedPumpPublicId || "").trim())
+    || (Number(session.assignedPump || 0) > 0)
+  const assignmentFallback =
+    !refreshedHasAssignment && currentHasAssignment
+      ? {
+          assignedPump: session.assignedPump,
+          assignedPumpPublicId: session.assignedPumpPublicId || null,
+          assignedNozzlePublicId: session.assignedNozzlePublicId || null,
+          assignedNozzleLabel: session.assignedNozzleLabel || null,
+        }
+      : {}
 
   return {
     ...session,
     ...refreshedDraft,
-    status: session.status === "completed" ? "completed" : refreshedDraft.status,
-    litresDispensed: session.status === "completed" ? session.litresDispensed : refreshedDraft.litresDispensed,
+    ...assignmentFallback,
+    status:
+      session.status === "dispensing" || session.status === "completed"
+        ? session.status
+        : refreshedDraft.status,
+    litresDispensed:
+      session.status === "dispensing" || session.status === "completed"
+        ? session.litresDispensed
+        : refreshedDraft.litresDispensed,
   }
 }
 
@@ -994,14 +1038,29 @@ export const useFuelStore = create<FuelStoreState>((set) => ({
       return state
     }
     const matchingNozzle = nextPump.nozzles.find((nozzle) => nozzle.fuelType === state.activeSession?.fuelType) || null
+    const nextAssignedPumpPublicId = nextPump.publicId || null
+    const nextAssignedPumpNumber = nextPump.id
+    const nextAssignedNozzlePublicId = matchingNozzle?.nozzlePublicId || null
+    const nextAssignedNozzleLabel = matchingNozzle?.nozzleNumber || null
     return {
       activeSession: {
         ...state.activeSession,
-        assignedPump: nextPump.id,
-        assignedPumpPublicId: nextPump.publicId || null,
-        assignedNozzlePublicId: matchingNozzle?.nozzlePublicId || null,
-        assignedNozzleLabel: matchingNozzle?.nozzleNumber || null,
+        assignedPump: nextAssignedPumpNumber,
+        assignedPumpPublicId: nextAssignedPumpPublicId,
+        assignedNozzlePublicId: nextAssignedNozzlePublicId,
+        assignedNozzleLabel: nextAssignedNozzleLabel,
       },
+      queue: state.queue.map((item) =>
+        item.id === state.activeSession?.customerId
+          ? {
+              ...item,
+              selectedPumpPublicId: nextAssignedPumpPublicId,
+              selectedPumpNumber: nextAssignedPumpNumber,
+              selectedNozzlePublicId: nextAssignedNozzlePublicId,
+              selectedNozzleNumber: nextAssignedNozzleLabel,
+            }
+          : item
+      ),
     }
   }),
 
