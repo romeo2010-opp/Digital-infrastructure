@@ -7,6 +7,8 @@ export const ASSISTANT_TOOL_IDS = Object.freeze({
   JOIN_FASTEST_QUEUE: "join_fastest_queue",
   MAKE_RESERVATION: "make_reservation",
   CHECK_BOOKING: "check_booking",
+  LIVE_QUEUE_UPDATES: "live_queue_updates",
+  STOP_LIVE_QUEUE_UPDATES: "stop_live_queue_updates",
   CANCEL_BOOKING: "cancel_booking",
   WALLET_HELP: "wallet_help",
   WALLET_SUMMARY: "wallet_summary",
@@ -20,6 +22,7 @@ export const ASSISTANT_ACTION_IDS = Object.freeze({
   CHOOSE_LITRES: "assistant.choose_litres",
   CHOOSE_SLOT: "assistant.choose_slot",
   CHOOSE_CANCEL_TARGET: "assistant.choose_cancel_target",
+  CHOOSE_LIVE_UPDATE_LANGUAGE: "assistant.choose_live_update_language",
   CONTINUE: "assistant.continue",
 })
 

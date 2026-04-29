@@ -23,7 +23,7 @@ import supportRoutes from "./modules/support/routes.js"
 import monitoringRoutes, { monitoringGatewayRoutes } from "./modules/monitoring/routes.js"
 import promotionsRoutes from "./modules/promotions/routes.js"
 import attendantRoutes from "./modules/attendant/routes.js"
-import assistantRoutes from "./modules/assistant/routes.js"
+import assistantRoutes, { publicAssistantRouter } from "./modules/assistant/routes.js"
 import fuelOrdersRoutes, { fuelOrderGatewayRoutes } from "./modules/fuelOrders/routes.js"
 import transactionPublicRoutes from "./modules/transactions/public.routes.js"
 import authRouter from "./modules/auth/auth.router.js"
@@ -43,6 +43,11 @@ const frontendDistPath = process.env.FRONTEND_DIST_PATH
 const frontendIndexPath = path.join(frontendDistPath, "index.html")
 const hasFrontendBuild = fs.existsSync(frontendIndexPath)
 
+function captureRawBody(req, _res, buffer) {
+  if (!buffer?.length) return
+  req.rawBody = buffer.toString("utf8")
+}
+
 app.use(helmet())
 app.use(
   cors({
@@ -50,7 +55,8 @@ app.use(
     credentials: true,
   })
 )
-app.use(express.json({ limit: "6mb" }))
+app.use(express.urlencoded({ extended: false, verify: captureRawBody }))
+app.use(express.json({ limit: "6mb", verify: captureRawBody }))
 app.use(cookieParser())
 app.use(morgan("dev"))
 
@@ -68,6 +74,7 @@ app.get("/api/health", (_req, res) => {
 app.use(transactionPublicRoutes)
 app.use(fuelOrderGatewayRoutes)
 app.use(monitoringGatewayRoutes)
+app.use(publicAssistantRouter)
 
 const apiRouter = express.Router()
 apiRouter.use(stationsRoutes)

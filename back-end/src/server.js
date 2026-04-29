@@ -9,6 +9,7 @@ import { attachUserStationChangesWebSocket } from "./realtime/userStationChanges
 import { attachUserAlertsWebSocket } from "./realtime/userAlertsWebSocket.js"
 import { attachInternalChatWebSocket } from "./realtime/internalChatWebSocket.js"
 import { startMonitoringStateWatcher } from "./modules/monitoring/monitoring.service.js"
+import { startQueueLiveUpdateWatcher } from "./realtime/queueLiveUpdateWatcher.js"
 
 const port = Number(process.env.PORT || 4000)
 const host = process.env.HOST || "0.0.0.0"
@@ -23,9 +24,11 @@ async function bootstrap() {
   const internalChatWsState = await attachInternalChatWebSocket(server)
   const stopWatcher = startStationChangeWatcher()
   const stopMonitoringWatcher = startMonitoringStateWatcher()
+  const stopQueueLiveUpdateWatcher = startQueueLiveUpdateWatcher()
   const shutdown = () => {
     stopWatcher()
     stopMonitoringWatcher()
+    stopQueueLiveUpdateWatcher()
   }
   process.on("exit", shutdown)
   process.on("SIGINT", shutdown)

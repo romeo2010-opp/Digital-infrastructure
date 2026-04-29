@@ -12,7 +12,7 @@
     "prisma:pull": "prisma db pull",
     "integrity:nozzles": "node src/scripts/nozzleIntegrityCheck.js",
     "report:sample-pdf": "node scripts/generateSampleReportPdf.js",
-    "test": "node --test src/tests"
+    "test": "node --test src/tests/*.js"
   },
   "dependencies": {
     "@prisma/client": "^6.4.1",
@@ -29,6 +29,7 @@
     "pdfkit": "^0.17.1",
     "puppeteer": "^24.37.5",
     "qrcode": "^1.5.4",
+    "twilio": "^5.10.4",
     "web-push": "^3.6.7",
     "ws": "^8.19.0",
     "zod": "^3.24.1"

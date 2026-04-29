@@ -2,9 +2,74 @@ import { Router } from "express"
 import { z } from "zod"
 import { asyncHandler } from "../../utils/asyncHandler.js"
 import { ok } from "../../utils/http.js"
-import { confirmAssistantAction, respondToAssistant } from "./service.js"
+import { confirmAssistantAction, respondToAssistant, handleUssdRequest } from "./service.js"
+import {
+  buildTwilioVoiceResponse,
+  validateTwilioWebhookRequest,
+} from "./twilio-voice.service.js"
 
+export const publicAssistantRouter = Router()
 const router = Router()
+
+/**
+ * USSD Entry point
+ * Standard format for Africa's Talking and similar gateways.
+ */
+async function ussdCallbackHandler(req, res) {
+  const { sessionId, phoneNumber, text, serviceCode, networkCode } = req.body || {}
+  const response = await handleUssdRequest({
+    sessionId,
+    phoneNumber,
+    text,
+    serviceCode,
+    networkCode,
+  })
+  res.set("Content-Type", "text/plain")
+  return res.send(response)
+}
+
+publicAssistantRouter.post("/ussd", asyncHandler(ussdCallbackHandler))
+publicAssistantRouter.post("/api/v1/ussd", asyncHandler(ussdCallbackHandler))
+
+publicAssistantRouter.post(
+  "/twilio/voice/live-queue/twiml",
+  asyncHandler(async (req, res) => {
+    try {
+      validateTwilioWebhookRequest(req)
+      const responseXml = await buildTwilioVoiceResponse({
+        kind: "twiml",
+        req,
+      })
+      res.type("text/xml")
+      return res.status(200).send(responseXml)
+    } catch (error) {
+      if (Number(error?.status || 0) === 400) {
+        return res.status(403).json({ ok: false, error: error.message || "Invalid Twilio signature" })
+      }
+      throw error
+    }
+  })
+)
+
+publicAssistantRouter.post(
+  "/twilio/voice/live-queue/events",
+  asyncHandler(async (req, res) => {
+    try {
+      validateTwilioWebhookRequest(req)
+      const responseXml = await buildTwilioVoiceResponse({
+        kind: "event",
+        req,
+      })
+      res.type("text/xml")
+      return res.status(200).send(responseXml)
+    } catch (error) {
+      if (Number(error?.status || 0) === 400) {
+        return res.status(403).json({ ok: false, error: error.message || "Invalid Twilio signature" })
+      }
+      throw error
+    }
+  })
+)
 
 const respondBodySchema = z.object({
   message: z.string().trim().max(1000).optional(),

@@ -61,6 +61,24 @@ const INTENT_PATTERNS = [
     ],
   },
   {
+    intent: "stop_live_queue_updates",
+    patterns: [
+      /\bstop\s+live\s+updates\b/i,
+      /\bdisable\s+live\s+updates\b/i,
+      /\bturn\s+off\s+live\s+updates\b/i,
+    ],
+  },
+  {
+    intent: "live_queue_updates",
+    patterns: [
+      /\bjoin\s+live\s+updates\b/i,
+      /\blive\s+updates\b/i,
+      /\bvoice\s+updates\b/i,
+      /\bqueue\s+updates\s+call\b/i,
+      /\bchange\s+live\s+update\s+language\b/i,
+    ],
+  },
+  {
     intent: "cancel_booking",
     patterns: [
       /\bcancel\s+booking\b/i,
@@ -123,6 +141,17 @@ const INTENT_SCORING_RULES = {
     { patterns: [/\b(check|view|show|see|open)\b/i], score: 2 },
     { patterns: [/\b(my|current|active)\b/i], score: 1 },
     { patterns: [/\b(booking|queue|reservation|status)\b/i], score: 2 },
+  ],
+  stop_live_queue_updates: [
+    { patterns: [/\b(stop|disable|off|turn\s+off)\b/i], score: 3 },
+    { patterns: [/\b(live|voice|call)\b/i], score: 2 },
+    { patterns: [/\b(update|updates)\b/i], score: 2 },
+  ],
+  live_queue_updates: [
+    { patterns: [/\b(live|voice|call)\b/i], score: 2 },
+    { patterns: [/\b(update|updates)\b/i], score: 2 },
+    { patterns: [/\b(join|start|enable|change|language)\b/i], score: 2 },
+    { patterns: [/\b(queue|booking)\b/i], score: 1 },
   ],
   cancel_booking: [
     { patterns: [/\b(cancel|leave|stop|end|remove|exit)\b/i], score: 3 },
@@ -194,6 +223,13 @@ function extractBookingKind(text) {
   return null
 }
 
+function extractLanguageCode(text) {
+  const normalized = String(text || "").toLowerCase()
+  if (normalized.includes("chichewa")) return "ny"
+  if (normalized.includes("english")) return "en"
+  return null
+}
+
 export function normalizeAssistantText(text) {
   return String(text || "").trim()
 }
@@ -229,6 +265,7 @@ export function parseAssistantIntent(text) {
       litres: extractLitres(normalizedText),
       requestedTime: extractRequestedTime(normalizedText),
       bookingKind: extractBookingKind(normalizedText),
+      languageCode: extractLanguageCode(normalizedText),
       isGreeting: isGreetingOnlyText(normalizedText),
       wantsNow: /\b(now|immediately|right now)\b/i.test(normalizedText),
       wantsLater:

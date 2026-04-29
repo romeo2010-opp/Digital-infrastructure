@@ -1,5 +1,7 @@
 import jwt from "jsonwebtoken"
+import bcrypt from "bcryptjs"
 import { prisma } from "../../db/prisma.js"
+import { generatePublicUserId } from "../../utils/generateUserId.js"
 import { badRequest } from "../../utils/http.js"
 import { getUserWalletSummary, ensureWalletTablesReady, isWalletFoundationTableMissingError } from "../common/wallets.js"
 import { hasStationPlanFeature, STATION_PLAN_FEATURES } from "../subscriptions/planCatalog.js"
@@ -28,6 +30,14 @@ import {
   buildWelcomeResponse,
 } from "./response-builders.js"
 import { createAssistantAuditLog } from "./audit.service.js"
+import {
+  getActiveQueueLiveUpdateSubscription,
+  getLiveUpdateLanguageLabel,
+  LIVE_UPDATE_LANGUAGE_OPTIONS,
+  normalizeLiveUpdateLanguage,
+  upsertQueueLiveUpdateSubscription,
+  deactivateQueueLiveUpdateSubscription,
+} from "./live-updates.service.js"
 
 const SESSION_TOKEN_TTL_SECONDS = 30 * 60
 const CONFIRMATION_TOKEN_TTL_SECONDS = 10 * 60
@@ -73,6 +83,28 @@ function sanitizeLocation(location) {
   const lng = toNumberOrNull(location.lng)
   if (lat === null || lng === null) return null
   return { lat, lng }
+}
+
+function normalizeUssdPhoneNumber(phoneNumber) {
+  const raw = String(phoneNumber || "")
+  if (!raw.trim()) return null
+
+  let normalized = raw.replace(/\s+/g, "")
+  if (normalized.startsWith("265") && !normalized.startsWith("+")) {
+    normalized = `+${normalized}`
+  }
+  return normalized || null
+}
+
+function normalizeUssdPin(pin) {
+  const normalized = String(pin || "").trim()
+  if (!/^\d{4}$/.test(normalized)) return null
+  return normalized
+}
+
+function formatUssdMoney(amount, currencyCode = "MWK") {
+  const normalizedAmount = Number(amount || 0)
+  return `${currencyCode} ${normalizedAmount.toLocaleString()}`
 }
 
 function signToken(payload, expiresIn) {
@@ -163,6 +195,9 @@ function mergeFreeTextIntoState(state, text, resolvedStation = null) {
   if (parsed?.params?.bookingKind) {
     params.bookingKind = parsed.params.bookingKind
   }
+  if (parsed?.params?.languageCode) {
+    params.languageCode = parsed.params.languageCode
+  }
   if (resolvedStation?.publicId) {
     params.stationPublicId = resolvedStation.publicId
     params.stationName = resolvedStation.name
@@ -195,6 +230,7 @@ function stateTaskLabel(goal) {
   if (goal === ASSISTANT_TOOL_IDS.JOIN_FASTEST_QUEUE) return "queue"
   if (goal === ASSISTANT_TOOL_IDS.GUIDED_FUEL_REQUEST) return "fuel request"
   if (goal === ASSISTANT_TOOL_IDS.CANCEL_BOOKING) return "booking cancellation"
+  if (goal === ASSISTANT_TOOL_IDS.LIVE_QUEUE_UPDATES) return "live queue updates"
   return "SmartLink task"
 }
 
@@ -204,7 +240,7 @@ export function shouldKeepAssistantStateForMessage({ state, parsedIntent, text, 
   if (resolvedStation?.publicId) return true
 
   const params = parsedIntent?.params || {}
-  if (params.fuelType || params.litres !== null && params.litres !== undefined || params.bookingKind) return true
+  if (params.fuelType || params.litres !== null && params.litres !== undefined || params.bookingKind || params.languageCode) return true
   if (params.requestedTime || params.wantsNow || params.wantsLater) return true
 
   if (String(state.step || "").trim() === "enter_identifier") {
@@ -274,6 +310,8 @@ function applyActionToState(state, actionId, payload = {}) {
     nextState.params.bookingKind = String(payload.bookingKind || "").trim().toLowerCase() || null
     nextState.params.queueJoinId = String(payload.queueJoinId || "").trim() || null
     nextState.params.reservationPublicId = String(payload.reservationPublicId || "").trim() || null
+  } else if (actionId === ASSISTANT_ACTION_IDS.CHOOSE_LIVE_UPDATE_LANGUAGE) {
+    nextState.params.languageCode = normalizeLiveUpdateLanguage(payload.languageCode || "en")
   }
 
   return nextState
@@ -682,6 +720,18 @@ function litreActions(values, allowSkip = true) {
   return actions
 }
 
+function liveUpdateLanguageActions() {
+  return LIVE_UPDATE_LANGUAGE_OPTIONS.map((option) =>
+    buildRespondAction({
+      id: ASSISTANT_ACTION_IDS.CHOOSE_LIVE_UPDATE_LANGUAGE,
+      label: option.label,
+      payload: {
+        languageCode: option.code,
+      },
+    })
+  )
+}
+
 async function buildGuidedFuelRequestResponse(state, currentLocation) {
   const params = cloneParams(state?.params || {})
   const station = params.stationPublicId ? await getStationByPublicId(params.stationPublicId, currentLocation) : null
@@ -821,6 +871,12 @@ async function handleCheckBooking(auth) {
     getActiveQueueForUser(auth),
     getActiveReservationDetails(auth),
   ])
+  const liveUpdateSubscription = queueSnapshot?.queueJoinId
+    ? await getActiveQueueLiveUpdateSubscription({
+        userId: auth?.userId,
+        queueJoinId: queueSnapshot.queueJoinId,
+      }).catch(() => null)
+    : null
 
   const cards = []
   if (queueSnapshot) cards.push(buildQueueBookingCard(queueSnapshot))
@@ -842,6 +898,19 @@ async function handleCheckBooking(auth) {
   const cancelActions = []
   if (queueSnapshot) {
     cancelActions.push(buildPromptAction("Cancel queue"))
+    cancelActions.push(
+      buildPromptAction(liveUpdateSubscription?.publicId ? "Change live update language" : "Join live updates")
+    )
+    if (liveUpdateSubscription?.publicId) {
+      cancelActions.push(buildPromptAction("Stop live updates"))
+      cards.push(
+        buildSystemNoticeCard({
+          tone: "info",
+          title: "Live voice updates active",
+          message: `Language: ${getLiveUpdateLanguageLabel(liveUpdateSubscription.languageCode)}. Calls will react to queue movement and position 4.`,
+        })
+      )
+    }
   }
   if (reservation) {
     cancelActions.push(buildPromptAction("Cancel reservation"))
@@ -858,6 +927,135 @@ async function handleCheckBooking(auth) {
     actions: cancelActions,
     suggestions: [buildPromptAction("Check wallet"), buildPromptAction("Find fuel near me")],
   })
+}
+
+async function handleLiveQueueUpdates(state, auth) {
+  const queueSnapshot = await getActiveQueueForUser(auth)
+  if (!queueSnapshot?.queueJoinId) {
+    return {
+      state: null,
+      response: buildAssistantResponse({
+        type: "blocked",
+        title: "No Active Queue",
+        message: "Live queue updates only work when you have an active queue booking.",
+        actions: [buildPromptAction("Join fastest queue"), buildPromptAction("Check my booking")],
+      }),
+    }
+  }
+
+  const existingSubscription = await getActiveQueueLiveUpdateSubscription({
+    userId: auth?.userId,
+    queueJoinId: queueSnapshot.queueJoinId,
+  }).catch((error) => {
+    throw badRequest(error?.message || "Live queue update storage is unavailable.")
+  })
+
+  const nextState = state || {
+    goal: ASSISTANT_TOOL_IDS.LIVE_QUEUE_UPDATES,
+    params: {},
+  }
+  const params = cloneParams(nextState.params || {})
+
+  if (!params.languageCode) {
+    nextState.step = "select_live_update_language"
+    nextState.params = params
+    return {
+      state: nextState,
+      response: buildAssistantResponse({
+        type: "question",
+        title: existingSubscription?.publicId ? "Change Live Update Language" : "Join Live Updates",
+        message: existingSubscription?.publicId
+          ? "Choose the language for your live queue update calls."
+          : "Choose the language for your live queue update calls. SmartLink will react to queue movement, play hold music between spoken updates, and tell you to head to the station from position 4.",
+        cards: [
+          buildQueueBookingCard(queueSnapshot),
+        ],
+        actions: liveUpdateLanguageActions(),
+        suggestions: [buildPromptAction("Check my booking"), buildResetAction()],
+      }),
+    }
+  }
+
+  const user = await prisma.users.findUnique({
+    where: {
+      id: Number(auth?.userId || 0),
+    },
+    select: {
+      phone_e164: true,
+    },
+  })
+  const phoneNumber = String(user?.phone_e164 || "").trim()
+  if (!phoneNumber) {
+    return {
+      state: null,
+      response: buildAssistantResponse({
+        type: "blocked",
+        title: "Phone Number Needed",
+        message: "Your account needs a phone number before SmartLink can place live update calls.",
+        actions: [buildPromptAction("Check my booking"), buildResetAction()],
+      }),
+    }
+  }
+
+  const subscription = await upsertQueueLiveUpdateSubscription({
+    userId: auth?.userId,
+    queueJoinId: queueSnapshot.queueJoinId,
+    phoneNumber,
+    languageCode: params.languageCode,
+  }).catch((error) => {
+    throw badRequest(error?.message || "Could not enable live queue updates.")
+  })
+
+  return {
+    state: null,
+    response: buildAssistantResponse({
+      type: "active_booking",
+      title: "Live Updates Enabled",
+      message: `Live queue updates are active in ${getLiveUpdateLanguageLabel(subscription.languageCode)}.`,
+      cards: [
+        buildQueueBookingCard(queueSnapshot),
+        buildSystemNoticeCard({
+          tone: "info",
+          title: "What will happen",
+          message: "SmartLink will react when your position changes, keep hold music between spoken updates, and call you to head to the station from position 4.",
+        }),
+      ],
+      actions: [buildPromptAction("Check my booking"), buildPromptAction("Stop live updates")],
+      suggestions: [buildPromptAction("Find fuel near me")],
+    }),
+  }
+}
+
+async function handleStopLiveQueueUpdates(auth) {
+  const queueSnapshot = await getActiveQueueForUser(auth)
+  if (!queueSnapshot?.queueJoinId) {
+    return {
+      state: null,
+      response: buildAssistantResponse({
+        type: "blocked",
+        title: "No Active Queue",
+        message: "There is no active queue booking to stop live updates for.",
+        actions: [buildPromptAction("Check my booking"), buildPromptAction("Join fastest queue")],
+      }),
+    }
+  }
+
+  await deactivateQueueLiveUpdateSubscription({
+    userId: auth?.userId,
+    queueJoinId: queueSnapshot.queueJoinId,
+  }).catch((error) => {
+    throw badRequest(error?.message || "Could not stop live queue updates.")
+  })
+
+  return {
+    state: null,
+    response: buildAssistantResponse({
+      type: "success",
+      title: "Live Updates Stopped",
+      message: "SmartLink has stopped your live queue update calls for this booking.",
+      actions: [buildPromptAction("Check my booking"), buildPromptAction("Join live updates")],
+    }),
+  }
 }
 
 async function handleFindFuelNearby(state, auth, currentLocation) {
@@ -884,7 +1082,11 @@ async function handleFindFuelNearby(state, auth, currentLocation) {
   }
 
   return {
-    state: null,
+    state: {
+      goal: ASSISTANT_TOOL_IDS.GUIDED_FUEL_REQUEST,
+      step: "choose_booking_mode",
+      params: fuelType ? { fuelType } : {},
+    },
     response: buildAssistantResponse({
       type: "station_list",
       title: "Nearby Fuel",
@@ -899,9 +1101,19 @@ async function handleFindFuelNearby(state, auth, currentLocation) {
         distanceKm: station.distanceKm,
         activeQueueCount: station.activeQueueCount,
         fuelStatuses: station.fuelStatuses,
+        actions: [
+          buildRespondAction({
+            id: ASSISTANT_ACTION_IDS.CHOOSE_STATION,
+            label: "Choose station",
+            payload: {
+              stationPublicId: station.publicId,
+              stationName: station.name,
+            },
+          }),
+        ],
       })),
-      actions: [buildPromptAction("Join fastest queue"), buildPromptAction("Reserve fuel for later")],
-      suggestions: [buildPromptAction("Check my booking"), buildPromptAction("Queue or reservation?")],
+      actions: [],
+      suggestions: [buildPromptAction("Check my booking")],
     }),
   }
 }
@@ -1494,6 +1706,10 @@ async function handleIntent({ state, auth, currentLocation }) {
         state: null,
         response: await handleCheckBooking(auth),
       }
+    case ASSISTANT_TOOL_IDS.LIVE_QUEUE_UPDATES:
+      return handleLiveQueueUpdates(state, auth)
+    case ASSISTANT_TOOL_IDS.STOP_LIVE_QUEUE_UPDATES:
+      return handleStopLiveQueueUpdates(auth)
     case ASSISTANT_TOOL_IDS.CANCEL_BOOKING:
       return handleCancelBooking(state, auth)
     case ASSISTANT_TOOL_IDS.WALLET_SUMMARY:
@@ -1967,5 +2183,815 @@ export async function confirmAssistantAction({ auth, confirmationToken } = {}) {
         actions: [buildPromptAction("Check my booking"), buildResetAction()],
       }),
     }
+  }
+}
+
+/**
+ * Simple in-memory store for USSD sessions.
+ * In production, use Redis or a database table.
+ */
+const ussdSessionStore = new Map()
+
+function normalizeUssdText(value) {
+  return String(value || "").replace(/\s+/g, " ").trim()
+}
+
+function buildUssdTextResponse(prefix, body) {
+  const normalizedBody = String(body || "")
+    .split("\n")
+    .map((line) => normalizeUssdText(line))
+    .filter(Boolean)
+    .join("\n")
+  return `${prefix} ${normalizedBody}`.trim()
+}
+
+function buildUssdMenuScreen(title, options = [], { includeBack = true, includeExit = false } = {}) {
+  const lines = [title]
+  options.forEach((option, index) => {
+    lines.push(`${index + 1}. ${normalizeUssdText(option.label)}`)
+  })
+  if (includeBack) lines.push("00. Back")
+  if (includeExit) lines.push("0. Exit")
+  return buildUssdTextResponse("CON", lines.join("\n"))
+}
+
+function buildUssdHomeOptions() {
+  return [
+    { kind: "menu", label: "Find fuel", menu: "fuel" },
+    { kind: "prompt", label: "My booking", prompt: "Check my booking" },
+    { kind: "prompt", label: "My balance", prompt: "Check wallet balance" },
+    { kind: "menu", label: "Help", menu: "help" },
+  ]
+}
+
+function buildUssdFuelOptions() {
+  return [
+    { kind: "prompt", label: "Fuel now", prompt: "Join fastest queue" },
+    { kind: "prompt", label: "Reserve later", prompt: "Reserve fuel for later" },
+    { kind: "prompt", label: "Nearby stations", prompt: "Find fuel near me" },
+  ]
+}
+
+function buildUssdHelpOptions() {
+  return [
+    { kind: "prompt", label: "Queue or reservation", prompt: "Queue or reservation?" },
+    { kind: "prompt", label: "What is queue?", prompt: "What is a digital queue?" },
+    { kind: "prompt", label: "Wallet help", prompt: "Wallet help" },
+  ]
+}
+
+function buildUssdMenuState(menu = "home") {
+  if (menu === "fuel") {
+    return {
+      menu,
+      menuOptions: buildUssdFuelOptions(),
+      text: buildUssdMenuScreen("Fuel menu", buildUssdFuelOptions()),
+    }
+  }
+  if (menu === "help") {
+    return {
+      menu,
+      menuOptions: buildUssdHelpOptions(),
+      text: buildUssdMenuScreen("Help", buildUssdHelpOptions()),
+    }
+  }
+  return {
+    menu: "home",
+    menuOptions: buildUssdHomeOptions(),
+    text: buildUssdMenuScreen("SmartLink", buildUssdHomeOptions(), { includeBack: false, includeExit: true }),
+  }
+}
+
+export function resolveUssdDirectPrompt(currentInput, session = {}) {
+  const normalizedInput = String(currentInput || "").trim()
+  if (!normalizedInput || !/^\d+$/.test(normalizedInput)) return normalizedInput
+
+  const indexedOption = Array.isArray(session.menuOptions) ? session.menuOptions[Number(normalizedInput) - 1] : null
+  if (indexedOption?.kind === "prompt" && indexedOption.prompt) return String(indexedOption.prompt)
+  if (indexedOption?.kind === "menu" && indexedOption.menu === "fuel") return "Find fuel near me"
+  if (indexedOption?.kind === "menu" && indexedOption.menu === "help") return "Help"
+
+  const homeOptions = buildUssdHomeOptions()
+  const homeOption = homeOptions[Number(normalizedInput) - 1] || null
+  if (homeOption?.kind === "prompt" && homeOption.prompt) return String(homeOption.prompt)
+  if (homeOption?.kind === "menu" && homeOption.menu === "fuel") return "Find fuel near me"
+  if (homeOption?.kind === "menu" && homeOption.menu === "help") return "Help"
+
+  return normalizedInput
+}
+
+function clearUssdSession(sessionId) {
+  ussdSessionStore.delete(String(sessionId || ""))
+}
+
+function getUssdSession(sessionId) {
+  const normalizedSessionId = String(sessionId || "").trim()
+  if (!normalizedSessionId) {
+    return {
+      stateToken: "",
+      menuOptions: [],
+      processedInputs: 0,
+    }
+  }
+  const existing = ussdSessionStore.get(normalizedSessionId)
+  if (existing && typeof existing === "object") {
+    return {
+      stateToken: String(existing.stateToken || ""),
+      menuOptions: Array.isArray(existing.menuOptions) ? existing.menuOptions : [],
+      processedInputs: Number(existing.processedInputs || 0) || 0,
+      registration: existing.registration && typeof existing.registration === "object" ? existing.registration : null,
+      menu: String(existing.menu || "home").trim() || "home",
+      browser: existing.browser && typeof existing.browser === "object" ? existing.browser : null,
+    }
+  }
+  return {
+    stateToken: typeof existing === "string" ? existing : "",
+    menuOptions: [],
+    processedInputs: 0,
+    registration: null,
+    menu: "home",
+    browser: null,
+  }
+}
+
+function setUssdSession(sessionId, data = {}) {
+  const normalizedSessionId = String(sessionId || "").trim()
+  if (!normalizedSessionId) return
+  ussdSessionStore.set(normalizedSessionId, {
+    stateToken: String(data.stateToken || ""),
+    menuOptions: Array.isArray(data.menuOptions) ? data.menuOptions : [],
+    processedInputs: Number(data.processedInputs || 0) || 0,
+    registration: data.registration && typeof data.registration === "object" ? data.registration : null,
+    menu: String(data.menu || "home").trim() || "home",
+    browser: data.browser && typeof data.browser === "object" ? data.browser : null,
+  })
+}
+
+function buildUssdOptionFromAction(action, fallbackLabel = "") {
+  if (!action || typeof action !== "object") return null
+  const label = normalizeUssdText(action.label || action.prompt || fallbackLabel || "")
+  if (action.kind === "confirm" && action.confirmationToken) {
+    return {
+      label: label || "Confirm",
+      kind: "confirm",
+      confirmationToken: String(action.confirmationToken),
+    }
+  }
+  if (action.kind === "prompt" && action.prompt) {
+    return {
+      label: label || String(action.prompt),
+      kind: "prompt",
+      prompt: String(action.prompt),
+    }
+  }
+  if (action.kind === "respond" && action.id) {
+    return {
+      label: label || String(action.id),
+      kind: "respond",
+      actionId: String(action.id),
+      actionPayload: action.payload && typeof action.payload === "object" ? action.payload : {},
+    }
+  }
+  return null
+}
+
+function extractUssdMenuOptions(response) {
+  const directOptions = [...(response.actions || [])]
+    .map((action) => buildUssdOptionFromAction(action))
+    .filter(Boolean)
+
+  const cardOptions = (response.cards || []).flatMap((card) => {
+    const stationLabel = String(card?.stationName || card?.name || "").trim()
+    const fuelSummary = buildUssdFuelStatusSummary(card?.fuelStatuses || [])
+    const cardLabel = normalizeUssdText(
+      stationLabel
+        ? `${stationLabel}${fuelSummary ? ` ${fuelSummary}` : ""}`
+        : card?.slotLabel || card?.title || card?.message || "Choose"
+    ) || "Choose"
+    return (card?.actions || [])
+      .map((action) => buildUssdOptionFromAction(action, cardLabel))
+      .filter(Boolean)
+      .map((option) => ({
+        ...option,
+        label:
+          option.kind === "respond" && option.label && /^choose\b/i.test(option.label) && cardLabel
+            ? cardLabel
+            : option.label,
+      }))
+  })
+
+  const combinedOptions = [...directOptions, ...cardOptions].filter((option) => option.actionId !== ASSISTANT_ACTION_IDS.RESET)
+  if (combinedOptions.length > 0) return combinedOptions
+
+  return [...(response.suggestions || [])]
+    .map((action) => buildUssdOptionFromAction(action))
+    .filter((option) => option && option.actionId !== ASSISTANT_ACTION_IDS.RESET)
+}
+
+function buildUssdWalletSummaryText(wallet) {
+  if (!wallet || typeof wallet !== "object") return ""
+  const currencyCode = String(wallet.currencyCode || "MWK").trim() || "MWK"
+  return [
+    "Wallet",
+    `Balance: ${formatUssdMoney(wallet.availableBalance, currencyCode)}`,
+    `Active hold: ${formatUssdMoney(wallet.activeHoldAmount, currencyCode)}`,
+    `Locked: ${formatUssdMoney(wallet.lockedBalance, currencyCode)}`,
+    `Ledger: ${formatUssdMoney(wallet.ledgerBalance, currencyCode)}`,
+  ].join("\n")
+}
+
+function formatUssdIsoDateTime(value) {
+  if (!value) return null
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return null
+  const year = parsed.getFullYear()
+  const month = String(parsed.getMonth() + 1).padStart(2, "0")
+  const day = String(parsed.getDate()).padStart(2, "0")
+  const hour = String(parsed.getHours()).padStart(2, "0")
+  const minute = String(parsed.getMinutes()).padStart(2, "0")
+  return `${year}-${month}-${day} ${hour}:${minute}`
+}
+
+export function buildUssdActiveBookingText(cards = [], fallbackMessage = "") {
+  const bookingCards = (Array.isArray(cards) ? cards : []).filter((card) => card?.kind === "active_booking")
+  if (!bookingCards.length) return normalizeUssdText(fallbackMessage)
+
+  const lines = []
+
+  bookingCards.forEach((card, index) => {
+    if (index > 0) lines.push("")
+
+    const bookingType = String(card.bookingType || "").trim().toLowerCase()
+    const stationName = String(card?.station?.name || card?.stationName || "").trim() || "Station"
+    const fuelType = String(card.fuelType || "").trim().toUpperCase()
+
+    if (bookingType === "queue") {
+      lines.push("Active queue")
+      lines.push(`Station: ${stationName}`)
+      if (fuelType) lines.push(`Fuel: ${fuelType}`)
+      if (card.position !== null && card.position !== undefined) lines.push(`Position: ${card.position}`)
+      if (card.carsAhead !== null && card.carsAhead !== undefined) lines.push(`Cars ahead: ${card.carsAhead}`)
+      if (card.etaMinutes !== null && card.etaMinutes !== undefined) lines.push(`ETA: ${card.etaMinutes} min`)
+      if (card.requestedLiters !== null && card.requestedLiters !== undefined) lines.push(`Litres: ${card.requestedLiters} L`)
+      if (card.queueStatus) lines.push(`Status: ${card.queueStatus}`)
+      return
+    }
+
+    if (bookingType === "reservation") {
+      lines.push("Active reservation")
+      lines.push(`Station: ${stationName}`)
+      if (fuelType) lines.push(`Fuel: ${fuelType}`)
+      if (card.litres !== null && card.litres !== undefined) lines.push(`Litres: ${card.litres} L`)
+      if (card.identifier) lines.push(`Ref: ${card.identifier}`)
+      const slotStart = formatUssdIsoDateTime(card.slotStart)
+      const slotEnd = formatUssdIsoDateTime(card.slotEnd)
+      if (slotStart && slotEnd) lines.push(`Slot: ${slotStart} to ${slotEnd}`)
+      else if (slotStart) lines.push(`Slot: ${slotStart}`)
+      const expiresAt = formatUssdIsoDateTime(card.expiresAt)
+      if (expiresAt) lines.push(`Expires: ${expiresAt}`)
+      if (card.reservationStatus) lines.push(`Status: ${card.reservationStatus}`)
+      return
+    }
+
+    lines.push(stationName)
+  })
+
+  return lines.filter((line) => line !== "").join("\n").trim() || normalizeUssdText(fallbackMessage)
+}
+
+function buildUssdFuelStatusSummary(statuses = []) {
+  const shortlist = (Array.isArray(statuses) ? statuses : [])
+    .map((status) => {
+      const label = String(status?.label || status?.fuelType || "").trim()
+      const code = label ? label.slice(0, 1).toUpperCase() : ""
+      const normalizedStatus = String(status?.status || "").trim().toLowerCase()
+      if (!code) return null
+      if (normalizedStatus === "available") return `${code}:Yes`
+      if (normalizedStatus === "low") return `${code}:Low`
+      if (normalizedStatus === "unavailable") return `${code}:No`
+      return `${code}:${normalizeUssdText(normalizedStatus)}`
+    })
+    .filter(Boolean)
+    .slice(0, 2)
+
+  return shortlist.join(" ")
+}
+
+function buildReadableFuelSummary(statuses = []) {
+  return (Array.isArray(statuses) ? statuses : [])
+    .map((status) => {
+      const label = String(status?.label || status?.fuelType || "").trim()
+      const normalizedStatus = String(status?.status || "").trim().toLowerCase()
+      if (!label) return null
+      if (normalizedStatus === "available") return `${label}: Yes`
+      if (normalizedStatus === "low") return `${label}: Low`
+      if (normalizedStatus === "unavailable") return `${label}: No`
+      return `${label}: ${normalizeUssdText(normalizedStatus)}`
+    })
+    .filter(Boolean)
+    .join(", ")
+}
+
+function buildStationBrowserItems(cards = []) {
+  return cards
+    .filter((card) => card?.stationPublicId && (card?.stationName || card?.name))
+    .map((card) => ({
+      stationPublicId: String(card.stationPublicId || "").trim(),
+      stationName: String(card.stationName || card.name || "").trim() || "Station",
+      fuelStatuses: Array.isArray(card.fuelStatuses) ? card.fuelStatuses : [],
+    }))
+}
+
+async function buildStationBrowserItemsFromDatabase(currentLocation = null) {
+  const stations = await listAssistantStations({ currentLocation })
+  const fuelStatusMap = await getFuelStatusesForStations(stations)
+
+  return stations.map((station) => ({
+    stationPublicId: station.publicId,
+    stationName: station.name,
+    fuelStatuses: fuelStatusMap.get(station.publicId) || [],
+  }))
+}
+
+function buildStationBrowserLabel(item) {
+  const summary = buildReadableFuelSummary(item?.fuelStatuses || [])
+  return normalizeUssdText(summary ? `${item.stationName} - ${summary}` : item.stationName)
+}
+
+function levenshteinDistance(left, right) {
+  const a = String(left || "")
+  const b = String(right || "")
+  if (!a) return b.length
+  if (!b) return a.length
+  const matrix = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0))
+  for (let row = 0; row <= a.length; row += 1) matrix[row][0] = row
+  for (let column = 0; column <= b.length; column += 1) matrix[0][column] = column
+  for (let row = 1; row <= a.length; row += 1) {
+    for (let column = 1; column <= b.length; column += 1) {
+      const cost = a[row - 1] === b[column - 1] ? 0 : 1
+      matrix[row][column] = Math.min(
+        matrix[row - 1][column] + 1,
+        matrix[row][column - 1] + 1,
+        matrix[row - 1][column - 1] + cost
+      )
+    }
+  }
+  return matrix[a.length][b.length]
+}
+
+function scoreStationBrowserMatch(item, query = "") {
+  const normalizedQuery = normalizeStationLookupText(query)
+  if (!normalizedQuery) return 0
+  const stationName = normalizeStationLookupText(item?.stationName)
+  const stationCompact = compactStationLookupText(item?.stationName)
+  const queryCompact = compactStationLookupText(query)
+
+  let score = scoreStationMatch(normalizedQuery, { name: stationName, address: "", city: "" })
+  if (stationName.includes(normalizedQuery)) score += 20
+  if (stationCompact.includes(queryCompact)) score += 18
+
+  const queryTokens = tokenizeStationLookupText(query)
+  const nameTokens = tokenizeStationLookupText(item?.stationName)
+  const matchedTokens = queryTokens.filter((token) => nameTokens.some((nameToken) => nameToken.includes(token) || token.includes(nameToken)))
+  score += matchedTokens.length * 6
+
+  if (queryCompact && stationCompact) {
+    const distance = levenshteinDistance(queryCompact, stationCompact.slice(0, Math.max(queryCompact.length, 1)))
+    score += Math.max(0, 14 - distance * 2)
+  }
+
+  return score
+}
+
+function filterStationBrowserItems(items = [], query = "") {
+  const normalizedQuery = normalizeStationLookupText(query)
+  if (!normalizedQuery) return items
+  return [...items]
+    .map((item) => ({
+      item,
+      score: scoreStationBrowserMatch(item, normalizedQuery),
+    }))
+    .filter((entry) => entry.score > 0)
+    .sort((left, right) => {
+      if (left.score !== right.score) return right.score - left.score
+      return String(left.item.stationName || "").localeCompare(String(right.item.stationName || ""))
+    })
+    .map((entry) => entry.item)
+}
+
+function buildStationBrowserState(items = [], page = 0, searchQuery = "", awaitingSearch = false) {
+  const normalizedItems = Array.isArray(items) ? items : []
+  const filteredItems = filterStationBrowserItems(normalizedItems, searchQuery)
+  const pageSize = 3
+  const totalPages = Math.max(1, Math.ceil(filteredItems.length / pageSize))
+  const safePage = Math.min(Math.max(0, page), totalPages - 1)
+  const visibleItems = filteredItems.slice(safePage * pageSize, safePage * pageSize + pageSize)
+
+  const menuOptions = visibleItems.map((item) => ({
+    kind: "respond",
+    label: buildStationBrowserLabel(item),
+    actionId: ASSISTANT_ACTION_IDS.CHOOSE_STATION,
+    actionPayload: {
+      stationPublicId: item.stationPublicId,
+      stationName: item.stationName,
+    },
+  }))
+
+  if (filteredItems.length > (safePage + 1) * pageSize) {
+    menuOptions.push({ kind: "browser_next", label: "Next stations" })
+  }
+  if (safePage > 0) {
+    menuOptions.push({ kind: "browser_prev", label: "Previous stations" })
+  }
+  menuOptions.push({ kind: "browser_search", label: "Search station" })
+
+  const title = searchQuery ? `Stations for "${searchQuery}"` : "Nearby stations"
+  const bodyLines = [title]
+  if (!filteredItems.length) {
+    bodyLines.push("No station match found.")
+    bodyLines.push("1. Search again")
+    bodyLines.push("00. Back")
+    return {
+      text: buildUssdTextResponse("CON", bodyLines.join("\n")),
+      menuOptions: [{ kind: "browser_search", label: "Search again" }],
+      browser: {
+        type: "station_list",
+        items: normalizedItems,
+        page: 0,
+        searchQuery,
+        awaitingSearch: false,
+      },
+    }
+  }
+
+  visibleItems.forEach((item, index) => {
+    bodyLines.push(`${index + 1}. ${buildStationBrowserLabel(item)}`)
+  })
+
+  let optionIndex = visibleItems.length
+  if (filteredItems.length > (safePage + 1) * pageSize) {
+    optionIndex += 1
+    bodyLines.push(`${optionIndex}. Next stations`)
+  }
+  if (safePage > 0) {
+    optionIndex += 1
+    bodyLines.push(`${optionIndex}. Previous stations`)
+  }
+  optionIndex += 1
+  bodyLines.push(`${optionIndex}. Search station`)
+  bodyLines.push("00. Back")
+
+  return {
+    text: buildUssdTextResponse("CON", bodyLines.join("\n")),
+    menuOptions,
+    browser: {
+      type: "station_list",
+      items: normalizedItems,
+      page: safePage,
+      searchQuery,
+      awaitingSearch,
+    },
+  }
+}
+
+/**
+ * Core handler for USSD interactions.
+ * Handles registration and menu navigation.
+ */
+export async function handleUssdRequest({ sessionId, phoneNumber, text, serviceCode, networkCode }) {
+  const normalizedSessionId = String(sessionId || "").trim()
+  const normalizedPhoneNumber = normalizeUssdPhoneNumber(phoneNumber)
+  const inputs = String(text || "")
+    .split("*")
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)
+  const lastInput = inputs[inputs.length - 1] || ""
+  let session = getUssdSession(normalizedSessionId)
+
+  let user = await prisma.users.findFirst({
+    where: normalizedPhoneNumber
+      ? {
+          OR: [
+            { phone_e164: normalizedPhoneNumber },
+            { phone_e164: String(phoneNumber || "").trim() || normalizedPhoneNumber },
+          ],
+        }
+      : undefined,
+  })
+
+  if (!user) {
+    if (inputs.length === 0) {
+      const home = buildUssdMenuState("home")
+      setUssdSession(normalizedSessionId, {
+        stateToken: "",
+        menuOptions: home.menuOptions,
+        processedInputs: 0,
+        registration: null,
+        menu: home.menu,
+      })
+      return buildUssdTextResponse("CON", "Welcome to SmartLink Malawi.\nNot registered.\nEnter your full name:")
+    }
+
+    const registration = session.registration || {}
+
+    if (!registration.fullName) {
+      const fullName = String(lastInput || "").trim().slice(0, 120)
+      if (!fullName) {
+        return buildUssdTextResponse("CON", "Enter your full name:")
+      }
+      setUssdSession(normalizedSessionId, {
+        ...session,
+        processedInputs: inputs.length,
+        registration: {
+          fullName,
+        },
+      })
+      return buildUssdTextResponse("CON", "Set your 4-digit PIN:")
+    }
+
+    if (!registration.pin) {
+      const pin = normalizeUssdPin(lastInput)
+      if (!pin) {
+        setUssdSession(normalizedSessionId, {
+          ...session,
+          processedInputs: inputs.length,
+          registration: {
+            ...registration,
+          },
+        })
+        return buildUssdTextResponse("CON", "Invalid PIN.\nSet a 4-digit PIN:")
+      }
+      setUssdSession(normalizedSessionId, {
+        ...session,
+        processedInputs: inputs.length,
+        registration: {
+          ...registration,
+          pin,
+        },
+      })
+      return buildUssdTextResponse("CON", "Confirm your 4-digit PIN:")
+    }
+
+    const confirmedPin = normalizeUssdPin(lastInput)
+    if (!confirmedPin) {
+      setUssdSession(normalizedSessionId, {
+        ...session,
+        processedInputs: inputs.length,
+        registration: {
+          fullName: registration.fullName,
+          pin: null,
+        },
+      })
+      return buildUssdTextResponse("CON", "Invalid PIN.\nSet your 4-digit PIN again:")
+    }
+
+    if (confirmedPin !== registration.pin) {
+      setUssdSession(normalizedSessionId, {
+        ...session,
+        processedInputs: inputs.length,
+        registration: {
+          fullName: registration.fullName,
+          pin: null,
+        },
+      })
+      return buildUssdTextResponse("CON", "PINs do not match.\nSet your 4-digit PIN again:")
+    }
+
+    try {
+      const home = buildUssdMenuState("home")
+      user = await prisma.users.create({
+        data: {
+          public_id: await generatePublicUserId(),
+          phone_e164: normalizedPhoneNumber,
+          full_name: registration.fullName,
+          password_hash: await bcrypt.hash(confirmedPin, 10),
+        },
+      })
+      setUssdSession(normalizedSessionId, {
+        stateToken: "",
+        menuOptions: home.menuOptions,
+        processedInputs: inputs.length,
+        registration: null,
+        menu: home.menu,
+      })
+      return buildUssdTextResponse("CON", `Account created successfully.\nWelcome ${registration.fullName}.\n${home.text.slice(4)}`)
+    } catch (err) {
+      clearUssdSession(normalizedSessionId)
+      return buildUssdTextResponse("END", "Registration failed. Try again later.")
+    }
+  }
+
+  if (inputs.length === 0) {
+    const home = buildUssdMenuState("home")
+    setUssdSession(normalizedSessionId, {
+      stateToken: "",
+      menuOptions: home.menuOptions,
+      processedInputs: 0,
+      menu: home.menu,
+      browser: null,
+    })
+    return home.text
+  }
+
+  if (lastInput === "0") {
+    clearUssdSession(normalizedSessionId)
+    return buildUssdTextResponse("END", "Zikomo for using SmartLink.")
+  }
+
+  if (lastInput === "00") {
+    const home = buildUssdMenuState("home")
+    setUssdSession(normalizedSessionId, {
+      stateToken: "",
+      menuOptions: home.menuOptions,
+      processedInputs: inputs.length,
+      menu: home.menu,
+      browser: null,
+    })
+    return home.text
+  }
+
+  const auth = { userId: user.id, sessionPublicId: normalizedSessionId }
+  const nextInputIndex = Math.min(session.processedInputs, Math.max(inputs.length - 1, 0))
+  const currentInput = inputs[nextInputIndex] || lastInput
+  const selectedOption = /^\d+$/.test(currentInput)
+    ? session.menuOptions[Number(currentInput) - 1] || null
+    : null
+
+  try {
+    if (session.browser?.type === "station_list" && session.browser.awaitingSearch) {
+      const allStationItems = await buildStationBrowserItemsFromDatabase()
+      const browserState = buildStationBrowserState(
+        allStationItems,
+        0,
+        currentInput,
+        false
+      )
+      setUssdSession(normalizedSessionId, {
+        ...session,
+        stateToken: session.stateToken,
+        menuOptions: browserState.menuOptions,
+        processedInputs: inputs.length,
+        browser: browserState.browser,
+      })
+      return browserState.text
+    }
+
+    let result
+
+    if (selectedOption?.kind === "confirm" && selectedOption.confirmationToken) {
+      result = await confirmAssistantAction({
+        auth,
+        confirmationToken: selectedOption.confirmationToken,
+      })
+    } else if (selectedOption?.kind === "browser_next" && session.browser?.type === "station_list") {
+      const browserState = buildStationBrowserState(
+        session.browser.items || [],
+        Number(session.browser.page || 0) + 1,
+        session.browser.searchQuery || "",
+        false
+      )
+      setUssdSession(normalizedSessionId, {
+        ...session,
+        menuOptions: browserState.menuOptions,
+        processedInputs: inputs.length,
+        browser: browserState.browser,
+      })
+      return browserState.text
+    } else if (selectedOption?.kind === "browser_prev" && session.browser?.type === "station_list") {
+      const browserState = buildStationBrowserState(
+        session.browser.items || [],
+        Number(session.browser.page || 0) - 1,
+        session.browser.searchQuery || "",
+        false
+      )
+      setUssdSession(normalizedSessionId, {
+        ...session,
+        menuOptions: browserState.menuOptions,
+        processedInputs: inputs.length,
+        browser: browserState.browser,
+      })
+      return browserState.text
+    } else if (selectedOption?.kind === "browser_search" && session.browser?.type === "station_list") {
+      setUssdSession(normalizedSessionId, {
+        ...session,
+        processedInputs: inputs.length,
+        browser: {
+          ...session.browser,
+          awaitingSearch: true,
+        },
+      })
+      return buildUssdTextResponse("CON", "Type station name:")
+    } else if (selectedOption?.kind === "menu" && selectedOption.menu) {
+      const menuState = buildUssdMenuState(selectedOption.menu)
+      setUssdSession(normalizedSessionId, {
+        ...session,
+        stateToken: "",
+        menuOptions: menuState.menuOptions,
+        processedInputs: inputs.length,
+        menu: menuState.menu,
+        browser: null,
+      })
+      return menuState.text
+    } else if (selectedOption?.kind === "prompt" && selectedOption.prompt) {
+      result = await respondToAssistant({
+        auth,
+        message: selectedOption.prompt,
+        sessionToken: session.stateToken,
+      })
+    } else if (selectedOption?.kind === "respond" && selectedOption.actionId) {
+      result = await respondToAssistant({
+        auth,
+        actionId: selectedOption.actionId,
+        actionPayload: selectedOption.actionPayload || {},
+        sessionToken: session.stateToken,
+      })
+    } else {
+      let assistantMessage = currentInput
+      if (!session.stateToken) {
+        assistantMessage = resolveUssdDirectPrompt(currentInput, session)
+      }
+      result = await respondToAssistant({
+        auth,
+        message: assistantMessage,
+        sessionToken: session.stateToken,
+      })
+    }
+
+    const formatted = formatAssistantResponseForUssd(result.response)
+    if (formatted.shouldEnd) {
+      clearUssdSession(normalizedSessionId)
+    } else {
+      setUssdSession(normalizedSessionId, {
+        stateToken: result.session?.stateToken || "",
+        menuOptions: formatted.menuOptions,
+        processedInputs: inputs.length,
+        browser: formatted.browser || null,
+      })
+    }
+
+    return formatted.text
+  } catch (error) {
+    clearUssdSession(normalizedSessionId)
+    return buildUssdTextResponse("END", `Error: ${error.message || "Could not process request."}`)
+  }
+}
+
+/**
+ * Translates Assistant JSON into USSD numbered text.
+ */
+function formatAssistantResponseForUssd(response) {
+  if (response.type === "station_list") {
+    const browserState = buildStationBrowserState(buildStationBrowserItems(response.cards || []))
+    return {
+      text: browserState.text,
+      menuOptions: browserState.menuOptions,
+      browser: browserState.browser,
+      shouldEnd: false,
+    }
+  }
+
+  let output = `${response.message}\n`
+  if (response.type === "wallet_summary") {
+    const walletCard = (response.cards || []).find((card) => card?.kind === "wallet_summary")
+    const walletText = buildUssdWalletSummaryText(walletCard?.wallet)
+    if (walletText) {
+      output = `${walletText}\n`
+    }
+  } else if (response.type === "active_booking") {
+    const bookingText = buildUssdActiveBookingText(response.cards || [], response.message || "Booking")
+    if (bookingText) {
+      output = `${bookingText}\n`
+    }
+  }
+  const menuOptions = extractUssdMenuOptions(response)
+
+  if (menuOptions.length > 0) {
+    menuOptions.forEach((option, index) => {
+      output += `${index + 1}. ${normalizeUssdText(option.label)}\n`
+    })
+    output += "00. Back\n"
+    return {
+      text: buildUssdTextResponse("CON", output.trim()),
+      menuOptions,
+      browser: null,
+      shouldEnd: false,
+    }
+  }
+
+  if (response.type === "question" || response.type === "station_list" || response.type === "queue_options" || response.type === "reservation_slots") {
+    output += "00. Back\n"
+    return {
+      text: buildUssdTextResponse("CON", output.trim()),
+      menuOptions: [],
+      browser: null,
+      shouldEnd: false,
+    }
+  }
+
+  return {
+    text: buildUssdTextResponse("END", output.trim()),
+    menuOptions: [],
+    browser: null,
+    shouldEnd: true,
   }
 }

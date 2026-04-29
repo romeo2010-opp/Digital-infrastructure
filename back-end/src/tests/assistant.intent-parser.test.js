@@ -68,3 +68,15 @@ test("assistant intent parser flags simple greetings without forcing a workflow 
   assert.equal(parsed.intent, null)
   assert.equal(parsed.params.isGreeting, true)
 })
+
+test("assistant intent parser understands live queue update requests", () => {
+  const joinParsed = parseAssistantIntent("Join live updates for my queue")
+  assert.equal(joinParsed.intent, "live_queue_updates")
+
+  const languageParsed = parseAssistantIntent("Change live update language to Chichewa")
+  assert.equal(languageParsed.intent, "live_queue_updates")
+  assert.equal(languageParsed.params.languageCode, "ny")
+
+  const stopParsed = parseAssistantIntent("Stop live updates")
+  assert.equal(stopParsed.intent, "stop_live_queue_updates")
+})
