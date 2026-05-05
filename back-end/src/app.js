@@ -32,6 +32,7 @@ import internalAuthRoutes from "./modules/internal/auth.routes.js"
 import internalChatRoutes from "./modules/internal/chat.routes.js"
 import internalRoutes from "./modules/internal/routes.js"
 import { requireInternalAuth } from "./modules/internal/middleware.js"
+import { meraProtectedRouter, meraPublicRouter } from "./modules/mera/routes.js"
 
 export const app = express()
 const __filename = fileURLToPath(import.meta.url)
@@ -59,6 +60,7 @@ app.use(express.urlencoded({ extended: false, verify: captureRawBody }))
 app.use(express.json({ limit: "6mb", verify: captureRawBody }))
 app.use(cookieParser())
 app.use(morgan("dev"))
+app.use("/uploads/mera", express.static(path.resolve(process.cwd(), process.env.MERA_UPLOAD_DIR || "tmp/mera-uploads")))
 
 app.get("/health", (_req, res) => {
   res.json({
@@ -75,6 +77,7 @@ app.use(transactionPublicRoutes)
 app.use(fuelOrderGatewayRoutes)
 app.use(monitoringGatewayRoutes)
 app.use(publicAssistantRouter)
+app.use(meraPublicRouter)
 
 const apiRouter = express.Router()
 apiRouter.use(stationsRoutes)
@@ -99,6 +102,7 @@ app.use("/auth", authRouter)
 app.use("/api/internal/auth", internalAuthRoutes)
 app.use("/api/internal/chat", requireInternalAuth, internalChatRoutes)
 app.use("/api/internal", requireInternalAuth, internalRoutes)
+app.use("/api/mera", meraProtectedRouter)
 app.use("/api", requireAuth, apiRouter)
 
 if (serveFrontend && hasFrontendBuild) {

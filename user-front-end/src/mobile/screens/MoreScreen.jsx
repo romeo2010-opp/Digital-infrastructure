@@ -18,6 +18,7 @@ const primaryItems = [
   { key: 'notifications', label: 'Notifications', path: '/m/alerts', Icon: BellIcon },
   { key: 'appearance', label: 'Appearance', path: '/m/settings', Icon: EyeIcon },
   { key: 'privacy', label: 'Privacy & Security', path: '/m/settings', Icon: ShieldIcon },
+  { key: 'mera-report', label: 'Report to MERA', path: '/m/mera/report', Icon: HeadphonesIcon },
   { key: 'help', label: 'Help and Support', path: '/m/help', Icon: HeadphonesIcon },
   { key: 'about', label: 'About', path: '/m/help', Icon: InfoIcon },
 ]

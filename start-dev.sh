@@ -14,8 +14,12 @@ echo "Starting Vite frontend..."
 (cd front-end && npm run dev) &
 
 # Start user-frontend
-echo "Starting Vite frontend..."
+echo "Starting user-frontend..."
 (cd user-front-end && npm run dev) &
+
+# Start MERA
+echo "Starting MERA..."
+(cd MERA && npm run dev) &
 
 # Start frontend
 echo "Starting Vite internal"

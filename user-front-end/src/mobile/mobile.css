@@ -2424,6 +2424,165 @@ body[data-user-theme='dark'] .app-airdrop-copy {
   transform: rotate(24deg);
 }
 
+.secondary-button {
+  border: 1px solid rgba(7, 105, 52, 0.18);
+  border-radius: 14px;
+  background: #f5fbf7;
+  color: #0b5933;
+  width: 100%;
+  padding: 12px 14px;
+  margin-top: 10px;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.ghost-inline-button {
+  border: none;
+  background: transparent;
+  color: #0b5933;
+  font-size: 14px;
+  font-weight: 700;
+  padding: 0;
+}
+
+.form-error {
+  margin: 8px 0 0;
+  color: #b42318;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.mera-report-screen {
+  display: grid;
+  gap: 14px;
+}
+
+.mera-report-intro p {
+  margin: 0;
+  color: var(--text-subtle);
+  line-height: 1.5;
+}
+
+.mera-report-form {
+  display: grid;
+  gap: 14px;
+}
+
+.mera-report-field {
+  display: grid;
+  gap: 8px;
+}
+
+.mera-report-field span {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+.mera-report-field input,
+.mera-report-field select,
+.mera-report-field textarea {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #fbfcfa;
+  padding: 12px 14px;
+  font: inherit;
+  color: var(--text-main);
+}
+
+.mera-report-field textarea {
+  resize: vertical;
+  min-height: 120px;
+}
+
+.mera-report-field small,
+.mera-report-hint {
+  margin: 0;
+  color: var(--text-subtle);
+  font-size: 12px;
+}
+
+.mera-report-selected-station {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: linear-gradient(145deg, rgba(7, 105, 52, 0.08), rgba(255, 255, 255, 0.9));
+  border: 1px solid rgba(7, 105, 52, 0.12);
+}
+
+.mera-report-selected-station strong {
+  font-size: 14px;
+  color: var(--text-main);
+}
+
+.mera-report-selected-station small {
+  color: var(--text-subtle);
+}
+
+.mera-report-location {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 16px;
+  background: #f6faf7;
+  border: 1px solid rgba(7, 105, 52, 0.12);
+}
+
+.mera-report-location p,
+.mera-report-location small {
+  margin: 4px 0 0;
+  color: var(--text-subtle);
+}
+
+.mera-report-location .secondary-button {
+  width: auto;
+  margin-top: 0;
+  min-width: 138px;
+}
+
+.mera-report-success {
+  display: grid;
+  gap: 12px;
+}
+
+.mera-report-success strong {
+  font-size: 18px;
+}
+
+.mera-report-success p {
+  margin: 0;
+  color: var(--text-subtle);
+  line-height: 1.55;
+}
+
+.mera-report-receipt {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+}
+
+.mera-report-receipt div {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 0;
+  border-bottom: 1px dashed var(--line);
+}
+
+.mera-report-receipt dt {
+  color: var(--text-subtle);
+}
+
+.mera-report-receipt dd {
+  margin: 0;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
 .stations-list-selected-wrap {
   position: absolute;
   transform: translate(-50%, -50%);

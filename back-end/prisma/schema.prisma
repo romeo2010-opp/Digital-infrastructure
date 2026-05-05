@@ -290,15 +290,22 @@ model stations {
   audit_log              audit_log[]
   auth_sessions          auth_sessions[]
   fuel_deliveries        fuel_deliveries[]
+  fuel_price_reports     fuel_price_reports[]
+  fuel_station_licenses  fuel_station_licenses[]
   incidents              incidents[]
   inventory_readings     inventory_readings[]
   pump_dispense_events   pump_dispense_events[]
   pump_nozzles           pump_nozzles[]
+  public_complaints      public_complaints[]
   promotion_campaigns    promotion_campaigns[]
   pumps                  pumps[]
+  compliance_flags       compliance_flags[]
   demand_anomaly_events  demand_anomaly_events[]
+  enforcement_actions    enforcement_actions[]
+  inspections            inspections[]
   queue_entries          queue_entries[]
   report_notes           report_notes[]
+  station_status_logs    station_status_logs[]
   station_queue_settings station_queue_settings?
   station_staff          station_staff[]
   tanks                  tanks[]
@@ -405,6 +412,7 @@ model users {
   updated_at    DateTime        @default(now()) @db.Timestamp(3)
   auth_sessions auth_sessions[]
   created_promotion_campaigns promotion_campaigns[] @relation("promotion_campaigns_created_by")
+  public_complaints public_complaints[]
   promotion_redemptions promotion_redemptions[]
   queue_entries queue_entries[]
   station_staff station_staff[]
@@ -476,6 +484,214 @@ model promotion_redemptions {
   @@index([campaign_id, created_at], map: "idx_promotion_redemptions_campaign")
   @@index([transaction_id, created_at], map: "idx_promotion_redemptions_transaction")
   @@index([user_id, created_at], map: "idx_promotion_redemptions_user")
+}
+
+model mera_roles {
+  id               Int          @id @db.UnsignedTinyInt
+  role_name        String       @unique(map: "role_name") @db.VarChar(64)
+  role_description String       @db.VarChar(255)
+  created_at       DateTime     @default(now()) @db.Timestamp(3)
+  updated_at       DateTime     @default(now()) @db.Timestamp(3)
+  mera_users       mera_users[]
+}
+
+model mera_users {
+  id                  BigInt                   @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id           String                   @unique(map: "public_id") @db.Char(26)
+  full_name           String                   @db.VarChar(120)
+  email               String                   @unique(map: "email") @db.VarChar(160)
+  phone               String?                  @db.VarChar(24)
+  password_hash       String                   @db.VarChar(255)
+  role_id             Int                      @db.UnsignedTinyInt
+  district            String?                  @db.VarChar(80)
+  account_status      mera_users_account_status @default(INVITED)
+  created_at          DateTime                 @default(now()) @db.Timestamp(3)
+  updated_at          DateTime                 @default(now()) @db.Timestamp(3)
+  audit_logs_mera     audit_logs_mera[]
+  compliance_flags    compliance_flags[]       @relation("compliance_flags_resolved_by")
+  enforcement_actions enforcement_actions[]    @relation("enforcement_actions_actor")
+  fuel_price_reports  fuel_price_reports[]
+  inspections         inspections[]
+  mera_auth_sessions  mera_auth_sessions[]
+  public_complaints   public_complaints[]      @relation("public_complaints_officer")
+  station_status_logs station_status_logs[]
+  mera_roles          mera_roles               @relation(fields: [role_id], references: [id], onUpdate: Restrict, map: "fk_mera_users_role")
+
+  @@index([district], map: "idx_mera_users_district")
+  @@index([role_id, account_status], map: "idx_mera_users_role_status")
+}
+
+model mera_auth_sessions {
+  id                 BigInt     @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id          String     @unique(map: "public_id") @db.Char(26)
+  mera_user_id       BigInt     @db.UnsignedBigInt
+  session_token_hash String     @unique(map: "session_token_hash") @db.Char(64)
+  user_agent         String?    @db.VarChar(255)
+  ip_address         String?    @db.VarChar(64)
+  last_seen_at       DateTime   @default(now()) @db.Timestamp(3)
+  expires_at         DateTime   @db.Timestamp(3)
+  revoked_at         DateTime?  @db.Timestamp(3)
+  created_at         DateTime   @default(now()) @db.Timestamp(3)
+  mera_users         mera_users @relation(fields: [mera_user_id], references: [id], onUpdate: Restrict, map: "fk_mera_auth_sessions_user")
+
+  @@index([mera_user_id, expires_at], map: "idx_mera_auth_sessions_user_expiry")
+}
+
+model fuel_station_licenses {
+  id                    BigInt                       @id @default(autoincrement()) @db.UnsignedBigInt
+  station_id            BigInt                       @db.UnsignedBigInt
+  license_number        String                       @unique(map: "license_number") @db.VarChar(96)
+  issue_date            DateTime                     @db.Date
+  expiry_date           DateTime                     @db.Date
+  license_status        fuel_station_licenses_status @default(ACTIVE)
+  compliance_conditions String?                      @db.Text
+  created_at            DateTime                     @default(now()) @db.Timestamp(3)
+  updated_at            DateTime                     @default(now()) @db.Timestamp(3)
+  stations              stations                     @relation(fields: [station_id], references: [id], onUpdate: Restrict, map: "fk_station_licenses_station")
+
+  @@index([expiry_date], map: "idx_station_licenses_expiry")
+  @@index([station_id, license_status, expiry_date], map: "idx_station_licenses_station_status")
+}
+
+model public_complaints {
+  id                    BigInt                             @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id             String                             @unique(map: "public_id") @db.Char(26)
+  user_id               BigInt?                            @db.UnsignedBigInt
+  station_id            BigInt                             @db.UnsignedBigInt
+  complaint_type        public_complaints_complaint_type
+  complaint_description String                             @db.Text
+  media_url             String?                            @db.VarChar(1000)
+  geo_lat               Decimal?                           @db.Decimal(10, 7)
+  geo_lng               Decimal?                           @db.Decimal(10, 7)
+  complaint_status      public_complaints_complaint_status @default(NEW)
+  assigned_officer_id   BigInt?                            @db.UnsignedBigInt
+  created_at            DateTime                           @default(now()) @db.Timestamp(3)
+  updated_at            DateTime                           @default(now()) @db.Timestamp(3)
+  mera_users            mera_users?                        @relation("public_complaints_officer", fields: [assigned_officer_id], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "fk_public_complaints_officer")
+  stations              stations                           @relation(fields: [station_id], references: [id], onUpdate: Restrict, map: "fk_public_complaints_station")
+  users                 users?                             @relation(fields: [user_id], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "fk_public_complaints_user")
+
+  @@index([assigned_officer_id, complaint_status], map: "idx_public_complaints_assigned")
+  @@index([complaint_type, created_at], map: "idx_public_complaints_type_time")
+  @@index([station_id, complaint_status, created_at], map: "idx_public_complaints_station_status")
+}
+
+model inspections {
+  id                       BigInt                        @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id                String                        @unique(map: "public_id") @db.Char(26)
+  station_id               BigInt                        @db.UnsignedBigInt
+  officer_id               BigInt                        @db.UnsignedBigInt
+  inspection_type          inspections_inspection_type   @default(ROUTINE)
+  queue_length             Int?                          @db.UnsignedInt
+  stock_visible            Boolean                       @default(true)
+  pumps_active             Int?                          @db.UnsignedInt
+  displayed_price          Decimal?                      @db.Decimal(12, 2)
+  illegal_vending_detected Boolean                       @default(false)
+  geotag_lat               Decimal?                      @db.Decimal(10, 7)
+  geotag_lng               Decimal?                      @db.Decimal(10, 7)
+  officer_notes            String?                       @db.Text
+  inspection_status        inspections_inspection_status @default(OPEN)
+  created_at               DateTime                      @default(now()) @db.Timestamp(3)
+  updated_at               DateTime                      @default(now()) @db.Timestamp(3)
+  inspection_evidence      inspection_evidence[]
+  mera_users               mera_users                    @relation(fields: [officer_id], references: [id], onUpdate: Restrict, map: "fk_inspections_officer")
+  stations                 stations                      @relation(fields: [station_id], references: [id], onUpdate: Restrict, map: "fk_inspections_station")
+
+  @@index([inspection_type, created_at], map: "idx_inspections_type_time")
+  @@index([officer_id, created_at], map: "idx_inspections_officer_time")
+  @@index([station_id, inspection_status, created_at], map: "idx_inspections_station_status")
+}
+
+model inspection_evidence {
+  id            BigInt                       @id @default(autoincrement()) @db.UnsignedBigInt
+  inspection_id BigInt                       @db.UnsignedBigInt
+  file_url      String                       @db.VarChar(1000)
+  file_type     inspection_evidence_file_type @default(PHOTO)
+  uploaded_at   DateTime                     @default(now()) @db.Timestamp(3)
+  inspections   inspections                  @relation(fields: [inspection_id], references: [id], onUpdate: Restrict, map: "fk_inspection_evidence_inspection")
+
+  @@index([inspection_id, uploaded_at], map: "idx_inspection_evidence_inspection")
+}
+
+model compliance_flags {
+  id                  BigInt                           @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id           String                           @unique(map: "public_id") @db.Char(26)
+  station_id          BigInt                           @db.UnsignedBigInt
+  flag_type           compliance_flags_flag_type
+  severity            compliance_flags_severity        @default(MEDIUM)
+  generated_reason    String                           @db.Text
+  source_reference    String?                          @db.VarChar(255)
+  resolved_status     compliance_flags_resolved_status @default(OPEN)
+  created_at          DateTime                         @default(now()) @db.Timestamp(3)
+  resolved_at         DateTime?                        @db.Timestamp(3)
+  resolved_by         BigInt?                          @db.UnsignedBigInt
+  enforcement_actions enforcement_actions[]
+  mera_users          mera_users?                      @relation("compliance_flags_resolved_by", fields: [resolved_by], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "fk_compliance_flags_resolved_by")
+  stations            stations                         @relation(fields: [station_id], references: [id], onUpdate: Restrict, map: "fk_compliance_flags_station")
+
+  @@index([flag_type, severity, created_at], map: "idx_compliance_flags_type_severity")
+  @@index([station_id, resolved_status, created_at], map: "idx_compliance_flags_station_status")
+}
+
+model enforcement_actions {
+  id               BigInt                            @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id        String                            @unique(map: "public_id") @db.Char(26)
+  station_id       BigInt                            @db.UnsignedBigInt
+  initiated_by     BigInt                            @db.UnsignedBigInt
+  related_flag_id  BigInt?                           @db.UnsignedBigInt
+  action_type      enforcement_actions_action_type
+  action_notes     String?                           @db.Text
+  action_status    enforcement_actions_action_status @default(OPEN)
+  issued_at        DateTime                          @default(now()) @db.Timestamp(3)
+  resolved_at      DateTime?                         @db.Timestamp(3)
+  compliance_flags compliance_flags?                 @relation(fields: [related_flag_id], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "fk_enforcement_flag")
+  mera_users       mera_users                        @relation("enforcement_actions_actor", fields: [initiated_by], references: [id], onUpdate: Restrict, map: "fk_enforcement_actor")
+  stations         stations                          @relation(fields: [station_id], references: [id], onUpdate: Restrict, map: "fk_enforcement_station")
+
+  @@index([related_flag_id], map: "idx_enforcement_flag")
+  @@index([station_id, action_status, issued_at], map: "idx_enforcement_station_status")
+}
+
+model station_status_logs {
+  id                  BigInt                                @id @default(autoincrement()) @db.UnsignedBigInt
+  station_id          BigInt                                @db.UnsignedBigInt
+  reported_source     station_status_logs_reported_source   @default(SYSTEM)
+  availability_status station_status_logs_availability_status @default(UNKNOWN)
+  diesel_status       station_status_logs_availability_status @default(UNKNOWN)
+  petrol_status       station_status_logs_availability_status @default(UNKNOWN)
+  updated_by          BigInt?                               @db.UnsignedBigInt
+  created_at          DateTime                              @default(now()) @db.Timestamp(3)
+  mera_users          mera_users?                           @relation(fields: [updated_by], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "fk_station_status_logs_user")
+  stations            stations                              @relation(fields: [station_id], references: [id], onUpdate: Restrict, map: "fk_station_status_logs_station")
+
+  @@index([reported_source, created_at], map: "idx_station_status_logs_source_time")
+  @@index([station_id, created_at], map: "idx_station_status_logs_station_time")
+}
+
+model fuel_price_reports {
+  id            BigInt      @id @default(autoincrement()) @db.UnsignedBigInt
+  station_id     BigInt      @db.UnsignedBigInt
+  petrol_price   Decimal?    @db.Decimal(12, 2)
+  diesel_price   Decimal?    @db.Decimal(12, 2)
+  submitted_by   BigInt?     @db.UnsignedBigInt
+  created_at     DateTime    @default(now()) @db.Timestamp(3)
+  mera_users     mera_users? @relation(fields: [submitted_by], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "fk_fuel_price_reports_user")
+  stations       stations    @relation(fields: [station_id], references: [id], onUpdate: Restrict, map: "fk_fuel_price_reports_station")
+
+  @@index([station_id, created_at], map: "idx_fuel_price_reports_station_time")
+}
+
+model audit_logs_mera {
+  id                 BigInt      @id @default(autoincrement()) @db.UnsignedBigInt
+  actor_id           BigInt?     @db.UnsignedBigInt
+  actor_role         String?     @db.VarChar(64)
+  action_type        String      @db.VarChar(96)
+  action_description String      @db.Text
+  created_at         DateTime    @default(now()) @db.Timestamp(3)
+  mera_users         mera_users? @relation(fields: [actor_id], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "fk_audit_logs_mera_actor")
+
+  @@index([action_type, created_at], map: "idx_audit_logs_mera_action_time")
+  @@index([actor_id, created_at], map: "idx_audit_logs_mera_actor_time")
 }
 
 model auth_sessions {
@@ -657,4 +873,114 @@ enum promotion_cashback_destination {
 enum demand_anomaly_events_severity {
   WARNING
   CRITICAL
+}
+
+enum mera_users_account_status {
+  ACTIVE
+  INVITED
+  SUSPENDED
+  DISABLED
+}
+
+enum fuel_station_licenses_status {
+  ACTIVE
+  EXPIRED
+  SUSPENDED
+  REVOKED
+  PENDING_RENEWAL
+}
+
+enum public_complaints_complaint_type {
+  HOARDING
+  ILLEGAL_VENDING
+  OVERPRICING
+  REFUSAL_TO_SELL
+  SUSPICIOUS_QUEUE_MANIPULATION
+  OTHER
+}
+
+enum public_complaints_complaint_status {
+  NEW
+  TRIAGED
+  ASSIGNED
+  UNDER_INVESTIGATION
+  RESOLVED
+  DISMISSED
+}
+
+enum inspections_inspection_type {
+  ROUTINE
+  FOLLOW_UP
+  SPOT_CHECK
+  SHORTAGE_RESPONSE
+  COMPLAINT_RESPONSE
+}
+
+enum inspections_inspection_status {
+  OPEN
+  PASSED
+  FAILED
+  ESCALATED
+  CLOSED
+}
+
+enum inspection_evidence_file_type {
+  PHOTO
+  VIDEO
+  DOCUMENT
+  OTHER
+}
+
+enum compliance_flags_flag_type {
+  COMPLAINT_SURGE
+  REFUSAL_MISMATCH
+  REPEATED_INSPECTION_FAILURE
+  PROLONGED_DRY_STATUS
+  MANUAL_REVIEW
+  PRICE_ANOMALY
+  LICENSE_RISK
+}
+
+enum compliance_flags_severity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum compliance_flags_resolved_status {
+  OPEN
+  UNDER_REVIEW
+  RESOLVED
+  DISMISSED
+}
+
+enum enforcement_actions_action_type {
+  WARNING
+  FINE
+  SUSPENSION
+  CLOSURE_NOTICE
+  FOLLOW_UP_DIRECTIVE
+}
+
+enum enforcement_actions_action_status {
+  OPEN
+  IN_PROGRESS
+  COMPLIED
+  ESCALATED
+  CLOSED
+}
+
+enum station_status_logs_reported_source {
+  STATION
+  USER
+  MERA_INSPECTION
+  SYSTEM
+}
+
+enum station_status_logs_availability_status {
+  AVAILABLE
+  LIMITED
+  DRY
+  UNKNOWN
 }

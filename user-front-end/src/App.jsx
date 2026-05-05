@@ -20,6 +20,8 @@ import { MoreScreen } from './mobile/screens/MoreScreen'
 import { AlertsScreen } from './mobile/screens/AlertsScreen'
 import { HelpScreen } from './mobile/screens/HelpScreen'
 import { SettingsScreen } from './mobile/screens/SettingsScreen'
+import { MeraReportScreen } from './mobile/screens/mera/MeraReportScreen'
+import { MeraReportSuccessScreen } from './mobile/screens/mera/MeraReportSuccessScreen'
 import { AssistantScreen } from './features/assistant/AssistantScreen'
 import { userQueueApi } from './mobile/api/userQueueApi'
 import { userAuthApi } from './mobile/api/userAuthApi'
@@ -143,6 +145,8 @@ function matchMobileRoute(pathname) {
   if (pathname === '/m/saved') return { name: 'saved', params: {} }
   if (pathname === '/m/wallet') return { name: 'wallet', params: {} }
   if (pathname === '/m/wallet/send-credit') return { name: 'send-credit', params: {} }
+  if (pathname === '/m/mera/report') return { name: 'mera-report', params: {} }
+  if (pathname === '/m/mera/report/success') return { name: 'mera-report-success', params: {} }
 
   const stationMatch = pathname.match(/^\/m\/stations\/([^/]+)$/)
   if (stationMatch) {
@@ -187,7 +191,9 @@ function activeTabForRoute(routeName) {
     routeName === 'alerts' ||
     routeName === 'help' ||
     routeName === 'settings' ||
-    routeName === 'account'
+    routeName === 'account' ||
+    routeName === 'mera-report' ||
+    routeName === 'mera-report-success'
   ) {
     return 'more'
   }
@@ -215,6 +221,8 @@ function titleForRoute(routeName) {
     wallet: 'Wallet',
     'send-credit': 'Send Credit',
     account: 'Account',
+    'mera-report': 'Report to MERA',
+    'mera-report-success': 'MERA Report Sent',
   }
 
   return `${routeTitleMap[routeName] || 'Home'} | ${APP_TITLE}`
@@ -361,6 +369,7 @@ function MobileApp({ theme = 'light', onThemeChange }) {
   const [showQueueStationPicker, setShowQueueStationPicker] = useState(false)
   const [pendingJoinStationId, setPendingJoinStationId] = useState('')
   const [stationsData, setStationsData] = useState(() => (stationsApi.isApiMode() ? [] : mockStations))
+  const [meraComplaintResult, setMeraComplaintResult] = useState(null)
   const [favoriteStationIds, setFavoriteStationIds] = useState(() => getStoredFavoriteStationIds())
   const [stationsLoading, setStationsLoading] = useState(() => stationsApi.isApiMode())
   const [stationsError, setStationsError] = useState('')
@@ -1730,6 +1739,26 @@ function MobileApp({ theme = 'light', onThemeChange }) {
         onOpenWallet={() => navigate('/m/wallet')}
         onLogout={handleLogout}
         onThemeChange={onThemeChange}
+      />
+    )
+  } else if (route.name === 'mera-report') {
+    screen = (
+      <MeraReportScreen
+        stations={stationsData}
+        userPublicId={sessionMeta?.user?.publicId || ''}
+        onBack={() => navigate('/m/more')}
+        onSuccess={(result) => {
+          setMeraComplaintResult(result)
+          navigate('/m/mera/report/success')
+        }}
+      />
+    )
+  } else if (route.name === 'mera-report-success') {
+    screen = (
+      <MeraReportSuccessScreen
+        result={meraComplaintResult}
+        onDone={() => navigate('/m/more')}
+        onReportAnother={() => navigate('/m/mera/report', { replace: true })}
       />
     )
   } else if (route.name === 'assistant') {
