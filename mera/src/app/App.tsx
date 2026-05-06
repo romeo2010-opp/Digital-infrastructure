@@ -62,8 +62,8 @@ function PortalShell() {
   return (
     <div className="flex h-screen overflow-hidden bg-[#eef3f1] text-slate-900">
       <Sidebar user={user} />
-      <div className="min-w-0 flex-1 overflow-hidden p-4 pl-2">
-        <div className="flex h-full min-w-0 flex-col overflow-hidden rounded-[1.65rem] border border-slate-200/90 bg-white shadow-[0_14px_40px_-28px_rgba(15,23,42,0.24)]">
+      <div className="min-w-0 flex-1 overflow-hidden p-3 pl-1.5">
+        <div className="flex h-full min-w-0 flex-col overflow-hidden rounded-[1.2rem] bg-[#f6faf8] shadow-none">
           <PageHeader title={activeMeta.title} subtitle={activeMeta.subtitle} user={user} loading={loading} onLogout={logout} />
           <main className="min-h-0 flex-1 overflow-hidden">
             <Routes>

@@ -140,9 +140,9 @@ export function Sidebar({ user }: { user?: any }) {
     .toUpperCase()
 
   return (
-    <aside className={`flex h-screen ${sidebarWidthClass} flex-col bg-[#f4f7f6] text-foreground`}>
+    <aside className={`flex h-screen ${sidebarWidthClass} flex-col bg-[#edf3f1] text-foreground`}>
       <div className="shrink-0 px-3 pt-3">
-        <div className="flex items-center gap-3 rounded-[6px] bg-white/75 px-2.5 py-2">
+        <div className="flex items-center gap-3 rounded-[6px] bg-white/88 px-3 py-2.5">
           {plusLogo()}
           <div className="min-w-0">
             <div className="truncate text-[13px] font-semibold tracking-[-0.02em] leading-none text-foreground">MERA Portal</div>
@@ -150,7 +150,7 @@ export function Sidebar({ user }: { user?: any }) {
           </div>
         </div>
 
-        <div className="mt-3 rounded-[6px] border border-border/60 bg-secondary/85 px-[10px] py-[8px]">
+        <div className="mt-3 rounded-[6px] border border-border/50 bg-white/68 px-[10px] py-[8px]">
           <div className="grid grid-cols-4 items-center text-center">
             <div className="min-w-0 pr-2">
               <div className="text-[9px] font-medium uppercase tracking-[0.08em] leading-none text-muted-foreground">Online</div>
@@ -238,17 +238,17 @@ export function Sidebar({ user }: { user?: any }) {
                     key={item.path}
                     type="button"
                     onClick={() => navigate(item.path)}
-                    className="flex w-full items-center gap-2 rounded-[6px] px-2.5 py-[7px] text-left transition-colors"
+                    className="flex w-full items-center gap-2 rounded-[6px] px-3 py-[8px] text-left transition-colors duration-150"
                     style={{
-                      backgroundColor: isActive ? '#E1F5EE' : 'transparent',
+                      backgroundColor: isActive ? '#dff2ea' : 'rgba(255,255,255,0.62)',
                       color: isActive ? '#0F6E56' : 'var(--color-muted-foreground)',
                       borderLeft: `2px solid ${isActive ? '#1D9E75' : 'transparent'}`,
                     }}
                     onMouseEnter={(event) => {
-                      if (!isActive) event.currentTarget.style.backgroundColor = 'var(--color-secondary)'
+                      if (!isActive) event.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.92)'
                     }}
                     onMouseLeave={(event) => {
-                      if (!isActive) event.currentTarget.style.backgroundColor = 'transparent'
+                      if (!isActive) event.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.62)'
                     }}
                   >
                     <Icon size={13} strokeWidth={2} style={{ opacity: isActive ? 1 : 0.7, flexShrink: 0 }} />
@@ -271,13 +271,13 @@ export function Sidebar({ user }: { user?: any }) {
         ))}
       </nav>
 
-      <div className="shrink-0 border-t border-border/70 bg-white/55 px-3 py-3">
+      <div className="shrink-0 border-t border-border/60 bg-white/62 px-3 py-3">
         <div className="flex items-center justify-between text-[10px]">
           <span className="font-medium uppercase tracking-[0.08em] text-muted-foreground">Portal sync</span>
           <span className="font-semibold tracking-[-0.01em]" style={{ color: syncTone }}>{formatSync(lastSync)}</span>
         </div>
 
-        <button type="button" className="mt-3 flex w-full items-center gap-3 rounded-[6px] px-1 py-1 text-left transition-colors hover:bg-secondary/80">
+        <button type="button" className="mt-3 flex w-full items-center gap-3 rounded-[6px] border border-transparent bg-white/52 px-2 py-2 text-left transition-colors duration-150 hover:border-border/40 hover:bg-white/92">
           <div className="flex size-9 items-center justify-center rounded-full bg-[#0F6E56] text-[11px] font-medium text-white">
             {initials || 'MR'}
           </div>
