@@ -50,6 +50,7 @@ export const complaintStatusSchema = z.object({
 
 export const inspectionCreateSchema = z.object({
   stationPublicId: z.string().trim().min(1).max(64),
+  officerPublicId: z.string().trim().min(1).max(64).optional().nullable(),
   inspectionType: z.enum(["ROUTINE", "FOLLOW_UP", "SPOT_CHECK", "SHORTAGE_RESPONSE", "COMPLAINT_RESPONSE"]),
   queueLength: z.coerce.number().int().min(0).max(100000).optional().nullable(),
   stockVisible: z.coerce.boolean(),
@@ -205,6 +206,47 @@ export const meraUserCreateSchema = z.object({
 
 export const meraUserStatusSchema = z.object({
   accountStatus: z.enum(["ACTIVE", "INVITED", "SUSPENDED", "DISABLED"]),
+})
+
+export const meraProfilePatchSchema = z
+  .object({
+    fullName: z.string().trim().min(3).max(120).optional(),
+    email: z.string().trim().email().max(160).optional(),
+    phone: z.string().trim().max(24).optional().nullable(),
+  })
+  .refine((value) => value.fullName !== undefined || value.email !== undefined || value.phone !== undefined, {
+    message: "At least one profile field is required",
+    path: ["fullName"],
+  })
+
+export const meraPreferencesPatchSchema = z
+  .object({
+    appearance: z.enum(["light", "system", "dark"]).optional(),
+    density: z.enum(["comfortable", "compact"]).optional(),
+    landingPage: z.enum(["dashboard", "complaints", "hoarding", "audit"]).optional(),
+    compactTables: z.coerce.boolean().optional(),
+    shortageAlerts: z.coerce.boolean().optional(),
+    complaintsAlerts: z.coerce.boolean().optional(),
+    dailyDigest: z.coerce.boolean().optional(),
+    browserNotifications: z.coerce.boolean().optional(),
+    sessionTimeout: z.enum(["15", "30", "60"]).optional(),
+    requireStepUp: z.coerce.boolean().optional(),
+    trustedDevice: z.coerce.boolean().optional(),
+  })
+  .refine((value) => Object.keys(value).length > 0, {
+    message: "At least one preference field is required",
+    path: ["appearance"],
+  })
+
+export const meraChangePasswordSchema = z.object({
+  currentPassword: z.string().min(8).max(128),
+  newPassword: z
+    .string()
+    .min(8)
+    .max(128)
+    .regex(/[A-Z]/, "New password must include an uppercase letter")
+    .regex(/[a-z]/, "New password must include a lowercase letter")
+    .regex(/[0-9]/, "New password must include a number"),
 })
 
 export const paginationQuerySchema = z.object({

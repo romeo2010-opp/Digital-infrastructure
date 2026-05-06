@@ -1,134 +1,157 @@
-import { Search, Download, AlertTriangle } from 'lucide-react';
-import { Toolbar } from '../components/Toolbar';
+import { useMemo, useState } from 'react'
+import { AlertTriangle, Download, Plus, Search } from 'lucide-react'
+import { Toolbar } from '../components/Toolbar'
+import { Button } from '../components/ui/button'
+import { Input } from '../components/ui/input'
+import { ModalShell } from '../components/ModalShell'
+import { PortalTable } from '../components/PortalTable'
+import { SectionCard } from '../components/SectionCard'
+import { usePortal } from '../lib/portalContext'
+import { matchesSearch, normalizeDate, normalizeRows, renderPill } from '../lib/portalUtils'
 
-const declarations = [
-  { recordId: 'AVL-9847', station: 'Shell Westlands', district: 'Nairobi', petrol: 'Available', diesel: 'Partial', activePumps: '8/12', reportedBy: 'Station Manager', timestamp: '2024-05-05 09:15', complaintConflict: 'Yes', deliveryConflict: 'Yes', severity: 'High' },
-  { recordId: 'AVL-9846', station: 'Total Mombasa Rd', district: 'Nairobi', petrol: 'Available', diesel: 'Dry', activePumps: '6/10', reportedBy: 'Attendant', timestamp: '2024-05-05 08:45', complaintConflict: 'No', deliveryConflict: 'No', severity: 'None' },
-  { recordId: 'AVL-9845', station: 'Hashi Ngong', district: 'Nairobi', petrol: 'Partial', diesel: 'Available', activePumps: '10/14', reportedBy: 'Station Manager', timestamp: '2024-05-05 08:30', complaintConflict: 'Yes', deliveryConflict: 'No', severity: 'Medium' },
-  { recordId: 'AVL-9844', station: 'Rubis Thika', district: 'Kiambu', petrol: 'Dry', diesel: 'Dry', activePumps: '0/8', reportedBy: 'Station Manager', timestamp: '2024-05-05 07:20', complaintConflict: 'No', deliveryConflict: 'Yes', severity: 'High' },
-  { recordId: 'AVL-9843', station: 'Kenol Nakuru', district: 'Nakuru', petrol: 'Available', diesel: 'Available', activePumps: '12/12', reportedBy: 'Station Manager', timestamp: '2024-05-05 07:00', complaintConflict: 'No', deliveryConflict: 'No', severity: 'None' },
-];
-
-const suspicious = [
-  { station: 'Shell Westlands', reason: 'Declared partial despite recent delivery', score: 94 },
-  { station: 'Rubis Thika', reason: 'Dry declaration conflicts with delivery log', score: 88 },
-  { station: 'Hashi Ngong', reason: 'Multiple complaint conflicts', score: 76 },
-];
+const fieldClass = 'h-9 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700'
 
 export function AvailabilityAudit() {
+  const { data, runAction, api, token } = usePortal()
+  const [search, setSearch] = useState('')
+  const [mismatchOnly, setMismatchOnly] = useState(false)
+  const [modalOpen, setModalOpen] = useState(false)
+  const [form, setForm] = useState({
+    stationPublicId: '',
+    petrolAvailable: true,
+    dieselAvailable: true,
+    activePumps: '',
+    reportedBy: '',
+  })
+
+  const rows = useMemo(() => {
+    const base = normalizeRows(data.availabilityReports?.items).filter((row: any) => matchesSearch(row, search))
+    return mismatchOnly ? base.filter((row: any) => row.mismatchIndicator === 'CONFLICT') : base
+  }, [data.availabilityReports, mismatchOnly, search])
+
+  const suspicious = rows
+    .slice()
+    .sort((a: any, b: any) => Number(b.mismatchTotal || 0) - Number(a.mismatchTotal || 0))
+    .slice(0, 6)
+
   return (
-    <div className="flex-1 flex flex-col h-screen overflow-hidden">
+    <div className="flex h-full flex-col gap-4 overflow-y-auto p-4">
       <Toolbar>
-        <div className="flex items-center gap-2 flex-1 max-w-md">
-          <Search className="w-3 h-3 text-slate-400" />
-          <input
-            type="text"
-            placeholder="Search station..."
-            className="bg-slate-900 border border-slate-600 px-2 py-1 rounded text-xs text-slate-300 flex-1"
-          />
+        <div className="flex min-w-[280px] flex-1 items-center gap-2">
+          <Search className="size-4 text-slate-400" />
+          <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search station or record..." />
         </div>
-        <label className="flex items-center gap-2 text-xs text-slate-300">
-          <input type="checkbox" className="rounded" />
-          Mismatch Only
+        <label className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700">
+          <input type="checkbox" checked={mismatchOnly} onChange={(event) => setMismatchOnly(event.target.checked)} />
+          Mismatch only
         </label>
-        <input type="date" className="bg-slate-900 border border-slate-600 px-2 py-1 rounded text-xs text-slate-300" />
-        <button className="bg-slate-700 hover:bg-slate-600 px-3 py-1 rounded text-xs flex items-center gap-1 text-slate-300">
-          <Download className="w-3 h-3" />
+        <input type="date" className={fieldClass} />
+        <Button type="button" size="sm" className="bg-blue-700 hover:bg-blue-800" onClick={() => setModalOpen(true)}>
+          <Plus className="size-4" />
+          Add Declaration
+        </Button>
+        <Button type="button" variant="outline" size="sm">
+          <Download className="size-4" />
           Export Declarations
-        </button>
+        </Button>
       </Toolbar>
 
-      <div className="flex-1 flex overflow-hidden">
-        <div className="flex-1 overflow-y-auto p-3">
-          <div className="bg-slate-900 border border-slate-700 rounded">
-            <div className="border-b border-slate-700 px-3 py-2">
-              <h3 className="text-sm font-medium text-slate-200 uppercase">Station Declaration Audit Ledger</h3>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs">
-                <thead className="bg-slate-800 text-slate-400 uppercase">
-                  <tr>
-                    <th className="px-2 py-1.5 text-left">Record ID</th>
-                    <th className="px-2 py-1.5 text-left">Station</th>
-                    <th className="px-2 py-1.5 text-left">District</th>
-                    <th className="px-2 py-1.5 text-left">Petrol</th>
-                    <th className="px-2 py-1.5 text-left">Diesel</th>
-                    <th className="px-2 py-1.5 text-left">Active Pumps</th>
-                    <th className="px-2 py-1.5 text-left">Reported By</th>
-                    <th className="px-2 py-1.5 text-left">Timestamp</th>
-                    <th className="px-2 py-1.5 text-center">Complaint Conflict</th>
-                    <th className="px-2 py-1.5 text-center">Delivery Conflict</th>
-                    <th className="px-2 py-1.5 text-left">Mismatch Severity</th>
-                  </tr>
-                </thead>
-                <tbody className="text-slate-300">
-                  {declarations.map((item) => (
-                    <tr key={item.recordId} className={`border-t border-slate-800 hover:bg-slate-800/50 ${
-                      item.severity === 'High' ? 'bg-red-900/10' : ''
-                    }`}>
-                      <td className="px-2 py-1.5 font-mono text-cyan-400">{item.recordId}</td>
-                      <td className="px-2 py-1.5 font-medium">{item.station}</td>
-                      <td className="px-2 py-1.5">{item.district}</td>
-                      <td className="px-2 py-1.5">
-                        <span className={`px-2 py-0.5 rounded text-xs ${
-                          item.petrol === 'Available' ? 'bg-emerald-900/30 border border-emerald-600 text-emerald-400' :
-                          item.petrol === 'Partial' ? 'bg-amber-900/30 border border-amber-600 text-amber-400' :
-                          'bg-red-900/30 border border-red-600 text-red-400'
-                        }`}>
-                          {item.petrol}
-                        </span>
-                      </td>
-                      <td className="px-2 py-1.5">
-                        <span className={`px-2 py-0.5 rounded text-xs ${
-                          item.diesel === 'Available' ? 'bg-emerald-900/30 border border-emerald-600 text-emerald-400' :
-                          item.diesel === 'Partial' ? 'bg-amber-900/30 border border-amber-600 text-amber-400' :
-                          'bg-red-900/30 border border-red-600 text-red-400'
-                        }`}>
-                          {item.diesel}
-                        </span>
-                      </td>
-                      <td className="px-2 py-1.5 font-mono">{item.activePumps}</td>
-                      <td className="px-2 py-1.5 text-slate-400">{item.reportedBy}</td>
-                      <td className="px-2 py-1.5 text-slate-400">{item.timestamp}</td>
-                      <td className="px-2 py-1.5 text-center">
-                        {item.complaintConflict === 'Yes' && <AlertTriangle className="w-3 h-3 text-red-400 inline" />}
-                      </td>
-                      <td className="px-2 py-1.5 text-center">
-                        {item.deliveryConflict === 'Yes' && <AlertTriangle className="w-3 h-3 text-red-400 inline" />}
-                      </td>
-                      <td className="px-2 py-1.5">
-                        {item.severity !== 'None' && (
-                          <span className={`px-2 py-0.5 rounded text-xs ${
-                            item.severity === 'High' ? 'bg-red-900/30 border border-red-600 text-red-400' :
-                            'bg-amber-900/30 border border-amber-600 text-amber-400'
-                          }`}>
-                            {item.severity}
-                          </span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
+      <div className="grid min-h-0 flex-1 gap-4 xl:grid-cols-[1.8fr_0.9fr]">
+        <SectionCard title="Station Declaration Audit Ledger" subtitle="Live station availability declarations and conflict detection">
+          <PortalTable
+            rows={rows}
+            columns={[
+              { key: 'recordId', label: 'Record ID' },
+              { key: 'station', label: 'Station', render: (row) => row.station?.name || '-' },
+              { key: 'district', label: 'District', render: (row) => row.station?.city || '-' },
+              { key: 'petrolAvailable', label: 'Petrol', render: (row) => renderPill(row.petrolAvailable ? 'AVAILABLE' : 'DRY') },
+              { key: 'dieselAvailable', label: 'Diesel', render: (row) => renderPill(row.dieselAvailable ? 'AVAILABLE' : 'DRY') },
+              { key: 'activePumps', label: 'Active Pumps', render: (row) => row.activePumps ?? '-' },
+              { key: 'reportedBy', label: 'Reported By' },
+              { key: 'createdAt', label: 'Timestamp', render: (row) => normalizeDate(row.createdAt) },
+              { key: 'complaintConflict', label: 'Complaint Conflict', render: (row) => row.mismatchIndicator === 'CONFLICT' ? <AlertTriangle className="size-4 text-amber-600" /> : 'Clear' },
+              { key: 'deliveryConflict', label: 'Delivery Conflict', render: (row) => Number(row.mismatchTotal || 0) > 1 ? <AlertTriangle className="size-4 text-red-600" /> : 'Clear' },
+              { key: 'mismatchIndicator', label: 'Mismatch Severity', render: (row) => renderPill(row.mismatchIndicator) },
+            ]}
+          />
+        </SectionCard>
 
-        <div className="w-64 bg-slate-900 border-l border-slate-700 overflow-y-auto p-3">
-          <h3 className="text-sm font-medium text-slate-200 uppercase mb-3">Most Suspicious Declarations</h3>
-          <div className="space-y-2">
-            {suspicious.map((item, idx) => (
-              <div key={idx} className="bg-red-900/20 border border-red-600 rounded p-2">
-                <div className="flex items-center justify-between mb-1">
-                  <p className="text-xs font-medium text-slate-200">{item.station}</p>
-                  <span className="text-xs font-bold text-red-400">{item.score}</span>
+        <SectionCard title="Most Suspicious Declarations" subtitle="Reports with the highest complaint conflict weight">
+          <div className="space-y-2 px-4 py-3 text-xs">
+            {suspicious.length ? (
+              suspicious.map((row: any) => (
+                <div key={row.recordId} className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="font-medium text-slate-800">{row.station?.name}</div>
+                      <div className="mt-1 text-slate-500">{row.station?.city || 'Unassigned district'}</div>
+                    </div>
+                    {renderPill(row.mismatchIndicator)}
+                  </div>
+                  <div className="mt-2 text-slate-600">
+                    Complaints in conflict window: <span className="font-medium">{row.mismatchTotal || 0}</span>
+                  </div>
+                  <div className="mt-1 text-slate-500">{normalizeDate(row.createdAt)}</div>
                 </div>
-                <p className="text-xs text-slate-400">{item.reason}</p>
+              ))
+            ) : (
+              <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 p-3 text-slate-500">
+                No suspicious declarations found.
               </div>
-            ))}
+            )}
           </div>
-        </div>
+        </SectionCard>
       </div>
+
+      <ModalShell
+        open={modalOpen}
+        onOpenChange={setModalOpen}
+        title="Record Availability Declaration"
+        description="Write a station availability declaration into the audit ledger and live station status."
+        footer={
+          <>
+            <Button type="button" variant="outline" onClick={() => setModalOpen(false)}>Cancel</Button>
+            <Button
+              type="button"
+              className="bg-blue-700 hover:bg-blue-800"
+              onClick={async () => {
+                await runAction(() =>
+                  api.createAvailabilityReport(token, {
+                    ...form,
+                    activePumps: form.activePumps === '' ? null : Number(form.activePumps),
+                  }),
+                )
+                setModalOpen(false)
+              }}
+            >
+              Save Declaration
+            </Button>
+          </>
+        }
+      >
+        <div className="grid gap-3">
+          <select className={fieldClass} value={form.stationPublicId} onChange={(event) => setForm({ ...form, stationPublicId: event.target.value })}>
+            <option value="">Select station</option>
+            {normalizeRows(data.profiles).map((station: any) => (
+              <option key={station.public_id} value={station.public_id}>
+                {station.name} {station.city ? `- ${station.city}` : ''}
+              </option>
+            ))}
+          </select>
+          <div className="grid gap-3 md:grid-cols-2">
+            <label className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+              <input type="checkbox" checked={form.petrolAvailable} onChange={(event) => setForm({ ...form, petrolAvailable: event.target.checked })} />
+              <span className="ml-2">Petrol available</span>
+            </label>
+            <label className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+              <input type="checkbox" checked={form.dieselAvailable} onChange={(event) => setForm({ ...form, dieselAvailable: event.target.checked })} />
+              <span className="ml-2">Diesel available</span>
+            </label>
+          </div>
+          <Input value={form.activePumps} onChange={(event) => setForm({ ...form, activePumps: event.target.value })} placeholder="Active pumps" />
+          <Input value={form.reportedBy} onChange={(event) => setForm({ ...form, reportedBy: event.target.value })} placeholder="Reported by" />
+        </div>
+      </ModalShell>
     </div>
-  );
+  )
 }

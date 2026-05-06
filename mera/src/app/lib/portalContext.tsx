@@ -38,84 +38,79 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
   const [loginError, setLoginError] = useState('')
   const token = session?.accessToken || ''
 
+  const refreshSession = async (accessToken = token) => {
+    if (!accessToken) return null
+    try {
+      const payload = await portalApi.me(accessToken)
+      setSession((current: any) => {
+        const next = {
+          ...(current || {}),
+          accessToken,
+          sessionPublicId: payload?.sessionPublicId || current?.sessionPublicId || null,
+          user: payload?.user || current?.user || null,
+        }
+        storeSession(next)
+        return next
+      })
+      return payload
+    } catch {
+      return null
+    }
+  }
+
   const loadPortalData = async (accessToken = token) => {
     if (!accessToken) return
     setLoading(true)
     setError('')
     try {
-      const [
-        overview,
-        flaggedStations,
-        heatmap,
-        complaintMetrics,
-        inspectionMetrics,
-        hoardingWatchlist,
-        fuelDeliveryLogs,
-        availabilityReports,
-        complaints,
-        flags,
-        inspections,
-        enforcementActions,
-        profiles,
-        licenseRegistry,
-        expiryAlerts,
-        topComplaintStations,
-        districtShortages,
-        repeatedOffenders,
-        monthlyReports,
-        users,
-        auditLogs,
-      ] = await Promise.all([
-        portalApi.getDashboardOverview(accessToken),
-        portalApi.getFlaggedStations(accessToken),
-        portalApi.getShortageHeatmap(accessToken),
-        portalApi.getComplaintMetrics(accessToken),
-        portalApi.getInspectionMetrics(accessToken),
-        portalApi.getHoardingWatchlist(accessToken),
-        portalApi.listFuelDeliveryLogs(accessToken),
-        portalApi.listAvailabilityReports(accessToken),
-        portalApi.listComplaints(accessToken),
-        portalApi.listFlags(accessToken),
-        portalApi.listInspections(accessToken),
-        portalApi.listEnforcementActions(accessToken),
-        portalApi.listProfiles(accessToken),
-        portalApi.listLicenseRegistry(accessToken),
-        portalApi.getExpiryAlerts(accessToken),
-        portalApi.getTopComplaintStations(accessToken),
-        portalApi.getDistrictShortageSummaries(accessToken),
-        portalApi.getRepeatedOffenders(accessToken),
-        portalApi.getMonthlyReports(accessToken),
-        portalApi.listUsers(accessToken),
-        portalApi.listAuditLogs(accessToken),
-      ])
+      const requests = [
+        ['overview', portalApi.getDashboardOverview(accessToken), initialData.overview],
+        ['flaggedStations', portalApi.getFlaggedStations(accessToken), initialData.flaggedStations],
+        ['heatmap', portalApi.getShortageHeatmap(accessToken), initialData.heatmap],
+        ['complaintMetrics', portalApi.getComplaintMetrics(accessToken), initialData.complaintMetrics],
+        ['inspectionMetrics', portalApi.getInspectionMetrics(accessToken), initialData.inspectionMetrics],
+        ['hoardingWatchlist', portalApi.getHoardingWatchlist(accessToken), initialData.hoardingWatchlist],
+        ['fuelDeliveryLogs', portalApi.listFuelDeliveryLogs(accessToken), initialData.fuelDeliveryLogs],
+        ['availabilityReports', portalApi.listAvailabilityReports(accessToken), initialData.availabilityReports],
+        ['complaints', portalApi.listComplaints(accessToken), initialData.complaints],
+        ['flags', portalApi.listFlags(accessToken), initialData.flags],
+        ['inspections', portalApi.listInspections(accessToken), initialData.inspections],
+        ['enforcementActions', portalApi.listEnforcementActions(accessToken), initialData.enforcementActions],
+        ['profiles', portalApi.listProfiles(accessToken), initialData.profiles],
+        ['licenseRegistry', portalApi.listLicenseRegistry(accessToken), initialData.licenseRegistry],
+        ['expiryAlerts', portalApi.getExpiryAlerts(accessToken), initialData.expiryAlerts],
+        ['topComplaintStations', portalApi.getTopComplaintStations(accessToken), initialData.topComplaintStations],
+        ['districtShortages', portalApi.getDistrictShortageSummaries(accessToken), initialData.districtShortages],
+        ['repeatedOffenders', portalApi.getRepeatedOffenders(accessToken), initialData.repeatedOffenders],
+        ['monthlyReports', portalApi.getMonthlyReports(accessToken), initialData.monthlyReports],
+        ['users', portalApi.listUsers(accessToken), initialData.users],
+        ['auditLogs', portalApi.listAuditLogs(accessToken), initialData.auditLogs],
+      ] as const
 
-      setData({
-        overview,
-        flaggedStations,
-        heatmap,
-        complaintMetrics,
-        inspectionMetrics,
-        hoardingWatchlist,
-        fuelDeliveryLogs,
-        availabilityReports,
-        complaints,
-        flags,
-        inspections,
-        enforcementActions,
-        profiles,
-        licenseRegistry,
-        expiryAlerts,
-        topComplaintStations,
-        districtShortages,
-        repeatedOffenders,
-        monthlyReports,
-        users,
-        auditLogs,
+      const settled = await Promise.allSettled(requests.map(([, request]) => request))
+      const nextData: any = { ...initialData }
+      const loadErrors: string[] = []
+
+      requests.forEach(([key, _request, fallback], index) => {
+        const result = settled[index]
+        if (result.status === 'fulfilled') {
+          nextData[key] = result.value
+        } else {
+          nextData[key] = fallback
+          loadErrors.push(`${key}: ${result.reason?.message || 'request failed'}`)
+        }
       })
 
-      if (!selectedProfile && profiles?.[0]?.public_id) {
-        const profile = await portalApi.getProfile(accessToken, profiles[0].public_id)
-        const enforcement = await portalApi.getStationEnforcementHistory(accessToken, profiles[0].public_id)
+      setData(nextData)
+
+      if (loadErrors.length) {
+        setError(`Some MERA modules could not load: ${loadErrors.slice(0, 4).join(' | ')}`)
+      }
+
+      const activeProfilePublicId = selectedProfile?.station?.public_id || nextData.profiles?.[0]?.public_id || null
+      if (activeProfilePublicId) {
+        const profile = await portalApi.getProfile(accessToken, activeProfilePublicId)
+        const enforcement = await portalApi.getStationEnforcementHistory(accessToken, activeProfilePublicId)
         setSelectedProfile(profile)
         setSelectedProfileEnforcement(enforcement)
       }
@@ -164,6 +159,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     setError('')
     try {
       const result = await runner()
+      await refreshSession(token)
       await loadPortalData(token)
       return result
     } catch (actionError: any) {
@@ -200,6 +196,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
       login,
       logout,
       refresh: () => loadPortalData(token),
+      refreshSession,
       runAction,
       openProfile,
       getHoardingWatchlistDetail: (stationPublicId: string) =>

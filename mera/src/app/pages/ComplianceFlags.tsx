@@ -1,157 +1,230 @@
-import { Download, Search, X } from 'lucide-react';
-import { Toolbar } from '../components/Toolbar';
-import { useState } from 'react';
+import { useMemo, useState } from 'react'
+import { Download, Plus, Search, X } from 'lucide-react'
+import { Toolbar } from '../components/Toolbar'
+import { Button } from '../components/ui/button'
+import { Input } from '../components/ui/input'
+import { ModalShell } from '../components/ModalShell'
+import { PortalTable } from '../components/PortalTable'
+import { SectionCard } from '../components/SectionCard'
+import { usePortal } from '../lib/portalContext'
+import { matchesSearch, normalizeDate, normalizeRows, renderPill } from '../lib/portalUtils'
 
-const flags = [
-  { flagId: 'FLG-3421', station: 'Shell Westlands', flagType: 'Delivery-Declaration Mismatch', severity: 'Critical', source: 'Automated System', createdAt: '2024-05-05 08:45', assignedTo: 'P. Kamau', status: 'Under Review' },
-  { flagId: 'FLG-3420', station: 'Hashi Ngong', flagType: 'Repeated Complaint Pattern', severity: 'High', source: 'AI Analysis', createdAt: '2024-05-05 07:30', assignedTo: 'J. Mwangi', status: 'Investigation' },
-  { flagId: 'FLG-3419', station: 'Total Mombasa Rd', flagType: 'Pump Calibration Overdue', severity: 'Medium', source: 'License Registry', createdAt: '2024-05-04 14:15', assignedTo: 'M. Otieno', status: 'Pending' },
-  { flagId: 'FLG-3418', station: 'Rubis Thika', flagType: 'Price Monitoring Alert', severity: 'High', source: 'Field Report', createdAt: '2024-05-04 11:20', assignedTo: 'A. Njeri', status: 'Resolved' },
-  { flagId: 'FLG-3417', station: 'Kenol Nakuru', flagType: 'Environmental Violation', severity: 'Medium', source: 'Inspector Report', createdAt: '2024-05-04 09:45', assignedTo: 'P. Kamau', status: 'Under Review' },
-];
+const fieldClass = 'h-9 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700'
 
 export function ComplianceFlags() {
-  const [selectedFlag, setSelectedFlag] = useState<string | null>(null);
+  const { data, runAction, api, token } = usePortal()
+  const [search, setSearch] = useState('')
+  const [severity, setSeverity] = useState('')
+  const [selectedFlag, setSelectedFlag] = useState<any>(null)
+  const [modalOpen, setModalOpen] = useState(false)
+  const [resolveOpen, setResolveOpen] = useState(false)
+  const [resolveStatus, setResolveStatus] = useState('UNDER_REVIEW')
+  const [form, setForm] = useState({
+    stationPublicId: '',
+    flagType: 'MANUAL_REVIEW',
+    severity: 'MEDIUM',
+    generatedReason: '',
+    sourceReference: '',
+  })
+
+  const rows = useMemo(() => {
+    return normalizeRows(data.flags?.items).filter((row: any) => {
+      if (severity && String(row.severity || '').toUpperCase() !== severity) return false
+      return matchesSearch(row, search)
+    })
+  }, [data.flags, search, severity])
 
   return (
-    <div className="flex-1 flex flex-col h-screen overflow-hidden">
+    <div className="flex h-full flex-col gap-4 overflow-y-auto p-4">
       <Toolbar>
-        <div className="flex items-center gap-2 flex-1 max-w-md">
-          <Search className="w-3 h-3 text-slate-400" />
-          <input
-            type="text"
-            placeholder="Search flags..."
-            className="bg-slate-900 border border-slate-600 px-2 py-1 rounded text-xs text-slate-300 flex-1"
-          />
+        <div className="flex min-w-[280px] flex-1 items-center gap-2">
+          <Search className="size-4 text-slate-400" />
+          <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search flags, stations, or references..." />
         </div>
-        <select className="bg-slate-900 border border-slate-600 px-2 py-1 rounded text-xs text-slate-300">
-          <option>All Severities</option>
-          <option>Critical</option>
-          <option>High</option>
+        <select className={fieldClass} value={severity} onChange={(event) => setSeverity(event.target.value)}>
+          <option value="">All Severities</option>
+          <option value="LOW">Low</option>
+          <option value="MEDIUM">Medium</option>
+          <option value="HIGH">High</option>
+          <option value="CRITICAL">Critical</option>
         </select>
-        <select className="bg-slate-900 border border-slate-600 px-2 py-1 rounded text-xs text-slate-300">
-          <option>All Officers</option>
-          <option>P. Kamau</option>
-          <option>J. Mwangi</option>
-        </select>
-        <button className="bg-slate-700 hover:bg-slate-600 px-3 py-1 rounded text-xs flex items-center gap-1 text-slate-300">
-          <Download className="w-3 h-3" />
+        <Button type="button" size="sm" className="bg-blue-700 hover:bg-blue-800" onClick={() => setModalOpen(true)}>
+          <Plus className="size-4" />
+          New Flag
+        </Button>
+        <Button type="button" variant="outline" size="sm">
+          <Download className="size-4" />
           Export
-        </button>
+        </Button>
       </Toolbar>
 
-      <div className="flex-1 flex overflow-hidden">
-        <div className={`${selectedFlag ? 'flex-1' : 'w-full'} overflow-y-auto p-3`}>
-          <div className="bg-slate-900 border border-slate-700 rounded">
-            <div className="border-b border-slate-700 px-3 py-2">
-              <h3 className="text-sm font-medium text-slate-200 uppercase">Compliance Flag Registry</h3>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs">
-                <thead className="bg-slate-800 text-slate-400 uppercase">
-                  <tr>
-                    <th className="px-2 py-1.5 text-left">Flag ID</th>
-                    <th className="px-2 py-1.5 text-left">Station</th>
-                    <th className="px-2 py-1.5 text-left">Flag Type</th>
-                    <th className="px-2 py-1.5 text-left">Severity</th>
-                    <th className="px-2 py-1.5 text-left">Generated Source</th>
-                    <th className="px-2 py-1.5 text-left">Created At</th>
-                    <th className="px-2 py-1.5 text-left">Assigned To</th>
-                    <th className="px-2 py-1.5 text-left">Resolution Status</th>
-                    <th className="px-2 py-1.5 text-center">Action</th>
-                  </tr>
-                </thead>
-                <tbody className="text-slate-300">
-                  {flags.map((flag) => (
-                    <tr key={flag.flagId} className="border-t border-slate-800 hover:bg-slate-800/50">
-                      <td className="px-2 py-1.5 font-mono text-cyan-400">{flag.flagId}</td>
-                      <td className="px-2 py-1.5 font-medium">{flag.station}</td>
-                      <td className="px-2 py-1.5">{flag.flagType}</td>
-                      <td className="px-2 py-1.5">
-                        <span className={`px-2 py-0.5 rounded text-xs ${
-                          flag.severity === 'Critical' ? 'bg-red-900/30 border border-red-600 text-red-400' :
-                          flag.severity === 'High' ? 'bg-orange-900/30 border border-orange-600 text-orange-400' :
-                          'bg-amber-900/30 border border-amber-600 text-amber-400'
-                        }`}>
-                          {flag.severity}
-                        </span>
-                      </td>
-                      <td className="px-2 py-1.5 text-slate-400">{flag.source}</td>
-                      <td className="px-2 py-1.5 text-slate-400">{flag.createdAt}</td>
-                      <td className="px-2 py-1.5 text-slate-400">{flag.assignedTo}</td>
-                      <td className="px-2 py-1.5">
-                        <span className={`px-2 py-0.5 rounded text-xs ${
-                          flag.status === 'Resolved' ? 'bg-emerald-900/30 border border-emerald-600 text-emerald-400' :
-                          'bg-blue-900/30 border border-blue-600 text-blue-400'
-                        }`}>
-                          {flag.status}
-                        </span>
-                      </td>
-                      <td className="px-2 py-1.5 text-center">
-                        <button
-                          onClick={() => setSelectedFlag(flag.flagId)}
-                          className="text-cyan-400 hover:text-cyan-300 text-xs underline"
-                        >
-                          Evidence
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
+      <div className="grid min-h-0 flex-1 gap-4 xl:grid-cols-[1.6fr_1fr]">
+        <SectionCard title="Compliance Flag Registry" subtitle="Generated and manual compliance alerts with resolution workflow">
+          <PortalTable
+            rows={rows}
+            onRowClick={setSelectedFlag}
+            columns={[
+              { key: 'publicId', label: 'Flag ID' },
+              { key: 'station', label: 'Station', render: (row) => row.station?.name || '-' },
+              { key: 'flagType', label: 'Flag Type', render: (row) => renderPill(row.flagType) },
+              { key: 'severity', label: 'Severity', render: (row) => renderPill(row.severity) },
+              { key: 'sourceReference', label: 'Generated Source', render: (row) => row.sourceReference || 'System intelligence' },
+              { key: 'createdAt', label: 'Created At', render: (row) => normalizeDate(row.createdAt) },
+              { key: 'resolvedBy', label: 'Assigned To', render: (row) => row.resolvedBy?.fullName || 'Open queue' },
+              { key: 'resolvedStatus', label: 'Resolution Status', render: (row) => renderPill(row.resolvedStatus) },
+              {
+                key: 'action',
+                label: 'Action',
+                render: (row) => (
+                  <button
+                    type="button"
+                    className="text-[11px] font-medium text-blue-700"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      setSelectedFlag(row)
+                      setResolveStatus(row.resolvedStatus || 'UNDER_REVIEW')
+                      setResolveOpen(true)
+                    }}
+                  >
+                    Resolve
+                  </button>
+                ),
+              },
+            ]}
+          />
+        </SectionCard>
 
-        {selectedFlag && (
-          <div className="w-80 bg-slate-900 border-l border-slate-700 overflow-y-auto p-3">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-medium text-slate-200 uppercase">Flag Evidence Chain</h3>
-              <button onClick={() => setSelectedFlag(null)} className="text-slate-400 hover:text-white">
-                <X className="w-4 h-4" />
+        <SectionCard
+          title="Flag Evidence Chain"
+          subtitle="Source references, reasons, timestamps, and compliance narrative"
+          actions={
+            selectedFlag ? (
+              <button type="button" className="text-slate-500" onClick={() => setSelectedFlag(null)}>
+                <X className="size-4" />
               </button>
-            </div>
-
-            <div className="space-y-3">
-              <div className="bg-slate-800 border border-slate-700 rounded p-2">
-                <h4 className="text-xs text-slate-400 uppercase mb-2">Flag Details</h4>
-                <p className="text-xs text-slate-300 mb-1"><span className="text-slate-500">Flag ID:</span> <span className="font-mono text-cyan-400">{selectedFlag}</span></p>
-                <p className="text-xs text-slate-300 mb-1"><span className="text-slate-500">Station:</span> Shell Westlands</p>
-                <p className="text-xs text-slate-300"><span className="text-slate-500">Type:</span> Delivery-Declaration Mismatch</p>
-              </div>
-
-              <div className="bg-slate-800 border border-slate-700 rounded p-2">
-                <h4 className="text-xs text-slate-400 uppercase mb-2">Evidence Items</h4>
-                <div className="space-y-2">
-                  <div className="bg-slate-900 p-2 rounded">
-                    <p className="text-xs text-emerald-400 mb-1">Delivery Record DLV-5847</p>
-                    <p className="text-xs text-slate-400">45,000L Diesel logged at 08:30</p>
-                  </div>
-                  <div className="bg-slate-900 p-2 rounded">
-                    <p className="text-xs text-red-400 mb-1">Declaration AVL-9847</p>
-                    <p className="text-xs text-slate-400">Declared "Partial Supply" at 09:15</p>
-                  </div>
-                  <div className="bg-slate-900 p-2 rounded">
-                    <p className="text-xs text-amber-400 mb-1">Complaints: 12 in 24h</p>
-                    <p className="text-xs text-slate-400">Citizens report "No fuel available"</p>
+            ) : null
+          }
+        >
+          <div className="max-h-[calc(100vh-260px)] space-y-3 overflow-y-auto px-4 py-3 text-xs">
+            {selectedFlag ? (
+              <>
+                <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                  <div className="font-medium text-slate-800">{selectedFlag.station?.name}</div>
+                  <div className="mt-1 text-slate-500">{selectedFlag.publicId} • {selectedFlag.station?.publicId}</div>
+                </div>
+                <div className="rounded-md border border-slate-200 bg-white p-3">
+                  <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Flag Details</div>
+                  <div className="mt-2 space-y-2 text-slate-700">
+                    <div>{renderPill(selectedFlag.flagType)}</div>
+                    <div>{renderPill(selectedFlag.severity)}</div>
+                    <div>{renderPill(selectedFlag.resolvedStatus)}</div>
                   </div>
                 </div>
+                <div className="rounded-md border border-slate-200 bg-white p-3">
+                  <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Generated Reason</div>
+                  <p className="mt-2 text-slate-700">{selectedFlag.generatedReason || 'No narrative attached.'}</p>
+                </div>
+                <div className="rounded-md border border-slate-200 bg-white p-3">
+                  <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Evidence Chain</div>
+                  <div className="mt-2 space-y-2 text-slate-600">
+                    <div>Created: {normalizeDate(selectedFlag.createdAt)}</div>
+                    <div>Source Reference: {selectedFlag.sourceReference || 'System-derived'}</div>
+                    <div>Resolved At: {normalizeDate(selectedFlag.resolvedAt)}</div>
+                    <div>Resolved By: {selectedFlag.resolvedBy?.fullName || 'Pending assignment'}</div>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 p-3 text-slate-500">
+                Select a flag row to review the evidence chain.
               </div>
-
-              <div className="bg-red-900/20 border border-red-600 rounded p-2">
-                <h4 className="text-xs text-red-400 uppercase mb-2">System Analysis</h4>
-                <p className="text-xs text-slate-300">Confidence: 94%</p>
-                <p className="text-xs text-slate-300 mt-2">Recent delivery contradicts declared availability status. Complaint pattern suggests hoarding behavior.</p>
-              </div>
-
-              <div className="bg-slate-800 border border-slate-700 rounded p-2">
-                <h4 className="text-xs text-slate-400 uppercase mb-2">Recommended Action</h4>
-                <p className="text-xs text-slate-300">Immediate field inspection with pump check and storage verification.</p>
-              </div>
-            </div>
+            )}
           </div>
-        )}
+        </SectionCard>
       </div>
+
+      <ModalShell
+        open={modalOpen}
+        onOpenChange={setModalOpen}
+        title="Create Manual Compliance Flag"
+        description="Submit a manual intelligence flag into the MERA compliance queue."
+        footer={
+          <>
+            <Button type="button" variant="outline" onClick={() => setModalOpen(false)}>Cancel</Button>
+            <Button
+              type="button"
+              className="bg-blue-700 hover:bg-blue-800"
+              onClick={async () => {
+                await runAction(() => api.createFlag(token, form))
+                setModalOpen(false)
+              }}
+            >
+              Save Flag
+            </Button>
+          </>
+        }
+      >
+        <div className="grid gap-3">
+          <select className={fieldClass} value={form.stationPublicId} onChange={(event) => setForm({ ...form, stationPublicId: event.target.value })}>
+            <option value="">Select station</option>
+            {normalizeRows(data.profiles).map((station: any) => (
+              <option key={station.public_id} value={station.public_id}>
+                {station.name} {station.city ? `- ${station.city}` : ''}
+              </option>
+            ))}
+          </select>
+          <select className={fieldClass} value={form.flagType} onChange={(event) => setForm({ ...form, flagType: event.target.value })}>
+            <option value="MANUAL_REVIEW">Manual Review</option>
+            <option value="POSSIBLE_HOARDING">Possible Hoarding</option>
+            <option value="COMPLAINT_SURGE">Complaint Surge</option>
+            <option value="REFUSAL_MISMATCH">Refusal Mismatch</option>
+            <option value="REPEATED_INSPECTION_FAILURE">Inspection Failure</option>
+            <option value="PROLONGED_DRY_STATUS">Prolonged Dry Status</option>
+          </select>
+          <select className={fieldClass} value={form.severity} onChange={(event) => setForm({ ...form, severity: event.target.value })}>
+            <option value="LOW">Low</option>
+            <option value="MEDIUM">Medium</option>
+            <option value="HIGH">High</option>
+            <option value="CRITICAL">Critical</option>
+          </select>
+          <Input value={form.sourceReference} onChange={(event) => setForm({ ...form, sourceReference: event.target.value })} placeholder="Source reference" />
+          <textarea
+            className="min-h-28 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700"
+            value={form.generatedReason}
+            onChange={(event) => setForm({ ...form, generatedReason: event.target.value })}
+            placeholder="Generated reason or evidence summary..."
+          />
+        </div>
+      </ModalShell>
+
+      <ModalShell
+        open={resolveOpen}
+        onOpenChange={setResolveOpen}
+        title="Resolve Compliance Flag"
+        description={selectedFlag ? `Update the resolution status for ${selectedFlag.publicId}.` : 'Update resolution status.'}
+        footer={
+          <>
+            <Button type="button" variant="outline" onClick={() => setResolveOpen(false)}>Cancel</Button>
+            <Button
+              type="button"
+              className="bg-blue-700 hover:bg-blue-800"
+              onClick={async () => {
+                if (!selectedFlag) return
+                await runAction(() => api.resolveFlag(token, selectedFlag.publicId, resolveStatus))
+                setResolveOpen(false)
+              }}
+            >
+              Save Resolution
+            </Button>
+          </>
+        }
+      >
+        <select className={fieldClass} value={resolveStatus} onChange={(event) => setResolveStatus(event.target.value)}>
+          <option value="UNDER_REVIEW">Under Review</option>
+          <option value="RESOLVED">Resolved</option>
+          <option value="DISMISSED">Dismissed</option>
+        </select>
+      </ModalShell>
     </div>
-  );
+  )
 }

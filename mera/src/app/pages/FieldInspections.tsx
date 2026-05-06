@@ -1,150 +1,222 @@
-import { Plus, Download, Search, MapPin } from 'lucide-react';
-import { Toolbar } from '../components/Toolbar';
+import { useMemo, useState } from 'react'
+import { Download, MapPin, Plus } from 'lucide-react'
+import { Toolbar } from '../components/Toolbar'
+import { Button } from '../components/ui/button'
+import { Input } from '../components/ui/input'
+import { ModalShell } from '../components/ModalShell'
+import { PortalTable } from '../components/PortalTable'
+import { SectionCard } from '../components/SectionCard'
+import { usePortal } from '../lib/portalContext'
+import { normalizeDate, normalizeRows, renderPill } from '../lib/portalUtils'
 
-const inspections = [
-  { ref: 'INS-4521', station: 'Shell Westlands', district: 'Nairobi', officer: 'P. Kamau', inspectionType: 'Hoarding Investigation', queueLength: '47 vehicles', pumpsActive: '8/12', illegalVending: 'No', result: 'Violation Found', createdAt: '2024-05-05 10:15' },
-  { ref: 'INS-4520', station: 'Hashi Ngong', district: 'Nairobi', officer: 'J. Mwangi', inspectionType: 'Routine Compliance', queueLength: '0 vehicles', pumpsActive: '14/14', illegalVending: 'No', result: 'Compliant', createdAt: '2024-05-05 09:30' },
-  { ref: 'INS-4519', station: 'Total Mombasa Rd', district: 'Nairobi', officer: 'M. Otieno', inspectionType: 'Price Check', queueLength: '12 vehicles', pumpsActive: '10/10', illegalVending: 'No', result: 'Price Violation', createdAt: '2024-05-05 08:45' },
-  { ref: 'INS-4518', station: 'Rubis Thika', district: 'Kiambu', officer: 'A. Njeri', inspectionType: 'Quality Audit', queueLength: '0 vehicles', pumpsActive: '0/8', illegalVending: 'Yes', result: 'Multiple Violations', createdAt: '2024-05-04 16:20' },
-  { ref: 'INS-4517', station: 'Kenol Nakuru', district: 'Nakuru', officer: 'P. Kamau', inspectionType: 'Routine Compliance', queueLength: '5 vehicles', pumpsActive: '12/12', illegalVending: 'No', result: 'Compliant', createdAt: '2024-05-04 14:30' },
-];
-
-const evidence = [
-  { ref: 'GEO-8821', type: 'Photo', station: 'Shell Westlands', officer: 'P. Kamau', timestamp: '2024-05-05 10:20', location: 'Verified' },
-  { ref: 'GEO-8820', type: 'Video', station: 'Rubis Thika', officer: 'A. Njeri', timestamp: '2024-05-04 16:25', location: 'Verified' },
-  { ref: 'GEO-8819', type: 'Photo', station: 'Hashi Ngong', officer: 'J. Mwangi', timestamp: '2024-05-05 09:35', location: 'Verified' },
-];
+const fieldClass = 'h-9 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700'
 
 export function FieldInspections() {
+  const { data, runAction, api, token } = usePortal()
+  const [typeFilter, setTypeFilter] = useState('')
+  const [officerFilter, setOfficerFilter] = useState('')
+  const [scheduleOpen, setScheduleOpen] = useState(false)
+  const [selectedInspection, setSelectedInspection] = useState<any>(null)
+  const [form, setForm] = useState({
+    stationPublicId: '',
+    officerPublicId: '',
+    inspectionType: 'COMPLAINT_RESPONSE',
+    queueLength: '',
+    stockVisible: true,
+    pumpsActive: '',
+    displayedPrice: '',
+    illegalVendingDetected: false,
+    geotagLat: '',
+    geotagLng: '',
+    officerNotes: '',
+    inspectionStatus: 'OPEN',
+  })
+
+  const rows = useMemo(() => {
+    return normalizeRows(data.inspections?.items).filter((row: any) => {
+      if (typeFilter && row.inspectionType !== typeFilter) return false
+      if (officerFilter && row.officer?.publicId !== officerFilter) return false
+      return true
+    })
+  }, [data.inspections, officerFilter, typeFilter])
+
+  const evidenceRows = rows
+    .filter((row: any) => row.geotagLat || row.geotagLng)
+    .slice(0, 10)
+
   return (
-    <div className="flex-1 flex flex-col h-screen overflow-hidden">
+    <div className="flex h-full flex-col gap-4 overflow-y-auto p-4">
       <Toolbar>
-        <button className="bg-cyan-700 hover:bg-cyan-600 px-3 py-1 rounded text-xs flex items-center gap-1 text-white">
-          <Plus className="w-3 h-3" />
+        <Button type="button" size="sm" className="bg-blue-700 hover:bg-blue-800" onClick={() => setScheduleOpen(true)}>
+          <Plus className="size-4" />
           Schedule Inspection
-        </button>
-        <button className="bg-blue-700 hover:bg-blue-600 px-3 py-1 rounded text-xs flex items-center gap-1 text-white">
-          <Plus className="w-3 h-3" />
+        </Button>
+        <Button type="button" variant="outline" size="sm" onClick={() => setScheduleOpen(true)}>
+          <Plus className="size-4" />
           Assign Officer
-        </button>
-        <select className="bg-slate-900 border border-slate-600 px-2 py-1 rounded text-xs text-slate-300">
-          <option>All Types</option>
-          <option>Hoarding Investigation</option>
-          <option>Routine Compliance</option>
+        </Button>
+        <select className={fieldClass} value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)}>
+          <option value="">All Types</option>
+          <option value="ROUTINE">Routine</option>
+          <option value="FOLLOW_UP">Follow Up</option>
+          <option value="SPOT_CHECK">Spot Check</option>
+          <option value="SHORTAGE_RESPONSE">Shortage Response</option>
+          <option value="COMPLAINT_RESPONSE">Complaint Response</option>
         </select>
-        <select className="bg-slate-900 border border-slate-600 px-2 py-1 rounded text-xs text-slate-300">
-          <option>All Officers</option>
-          <option>P. Kamau</option>
-          <option>J. Mwangi</option>
+        <select className={fieldClass} value={officerFilter} onChange={(event) => setOfficerFilter(event.target.value)}>
+          <option value="">All Officers</option>
+          {normalizeRows(data.users).map((user: any) => (
+            <option key={user.public_id} value={user.public_id}>
+              {user.full_name}
+            </option>
+          ))}
         </select>
-        <button className="bg-slate-700 hover:bg-slate-600 px-3 py-1 rounded text-xs flex items-center gap-1 text-slate-300">
-          <Download className="w-3 h-3" />
+        <Button type="button" variant="outline" size="sm">
+          <Download className="size-4" />
           Export
-        </button>
+        </Button>
       </Toolbar>
 
-      <div className="flex-1 overflow-y-auto p-3">
-        <div className="bg-slate-900 border border-slate-700 rounded mb-3">
-          <div className="border-b border-slate-700 px-3 py-2">
-            <h3 className="text-sm font-medium text-slate-200 uppercase">Field Inspection Log</h3>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead className="bg-slate-800 text-slate-400 uppercase">
-                <tr>
-                  <th className="px-2 py-1.5 text-left">Inspection Ref</th>
-                  <th className="px-2 py-1.5 text-left">Station</th>
-                  <th className="px-2 py-1.5 text-left">District</th>
-                  <th className="px-2 py-1.5 text-left">Officer</th>
-                  <th className="px-2 py-1.5 text-left">Inspection Type</th>
-                  <th className="px-2 py-1.5 text-left">Queue Length</th>
-                  <th className="px-2 py-1.5 text-left">Pumps Active</th>
-                  <th className="px-2 py-1.5 text-center">Illegal Vending</th>
-                  <th className="px-2 py-1.5 text-left">Result</th>
-                  <th className="px-2 py-1.5 text-left">Created At</th>
-                  <th className="px-2 py-1.5 text-center">Action</th>
-                </tr>
-              </thead>
-              <tbody className="text-slate-300">
-                {inspections.map((inspection) => (
-                  <tr key={inspection.ref} className="border-t border-slate-800 hover:bg-slate-800/50">
-                    <td className="px-2 py-1.5 font-mono text-cyan-400">{inspection.ref}</td>
-                    <td className="px-2 py-1.5 font-medium">{inspection.station}</td>
-                    <td className="px-2 py-1.5">{inspection.district}</td>
-                    <td className="px-2 py-1.5 text-slate-400">{inspection.officer}</td>
-                    <td className="px-2 py-1.5">{inspection.inspectionType}</td>
-                    <td className="px-2 py-1.5">{inspection.queueLength}</td>
-                    <td className="px-2 py-1.5 font-mono">{inspection.pumpsActive}</td>
-                    <td className="px-2 py-1.5 text-center">
-                      <span className={`px-2 py-0.5 rounded text-xs ${
-                        inspection.illegalVending === 'Yes'
-                          ? 'bg-red-900/30 border border-red-600 text-red-400'
-                          : 'bg-emerald-900/30 border border-emerald-600 text-emerald-400'
-                      }`}>
-                        {inspection.illegalVending}
-                      </span>
-                    </td>
-                    <td className="px-2 py-1.5">
-                      <span className={`px-2 py-0.5 rounded text-xs ${
-                        inspection.result === 'Compliant' ? 'bg-emerald-900/30 border border-emerald-600 text-emerald-400' :
-                        inspection.result === 'Violation Found' ? 'bg-orange-900/30 border border-orange-600 text-orange-400' :
-                        'bg-red-900/30 border border-red-600 text-red-400'
-                      }`}>
-                        {inspection.result}
-                      </span>
-                    </td>
-                    <td className="px-2 py-1.5 text-slate-400">{inspection.createdAt}</td>
-                    <td className="px-2 py-1.5 text-center">
-                      <button className="text-cyan-400 hover:text-cyan-300 text-xs underline">Details</button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
+      <div className="grid min-h-0 flex-1 gap-4">
+        <SectionCard title="Field Inspection Log" subtitle="Inspection queue, assigned officers, and live outcomes">
+          <PortalTable
+            rows={rows}
+            onRowClick={setSelectedInspection}
+            columns={[
+              { key: 'publicId', label: 'Inspection Ref' },
+              { key: 'station', label: 'Station', render: (row) => row.station?.name || '-' },
+              { key: 'district', label: 'District', render: (row) => row.station?.city || '-' },
+              { key: 'officer', label: 'Officer', render: (row) => row.officer?.fullName || '-' },
+              { key: 'inspectionType', label: 'Inspection Type', render: (row) => renderPill(row.inspectionType) },
+              { key: 'queueLength', label: 'Queue Length', render: (row) => row.queueLength ?? 0 },
+              { key: 'pumpsActive', label: 'Pumps Active', render: (row) => row.pumpsActive ?? '-' },
+              { key: 'illegalVendingDetected', label: 'Illegal Vending', render: (row) => renderPill(row.illegalVendingDetected ? 'YES' : 'NO') },
+              { key: 'inspectionStatus', label: 'Result', render: (row) => renderPill(row.inspectionStatus) },
+              { key: 'createdAt', label: 'Created At', render: (row) => normalizeDate(row.createdAt) },
+              { key: 'action', label: 'Action', render: () => <span className="text-[11px] font-medium text-blue-700">Details</span> },
+            ]}
+          />
+          {selectedInspection ? (
+            <div className="border-t border-slate-200 px-4 py-3 text-xs text-slate-600">
+              {selectedInspection.publicId} • {selectedInspection.officerNotes || 'No officer note recorded.'}
+            </div>
+          ) : null}
+        </SectionCard>
 
-        <div className="bg-slate-900 border border-slate-700 rounded">
-          <div className="border-b border-slate-700 px-3 py-2">
-            <h3 className="text-sm font-medium text-slate-200 uppercase">Uploaded Geotagged Evidence Ledger</h3>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead className="bg-slate-800 text-slate-400 uppercase">
-                <tr>
-                  <th className="px-2 py-1.5 text-left">Evidence Ref</th>
-                  <th className="px-2 py-1.5 text-left">Type</th>
-                  <th className="px-2 py-1.5 text-left">Station</th>
-                  <th className="px-2 py-1.5 text-left">Officer</th>
-                  <th className="px-2 py-1.5 text-left">Timestamp</th>
-                  <th className="px-2 py-1.5 text-left">Location Verified</th>
-                  <th className="px-2 py-1.5 text-center">Action</th>
-                </tr>
-              </thead>
-              <tbody className="text-slate-300">
-                {evidence.map((item) => (
-                  <tr key={item.ref} className="border-t border-slate-800 hover:bg-slate-800/50">
-                    <td className="px-2 py-1.5 font-mono text-cyan-400">{item.ref}</td>
-                    <td className="px-2 py-1.5">{item.type}</td>
-                    <td className="px-2 py-1.5 font-medium">{item.station}</td>
-                    <td className="px-2 py-1.5 text-slate-400">{item.officer}</td>
-                    <td className="px-2 py-1.5 text-slate-400">{item.timestamp}</td>
-                    <td className="px-2 py-1.5">
-                      <div className="flex items-center gap-1">
-                        <MapPin className="w-3 h-3 text-emerald-400" />
-                        <span className="text-emerald-400">{item.location}</span>
-                      </div>
-                    </td>
-                    <td className="px-2 py-1.5 text-center">
-                      <button className="text-cyan-400 hover:text-cyan-300 text-xs underline">View</button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
+        <SectionCard title="Uploaded Geotagged Evidence Ledger" subtitle="Inspections with location-tagged field evidence coordinates">
+          <PortalTable
+            rows={evidenceRows}
+            columns={[
+              { key: 'publicId', label: 'Evidence Ref', render: (row) => `GEO-${String(row.publicId).slice(-8)}` },
+              { key: 'type', label: 'Type', render: () => 'Inspection Geo Record' },
+              { key: 'station', label: 'Station', render: (row) => row.station?.name || '-' },
+              { key: 'officer', label: 'Officer', render: (row) => row.officer?.fullName || '-' },
+              { key: 'createdAt', label: 'Timestamp', render: (row) => normalizeDate(row.createdAt) },
+              {
+                key: 'location',
+                label: 'Location Verified',
+                render: (row) => (
+                  <span className="inline-flex items-center gap-1 text-emerald-700">
+                    <MapPin className="size-3.5" />
+                    {row.geotagLat && row.geotagLng ? `${row.geotagLat}, ${row.geotagLng}` : 'Pending'}
+                  </span>
+                ),
+              },
+              { key: 'action', label: 'Action', render: () => <span className="text-[11px] font-medium text-blue-700">View</span> },
+            ]}
+          />
+        </SectionCard>
       </div>
+
+      <ModalShell
+        open={scheduleOpen}
+        onOpenChange={setScheduleOpen}
+        title="Schedule Field Inspection"
+        description="Create and assign a new field inspection record."
+        footer={
+          <>
+            <Button type="button" variant="outline" onClick={() => setScheduleOpen(false)}>Cancel</Button>
+            <Button
+              type="button"
+              className="bg-blue-700 hover:bg-blue-800"
+              onClick={async () => {
+                await runAction(() =>
+                  api.createInspection(token, {
+                    ...form,
+                    queueLength: form.queueLength === '' ? null : Number(form.queueLength),
+                    pumpsActive: form.pumpsActive === '' ? null : Number(form.pumpsActive),
+                    displayedPrice: form.displayedPrice === '' ? null : Number(form.displayedPrice),
+                    geotagLat: form.geotagLat === '' ? null : Number(form.geotagLat),
+                    geotagLng: form.geotagLng === '' ? null : Number(form.geotagLng),
+                    officerPublicId: form.officerPublicId || null,
+                  }),
+                )
+                setScheduleOpen(false)
+              }}
+            >
+              Save Inspection
+            </Button>
+          </>
+        }
+      >
+        <div className="grid gap-3">
+          <select className={fieldClass} value={form.stationPublicId} onChange={(event) => setForm({ ...form, stationPublicId: event.target.value })}>
+            <option value="">Select station</option>
+            {normalizeRows(data.profiles).map((station: any) => (
+              <option key={station.public_id} value={station.public_id}>
+                {station.name} {station.city ? `- ${station.city}` : ''}
+              </option>
+            ))}
+          </select>
+          <select className={fieldClass} value={form.officerPublicId} onChange={(event) => setForm({ ...form, officerPublicId: event.target.value })}>
+            <option value="">Default to current officer</option>
+            {normalizeRows(data.users).map((user: any) => (
+              <option key={user.public_id} value={user.public_id}>
+                {user.full_name} • {user.role_name}
+              </option>
+            ))}
+          </select>
+          <select className={fieldClass} value={form.inspectionType} onChange={(event) => setForm({ ...form, inspectionType: event.target.value })}>
+            <option value="ROUTINE">Routine</option>
+            <option value="FOLLOW_UP">Follow Up</option>
+            <option value="SPOT_CHECK">Spot Check</option>
+            <option value="SHORTAGE_RESPONSE">Shortage Response</option>
+            <option value="COMPLAINT_RESPONSE">Complaint Response</option>
+          </select>
+          <div className="grid gap-3 md:grid-cols-2">
+            <Input value={form.queueLength} onChange={(event) => setForm({ ...form, queueLength: event.target.value })} placeholder="Queue length" />
+            <Input value={form.pumpsActive} onChange={(event) => setForm({ ...form, pumpsActive: event.target.value })} placeholder="Pumps active" />
+          </div>
+          <Input value={form.displayedPrice} onChange={(event) => setForm({ ...form, displayedPrice: event.target.value })} placeholder="Displayed price" />
+          <div className="grid gap-3 md:grid-cols-2">
+            <label className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+              <input type="checkbox" checked={form.stockVisible} onChange={(event) => setForm({ ...form, stockVisible: event.target.checked })} />
+              <span className="ml-2">Stock visible</span>
+            </label>
+            <label className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+              <input type="checkbox" checked={form.illegalVendingDetected} onChange={(event) => setForm({ ...form, illegalVendingDetected: event.target.checked })} />
+              <span className="ml-2">Illegal vending detected</span>
+            </label>
+          </div>
+          <div className="grid gap-3 md:grid-cols-2">
+            <Input value={form.geotagLat} onChange={(event) => setForm({ ...form, geotagLat: event.target.value })} placeholder="Latitude" />
+            <Input value={form.geotagLng} onChange={(event) => setForm({ ...form, geotagLng: event.target.value })} placeholder="Longitude" />
+          </div>
+          <select className={fieldClass} value={form.inspectionStatus} onChange={(event) => setForm({ ...form, inspectionStatus: event.target.value })}>
+            <option value="OPEN">Open</option>
+            <option value="PASSED">Passed</option>
+            <option value="FAILED">Failed</option>
+            <option value="ESCALATED">Escalated</option>
+            <option value="CLOSED">Closed</option>
+          </select>
+          <textarea
+            className="min-h-28 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700"
+            value={form.officerNotes}
+            onChange={(event) => setForm({ ...form, officerNotes: event.target.value })}
+            placeholder="Officer notes..."
+          />
+        </div>
+      </ModalShell>
     </div>
-  );
+  )
 }

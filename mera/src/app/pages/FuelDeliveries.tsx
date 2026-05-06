@@ -34,7 +34,7 @@ export function FuelDeliveries() {
     .slice(0, 6)
 
   return (
-    <div className="flex h-full flex-col gap-4 overflow-hidden p-4">
+    <div className="flex h-full flex-col gap-4 overflow-y-auto p-4">
       <Toolbar>
         <Button type="button" size="sm" className="bg-blue-700 hover:bg-blue-800" onClick={() => setModalOpen(true)}>
           <Plus className="size-4" />

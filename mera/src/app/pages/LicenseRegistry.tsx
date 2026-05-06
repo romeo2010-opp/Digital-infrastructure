@@ -1,94 +1,232 @@
-import { Download, Search, AlertTriangle } from 'lucide-react';
-import { Toolbar } from '../components/Toolbar';
+import { useMemo, useState } from 'react'
+import { AlertTriangle, Download, Plus, Search } from 'lucide-react'
+import { Toolbar } from '../components/Toolbar'
+import { Button } from '../components/ui/button'
+import { Input } from '../components/ui/input'
+import { ModalShell } from '../components/ModalShell'
+import { PortalTable } from '../components/PortalTable'
+import { SectionCard } from '../components/SectionCard'
+import { usePortal } from '../lib/portalContext'
+import { matchesSearch, normalizeDate, normalizeRows, renderPill } from '../lib/portalUtils'
 
-const licenses = [
-  { licenseNo: 'LIC-89234', station: 'Shell Westlands', owner: 'Shell Kenya Ltd', district: 'Nairobi', issueDate: '2022-03-15', expiryDate: '2027-03-15', complianceStatus: 'Warning', renewalAlert: false },
-  { licenseNo: 'LIC-89233', station: 'Total Mombasa Rd', owner: 'TotalEnergies Kenya', district: 'Nairobi', issueDate: '2021-06-20', expiryDate: '2026-06-20', complianceStatus: 'Compliant', renewalAlert: false },
-  { licenseNo: 'LIC-89232', station: 'Hashi Ngong', owner: 'Hashi Energy Ltd', district: 'Nairobi', issueDate: '2020-09-10', expiryDate: '2025-09-10', complianceStatus: 'Warning', renewalAlert: true },
-  { licenseNo: 'LIC-89231', station: 'Rubis Thika', owner: 'Rubis Energy Kenya', district: 'Kiambu', issueDate: '2023-01-05', expiryDate: '2028-01-05', complianceStatus: 'Suspended', renewalAlert: false },
-  { licenseNo: 'LIC-89230', station: 'Kenol Nakuru', owner: 'KenolKobil Ltd', district: 'Nakuru', issueDate: '2022-11-18', expiryDate: '2027-11-18', complianceStatus: 'Compliant', renewalAlert: false },
-];
+const fieldClass = 'h-9 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700'
 
 export function LicenseRegistry() {
+  const { data, runAction, api, token } = usePortal()
+  const [search, setSearch] = useState('')
+  const [status, setStatus] = useState('')
+  const [modalOpen, setModalOpen] = useState(false)
+  const [editOpen, setEditOpen] = useState(false)
+  const [selectedLicense, setSelectedLicense] = useState<any>(null)
+  const [createForm, setCreateForm] = useState({
+    stationPublicId: '',
+    licenseNumber: '',
+    issueDate: '',
+    expiryDate: '',
+    licenseStatus: 'ACTIVE',
+    complianceConditions: '',
+  })
+  const [editForm, setEditForm] = useState({
+    issueDate: '',
+    expiryDate: '',
+    licenseStatus: 'ACTIVE',
+    complianceConditions: '',
+  })
+
+  const rows = useMemo(() => {
+    return normalizeRows(data.licenseRegistry?.items).filter((row: any) => {
+      if (status && row.licenseStatus !== status) return false
+      return matchesSearch(row, search)
+    })
+  }, [data.licenseRegistry, search, status])
+
+  const alerts = normalizeRows(data.expiryAlerts).slice(0, 8)
+
   return (
-    <div className="flex-1 flex flex-col h-screen overflow-hidden">
+    <div className="flex h-full flex-col gap-4 overflow-y-auto p-4">
       <Toolbar>
-        <div className="flex items-center gap-2 flex-1 max-w-md">
-          <Search className="w-3 h-3 text-slate-400" />
-          <input
-            type="text"
-            placeholder="Search licenses..."
-            className="bg-slate-900 border border-slate-600 px-2 py-1 rounded text-xs text-slate-300 flex-1"
-          />
+        <div className="flex min-w-[280px] flex-1 items-center gap-2">
+          <Search className="size-4 text-slate-400" />
+          <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search licenses or stations..." />
         </div>
-        <select className="bg-slate-900 border border-slate-600 px-2 py-1 rounded text-xs text-slate-300">
-          <option>All Districts</option>
-          <option>Nairobi</option>
-          <option>Mombasa</option>
+        <select className={fieldClass} value={status} onChange={(event) => setStatus(event.target.value)}>
+          <option value="">All Statuses</option>
+          <option value="ACTIVE">Active</option>
+          <option value="PENDING_RENEWAL">Pending Renewal</option>
+          <option value="SUSPENDED">Suspended</option>
+          <option value="REVOKED">Revoked</option>
+          <option value="EXPIRED">Expired</option>
         </select>
-        <select className="bg-slate-900 border border-slate-600 px-2 py-1 rounded text-xs text-slate-300">
-          <option>All Statuses</option>
-          <option>Compliant</option>
-          <option>Warning</option>
-          <option>Suspended</option>
-        </select>
-        <button className="bg-slate-700 hover:bg-slate-600 px-3 py-1 rounded text-xs flex items-center gap-1 text-slate-300">
-          <Download className="w-3 h-3" />
+        <Button type="button" size="sm" className="bg-blue-700 hover:bg-blue-800" onClick={() => setModalOpen(true)}>
+          <Plus className="size-4" />
+          Add License
+        </Button>
+        <Button type="button" variant="outline" size="sm">
+          <Download className="size-4" />
           Export
-        </button>
+        </Button>
       </Toolbar>
 
-      <div className="flex-1 overflow-y-auto p-3">
-        <div className="bg-slate-900 border border-slate-700 rounded">
-          <div className="border-b border-slate-700 px-3 py-2">
-            <h3 className="text-sm font-medium text-slate-200 uppercase">Petroleum Station License Registry</h3>
+      <div className="grid min-h-0 flex-1 gap-4 xl:grid-cols-[1.8fr_0.9fr]">
+        <SectionCard title="Petroleum Station License Registry" subtitle="National license, renewal, and compliance register">
+          <PortalTable
+            rows={rows}
+            columns={[
+              { key: 'licenseNumber', label: 'License No' },
+              { key: 'station', label: 'Station', render: (row) => row.station?.name || '-' },
+              { key: 'owner', label: 'Owner', render: (row) => row.station?.operatorName || '-' },
+              { key: 'district', label: 'District', render: (row) => row.station?.city || '-' },
+              { key: 'issueDate', label: 'Issue Date', render: (row) => normalizeDate(row.issueDate) },
+              { key: 'expiryDate', label: 'Expiry Date', render: (row) => normalizeDate(row.expiryDate) },
+              { key: 'licenseStatus', label: 'Compliance Status', render: (row) => renderPill(row.licenseStatus) },
+              {
+                key: 'renewalAlert',
+                label: 'Renewal Alert',
+                render: (row) =>
+                  alerts.some((alert: any) => alert.license_number === row.licenseNumber) ? <AlertTriangle className="size-4 text-amber-600" /> : 'Clear',
+              },
+              {
+                key: 'action',
+                label: 'Action',
+                render: (row) => (
+                  <button
+                    type="button"
+                    className="text-[11px] font-medium text-blue-700"
+                    onClick={() => {
+                      setSelectedLicense(row)
+                      setEditForm({
+                        issueDate: String(row.issueDate || '').slice(0, 10),
+                        expiryDate: String(row.expiryDate || '').slice(0, 10),
+                        licenseStatus: row.licenseStatus || 'ACTIVE',
+                        complianceConditions: row.complianceConditions || '',
+                      })
+                      setEditOpen(true)
+                    }}
+                  >
+                    Edit
+                  </button>
+                ),
+              },
+            ]}
+          />
+        </SectionCard>
+
+        <SectionCard title="Renewal Alert Queue" subtitle="Licenses approaching expiry or pending renewal action">
+          <div className="space-y-2 px-4 py-3 text-xs">
+            {alerts.length ? (
+              alerts.map((item: any) => (
+                <div key={`${item.id}-${item.license_number}`} className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                  <div className="font-medium text-slate-800">{item.station_name}</div>
+                  <div className="mt-1 text-slate-600">{item.license_number}</div>
+                  <div className="mt-1 text-slate-500">Expiry: {normalizeDate(item.expiry_date)}</div>
+                  <div className="mt-2">{renderPill(item.license_status)}</div>
+                </div>
+              ))
+            ) : (
+              <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 p-3 text-slate-500">
+                No expiry alerts are active.
+              </div>
+            )}
           </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead className="bg-slate-800 text-slate-400 uppercase">
-                <tr>
-                  <th className="px-2 py-1.5 text-left">License No</th>
-                  <th className="px-2 py-1.5 text-left">Station</th>
-                  <th className="px-2 py-1.5 text-left">Owner</th>
-                  <th className="px-2 py-1.5 text-left">District</th>
-                  <th className="px-2 py-1.5 text-left">Issue Date</th>
-                  <th className="px-2 py-1.5 text-left">Expiry Date</th>
-                  <th className="px-2 py-1.5 text-left">Compliance Status</th>
-                  <th className="px-2 py-1.5 text-center">Renewal Alert</th>
-                  <th className="px-2 py-1.5 text-center">Action</th>
-                </tr>
-              </thead>
-              <tbody className="text-slate-300">
-                {licenses.map((license) => (
-                  <tr key={license.licenseNo} className="border-t border-slate-800 hover:bg-slate-800/50">
-                    <td className="px-2 py-1.5 font-mono text-cyan-400">{license.licenseNo}</td>
-                    <td className="px-2 py-1.5 font-medium">{license.station}</td>
-                    <td className="px-2 py-1.5">{license.owner}</td>
-                    <td className="px-2 py-1.5">{license.district}</td>
-                    <td className="px-2 py-1.5 text-slate-400">{license.issueDate}</td>
-                    <td className="px-2 py-1.5 text-slate-400">{license.expiryDate}</td>
-                    <td className="px-2 py-1.5">
-                      <span className={`px-2 py-0.5 rounded text-xs ${
-                        license.complianceStatus === 'Compliant' ? 'bg-emerald-900/30 border border-emerald-600 text-emerald-400' :
-                        license.complianceStatus === 'Warning' ? 'bg-amber-900/30 border border-amber-600 text-amber-400' :
-                        'bg-red-900/30 border border-red-600 text-red-400'
-                      }`}>
-                        {license.complianceStatus}
-                      </span>
-                    </td>
-                    <td className="px-2 py-1.5 text-center">
-                      {license.renewalAlert && <AlertTriangle className="w-3 h-3 text-amber-400 inline" />}
-                    </td>
-                    <td className="px-2 py-1.5 text-center">
-                      <button className="text-cyan-400 hover:text-cyan-300 text-xs underline">View</button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
+        </SectionCard>
       </div>
+
+      <ModalShell
+        open={modalOpen}
+        onOpenChange={setModalOpen}
+        title="Attach License"
+        description="Create a new fuel station license record."
+        footer={
+          <>
+            <Button type="button" variant="outline" onClick={() => setModalOpen(false)}>Cancel</Button>
+            <Button
+              type="button"
+              className="bg-blue-700 hover:bg-blue-800"
+              onClick={async () => {
+                await runAction(() => api.attachLicense(token, createForm))
+                setModalOpen(false)
+              }}
+            >
+              Save License
+            </Button>
+          </>
+        }
+      >
+        <div className="grid gap-3">
+          <select className={fieldClass} value={createForm.stationPublicId} onChange={(event) => setCreateForm({ ...createForm, stationPublicId: event.target.value })}>
+            <option value="">Select station</option>
+            {normalizeRows(data.profiles).map((station: any) => (
+              <option key={station.public_id} value={station.public_id}>
+                {station.name} {station.city ? `- ${station.city}` : ''}
+              </option>
+            ))}
+          </select>
+          <Input value={createForm.licenseNumber} onChange={(event) => setCreateForm({ ...createForm, licenseNumber: event.target.value })} placeholder="License number" />
+          <div className="grid gap-3 md:grid-cols-2">
+            <input type="date" className={fieldClass} value={createForm.issueDate} onChange={(event) => setCreateForm({ ...createForm, issueDate: event.target.value })} />
+            <input type="date" className={fieldClass} value={createForm.expiryDate} onChange={(event) => setCreateForm({ ...createForm, expiryDate: event.target.value })} />
+          </div>
+          <select className={fieldClass} value={createForm.licenseStatus} onChange={(event) => setCreateForm({ ...createForm, licenseStatus: event.target.value })}>
+            <option value="ACTIVE">Active</option>
+            <option value="PENDING_RENEWAL">Pending Renewal</option>
+            <option value="SUSPENDED">Suspended</option>
+            <option value="REVOKED">Revoked</option>
+            <option value="EXPIRED">Expired</option>
+          </select>
+          <textarea
+            className="min-h-28 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700"
+            value={createForm.complianceConditions}
+            onChange={(event) => setCreateForm({ ...createForm, complianceConditions: event.target.value })}
+            placeholder="Compliance conditions..."
+          />
+        </div>
+      </ModalShell>
+
+      <ModalShell
+        open={editOpen}
+        onOpenChange={setEditOpen}
+        title="Edit License Record"
+        description={selectedLicense ? `Update license ${selectedLicense.licenseNumber}.` : 'Update a license.'}
+        footer={
+          <>
+            <Button type="button" variant="outline" onClick={() => setEditOpen(false)}>Cancel</Button>
+            <Button
+              type="button"
+              className="bg-blue-700 hover:bg-blue-800"
+              onClick={async () => {
+                if (!selectedLicense) return
+                await runAction(() => api.updateLicense(token, selectedLicense.id, editForm))
+                setEditOpen(false)
+              }}
+            >
+              Save Changes
+            </Button>
+          </>
+        }
+      >
+        <div className="grid gap-3">
+          <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+            {selectedLicense?.licenseNumber || 'License'}
+          </div>
+          <div className="grid gap-3 md:grid-cols-2">
+            <input type="date" className={fieldClass} value={editForm.issueDate} onChange={(event) => setEditForm({ ...editForm, issueDate: event.target.value })} />
+            <input type="date" className={fieldClass} value={editForm.expiryDate} onChange={(event) => setEditForm({ ...editForm, expiryDate: event.target.value })} />
+          </div>
+          <select className={fieldClass} value={editForm.licenseStatus} onChange={(event) => setEditForm({ ...editForm, licenseStatus: event.target.value })}>
+            <option value="ACTIVE">Active</option>
+            <option value="PENDING_RENEWAL">Pending Renewal</option>
+            <option value="SUSPENDED">Suspended</option>
+            <option value="REVOKED">Revoked</option>
+            <option value="EXPIRED">Expired</option>
+          </select>
+          <textarea
+            className="min-h-28 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700"
+            value={editForm.complianceConditions}
+            onChange={(event) => setEditForm({ ...editForm, complianceConditions: event.target.value })}
+            placeholder="Compliance conditions..."
+          />
+        </div>
+      </ModalShell>
     </div>
-  );
+  )
 }

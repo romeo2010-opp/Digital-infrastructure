@@ -513,12 +513,32 @@ model mera_users {
   fuel_price_reports  fuel_price_reports[]
   inspections         inspections[]
   mera_auth_sessions  mera_auth_sessions[]
+  mera_user_preferences mera_user_preferences?
   public_complaints   public_complaints[]      @relation("public_complaints_officer")
   station_status_logs station_status_logs[]
   mera_roles          mera_roles               @relation(fields: [role_id], references: [id], onUpdate: Restrict, map: "fk_mera_users_role")
 
   @@index([district], map: "idx_mera_users_district")
   @@index([role_id, account_status], map: "idx_mera_users_role_status")
+}
+
+model mera_user_preferences {
+  id                               BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  mera_user_id                     BigInt    @unique(map: "uq_mera_user_preferences_user") @db.UnsignedBigInt
+  appearance                       String    @default("system") @db.VarChar(16)
+  density                          String    @default("comfortable") @db.VarChar(16)
+  landing_page                     String    @default("dashboard") @db.VarChar(32)
+  compact_tables                   Boolean   @default(false)
+  shortage_alerts                  Boolean   @default(true)
+  complaints_alerts                Boolean   @default(true)
+  daily_digest                     Boolean   @default(true)
+  browser_notifications            Boolean   @default(false)
+  session_timeout_minutes          Int       @default(30) @db.UnsignedSmallInt
+  require_step_up                  Boolean   @default(true)
+  trusted_device                   Boolean   @default(false)
+  created_at                       DateTime  @default(now()) @db.Timestamp(3)
+  updated_at                       DateTime  @default(now()) @db.Timestamp(3)
+  mera_users                       mera_users @relation(fields: [mera_user_id], references: [id], onUpdate: Restrict, map: "fk_mera_user_preferences_user")
 }
 
 model mera_auth_sessions {

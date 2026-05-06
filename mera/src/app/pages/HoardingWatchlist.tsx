@@ -42,7 +42,7 @@ export function HoardingWatchlist() {
   }
 
   return (
-    <div className="flex h-full flex-col gap-4 overflow-hidden p-4">
+    <div className="flex h-full flex-col gap-4 overflow-y-auto p-4">
       <Toolbar>
         <div className="flex min-w-[280px] flex-1 items-center gap-2">
           <Search className="size-4 text-slate-400" />
@@ -65,22 +65,28 @@ export function HoardingWatchlist() {
       </Toolbar>
 
       <div className="grid min-h-0 flex-1 gap-4 xl:grid-cols-[1.7fr_1fr]">
-        <SectionCard title="Hoarding Watchlist" subtitle="Professional searchable surveillance table">
-          <PortalTable
-            rows={rows}
-            onRowClick={selectRow}
-            columns={[
-              { key: 'stationName', label: 'Station Name' },
-              { key: 'district', label: 'District' },
-              { key: 'lastDeliveryLogged', label: 'Last Delivery Logged', render: (row) => normalizeDate(row.lastDeliveryLogged) },
-              { key: 'currentDeclaredAvailability', label: 'Current Declared Availability', render: (row) => renderPill(row.currentDeclaredAvailability) },
-              { key: 'complaints24h', label: 'Complaints (24h)' },
-              { key: 'inspectionFailures', label: 'Inspection Failures' },
-              { key: 'riskScore', label: 'Risk Score' },
-              { key: 'escalationStatus', label: 'Escalation Status', render: (row) => renderPill(row.escalationStatus) },
-              { key: 'action', label: 'Action', render: () => <Eye className="size-4 text-blue-700" /> },
-            ]}
-          />
+        <SectionCard
+          title="Hoarding Watchlist"
+          subtitle="Professional searchable surveillance table"
+          className="flex min-h-0 flex-col"
+        >
+          <div className="min-h-0 flex-1 overflow-auto">
+            <PortalTable
+              rows={rows}
+              onRowClick={selectRow}
+              columns={[
+                { key: 'stationName', label: 'Station Name' },
+                { key: 'district', label: 'District' },
+                { key: 'lastDeliveryLogged', label: 'Last Delivery Logged', render: (row) => normalizeDate(row.lastDeliveryLogged) },
+                { key: 'currentDeclaredAvailability', label: 'Current Declared Availability', render: (row) => renderPill(row.currentDeclaredAvailability) },
+                { key: 'complaints24h', label: 'Complaints (24h)' },
+                { key: 'inspectionFailures', label: 'Inspection Failures' },
+                { key: 'riskScore', label: 'Risk Score' },
+                { key: 'escalationStatus', label: 'Escalation Status', render: (row) => renderPill(row.escalationStatus) },
+                { key: 'action', label: 'Action', render: () => <Eye className="size-4 text-blue-700" /> },
+              ]}
+            />
+          </div>
         </SectionCard>
 
         <SectionCard

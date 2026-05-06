@@ -14,6 +14,13 @@ function resolveApiOrigin() {
   return window.location.origin
 }
 
+export function resolvePortalAssetUrl(assetPath: string) {
+  const raw = String(assetPath || '').trim()
+  if (!raw) return ''
+  if (/^https?:\/\//i.test(raw)) return raw
+  return new URL(raw.startsWith('/') ? raw : `/${raw}`, resolveApiOrigin()).toString()
+}
+
 function parseResponse(response: Response, payload: any) {
   if (!response.ok || payload?.ok === false) {
     throw new Error(payload?.error || `Request failed (${response.status})`)
@@ -41,9 +48,10 @@ export function clearSession() {
   window.sessionStorage.removeItem(storageKey)
 }
 
-async function request(pathname: string, { method = 'GET', body, token, isForm = false }: any = {}) {
+async function request(pathname: string, { method = 'GET', body, token, isForm = false, signal }: any = {}) {
   const response = await fetch(`${resolveApiOrigin()}${pathname}`, {
     method,
+    signal,
     headers: {
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(body && !isForm ? { 'Content-Type': 'application/json' } : {}),
@@ -86,6 +94,10 @@ export const portalApi = {
 
   getInspectionMetrics(token: string) {
     return request('/api/mera/dashboard/inspection-metrics', { token })
+  },
+
+  getSidebarStats(token: string, signal?: AbortSignal) {
+    return request('/api/mera/dashboard/sidebar-stats', { token, signal })
   },
 
   getHoardingWatchlist(token: string) {

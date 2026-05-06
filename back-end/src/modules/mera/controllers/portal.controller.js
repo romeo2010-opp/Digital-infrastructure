@@ -203,6 +203,10 @@ export async function inspectionMetrics(req, res) {
   return ok(res, await portalService.getInspectionMetrics())
 }
 
+export async function sidebarStats(req, res) {
+  return ok(res, await portalService.getSidebarStats())
+}
+
 export async function topComplaintStations(req, res) {
   return ok(res, await portalService.getTopComplaintStations())
 }

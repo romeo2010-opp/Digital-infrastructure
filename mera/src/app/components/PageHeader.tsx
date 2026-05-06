@@ -1,4 +1,4 @@
-import { Bell, LogOut, RefreshCw, Shield, User } from 'lucide-react'
+import { Bell, LogOut, RefreshCw, SunMedium } from 'lucide-react'
 import { Button } from './ui/button'
 
 export function PageHeader({
@@ -15,23 +15,27 @@ export function PageHeader({
   onLogout: () => void
 }) {
   return (
-    <header className="border-b border-slate-200 bg-white px-6 py-3">
-      <div className="flex items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <div className="flex size-10 items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-blue-700">
-            <Shield className="size-4" />
-          </div>
-          <div>
-            <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">
-              Malawi Energy Regulatory Authority
-            </p>
-            <h2 className="text-lg font-semibold text-slate-900">{title}</h2>
-            <p className="text-xs text-slate-500">{subtitle}</p>
-          </div>
+    <header className="h-[92px]  bg-white px-6">
+      <div className="flex h-full items-center justify-between gap-4">
+        <div className="min-w-0">
+          <h2 className="truncate text-[1rem] font-semibold tracking-[-0.02em] text-slate-900">{title}</h2>
+          <p className="mt-1 truncate text-[0.88rem] leading-5 text-[#6b84a3]">{subtitle}</p>
         </div>
 
         <div className="flex items-center gap-3">
-          <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">
+          <button type="button" className="text-[0.88rem] font-medium text-[#6d7f98] transition-colors hover:text-slate-900">
+            Start guide
+          </button>
+          <button type="button" className="inline-flex h-9 items-center gap-2 rounded-full border border-slate-200 px-3 text-[0.9rem] font-medium text-[#405772]">
+            <span>Live Mode</span>
+            <span className="flex h-4.5 w-8 items-center rounded-full bg-[#eef2f7] px-0.5">
+              <span className="ml-auto size-3.5 rounded-full bg-white shadow-sm" />
+            </span>
+          </button>
+          <button type="button" className="text-[0.88rem] font-medium text-[#6d7f98] transition-colors hover:text-slate-900">
+            Docs
+          </button>
+          <div className="rounded-full bg-[#eef2f7] px-3 py-1.5 text-[0.76rem] font-medium text-[#4a6280]">
             {loading ? (
               <span className="inline-flex items-center gap-2">
                 <RefreshCw className="size-3 animate-spin" />
@@ -41,19 +45,18 @@ export function PageHeader({
               'Portal synchronized'
             )}
           </div>
-          <button className="relative rounded-md border border-slate-200 bg-white p-2 text-slate-500 hover:bg-slate-50">
-            <Bell className="size-4" />
-            <span className="absolute right-1 top-1 size-2 rounded-full bg-blue-600" />
+          <button className="relative rounded-full p-1.5 text-[#6d7f98] transition-colors hover:bg-slate-100 hover:text-slate-900">
+            <Bell className="size-[0.95rem]" />
+            <span className="absolute right-[0.28rem] top-[0.28rem] size-1.5 rounded-full bg-blue-600" />
           </button>
-          <div className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2">
-            <User className="size-4 text-slate-500" />
-            <div className="text-xs">
-              <div className="font-medium text-slate-800">{user?.fullName || user?.email || 'MERA Officer'}</div>
-              <div className="text-slate-500">{user?.role || 'Authenticated session'}</div>
-            </div>
+          <button className="rounded-full p-1.5 text-[#6d7f98] transition-colors hover:bg-slate-100 hover:text-slate-900">
+            <SunMedium className="size-[0.95rem]" />
+          </button>
+          <div className="flex size-10 items-center justify-center rounded-full bg-[#43a047] text-[0.95rem] font-medium text-white">
+            {(user?.fullName || user?.email || 'MO').slice(0, 2).toUpperCase()}
           </div>
-          <Button type="button" variant="outline" size="sm" onClick={onLogout}>
-            <LogOut className="size-4" />
+          <Button type="button" variant="outline" size="sm" className="h-9 rounded-full px-3.5 text-[0.9rem]" onClick={onLogout}>
+            <LogOut className="size-3.5" />
             Sign out
           </Button>
         </div>

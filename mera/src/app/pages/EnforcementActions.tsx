@@ -1,121 +1,163 @@
-import { Download, Search, Plus } from 'lucide-react';
-import { Toolbar } from '../components/Toolbar';
+import { useMemo, useState } from 'react'
+import { Download, Plus, Search } from 'lucide-react'
+import { Toolbar } from '../components/Toolbar'
+import { Button } from '../components/ui/button'
+import { Input } from '../components/ui/input'
+import { ModalShell } from '../components/ModalShell'
+import { PortalTable } from '../components/PortalTable'
+import { SectionCard } from '../components/SectionCard'
+import { usePortal } from '../lib/portalContext'
+import { matchesSearch, normalizeDate, normalizeRows, renderPill } from '../lib/portalUtils'
 
-const actions = [
-  { actionRef: 'ENF-1245', station: 'Shell Westlands', legalBasis: 'EPRA Act Sec 24(a)', actionType: 'Warning Notice', issuedBy: 'P. Kamau', issueDate: '2024-05-05', complianceDeadline: '2024-05-12', status: 'Active' },
-  { actionRef: 'ENF-1244', station: 'Rubis Thika', legalBasis: 'EPRA Act Sec 26(b)', actionType: 'Operations Suspension', issuedBy: 'A. Njeri', issueDate: '2024-05-04', complianceDeadline: '2024-05-11', status: 'Pending Compliance' },
-  { actionRef: 'ENF-1243', station: 'Hashi Ngong', legalBasis: 'EPRA Act Sec 24(a)', actionType: 'Penalty Notice', issuedBy: 'J. Mwangi', issueDate: '2024-05-03', complianceDeadline: '2024-05-10', status: 'Complied' },
-  { actionRef: 'ENF-1242', station: 'Total Mombasa Rd', legalBasis: 'EPRA Act Sec 25(c)', actionType: 'Corrective Order', issuedBy: 'M. Otieno', issueDate: '2024-05-02', complianceDeadline: '2024-05-09', status: 'Active' },
-  { actionRef: 'ENF-1241', station: 'Kenol Nakuru', legalBasis: 'EPRA Act Sec 24(a)', actionType: 'Warning Notice', issuedBy: 'P. Kamau', issueDate: '2024-05-01', complianceDeadline: '2024-05-08', status: 'Complied' },
-];
-
-const pendingSuspensions = [
-  { station: 'Rubis Thika', reason: 'Hoarding violations', deadline: '2024-05-11', officer: 'A. Njeri' },
-  { station: 'Hashi Langata', reason: 'Quality violations', deadline: '2024-05-13', officer: 'J. Mwangi' },
-];
+const fieldClass = 'h-9 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700'
 
 export function EnforcementActions() {
+  const { data, runAction, api, token } = usePortal()
+  const [search, setSearch] = useState('')
+  const [actionType, setActionType] = useState('')
+  const [modalOpen, setModalOpen] = useState(false)
+  const [form, setForm] = useState({
+    stationPublicId: '',
+    relatedFlagPublicId: '',
+    actionType: 'WARNING',
+    actionNotes: '',
+    actionStatus: 'OPEN',
+  })
+
+  const rows = useMemo(() => {
+    return normalizeRows(data.enforcementActions?.items).filter((row: any) => {
+      if (actionType && row.actionType !== actionType) return false
+      return matchesSearch(row, search)
+    })
+  }, [actionType, data.enforcementActions, search])
+
+  const pendingSuspensions = rows
+    .filter((row: any) => row.actionType === 'SUSPENSION' || row.actionStatus === 'ESCALATED')
+    .slice(0, 6)
+
   return (
-    <div className="flex-1 flex flex-col h-screen overflow-hidden">
+    <div className="flex h-full flex-col gap-4 overflow-y-auto p-4">
       <Toolbar>
-        <button className="bg-cyan-700 hover:bg-cyan-600 px-3 py-1 rounded text-xs flex items-center gap-1 text-white">
-          <Plus className="w-3 h-3" />
+        <Button type="button" size="sm" className="bg-blue-700 hover:bg-blue-800" onClick={() => setModalOpen(true)}>
+          <Plus className="size-4" />
           Issue Action
-        </button>
-        <div className="flex items-center gap-2 flex-1 max-w-md">
-          <Search className="w-3 h-3 text-slate-400" />
-          <input
-            type="text"
-            placeholder="Search actions..."
-            className="bg-slate-900 border border-slate-600 px-2 py-1 rounded text-xs text-slate-300 flex-1"
-          />
+        </Button>
+        <div className="flex min-w-[280px] flex-1 items-center gap-2">
+          <Search className="size-4 text-slate-400" />
+          <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search actions, stations, or flags..." />
         </div>
-        <select className="bg-slate-900 border border-slate-600 px-2 py-1 rounded text-xs text-slate-300">
-          <option>All Types</option>
-          <option>Warning Notice</option>
-          <option>Operations Suspension</option>
+        <select className={fieldClass} value={actionType} onChange={(event) => setActionType(event.target.value)}>
+          <option value="">All Types</option>
+          <option value="WARNING">Warning</option>
+          <option value="FINE">Fine</option>
+          <option value="SUSPENSION">Suspension</option>
+          <option value="CLOSURE_NOTICE">Closure Notice</option>
+          <option value="FOLLOW_UP_DIRECTIVE">Follow-up Directive</option>
         </select>
-        <button className="bg-slate-700 hover:bg-slate-600 px-3 py-1 rounded text-xs flex items-center gap-1 text-slate-300">
-          <Download className="w-3 h-3" />
+        <Button type="button" variant="outline" size="sm">
+          <Download className="size-4" />
           Export
-        </button>
+        </Button>
       </Toolbar>
 
-      <div className="flex-1 flex overflow-hidden">
-        <div className="flex-1 overflow-y-auto p-3">
-          <div className="bg-slate-900 border border-slate-700 rounded">
-            <div className="border-b border-slate-700 px-3 py-2">
-              <h3 className="text-sm font-medium text-slate-200 uppercase">Enforcement Action Registry</h3>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs">
-                <thead className="bg-slate-800 text-slate-400 uppercase">
-                  <tr>
-                    <th className="px-2 py-1.5 text-left">Action Ref</th>
-                    <th className="px-2 py-1.5 text-left">Station</th>
-                    <th className="px-2 py-1.5 text-left">Legal Basis</th>
-                    <th className="px-2 py-1.5 text-left">Action Type</th>
-                    <th className="px-2 py-1.5 text-left">Issued By</th>
-                    <th className="px-2 py-1.5 text-left">Issue Date</th>
-                    <th className="px-2 py-1.5 text-left">Compliance Deadline</th>
-                    <th className="px-2 py-1.5 text-left">Current Status</th>
-                    <th className="px-2 py-1.5 text-center">Action</th>
-                  </tr>
-                </thead>
-                <tbody className="text-slate-300">
-                  {actions.map((action) => (
-                    <tr key={action.actionRef} className="border-t border-slate-800 hover:bg-slate-800/50">
-                      <td className="px-2 py-1.5 font-mono text-cyan-400">{action.actionRef}</td>
-                      <td className="px-2 py-1.5 font-medium">{action.station}</td>
-                      <td className="px-2 py-1.5 text-slate-400">{action.legalBasis}</td>
-                      <td className="px-2 py-1.5">
-                        <span className={`px-2 py-0.5 rounded text-xs ${
-                          action.actionType === 'Operations Suspension' ? 'bg-red-900/30 border border-red-600 text-red-400' :
-                          action.actionType === 'Penalty Notice' ? 'bg-orange-900/30 border border-orange-600 text-orange-400' :
-                          'bg-amber-900/30 border border-amber-600 text-amber-400'
-                        }`}>
-                          {action.actionType}
-                        </span>
-                      </td>
-                      <td className="px-2 py-1.5 text-slate-400">{action.issuedBy}</td>
-                      <td className="px-2 py-1.5 text-slate-400">{action.issueDate}</td>
-                      <td className="px-2 py-1.5 text-slate-400">{action.complianceDeadline}</td>
-                      <td className="px-2 py-1.5">
-                        <span className={`px-2 py-0.5 rounded text-xs ${
-                          action.status === 'Complied' ? 'bg-emerald-900/30 border border-emerald-600 text-emerald-400' :
-                          'bg-blue-900/30 border border-blue-600 text-blue-400'
-                        }`}>
-                          {action.status}
-                        </span>
-                      </td>
-                      <td className="px-2 py-1.5 text-center">
-                        <button className="text-cyan-400 hover:text-cyan-300 text-xs underline">View</button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
+      <div className="grid min-h-0 flex-1 gap-4 xl:grid-cols-[1.8fr_0.9fr]">
+        <SectionCard title="Enforcement Action Registry" subtitle="Issued legal actions, deadlines, statuses, and references">
+          <PortalTable
+            rows={rows}
+            columns={[
+              { key: 'publicId', label: 'Action Ref' },
+              { key: 'station', label: 'Station', render: (row) => row.station?.name || '-' },
+              { key: 'legalBasis', label: 'Legal Basis', render: (row) => row.relatedFlagPublicId ? `Related flag ${row.relatedFlagPublicId}` : 'Regulatory directive' },
+              { key: 'actionType', label: 'Action Type', render: (row) => renderPill(row.actionType) },
+              { key: 'actor', label: 'Issued By', render: (row) => row.actor?.fullName || '-' },
+              { key: 'issuedAt', label: 'Issue Date', render: (row) => normalizeDate(row.issuedAt) },
+              { key: 'deadline', label: 'Compliance Deadline', render: (row) => normalizeDate(row.resolvedAt || row.issuedAt) },
+              { key: 'actionStatus', label: 'Current Status', render: (row) => renderPill(row.actionStatus) },
+              { key: 'action', label: 'Action', render: () => <span className="text-[11px] font-medium text-blue-700">View</span> },
+            ]}
+          />
+        </SectionCard>
 
-        <div className="w-72 bg-slate-900 border-l border-slate-700 overflow-y-auto p-3">
-          <h3 className="text-sm font-medium text-slate-200 uppercase mb-3">Pending Suspensions Summary</h3>
-          <div className="space-y-2">
-            {pendingSuspensions.map((item, idx) => (
-              <div key={idx} className="bg-red-900/20 border border-red-600 rounded p-2">
-                <p className="text-xs font-medium text-slate-200 mb-1">{item.station}</p>
-                <p className="text-xs text-slate-400 mb-1">{item.reason}</p>
-                <div className="flex justify-between items-center text-xs">
-                  <span className="text-slate-500">Deadline:</span>
-                  <span className="text-red-400 font-bold">{item.deadline}</span>
+        <SectionCard title="Pending Suspensions Summary" subtitle="Cases moving toward suspension or escalated legal review">
+          <div className="space-y-2 px-4 py-3 text-xs">
+            {pendingSuspensions.length ? (
+              pendingSuspensions.map((row: any) => (
+                <div key={row.publicId} className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                  <div className="font-medium text-slate-800">{row.station?.name || '-'}</div>
+                  <div className="mt-1 text-slate-500">{row.station?.city || 'No district'}</div>
+                  <div className="mt-2">{renderPill(row.actionType)}</div>
+                  <div className="mt-2 text-slate-600">Officer: {row.actor?.fullName || 'Unknown'}</div>
                 </div>
-                <p className="text-xs text-slate-500 mt-1">Officer: {item.officer}</p>
+              ))
+            ) : (
+              <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 p-3 text-slate-500">
+                No pending suspension summaries at this time.
               </div>
-            ))}
+            )}
           </div>
-        </div>
+        </SectionCard>
       </div>
+
+      <ModalShell
+        open={modalOpen}
+        onOpenChange={setModalOpen}
+        title="Issue Enforcement Action"
+        description="Create a legal or compliance action against a regulated station."
+        footer={
+          <>
+            <Button type="button" variant="outline" onClick={() => setModalOpen(false)}>Cancel</Button>
+            <Button
+              type="button"
+              className="bg-blue-700 hover:bg-blue-800"
+              onClick={async () => {
+                await runAction(() => api.createEnforcementAction(token, form))
+                setModalOpen(false)
+              }}
+            >
+              Save Action
+            </Button>
+          </>
+        }
+      >
+        <div className="grid gap-3">
+          <select className={fieldClass} value={form.stationPublicId} onChange={(event) => setForm({ ...form, stationPublicId: event.target.value })}>
+            <option value="">Select station</option>
+            {normalizeRows(data.profiles).map((station: any) => (
+              <option key={station.public_id} value={station.public_id}>
+                {station.name} {station.city ? `- ${station.city}` : ''}
+              </option>
+            ))}
+          </select>
+          <select className={fieldClass} value={form.relatedFlagPublicId} onChange={(event) => setForm({ ...form, relatedFlagPublicId: event.target.value })}>
+            <option value="">No related flag</option>
+            {normalizeRows(data.flags?.items).map((flag: any) => (
+              <option key={flag.publicId} value={flag.publicId}>
+                {flag.publicId} • {flag.station?.name}
+              </option>
+            ))}
+          </select>
+          <select className={fieldClass} value={form.actionType} onChange={(event) => setForm({ ...form, actionType: event.target.value })}>
+            <option value="WARNING">Warning</option>
+            <option value="FINE">Fine</option>
+            <option value="SUSPENSION">Suspension</option>
+            <option value="CLOSURE_NOTICE">Closure Notice</option>
+            <option value="FOLLOW_UP_DIRECTIVE">Follow-up Directive</option>
+          </select>
+          <select className={fieldClass} value={form.actionStatus} onChange={(event) => setForm({ ...form, actionStatus: event.target.value })}>
+            <option value="OPEN">Open</option>
+            <option value="IN_PROGRESS">In Progress</option>
+            <option value="COMPLIED">Complied</option>
+            <option value="ESCALATED">Escalated</option>
+            <option value="CLOSED">Closed</option>
+          </select>
+          <textarea
+            className="min-h-28 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700"
+            value={form.actionNotes}
+            onChange={(event) => setForm({ ...form, actionNotes: event.target.value })}
+            placeholder="Legal basis, issue notes, or enforcement narrative..."
+          />
+        </div>
+      </ModalShell>
     </div>
-  );
+  )
 }

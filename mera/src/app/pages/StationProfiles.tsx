@@ -1,198 +1,189 @@
-import { Search } from 'lucide-react';
-import { Toolbar } from '../components/Toolbar';
-import * as Tabs from '@radix-ui/react-tabs';
-import { useState } from 'react';
-
-const stations = [
-  'Shell Westlands', 'Total Mombasa Rd', 'Hashi Ngong', 'Rubis Thika', 'Kenol Nakuru',
-  'Total CBD', 'Shell Karen', 'Hashi Langata', 'Rubis Parklands', 'Kenol Eldoret'
-];
+import { useMemo, useState } from 'react'
+import * as Tabs from '@radix-ui/react-tabs'
+import { Search } from 'lucide-react'
+import { Input } from '../components/ui/input'
+import { SectionCard } from '../components/SectionCard'
+import { usePortal } from '../lib/portalContext'
+import { normalizeDate, normalizeRows, renderPill } from '../lib/portalUtils'
 
 export function StationProfiles() {
-  const [selectedStation, setSelectedStation] = useState<string | null>(null);
+  const { data, selectedProfile, selectedProfileEnforcement, openProfile } = usePortal()
+  const [search, setSearch] = useState('')
+
+  const stations = useMemo(
+    () =>
+      normalizeRows(data.profiles).filter((station: any) =>
+        JSON.stringify(station).toLowerCase().includes(search.trim().toLowerCase()),
+      ),
+    [data.profiles, search],
+  )
+
+  const renderList = (items: any[], render: (item: any, index: number) => React.ReactNode) => {
+    if (!items.length) {
+      return <div className="px-4 py-6 text-xs text-slate-500">No records available.</div>
+    }
+    return <div className="divide-y divide-slate-200">{items.map(render)}</div>
+  }
 
   return (
-    <div className="flex-1 flex h-screen overflow-hidden">
-      <div className="w-64 bg-slate-900 border-r border-slate-700 overflow-y-auto p-3">
-        <div className="mb-3">
-          <div className="flex items-center gap-2 mb-2">
-            <Search className="w-3 h-3 text-slate-400" />
-            <input
-              type="text"
-              placeholder="Search station..."
-              className="bg-slate-800 border border-slate-600 px-2 py-1 rounded text-xs text-slate-300 flex-1"
-            />
+    <div className="flex h-full overflow-hidden">
+      <aside className="w-72 border-r border-slate-200 bg-white">
+        <div className="border-b border-slate-200 p-4">
+          <div className="flex items-center gap-2">
+            <Search className="size-4 text-slate-400" />
+            <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search station..." />
           </div>
         </div>
-        <h3 className="text-xs text-slate-400 uppercase mb-2">Station Directory</h3>
-        <div className="space-y-1">
-          {stations.map((station) => (
-            <button
-              key={station}
-              onClick={() => setSelectedStation(station)}
-              className={`w-full text-left px-2 py-1.5 rounded text-xs transition-colors ${
-                selectedStation === station
-                  ? 'bg-cyan-900/30 border border-cyan-600 text-cyan-400'
-                  : 'text-slate-300 hover:bg-slate-800'
-              }`}
-            >
-              {station}
-            </button>
-          ))}
+        <div className="overflow-y-auto p-2">
+          {stations.map((station: any) => {
+            const active = selectedProfile?.station?.public_id === station.public_id
+            return (
+              <button
+                key={station.public_id}
+                type="button"
+                onClick={() => openProfile(station.public_id)}
+                className={`mb-1 w-full rounded-md border px-3 py-2 text-left text-xs ${
+                  active ? 'border-blue-200 bg-blue-50 text-blue-900' : 'border-transparent text-slate-700 hover:bg-slate-50'
+                }`}
+              >
+                <div className="font-medium">{station.name}</div>
+                <div className="mt-1 text-slate-500">{station.city || 'No district'}</div>
+                <div className="mt-2 flex gap-2">
+                  {renderPill(station.license_status || 'UNLICENSED')}
+                  {renderPill(`${station.open_flags || 0} OPEN FLAGS`)}
+                </div>
+              </button>
+            )
+          })}
         </div>
-      </div>
+      </aside>
 
-      <div className="flex-1 overflow-y-auto p-3">
-        {selectedStation ? (
+      <div className="min-w-0 flex-1 overflow-y-auto p-4">
+        {selectedProfile ? (
           <>
-            <div className="bg-slate-900 border border-slate-700 rounded p-3 mb-3">
-              <h2 className="text-lg font-medium text-slate-200 mb-2">{selectedStation}</h2>
-              <div className="grid grid-cols-4 gap-4 text-xs">
+            <SectionCard title="Station Dossier" subtitle="Licensing, complaints, inspections, declarations, and enforcement history">
+              <div className="grid gap-4 px-4 py-3 text-xs md:grid-cols-4">
                 <div>
-                  <p className="text-slate-500">License No</p>
-                  <p className="text-slate-300 font-mono">LIC-89234</p>
+                  <div className="uppercase tracking-[0.08em] text-slate-500">Station</div>
+                  <div className="mt-1 font-medium text-slate-900">{selectedProfile.station?.name}</div>
                 </div>
                 <div>
-                  <p className="text-slate-500">District</p>
-                  <p className="text-slate-300">Nairobi</p>
+                  <div className="uppercase tracking-[0.08em] text-slate-500">District</div>
+                  <div className="mt-1 text-slate-700">{selectedProfile.station?.city || '-'}</div>
                 </div>
                 <div>
-                  <p className="text-slate-500">Risk Score</p>
-                  <p className="text-red-400 font-bold">94</p>
+                  <div className="uppercase tracking-[0.08em] text-slate-500">Address</div>
+                  <div className="mt-1 text-slate-700">{selectedProfile.station?.address || '-'}</div>
                 </div>
                 <div>
-                  <p className="text-slate-500">Compliance Status</p>
-                  <span className="px-2 py-0.5 bg-amber-900/30 border border-amber-600 rounded text-amber-400 text-xs">
-                    Warning
-                  </span>
+                  <div className="uppercase tracking-[0.08em] text-slate-500">Open Enforcement Cases</div>
+                  <div className="mt-1 text-slate-700">{normalizeRows(selectedProfileEnforcement?.items).length}</div>
                 </div>
               </div>
-            </div>
+            </SectionCard>
 
-            <Tabs.Root defaultValue="license" className="bg-slate-900 border border-slate-700 rounded">
-              <Tabs.List className="border-b border-slate-700 px-3 py-2 flex gap-2">
-                <Tabs.Trigger
-                  value="license"
-                  className="px-3 py-1 text-xs rounded data-[state=active]:bg-cyan-900/30 data-[state=active]:border data-[state=active]:border-cyan-600 data-[state=active]:text-cyan-400 text-slate-400"
-                >
-                  License
-                </Tabs.Trigger>
-                <Tabs.Trigger
-                  value="complaints"
-                  className="px-3 py-1 text-xs rounded data-[state=active]:bg-cyan-900/30 data-[state=active]:border data-[state=active]:border-cyan-600 data-[state=active]:text-cyan-400 text-slate-400"
-                >
-                  Complaints
-                </Tabs.Trigger>
-                <Tabs.Trigger
-                  value="inspections"
-                  className="px-3 py-1 text-xs rounded data-[state=active]:bg-cyan-900/30 data-[state=active]:border data-[state=active]:border-cyan-600 data-[state=active]:text-cyan-400 text-slate-400"
-                >
-                  Inspections
-                </Tabs.Trigger>
-                <Tabs.Trigger
-                  value="deliveries"
-                  className="px-3 py-1 text-xs rounded data-[state=active]:bg-cyan-900/30 data-[state=active]:border data-[state=active]:border-cyan-600 data-[state=active]:text-cyan-400 text-slate-400"
-                >
-                  Deliveries
-                </Tabs.Trigger>
-                <Tabs.Trigger
-                  value="declarations"
-                  className="px-3 py-1 text-xs rounded data-[state=active]:bg-cyan-900/30 data-[state=active]:border data-[state=active]:border-cyan-600 data-[state=active]:text-cyan-400 text-slate-400"
-                >
-                  Declarations
-                </Tabs.Trigger>
-                <Tabs.Trigger
-                  value="enforcement"
-                  className="px-3 py-1 text-xs rounded data-[state=active]:bg-cyan-900/30 data-[state=active]:border data-[state=active]:border-cyan-600 data-[state=active]:text-cyan-400 text-slate-400"
-                >
-                  Enforcement
-                </Tabs.Trigger>
-                <Tabs.Trigger
-                  value="risk"
-                  className="px-3 py-1 text-xs rounded data-[state=active]:bg-cyan-900/30 data-[state=active]:border data-[state=active]:border-cyan-600 data-[state=active]:text-cyan-400 text-slate-400"
-                >
-                  Risk History
-                </Tabs.Trigger>
+            <Tabs.Root defaultValue="license" className="mt-4 rounded-md border border-slate-200 bg-white shadow-sm">
+              <Tabs.List className="flex flex-wrap gap-2 border-b border-slate-200 px-4 py-3">
+                {['license', 'complaints', 'inspections', 'deliveries', 'declarations', 'enforcement', 'risk'].map((tab) => (
+                  <Tabs.Trigger
+                    key={tab}
+                    value={tab}
+                    className="rounded-md border border-transparent px-3 py-1 text-xs font-medium capitalize text-slate-600 data-[state=active]:border-blue-200 data-[state=active]:bg-blue-50 data-[state=active]:text-blue-900"
+                  >
+                    {tab === 'risk' ? 'Risk Score History' : tab}
+                  </Tabs.Trigger>
+                ))}
               </Tabs.List>
 
-              <Tabs.Content value="license" className="p-3">
-                <div className="grid grid-cols-2 gap-4 text-xs">
-                  <div>
-                    <p className="text-slate-500 mb-1">Owner</p>
-                    <p className="text-slate-300">Shell Kenya Ltd</p>
+              <Tabs.Content value="license">
+                {renderList(normalizeRows(selectedProfile.licenses), (item: any) => (
+                  <div key={`${item.id}-${item.license_number}`} className="grid gap-3 px-4 py-3 text-xs md:grid-cols-5">
+                    <div className="font-medium text-slate-900">{item.license_number}</div>
+                    <div>{normalizeDate(item.issue_date)}</div>
+                    <div>{normalizeDate(item.expiry_date)}</div>
+                    <div>{renderPill(item.license_status)}</div>
+                    <div className="text-slate-600">{item.compliance_conditions || 'No conditions logged.'}</div>
                   </div>
-                  <div>
-                    <p className="text-slate-500 mb-1">License No</p>
-                    <p className="text-slate-300 font-mono">LIC-89234</p>
-                  </div>
-                  <div>
-                    <p className="text-slate-500 mb-1">Issue Date</p>
-                    <p className="text-slate-300">2022-03-15</p>
-                  </div>
-                  <div>
-                    <p className="text-slate-500 mb-1">Expiry Date</p>
-                    <p className="text-slate-300">2027-03-15</p>
-                  </div>
-                  <div>
-                    <p className="text-slate-500 mb-1">Capacity</p>
-                    <p className="text-slate-300">120,000L</p>
-                  </div>
-                  <div>
-                    <p className="text-slate-500 mb-1">Pumps</p>
-                    <p className="text-slate-300">12</p>
-                  </div>
-                </div>
+                ))}
               </Tabs.Content>
 
-              <Tabs.Content value="complaints" className="p-3">
-                <div className="text-xs">
-                  <p className="text-slate-300 mb-2">Total Complaints: <span className="font-bold text-red-400">47</span></p>
-                  <p className="text-slate-400">Most recent complaints relate to fuel hoarding and queue violence.</p>
-                </div>
+              <Tabs.Content value="complaints">
+                {renderList(normalizeRows(selectedProfile.complaints), (item: any, index: number) => (
+                  <div key={`${item.created_at}-${index}`} className="grid gap-3 px-4 py-3 text-xs md:grid-cols-4">
+                    <div>{renderPill(item.complaint_type)}</div>
+                    <div>{renderPill(item.complaint_status)}</div>
+                    <div>{normalizeDate(item.created_at)}</div>
+                    <div className="text-slate-600">Case reference: CMP-{String(index + 1).padStart(4, '0')}</div>
+                  </div>
+                ))}
               </Tabs.Content>
 
-              <Tabs.Content value="inspections" className="p-3">
-                <div className="text-xs">
-                  <p className="text-slate-300 mb-2">Total Inspections: <span className="font-bold text-cyan-400">23</span></p>
-                  <p className="text-slate-400">Last inspection: 2024-05-05 by P. Kamau - Violation Found</p>
-                </div>
+              <Tabs.Content value="inspections">
+                {renderList(normalizeRows(selectedProfile.inspections), (item: any) => (
+                  <div key={item.public_id} className="grid gap-3 px-4 py-3 text-xs md:grid-cols-5">
+                    <div className="font-medium text-slate-900">{item.public_id}</div>
+                    <div>{renderPill(item.inspection_type)}</div>
+                    <div>{renderPill(item.inspection_status)}</div>
+                    <div>{item.officer_name}</div>
+                    <div>{normalizeDate(item.created_at)}</div>
+                  </div>
+                ))}
               </Tabs.Content>
 
-              <Tabs.Content value="deliveries" className="p-3">
-                <div className="text-xs">
-                  <p className="text-slate-300 mb-2">Total Deliveries (30 days): <span className="font-bold text-cyan-400">18</span></p>
-                  <p className="text-slate-400">Last delivery: 2024-05-02 - 45,000L Diesel, 32,000L Petrol</p>
-                </div>
+              <Tabs.Content value="deliveries">
+                {renderList(normalizeRows(selectedProfile.deliveries), (item: any, index: number) => (
+                  <div key={`${item.id}-${index}`} className="grid gap-3 px-4 py-3 text-xs md:grid-cols-5">
+                    <div className="font-medium text-slate-900">DLV-{item.id}</div>
+                    <div>{renderPill(item.fuel_type)}</div>
+                    <div>{item.estimated_volume ? `${item.estimated_volume} L` : '-'}</div>
+                    <div>{item.reported_by || '-'}</div>
+                    <div>{normalizeDate(item.delivery_time)}</div>
+                  </div>
+                ))}
               </Tabs.Content>
 
-              <Tabs.Content value="declarations" className="p-3">
-                <div className="text-xs">
-                  <p className="text-slate-300 mb-2">Total Declarations (30 days): <span className="font-bold text-cyan-400">87</span></p>
-                  <p className="text-slate-400">Mismatch rate: <span className="text-red-400 font-bold">34%</span> - significantly above threshold</p>
-                </div>
+              <Tabs.Content value="declarations">
+                {renderList(normalizeRows(selectedProfile.declarations), (item: any, index: number) => (
+                  <div key={`${item.id}-${index}`} className="grid gap-3 px-4 py-3 text-xs md:grid-cols-5">
+                    <div className="font-medium text-slate-900">SAR-{item.id}</div>
+                    <div>{renderPill(item.petrol_available ? 'PETROL AVAILABLE' : 'PETROL DRY')}</div>
+                    <div>{renderPill(item.diesel_available ? 'DIESEL AVAILABLE' : 'DIESEL DRY')}</div>
+                    <div>Pumps active: {item.active_pumps ?? '-'}</div>
+                    <div>{normalizeDate(item.created_at)}</div>
+                  </div>
+                ))}
               </Tabs.Content>
 
-              <Tabs.Content value="enforcement" className="p-3">
-                <div className="text-xs">
-                  <p className="text-slate-300 mb-2">Total Actions: <span className="font-bold text-orange-400">5</span></p>
-                  <p className="text-slate-400">Most recent: Warning Notice (ENF-1245) - Active</p>
-                </div>
+              <Tabs.Content value="enforcement">
+                {renderList(normalizeRows(selectedProfileEnforcement?.items), (item: any) => (
+                  <div key={item.public_id} className="grid gap-3 px-4 py-3 text-xs md:grid-cols-5">
+                    <div className="font-medium text-slate-900">{item.public_id}</div>
+                    <div>{renderPill(item.action_type)}</div>
+                    <div>{renderPill(item.action_status)}</div>
+                    <div>{item.actor_name || '-'}</div>
+                    <div>{normalizeDate(item.issued_at)}</div>
+                  </div>
+                ))}
               </Tabs.Content>
 
-              <Tabs.Content value="risk" className="p-3">
-                <div className="text-xs">
-                  <p className="text-slate-300 mb-2">Current Risk Score: <span className="font-bold text-red-400">94</span></p>
-                  <p className="text-slate-400">Trend: Increasing over past 30 days</p>
-                </div>
+              <Tabs.Content value="risk">
+                {renderList(normalizeRows(selectedProfile.riskHistory), (item: any) => (
+                  <div key={`${item.id}-${item.last_calculated_at}`} className="grid gap-3 px-4 py-3 text-xs md:grid-cols-4">
+                    <div className="font-medium text-slate-900">Score {item.risk_score}</div>
+                    <div>{renderPill(item.escalation_status)}</div>
+                    <div>{normalizeDate(item.last_calculated_at)}</div>
+                    <div className="text-slate-600">{item.generated_factors_json || 'No factor JSON recorded.'}</div>
+                  </div>
+                ))}
               </Tabs.Content>
             </Tabs.Root>
           </>
         ) : (
-          <div className="flex items-center justify-center h-full text-slate-500">
-            Select a station from the directory to view its regulatory profile
+          <div className="flex h-full items-center justify-center rounded-md border border-dashed border-slate-200 bg-slate-50 text-sm text-slate-500">
+            Select a station from the directory to open its regulatory dossier.
           </div>
         )}
       </div>
     </div>
-  );
+  )
 }

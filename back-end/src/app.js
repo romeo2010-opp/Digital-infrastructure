@@ -49,7 +49,11 @@ function captureRawBody(req, _res, buffer) {
   req.rawBody = buffer.toString("utf8")
 }
 
-app.use(helmet())
+app.use(
+  helmet({
+    crossOriginResourcePolicy: false,
+  })
+)
 app.use(
   cors({
     origin: true,

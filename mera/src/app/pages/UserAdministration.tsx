@@ -1,100 +1,185 @@
-import { Download, Search, Plus, UserPlus } from 'lucide-react';
-import { Toolbar } from '../components/Toolbar';
+import { useMemo, useState } from 'react'
+import { Download, Search, UserPlus } from 'lucide-react'
+import { Toolbar } from '../components/Toolbar'
+import { Button } from '../components/ui/button'
+import { Input } from '../components/ui/input'
+import { ModalShell } from '../components/ModalShell'
+import { PortalTable } from '../components/PortalTable'
+import { SectionCard } from '../components/SectionCard'
+import { usePortal } from '../lib/portalContext'
+import { matchesSearch, normalizeDate, normalizeRows, renderPill } from '../lib/portalUtils'
 
-const users = [
-  { name: 'Peter Kamau', role: 'Senior Inspector', district: 'Nairobi', activeCases: 12, lastLogin: '2024-05-05 09:45', accountStatus: 'Active' },
-  { name: 'Jane Mwangi', role: 'Field Officer', district: 'Nairobi', activeCases: 8, lastLogin: '2024-05-05 10:12', accountStatus: 'Active' },
-  { name: 'Michael Otieno', role: 'Compliance Officer', district: 'Nairobi', activeCases: 15, lastLogin: '2024-05-05 08:30', accountStatus: 'Active' },
-  { name: 'Anne Njeri', role: 'Field Officer', district: 'Kiambu', activeCases: 6, lastLogin: '2024-05-04 16:45', accountStatus: 'Active' },
-  { name: 'David Ochieng', role: 'Senior Inspector', district: 'Mombasa', activeCases: 10, lastLogin: '2024-05-03 14:20', accountStatus: 'Suspended' },
-];
+const fieldClass = 'h-9 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700'
 
 export function UserAdministration() {
+  const { data, runAction, api, token } = usePortal()
+  const [search, setSearch] = useState('')
+  const [role, setRole] = useState('')
+  const [district, setDistrict] = useState('')
+  const [modalOpen, setModalOpen] = useState(false)
+  const [statusOpen, setStatusOpen] = useState(false)
+  const [selectedUser, setSelectedUser] = useState<any>(null)
+  const [statusValue, setStatusValue] = useState('ACTIVE')
+  const [form, setForm] = useState({
+    fullName: '',
+    email: '',
+    phone: '',
+    password: '',
+    roleName: 'COMPLIANCE_OFFICER',
+    district: '',
+    accountStatus: 'ACTIVE',
+  })
+
+  const rows = useMemo(() => {
+    return normalizeRows(data.users).filter((row: any) => {
+      if (role && row.role_name !== role) return false
+      if (district && String(row.district || '') !== district) return false
+      return matchesSearch(row, search)
+    })
+  }, [data.users, district, role, search])
+
+  const caseCounts = normalizeRows(data.complaints?.items).reduce((acc: Record<string, number>, item: any) => {
+    const id = item.assignedOfficer?.publicId
+    if (id) acc[id] = (acc[id] || 0) + 1
+    return acc
+  }, {})
+
   return (
-    <div className="flex-1 flex flex-col h-screen overflow-hidden">
+    <div className="flex h-full flex-col gap-4 overflow-y-auto p-4">
       <Toolbar>
-        <button className="bg-cyan-700 hover:bg-cyan-600 px-3 py-1 rounded text-xs flex items-center gap-1 text-white">
-          <UserPlus className="w-3 h-3" />
+        <Button type="button" size="sm" className="bg-blue-700 hover:bg-blue-800" onClick={() => setModalOpen(true)}>
+          <UserPlus className="size-4" />
           Add User
-        </button>
-        <div className="flex items-center gap-2 flex-1 max-w-md">
-          <Search className="w-3 h-3 text-slate-400" />
-          <input
-            type="text"
-            placeholder="Search users..."
-            className="bg-slate-900 border border-slate-600 px-2 py-1 rounded text-xs text-slate-300 flex-1"
-          />
+        </Button>
+        <div className="flex min-w-[280px] flex-1 items-center gap-2">
+          <Search className="size-4 text-slate-400" />
+          <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search officers..." />
         </div>
-        <select className="bg-slate-900 border border-slate-600 px-2 py-1 rounded text-xs text-slate-300">
-          <option>All Roles</option>
-          <option>Senior Inspector</option>
-          <option>Field Officer</option>
-          <option>Compliance Officer</option>
+        <select className={fieldClass} value={role} onChange={(event) => setRole(event.target.value)}>
+          <option value="">All Roles</option>
+          <option value="SUPER_ADMIN">Super Admin</option>
+          <option value="COMPLIANCE_OFFICER">Compliance Officer</option>
+          <option value="LEGAL_ENFORCEMENT">Legal Enforcement</option>
+          <option value="PUBLIC_COMPLAINT_ANALYST">Public Complaint Analyst</option>
+          <option value="MARKET_ANALYST">Market Analyst</option>
         </select>
-        <select className="bg-slate-900 border border-slate-600 px-2 py-1 rounded text-xs text-slate-300">
-          <option>All Districts</option>
-          <option>Nairobi</option>
-          <option>Mombasa</option>
+        <select className={fieldClass} value={district} onChange={(event) => setDistrict(event.target.value)}>
+          <option value="">All Districts</option>
+          {Array.from(new Set(rows.map((row: any) => row.district).filter(Boolean))).map((value) => (
+            <option key={value} value={value}>
+              {value}
+            </option>
+          ))}
         </select>
-        <button className="bg-slate-700 hover:bg-slate-600 px-3 py-1 rounded text-xs flex items-center gap-1 text-slate-300">
-          <Download className="w-3 h-3" />
+        <Button type="button" variant="outline" size="sm">
+          <Download className="size-4" />
           Export
-        </button>
+        </Button>
       </Toolbar>
 
-      <div className="flex-1 overflow-y-auto p-3">
-        <div className="bg-slate-900 border border-slate-700 rounded">
-          <div className="border-b border-slate-700 px-3 py-2">
-            <h3 className="text-sm font-medium text-slate-200 uppercase">MERA Officer Registry</h3>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead className="bg-slate-800 text-slate-400 uppercase">
-                <tr>
-                  <th className="px-2 py-1.5 text-left">Officer Name</th>
-                  <th className="px-2 py-1.5 text-left">Role</th>
-                  <th className="px-2 py-1.5 text-left">District</th>
-                  <th className="px-2 py-1.5 text-center">Active Cases</th>
-                  <th className="px-2 py-1.5 text-left">Last Login</th>
-                  <th className="px-2 py-1.5 text-left">Account Status</th>
-                  <th className="px-2 py-1.5 text-center">Action</th>
-                </tr>
-              </thead>
-              <tbody className="text-slate-300">
-                {users.map((user, idx) => (
-                  <tr key={idx} className="border-t border-slate-800 hover:bg-slate-800/50">
-                    <td className="px-2 py-1.5 font-medium">{user.name}</td>
-                    <td className="px-2 py-1.5">
-                      <span className={`px-2 py-0.5 rounded text-xs ${
-                        user.role === 'Senior Inspector' ? 'bg-purple-900/30 border border-purple-600 text-purple-400' :
-                        user.role === 'Compliance Officer' ? 'bg-blue-900/30 border border-blue-600 text-blue-400' :
-                        'bg-emerald-900/30 border border-emerald-600 text-emerald-400'
-                      }`}>
-                        {user.role}
-                      </span>
-                    </td>
-                    <td className="px-2 py-1.5">{user.district}</td>
-                    <td className="px-2 py-1.5 text-center font-bold text-cyan-400">{user.activeCases}</td>
-                    <td className="px-2 py-1.5 text-slate-400">{user.lastLogin}</td>
-                    <td className="px-2 py-1.5">
-                      <span className={`px-2 py-0.5 rounded text-xs ${
-                        user.accountStatus === 'Active'
-                          ? 'bg-emerald-900/30 border border-emerald-600 text-emerald-400'
-                          : 'bg-red-900/30 border border-red-600 text-red-400'
-                      }`}>
-                        {user.accountStatus}
-                      </span>
-                    </td>
-                    <td className="px-2 py-1.5 text-center">
-                      <button className="text-cyan-400 hover:text-cyan-300 text-xs underline">Manage</button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+      <SectionCard title="MERA Officer Registry" subtitle="User accounts, districts, case ownership, and access control">
+        <PortalTable
+          rows={rows}
+          columns={[
+            { key: 'full_name', label: 'Officer Name' },
+            { key: 'role_name', label: 'Role', render: (row) => renderPill(row.role_name) },
+            { key: 'district', label: 'District', render: (row) => row.district || '-' },
+            { key: 'activeCases', label: 'Active Cases', render: (row) => caseCounts[row.public_id] || 0 },
+            { key: 'last_login_at', label: 'Last Login', render: (row) => normalizeDate(row.last_login_at) },
+            { key: 'account_status', label: 'Account Status', render: (row) => renderPill(row.account_status) },
+            {
+              key: 'action',
+              label: 'Action',
+              render: (row) => (
+                <button
+                  type="button"
+                  className="text-[11px] font-medium text-blue-700"
+                  onClick={() => {
+                    setSelectedUser(row)
+                    setStatusValue(row.account_status || 'ACTIVE')
+                    setStatusOpen(true)
+                  }}
+                >
+                  Manage
+                </button>
+              ),
+            },
+          ]}
+        />
+      </SectionCard>
+
+      <ModalShell
+        open={modalOpen}
+        onOpenChange={setModalOpen}
+        title="Add MERA User"
+        description="Create an officer account for the enforcement portal."
+        footer={
+          <>
+            <Button type="button" variant="outline" onClick={() => setModalOpen(false)}>Cancel</Button>
+            <Button
+              type="button"
+              className="bg-blue-700 hover:bg-blue-800"
+              onClick={async () => {
+                await runAction(() => api.createUser(token, form))
+                setModalOpen(false)
+              }}
+            >
+              Save User
+            </Button>
+          </>
+        }
+      >
+        <div className="grid gap-3">
+          <Input value={form.fullName} onChange={(event) => setForm({ ...form, fullName: event.target.value })} placeholder="Officer full name" />
+          <Input value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} placeholder="Email address" />
+          <Input value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} placeholder="Phone number" />
+          <Input value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} type="password" placeholder="Temporary password" />
+          <select className={fieldClass} value={form.roleName} onChange={(event) => setForm({ ...form, roleName: event.target.value })}>
+            <option value="SUPER_ADMIN">Super Admin</option>
+            <option value="COMPLIANCE_OFFICER">Compliance Officer</option>
+            <option value="LEGAL_ENFORCEMENT">Legal Enforcement</option>
+            <option value="PUBLIC_COMPLAINT_ANALYST">Public Complaint Analyst</option>
+            <option value="MARKET_ANALYST">Market Analyst</option>
+          </select>
+          <Input value={form.district} onChange={(event) => setForm({ ...form, district: event.target.value })} placeholder="District" />
+          <select className={fieldClass} value={form.accountStatus} onChange={(event) => setForm({ ...form, accountStatus: event.target.value })}>
+            <option value="ACTIVE">Active</option>
+            <option value="INVITED">Invited</option>
+            <option value="SUSPENDED">Suspended</option>
+            <option value="DISABLED">Disabled</option>
+          </select>
         </div>
-      </div>
+      </ModalShell>
+
+      <ModalShell
+        open={statusOpen}
+        onOpenChange={setStatusOpen}
+        title="Update Account Status"
+        description={selectedUser ? `Update access for ${selectedUser.full_name}.` : 'Update account status.'}
+        footer={
+          <>
+            <Button type="button" variant="outline" onClick={() => setStatusOpen(false)}>Cancel</Button>
+            <Button
+              type="button"
+              className="bg-blue-700 hover:bg-blue-800"
+              onClick={async () => {
+                if (!selectedUser) return
+                await runAction(() => api.updateUserStatus(token, selectedUser.public_id, statusValue))
+                setStatusOpen(false)
+              }}
+            >
+              Save Status
+            </Button>
+          </>
+        }
+      >
+        <select className={fieldClass} value={statusValue} onChange={(event) => setStatusValue(event.target.value)}>
+          <option value="ACTIVE">Active</option>
+          <option value="INVITED">Invited</option>
+          <option value="SUSPENDED">Suspended</option>
+          <option value="DISABLED">Disabled</option>
+        </select>
+      </ModalShell>
     </div>
-  );
+  )
 }

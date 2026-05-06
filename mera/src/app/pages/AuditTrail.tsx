@@ -1,88 +1,105 @@
-import { Download, Search } from 'lucide-react';
-import { Toolbar } from '../components/Toolbar';
+import { useMemo, useState } from 'react'
+import { Download, Search } from 'lucide-react'
+import { Toolbar } from '../components/Toolbar'
+import { Button } from '../components/ui/button'
+import { Input } from '../components/ui/input'
+import { PortalTable } from '../components/PortalTable'
+import { SectionCard } from '../components/SectionCard'
+import { usePortal } from '../lib/portalContext'
+import { matchesSearch, normalizeDate, normalizeRows, renderPill } from '../lib/portalUtils'
 
-const auditLogs = [
-  { logRef: 'LOG-28471', officer: 'Peter Kamau', role: 'Senior Inspector', actionType: 'Inspection Logged', affectedCase: 'INS-4521 / Shell Westlands', timestamp: '2024-05-05 10:15:32', ip: '192.168.1.45', notes: 'Field inspection completed, violation found' },
-  { logRef: 'LOG-28470', officer: 'Jane Mwangi', role: 'Field Officer', actionType: 'Complaint Assigned', affectedCase: 'CMP-7841 / Hashi Ngong', timestamp: '2024-05-05 09:47:18', ip: '192.168.1.52', notes: 'High priority hoarding complaint assigned for investigation' },
-  { logRef: 'LOG-28469', officer: 'Michael Otieno', role: 'Compliance Officer', actionType: 'Enforcement Action Issued', affectedCase: 'ENF-1242 / Total Mombasa Rd', timestamp: '2024-05-05 09:23:45', ip: '192.168.1.38', notes: 'Corrective order issued for price violation' },
-  { logRef: 'LOG-28468', officer: 'Anne Njeri', role: 'Field Officer', actionType: 'Evidence Uploaded', affectedCase: 'INS-4518 / Rubis Thika', timestamp: '2024-05-04 16:25:12', ip: '192.168.1.67', notes: 'Geotagged photos uploaded from field inspection' },
-  { logRef: 'LOG-28467', officer: 'Peter Kamau', role: 'Senior Inspector', actionType: 'Flag Reviewed', affectedCase: 'FLG-3421 / Shell Westlands', timestamp: '2024-05-04 15:48:33', ip: '192.168.1.45', notes: 'Delivery-declaration mismatch flag under review' },
-  { logRef: 'LOG-28466', officer: 'Jane Mwangi', role: 'Field Officer', actionType: 'Delivery Verified', affectedCase: 'DLV-5846 / Total Mombasa Rd', timestamp: '2024-05-04 14:32:19', ip: '192.168.1.52', notes: 'Tanker delivery verified against manifest' },
-  { logRef: 'LOG-28465', officer: 'Michael Otieno', role: 'Compliance Officer', actionType: 'Station Profile Updated', affectedCase: 'Shell Westlands', timestamp: '2024-05-04 13:15:47', ip: '192.168.1.38', notes: 'Risk score updated to 94 based on recent activity' },
-  { logRef: 'LOG-28464', officer: 'Anne Njeri', role: 'Field Officer', actionType: 'Complaint Resolved', affectedCase: 'CMP-7840 / Total Mombasa Rd', timestamp: '2024-05-04 11:58:22', ip: '192.168.1.67', notes: 'Price violation complaint resolved after corrective action' },
-];
+const fieldClass = 'h-9 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700'
+
+function isSeriousAuditLog(row: any) {
+  const actionType = String(row?.action_type || '').toUpperCase()
+  const actorRole = String(row?.actor_role || '').toUpperCase()
+  const description = String(row?.action_description || '').toUpperCase()
+
+  if (actorRole.includes('ADMIN') || actorRole.includes('SUPERVISOR')) return true
+  if (actionType.includes('DELETE') || actionType.includes('DISMISS') || actionType.includes('SUSPEND')) return true
+  if (actionType.includes('ESCALAT') || actionType.includes('RESOLVE') || actionType.includes('ENFORC')) return true
+  if (actionType.includes('ASSIGN') || actionType.includes('STATUS')) return true
+  if (description.includes('WARNING') || description.includes('FINE') || description.includes('CLOSURE')) return true
+  if (description.includes('COMPLIANCE') || description.includes('VIOLATION') || description.includes('HIGH RISK')) return true
+  return false
+}
 
 export function AuditTrail() {
+  const { data } = usePortal()
+  const [search, setSearch] = useState('')
+  const [officer, setOfficer] = useState('')
+  const [actionType, setActionType] = useState('')
+  const seriousLogs = useMemo(
+    () => normalizeRows(data.auditLogs?.items).filter((row: any) => isSeriousAuditLog(row)),
+    [data.auditLogs],
+  )
+  const recentIncidents = seriousLogs.slice(0, 8)
+
+  const rows = useMemo(() => {
+    return seriousLogs.filter((row: any) => {
+      if (officer && (row.actor_name || 'System') !== officer) return false
+      if (actionType && row.action_type !== actionType) return false
+      return matchesSearch(row, search)
+    })
+  }, [actionType, officer, search, seriousLogs])
+
   return (
-    <div className="flex-1 flex flex-col h-screen overflow-hidden">
+    <div className="flex h-full flex-col gap-4 overflow-y-auto p-4">
       <Toolbar>
-        <div className="flex items-center gap-2 flex-1 max-w-md">
-          <Search className="w-3 h-3 text-slate-400" />
-          <input
-            type="text"
-            placeholder="Search audit logs..."
-            className="bg-slate-900 border border-slate-600 px-2 py-1 rounded text-xs text-slate-300 flex-1"
-          />
+        <div className="flex min-w-[280px] flex-1 items-center gap-2">
+          <Search className="size-4 text-slate-400" />
+          <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search audit logs..." />
         </div>
-        <select className="bg-slate-900 border border-slate-600 px-2 py-1 rounded text-xs text-slate-300">
-          <option>All Officers</option>
-          <option>P. Kamau</option>
-          <option>J. Mwangi</option>
+        <select className={fieldClass} value={officer} onChange={(event) => setOfficer(event.target.value)}>
+          <option value="">All Officers</option>
+          {Array.from(new Set(rows.map((row: any) => row.actor_name || 'System'))).map((name) => (
+            <option key={name} value={name}>
+              {name}
+            </option>
+          ))}
         </select>
-        <select className="bg-slate-900 border border-slate-600 px-2 py-1 rounded text-xs text-slate-300">
-          <option>All Actions</option>
-          <option>Inspection Logged</option>
-          <option>Enforcement Action Issued</option>
-          <option>Evidence Uploaded</option>
+        <select className={fieldClass} value={actionType} onChange={(event) => setActionType(event.target.value)}>
+          <option value="">Serious Actions</option>
+          {Array.from(new Set(seriousLogs.map((row: any) => row.action_type))).map((name) => (
+            <option key={name} value={name}>
+              {name}
+            </option>
+          ))}
         </select>
-        <input type="date" className="bg-slate-900 border border-slate-600 px-2 py-1 rounded text-xs text-slate-300" />
-        <button className="bg-slate-700 hover:bg-slate-600 px-3 py-1 rounded text-xs flex items-center gap-1 text-slate-300">
-          <Download className="w-3 h-3" />
+        <input type="date" className={fieldClass} />
+        <Button type="button" variant="outline" size="sm">
+          <Download className="size-4" />
           Export
-        </button>
+        </Button>
       </Toolbar>
 
-      <div className="flex-1 overflow-y-auto p-3">
-        <div className="bg-slate-900 border border-slate-700 rounded">
-          <div className="border-b border-slate-700 px-3 py-2">
-            <h3 className="text-sm font-medium text-slate-200 uppercase">System Audit Trail (Chronological)</h3>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead className="bg-slate-800 text-slate-400 uppercase">
-                <tr>
-                  <th className="px-2 py-1.5 text-left">Log Ref</th>
-                  <th className="px-2 py-1.5 text-left">Officer</th>
-                  <th className="px-2 py-1.5 text-left">Role</th>
-                  <th className="px-2 py-1.5 text-left">Action Type</th>
-                  <th className="px-2 py-1.5 text-left">Affected Station/Case</th>
-                  <th className="px-2 py-1.5 text-left">Timestamp</th>
-                  <th className="px-2 py-1.5 text-left">IP/Device</th>
-                  <th className="px-2 py-1.5 text-left">Notes</th>
-                </tr>
-              </thead>
-              <tbody className="text-slate-300">
-                {auditLogs.map((log) => (
-                  <tr key={log.logRef} className="border-t border-slate-800 hover:bg-slate-800/50">
-                    <td className="px-2 py-1.5 font-mono text-cyan-400">{log.logRef}</td>
-                    <td className="px-2 py-1.5 font-medium">{log.officer}</td>
-                    <td className="px-2 py-1.5 text-slate-400">{log.role}</td>
-                    <td className="px-2 py-1.5">
-                      <span className="px-2 py-0.5 bg-blue-900/30 border border-blue-600 rounded text-blue-400 text-xs">
-                        {log.actionType}
-                      </span>
-                    </td>
-                    <td className="px-2 py-1.5">{log.affectedCase}</td>
-                    <td className="px-2 py-1.5 text-slate-400 font-mono">{log.timestamp}</td>
-                    <td className="px-2 py-1.5 text-slate-400 font-mono">{log.ip}</td>
-                    <td className="px-2 py-1.5 text-slate-400 max-w-xs truncate">{log.notes}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
+      <SectionCard title="Recent Regulatory Incidents" subtitle="Recent incidents filtered to material enforcement, escalation, and oversight activity">
+        <PortalTable
+          rows={recentIncidents}
+          columns={[
+            { key: 'created_at', label: 'Timestamp', render: (row) => normalizeDate(row.created_at) },
+            { key: 'action_type', label: 'Incident Type', render: (row) => renderPill(row.action_type) },
+            { key: 'actor_name', label: 'Officer', render: (row) => row.actor_name || 'System' },
+            { key: 'action_description', label: 'Notes' },
+          ]}
+        />
+      </SectionCard>
+
+      <SectionCard title="System Audit Trail" subtitle="Only serious audit entries are shown here to keep the log focused on material actions">
+        <PortalTable
+          rows={rows}
+          columns={[
+            { key: 'id', label: 'Log Ref', render: (row) => `LOG-${row.id}` },
+            { key: 'actor_name', label: 'Officer', render: (row) => row.actor_name || 'System' },
+            { key: 'actor_role', label: 'Role', render: (row) => renderPill(row.actor_role) },
+            { key: 'action_type', label: 'Action Type', render: (row) => renderPill(row.action_type) },
+            { key: 'affected', label: 'Affected Station/Case', render: (row) => row.action_description },
+            { key: 'created_at', label: 'Timestamp', render: (row) => normalizeDate(row.created_at) },
+            { key: 'ip', label: 'IP/Device', render: (row) => row.actor_public_id || 'System session' },
+            { key: 'notes', label: 'Notes', render: (row) => row.action_description },
+          ]}
+        />
+      </SectionCard>
     </div>
-  );
+  )
 }

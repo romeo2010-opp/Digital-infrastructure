@@ -16,6 +16,22 @@ export async function me(req, res) {
   return ok(res, await authService.me(req.meraAuth))
 }
 
+export async function patchMe(req, res) {
+  return ok(res, await authService.patchMe(req.meraAuth, req.body))
+}
+
+export async function changePassword(req, res) {
+  return ok(res, await authService.changePassword(req.meraAuth, req.body))
+}
+
+export async function getMyPreferences(req, res) {
+  return ok(res, await authService.getMyPreferences(req.meraAuth))
+}
+
+export async function patchMyPreferences(req, res) {
+  return ok(res, await authService.patchMyPreferences(req.meraAuth, req.body))
+}
+
 export async function verifyRole(req, res) {
   const requestedRoles = String(req.query.roles || "")
     .split(",")

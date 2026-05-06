@@ -1,111 +1,113 @@
-import { Download, FileText, TrendingUp } from 'lucide-react';
-import { Toolbar } from '../components/Toolbar';
-
-const reports = [
-  { name: 'Monthly Hoarding Report', type: 'Enforcement', period: 'April 2024', generated: '2024-05-01', size: '2.3 MB' },
-  { name: 'District Fuel Stress Report', type: 'Analytics', period: 'Q1 2024', generated: '2024-04-15', size: '1.8 MB' },
-  { name: 'Repeat Offenders Report', type: 'Enforcement', period: 'March 2024', generated: '2024-04-01', size: '890 KB' },
-  { name: 'Enforcement Outcome Report', type: 'Compliance', period: 'Q1 2024', generated: '2024-04-10', size: '1.2 MB' },
-  { name: 'Complaint Analytics', type: 'Analytics', period: 'April 2024', generated: '2024-05-02', size: '1.5 MB' },
-];
-
-const intelligenceActions = [
-  { title: 'Generate Hoarding Risk Map', description: 'AI-powered geographical hoarding risk analysis' },
-  { title: 'District Stress Forecast', description: 'Predictive analysis for next 7 days' },
-  { title: 'Offender Pattern Analysis', description: 'Identify repeat violators and networks' },
-  { title: 'Compliance Trend Report', description: 'National compliance trends and insights' },
-];
+import { Download, FileText, RefreshCw } from 'lucide-react'
+import { Toolbar } from '../components/Toolbar'
+import { Button } from '../components/ui/button'
+import { PortalTable } from '../components/PortalTable'
+import { SectionCard } from '../components/SectionCard'
+import { usePortal } from '../lib/portalContext'
+import { normalizeDate, normalizeRows, renderPill } from '../lib/portalUtils'
 
 export function ReportsIntelligence() {
+  const { data, refresh } = usePortal()
+
+  const reportRows = [
+    {
+      name: 'Monthly Hoarding Report',
+      type: 'Enforcement',
+      period: normalizeRows(data.monthlyReports).at(-1)?.month_bucket || 'Current cycle',
+      generated: new Date().toISOString(),
+      source: `${normalizeRows(data.hoardingWatchlist?.items).length} watchlist records`,
+    },
+    {
+      name: 'District Fuel Stress Report',
+      type: 'Analytics',
+      period: 'Live national snapshot',
+      generated: new Date().toISOString(),
+      source: `${normalizeRows(data.districtShortages).length} district summaries`,
+    },
+    {
+      name: 'Repeat Offenders Report',
+      type: 'Enforcement',
+      period: 'Current offenders set',
+      generated: new Date().toISOString(),
+      source: `${normalizeRows(data.repeatedOffenders).length} repeat offender stations`,
+    },
+    {
+      name: 'Enforcement Outcome Report',
+      type: 'Compliance',
+      period: 'Current action ledger',
+      generated: new Date().toISOString(),
+      source: `${normalizeRows(data.enforcementActions?.items).length} enforcement actions`,
+    },
+    {
+      name: 'Complaint Analytics',
+      type: 'Analytics',
+      period: 'Current complaint cycle',
+      generated: new Date().toISOString(),
+      source: `${normalizeRows(data.complaints?.items).length} complaint records`,
+    },
+  ]
+
+  const intelligenceRows = [
+    { title: 'Generate Hoarding Intelligence', summary: 'Refresh live hoarding watchlist, factors, and escalations.', action: refresh },
+    { title: 'Generate District Fuel Stress Report', summary: 'Recompute district shortage summaries and pressure rankings.', action: refresh },
+    { title: 'Generate Repeat Offenders Report', summary: 'Refresh stations with repeated flags or enforcement activity.', action: refresh },
+    { title: 'Generate Enforcement Outcome Report', summary: 'Update action status coverage and current legal exposure.', action: refresh },
+    { title: 'Generate Complaint Analytics', summary: 'Rebuild live complaint metrics and type distributions.', action: refresh },
+  ]
+
   return (
-    <div className="flex-1 flex flex-col h-screen overflow-hidden">
+    <div className="flex h-full flex-col gap-4 overflow-y-auto p-4">
       <Toolbar>
-        <select className="bg-slate-900 border border-slate-600 px-2 py-1 rounded text-xs text-slate-300">
-          <option>All Types</option>
-          <option>Enforcement</option>
-          <option>Analytics</option>
-          <option>Compliance</option>
-        </select>
-        <select className="bg-slate-900 border border-slate-600 px-2 py-1 rounded text-xs text-slate-300">
-          <option>All Periods</option>
-          <option>April 2024</option>
-          <option>Q1 2024</option>
-        </select>
+        <Button type="button" variant="outline" size="sm">
+          <Download className="size-4" />
+          Export Intelligence
+        </Button>
       </Toolbar>
 
-      <div className="flex-1 overflow-y-auto p-3">
-        <div className="grid grid-cols-2 gap-3 mb-3">
-          <div className="bg-slate-900 border border-slate-700 rounded">
-            <div className="border-b border-slate-700 px-3 py-2">
-              <h3 className="text-sm font-medium text-slate-200 uppercase">Downloadable Report Ledger</h3>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs">
-                <thead className="bg-slate-800 text-slate-400 uppercase">
-                  <tr>
-                    <th className="px-2 py-1.5 text-left">Report Name</th>
-                    <th className="px-2 py-1.5 text-left">Type</th>
-                    <th className="px-2 py-1.5 text-left">Period</th>
-                    <th className="px-2 py-1.5 text-left">Generated</th>
-                    <th className="px-2 py-1.5 text-left">Size</th>
-                    <th className="px-2 py-1.5 text-center">Action</th>
-                  </tr>
-                </thead>
-                <tbody className="text-slate-300">
-                  {reports.map((report, idx) => (
-                    <tr key={idx} className="border-t border-slate-800 hover:bg-slate-800/50">
-                      <td className="px-2 py-1.5 font-medium">{report.name}</td>
-                      <td className="px-2 py-1.5">
-                        <span className={`px-2 py-0.5 rounded text-xs ${
-                          report.type === 'Enforcement' ? 'bg-red-900/30 border border-red-600 text-red-400' :
-                          report.type === 'Analytics' ? 'bg-blue-900/30 border border-blue-600 text-blue-400' :
-                          'bg-emerald-900/30 border border-emerald-600 text-emerald-400'
-                        }`}>
-                          {report.type}
-                        </span>
-                      </td>
-                      <td className="px-2 py-1.5">{report.period}</td>
-                      <td className="px-2 py-1.5 text-slate-400">{report.generated}</td>
-                      <td className="px-2 py-1.5 text-slate-400">{report.size}</td>
-                      <td className="px-2 py-1.5 text-center">
-                        <button className="text-cyan-400 hover:text-cyan-300 text-xs underline flex items-center gap-1 mx-auto">
-                          <Download className="w-3 h-3" />
-                          Download
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
+      <div className="grid min-h-0 flex-1 gap-4 xl:grid-cols-[1.35fr_1fr]">
+        <SectionCard title="Downloadable Report Ledger" subtitle="Document-style live intelligence outputs for regulatory operations">
+          <PortalTable
+            rows={reportRows}
+            columns={[
+              { key: 'name', label: 'Report Name' },
+              { key: 'type', label: 'Type', render: (row) => renderPill(row.type) },
+              { key: 'period', label: 'Period' },
+              { key: 'generated', label: 'Generated', render: (row) => normalizeDate(row.generated) },
+              { key: 'source', label: 'Source Summary' },
+              {
+                key: 'action',
+                label: 'Action',
+                render: () => (
+                  <span className="inline-flex items-center gap-1 text-[11px] font-medium text-blue-700">
+                    <Download className="size-3.5" />
+                    Download
+                  </span>
+                ),
+              },
+            ]}
+          />
+        </SectionCard>
 
-          <div className="bg-slate-900 border border-slate-700 rounded">
-            <div className="border-b border-slate-700 px-3 py-2">
-              <h3 className="text-sm font-medium text-slate-200 uppercase">Intelligence Generation</h3>
-            </div>
-            <div className="p-3 space-y-2">
-              {intelligenceActions.map((action, idx) => (
-                <div key={idx} className="bg-slate-800 border border-slate-700 rounded p-3">
-                  <div className="flex items-start justify-between mb-2">
-                    <div className="flex items-start gap-2">
-                      <TrendingUp className="w-4 h-4 text-cyan-400 mt-0.5" />
-                      <div>
-                        <h4 className="text-xs font-medium text-slate-200">{action.title}</h4>
-                        <p className="text-xs text-slate-400 mt-1">{action.description}</p>
-                      </div>
-                    </div>
+        <SectionCard title="Intelligence Generation" subtitle="Operational refresh actions for derived national reports">
+          <div className="space-y-2 px-4 py-3">
+            {intelligenceRows.map((item) => (
+              <div key={item.title} className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                <div className="flex items-start gap-3">
+                  <FileText className="mt-0.5 size-4 text-blue-700" />
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-medium text-slate-800">{item.title}</div>
+                    <div className="mt-1 text-xs text-slate-500">{item.summary}</div>
                   </div>
-                  <button className="w-full bg-cyan-700 hover:bg-cyan-600 px-3 py-1.5 rounded text-xs flex items-center justify-center gap-1 text-white mt-2">
-                    <FileText className="w-3 h-3" />
-                    Generate
-                  </button>
                 </div>
-              ))}
-            </div>
+                <Button type="button" size="sm" className="mt-3 bg-blue-700 hover:bg-blue-800" onClick={item.action}>
+                  <RefreshCw className="size-4" />
+                  Generate
+                </Button>
+              </div>
+            ))}
           </div>
-        </div>
+        </SectionCard>
       </div>
     </div>
-  );
+  )
 }

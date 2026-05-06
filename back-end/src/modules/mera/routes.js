@@ -107,6 +107,7 @@ meraProtectedRouter.get("/dashboard/flagged-stations", asyncHandler(portalContro
 meraProtectedRouter.get("/dashboard/shortage-heatmap", asyncHandler(portalController.shortageHeatmap))
 meraProtectedRouter.get("/dashboard/complaint-metrics", asyncHandler(portalController.complaintMetrics))
 meraProtectedRouter.get("/dashboard/inspection-metrics", asyncHandler(portalController.inspectionMetrics))
+meraProtectedRouter.get("/dashboard/sidebar-stats", asyncHandler(portalController.sidebarStats))
 
 meraProtectedRouter.get(
   "/hoarding-watchlist",

@@ -1163,6 +1163,129 @@ export async function getDashboardOverview() {
   }
 }
 
+export async function getSidebarStats() {
+  const [
+    stationsTotalRows,
+    availabilitySummaryRows,
+    queueWaitRows,
+    complaintsRows,
+    flagsRows,
+    inspectionsRows,
+    enforcementRows,
+    shortageDistrictRows,
+  ] = await Promise.all([
+    prisma.$queryRaw`SELECT COUNT(*) AS total FROM stations WHERE is_active = 1`,
+    prisma.$queryRaw`
+      SELECT
+        SUM(CASE WHEN COALESCE(latest_status.availability_status, 'UNKNOWN') = 'AVAILABLE' THEN 1 ELSE 0 END) AS stations_online,
+        SUM(CASE WHEN COALESCE(latest_status.availability_status, 'UNKNOWN') = 'DRY' THEN 1 ELSE 0 END) AS out_of_stock,
+        SUM(CASE WHEN COALESCE(latest_status.availability_status, 'UNKNOWN') = 'LIMITED' THEN 1 ELSE 0 END) AS low_stock
+      FROM stations s
+      LEFT JOIN (
+        SELECT ssl.station_id, ssl.availability_status
+        FROM station_status_logs ssl
+        INNER JOIN (
+          SELECT station_id, MAX(created_at) AS max_created_at
+          FROM station_status_logs
+          GROUP BY station_id
+        ) latest_per_station
+          ON latest_per_station.station_id = ssl.station_id
+         AND latest_per_station.max_created_at = ssl.created_at
+      ) latest_status ON latest_status.station_id = s.id
+      WHERE s.is_active = 1
+    `,
+    prisma.$queryRaw`
+      SELECT AVG(TIMESTAMPDIFF(MINUTE, joined_at, CURRENT_TIMESTAMP(3))) AS avg_wait
+      FROM queue_entries
+      WHERE status IN ('WAITING', 'CALLED', 'LATE')
+    `,
+    prisma.$queryRaw`
+      SELECT COUNT(*) AS total
+      FROM public_complaints
+      WHERE complaint_status IN ('NEW', 'TRIAGED', 'ASSIGNED', 'UNDER_INVESTIGATION')
+    `,
+    prisma.$queryRaw`
+      SELECT COUNT(*) AS total
+      FROM compliance_flags
+      WHERE resolved_status IN ('OPEN', 'UNDER_REVIEW')
+    `,
+    prisma.$queryRaw`
+      SELECT COUNT(*) AS total
+      FROM inspections
+      WHERE inspection_status IN ('OPEN', 'ESCALATED')
+    `,
+    prisma.$queryRaw`
+      SELECT COUNT(*) AS total
+      FROM enforcement_actions
+      WHERE action_status IN ('OPEN', 'IN_PROGRESS', 'ESCALATED')
+    `,
+    prisma.$queryRaw`
+      SELECT COUNT(*) AS total
+      FROM (
+        SELECT COALESCE(NULLIF(s.city, ''), 'Unknown') AS district
+        FROM stations s
+        LEFT JOIN (
+          SELECT ssl.station_id, ssl.availability_status
+          FROM station_status_logs ssl
+          INNER JOIN (
+            SELECT station_id, MAX(created_at) AS max_created_at
+            FROM station_status_logs
+            GROUP BY station_id
+          ) latest_per_station
+            ON latest_per_station.station_id = ssl.station_id
+           AND latest_per_station.max_created_at = ssl.created_at
+        ) latest_status ON latest_status.station_id = s.id
+        WHERE s.is_active = 1
+          AND COALESCE(latest_status.availability_status, 'UNKNOWN') IN ('DRY', 'LIMITED')
+        GROUP BY COALESCE(NULLIF(s.city, ''), 'Unknown')
+      ) shortage_districts
+    `,
+  ])
+
+  const stationsTotal = Number(stationsTotalRows?.[0]?.total || 0)
+  const stationsOnline = Number(availabilitySummaryRows?.[0]?.stations_online || 0)
+  const outOfStock = Number(availabilitySummaryRows?.[0]?.out_of_stock || 0)
+  const lowStock = Number(availabilitySummaryRows?.[0]?.low_stock || 0)
+  const avgQueueWait = Math.round(Number(queueWaitRows?.[0]?.avg_wait || 0))
+  const openComplaints = Number(complaintsRows?.[0]?.total || 0)
+  const activeFlags = Number(flagsRows?.[0]?.total || 0)
+  const activeInspections = Number(inspectionsRows?.[0]?.total || 0)
+  const pendingEnforcement = Number(enforcementRows?.[0]?.total || 0)
+  const shortageDistricts = Number(shortageDistrictRows?.[0]?.total || 0)
+
+  let nationalSituation = "STABLE"
+  let situationDetail = "Supply stable · national network normal"
+
+  if (stationsTotal > 0 && outOfStock >= Math.ceil(stationsTotal * 0.35)) {
+    nationalSituation = "NATIONAL_OUTAGE"
+    situationDetail = `National outage · ${outOfStock} dry stations`
+  } else if (shortageDistricts >= 4) {
+    nationalSituation = "REGIONAL_SHORTAGE"
+    situationDetail = `Regional shortage · ${shortageDistricts} districts`
+  } else if (activeFlags >= 5 || pendingEnforcement >= 3) {
+    nationalSituation = "PRICE_SPIKE"
+    situationDetail = `Price spike watch · ${activeFlags} active flags`
+  } else if (lowStock > 0 || avgQueueWait > 15 || openComplaints > 0) {
+    nationalSituation = "MONITORING"
+    situationDetail = `Monitoring supply · ${lowStock} low stock`
+  }
+
+  return {
+    stationsOnline,
+    stationsTotal,
+    outOfStock,
+    lowStock,
+    avgQueueWait,
+    openComplaints,
+    activeFlags,
+    activeInspections,
+    pendingEnforcement,
+    nationalSituation,
+    situationDetail,
+    lastSync: new Date().toISOString(),
+  }
+}
+
 export async function getFlaggedStations() {
   const rows = await prisma.$queryRaw`
     SELECT
