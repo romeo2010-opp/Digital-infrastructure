@@ -6,13 +6,14 @@ import { Input } from '../components/ui/input'
 import { ModalShell } from '../components/ModalShell'
 import { PortalTable } from '../components/PortalTable'
 import { SectionCard } from '../components/SectionCard'
+import { MERA_PERMISSIONS } from '../lib/access'
 import { usePortal } from '../lib/portalContext'
 import { matchesSearch, normalizeDate, normalizeRows, renderPill } from '../lib/portalUtils'
 
 const fieldClass = 'h-9 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700'
 
 export function AvailabilityAudit() {
-  const { data, runAction, api, token } = usePortal()
+  const { data, runAction, api, token, hasPermission } = usePortal()
   const [search, setSearch] = useState('')
   const [mismatchOnly, setMismatchOnly] = useState(false)
   const [modalOpen, setModalOpen] = useState(false)
@@ -33,6 +34,7 @@ export function AvailabilityAudit() {
     .slice()
     .sort((a: any, b: any) => Number(b.mismatchTotal || 0) - Number(a.mismatchTotal || 0))
     .slice(0, 6)
+  const canLog = hasPermission(MERA_PERMISSIONS.AVAILABILITY_LOG)
 
   return (
     <div className="flex h-full flex-col gap-4 overflow-y-auto p-4">
@@ -46,10 +48,12 @@ export function AvailabilityAudit() {
           Mismatch only
         </label>
         <input type="date" className={fieldClass} />
-        <Button type="button" size="sm" className="bg-blue-700 hover:bg-blue-800" onClick={() => setModalOpen(true)}>
-          <Plus className="size-4" />
-          Add Declaration
-        </Button>
+        {canLog ? (
+          <Button type="button" size="sm" className="bg-blue-700 hover:bg-blue-800" onClick={() => setModalOpen(true)}>
+            <Plus className="size-4" />
+            Add Declaration
+          </Button>
+        ) : null}
         <Button type="button" variant="outline" size="sm">
           <Download className="size-4" />
           Export Declarations

@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react'
+import { canAccessPath, firstAccessiblePath, hasAnyPermission, hasPermission, MERA_PERMISSIONS } from './access'
 import { clearSession, portalApi, readStoredSession, storeSession } from './portalApi'
 
 const PortalContext = createContext<any>(null)
@@ -9,6 +10,7 @@ const initialData = {
   heatmap: [],
   complaintMetrics: null,
   inspectionMetrics: null,
+  demandForecastSummary: null,
   hoardingWatchlist: { items: [] },
   fuelDeliveryLogs: { items: [] },
   availabilityReports: { items: [] },
@@ -37,6 +39,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
   const [error, setError] = useState('')
   const [loginError, setLoginError] = useState('')
   const token = session?.accessToken || ''
+  const user = session?.user || null
 
   const refreshSession = async (accessToken = token) => {
     if (!accessToken) return null
@@ -64,35 +67,47 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     setError('')
     try {
       const requests = [
-        ['overview', portalApi.getDashboardOverview(accessToken), initialData.overview],
-        ['flaggedStations', portalApi.getFlaggedStations(accessToken), initialData.flaggedStations],
-        ['heatmap', portalApi.getShortageHeatmap(accessToken), initialData.heatmap],
-        ['complaintMetrics', portalApi.getComplaintMetrics(accessToken), initialData.complaintMetrics],
-        ['inspectionMetrics', portalApi.getInspectionMetrics(accessToken), initialData.inspectionMetrics],
-        ['hoardingWatchlist', portalApi.getHoardingWatchlist(accessToken), initialData.hoardingWatchlist],
-        ['fuelDeliveryLogs', portalApi.listFuelDeliveryLogs(accessToken), initialData.fuelDeliveryLogs],
-        ['availabilityReports', portalApi.listAvailabilityReports(accessToken), initialData.availabilityReports],
-        ['complaints', portalApi.listComplaints(accessToken), initialData.complaints],
-        ['flags', portalApi.listFlags(accessToken), initialData.flags],
-        ['inspections', portalApi.listInspections(accessToken), initialData.inspections],
-        ['enforcementActions', portalApi.listEnforcementActions(accessToken), initialData.enforcementActions],
-        ['profiles', portalApi.listProfiles(accessToken), initialData.profiles],
-        ['licenseRegistry', portalApi.listLicenseRegistry(accessToken), initialData.licenseRegistry],
-        ['expiryAlerts', portalApi.getExpiryAlerts(accessToken), initialData.expiryAlerts],
-        ['topComplaintStations', portalApi.getTopComplaintStations(accessToken), initialData.topComplaintStations],
-        ['districtShortages', portalApi.getDistrictShortageSummaries(accessToken), initialData.districtShortages],
-        ['repeatedOffenders', portalApi.getRepeatedOffenders(accessToken), initialData.repeatedOffenders],
-        ['monthlyReports', portalApi.getMonthlyReports(accessToken), initialData.monthlyReports],
-        ['users', portalApi.listUsers(accessToken), initialData.users],
-        ['auditLogs', portalApi.listAuditLogs(accessToken), initialData.auditLogs],
+        [
+          'overview',
+          hasAnyPermission(user, [MERA_PERMISSIONS.DASHBOARD_VIEW_NATIONAL, MERA_PERMISSIONS.DASHBOARD_VIEW_DISTRICT]),
+          () => portalApi.getDashboardOverview(accessToken),
+          initialData.overview,
+        ],
+        ['flaggedStations', hasPermission(user, MERA_PERMISSIONS.FLAGS_VIEW), () => portalApi.getFlaggedStations(accessToken), initialData.flaggedStations],
+        ['heatmap', hasPermission(user, MERA_PERMISSIONS.HEATMAP_VIEW), () => portalApi.getShortageHeatmap(accessToken), initialData.heatmap],
+        ['complaintMetrics', hasPermission(user, MERA_PERMISSIONS.COMPLAINTS_VIEW), () => portalApi.getComplaintMetrics(accessToken), initialData.complaintMetrics],
+        ['inspectionMetrics', hasPermission(user, MERA_PERMISSIONS.INSPECTIONS_VIEW), () => portalApi.getInspectionMetrics(accessToken), initialData.inspectionMetrics],
+        ['demandForecastSummary', hasPermission(user, MERA_PERMISSIONS.REPORTS_VIEW), () => portalApi.getDemandForecastSummary(accessToken), initialData.demandForecastSummary],
+        ['hoardingWatchlist', hasAnyPermission(user, [MERA_PERMISSIONS.FLAGS_VIEW, MERA_PERMISSIONS.AVAILABILITY_AUDIT]), () => portalApi.getHoardingWatchlist(accessToken), initialData.hoardingWatchlist],
+        ['fuelDeliveryLogs', hasPermission(user, MERA_PERMISSIONS.DELIVERIES_VIEW), () => portalApi.listFuelDeliveryLogs(accessToken), initialData.fuelDeliveryLogs],
+        ['availabilityReports', hasAnyPermission(user, [MERA_PERMISSIONS.AVAILABILITY_VIEW, MERA_PERMISSIONS.AVAILABILITY_AUDIT]), () => portalApi.listAvailabilityReports(accessToken), initialData.availabilityReports],
+        ['complaints', hasPermission(user, MERA_PERMISSIONS.COMPLAINTS_VIEW), () => portalApi.listComplaints(accessToken), initialData.complaints],
+        ['flags', hasPermission(user, MERA_PERMISSIONS.FLAGS_VIEW), () => portalApi.listFlags(accessToken), initialData.flags],
+        ['inspections', hasPermission(user, MERA_PERMISSIONS.INSPECTIONS_VIEW), () => portalApi.listInspections(accessToken), initialData.inspections],
+        ['enforcementActions', hasPermission(user, MERA_PERMISSIONS.ENFORCEMENT_VIEW), () => portalApi.listEnforcementActions(accessToken), initialData.enforcementActions],
+        ['profiles', hasAnyPermission(user, [MERA_PERMISSIONS.STATIONS_VIEW, MERA_PERMISSIONS.STATIONS_VIEW_DISTRICT]), () => portalApi.listProfiles(accessToken), initialData.profiles],
+        ['licenseRegistry', hasPermission(user, MERA_PERMISSIONS.LICENSES_VIEW), () => portalApi.listLicenseRegistry(accessToken), initialData.licenseRegistry],
+        ['expiryAlerts', hasAnyPermission(user, [MERA_PERMISSIONS.LICENSES_VIEW, MERA_PERMISSIONS.LICENSES_EXPIRE_REVIEW]), () => portalApi.getExpiryAlerts(accessToken), initialData.expiryAlerts],
+        ['topComplaintStations', hasPermission(user, MERA_PERMISSIONS.REPORTS_VIEW), () => portalApi.getTopComplaintStations(accessToken), initialData.topComplaintStations],
+        ['districtShortages', hasPermission(user, MERA_PERMISSIONS.REPORTS_VIEW), () => portalApi.getDistrictShortageSummaries(accessToken), initialData.districtShortages],
+        ['repeatedOffenders', hasPermission(user, MERA_PERMISSIONS.REPORTS_VIEW), () => portalApi.getRepeatedOffenders(accessToken), initialData.repeatedOffenders],
+        ['monthlyReports', hasPermission(user, MERA_PERMISSIONS.REPORTS_VIEW), () => portalApi.getMonthlyReports(accessToken), initialData.monthlyReports],
+        ['users', hasPermission(user, MERA_PERMISSIONS.USERS_VIEW), () => portalApi.listUsers(accessToken), initialData.users],
+        ['auditLogs', hasPermission(user, MERA_PERMISSIONS.AUDIT_VIEW), () => portalApi.listAuditLogs(accessToken), initialData.auditLogs],
       ] as const
 
-      const settled = await Promise.allSettled(requests.map(([, request]) => request))
+      const settled = await Promise.allSettled(
+        requests.map(([, allowed, request, fallback]) => (allowed ? request() : Promise.resolve(fallback))),
+      )
       const nextData: any = { ...initialData }
       const loadErrors: string[] = []
 
-      requests.forEach(([key, _request, fallback], index) => {
+      requests.forEach(([key, allowed, _request, fallback], index) => {
         const result = settled[index]
+        if (!allowed) {
+          nextData[key] = fallback
+          return
+        }
         if (result.status === 'fulfilled') {
           nextData[key] = result.value
         } else {
@@ -184,7 +199,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
   const value = useMemo(
     () => ({
       session,
-      user: session?.user || null,
+      user,
       token,
       data,
       loading,
@@ -199,11 +214,15 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
       refreshSession,
       runAction,
       openProfile,
+      hasPermission: (permission: any) => hasPermission(user, permission),
+      hasAnyPermission: (permissions: any[]) => hasAnyPermission(user, permissions),
+      canAccessPath: (pathname: string) => canAccessPath(user, pathname),
+      firstAccessiblePath: () => firstAccessiblePath(user),
       getHoardingWatchlistDetail: (stationPublicId: string) =>
         portalApi.getHoardingWatchlistDetail(token, stationPublicId),
       api: portalApi,
     }),
-    [session, token, data, loading, bootLoading, error, loginError, selectedProfile, selectedProfileEnforcement],
+    [session, user, token, data, loading, bootLoading, error, loginError, selectedProfile, selectedProfileEnforcement],
   )
 
   return <PortalContext.Provider value={value}>{children}</PortalContext.Provider>

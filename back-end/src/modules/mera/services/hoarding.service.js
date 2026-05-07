@@ -302,12 +302,13 @@ export async function refreshAllHoardingRiskScores({ actor = null } = {}) {
   }
 }
 
-export async function listHoardingWatchlist(filters = {}) {
+export async function listHoardingWatchlist(filters = {}, auth = null) {
   await refreshAllHoardingRiskScores()
   const pagination = normalizePagination(filters)
   const districtFilter = `%${String(filters.district || "").trim()}%`
   const queryFilter = `%${String(filters.query || "").trim()}%`
   const riskFilter = String(filters.risk || "").trim().toUpperCase()
+  const scopedDistrict = String(auth?.districtScope || "").trim()
 
   const rows = await prisma.$queryRaw`
     SELECT
@@ -369,6 +370,7 @@ export async function listHoardingWatchlist(filters = {}) {
       AND (${String(filters.district || "").trim() === ""} = TRUE OR s.city LIKE ${districtFilter})
       AND (${String(filters.query || "").trim() === ""} = TRUE OR s.name LIKE ${queryFilter} OR s.public_id LIKE ${queryFilter})
       AND (${riskFilter === ""} = TRUE OR hrs.escalation_status = ${riskFilter})
+      AND (${scopedDistrict === ""} = TRUE OR s.city = ${scopedDistrict})
     ORDER BY hrs.risk_score DESC, hrs.last_calculated_at DESC, s.name ASC
     LIMIT ${pagination.limit}
     OFFSET ${pagination.offset}
@@ -394,7 +396,7 @@ export async function listHoardingWatchlist(filters = {}) {
   }
 }
 
-export async function getHoardingWatchlistDetail(stationPublicId) {
+export async function getHoardingWatchlistDetail(stationPublicId, auth = null) {
   const stationRows = await prisma.$queryRaw`
     SELECT id, public_id, name, city, address
     FROM stations
@@ -403,6 +405,9 @@ export async function getHoardingWatchlistDetail(stationPublicId) {
   `
   const station = stationRows?.[0]
   if (!station?.id) throw badRequest("Station not found")
+  if (String(auth?.districtScope || "").trim() && String(auth?.districtScope || "").trim().toLowerCase() !== String(station.city || "").trim().toLowerCase()) {
+    throw badRequest("You do not have access to this station")
+  }
 
   const risk = await calculateStationHoardingRisk(Number(station.id), { persist: true })
 

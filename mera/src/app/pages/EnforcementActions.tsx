@@ -6,13 +6,14 @@ import { Input } from '../components/ui/input'
 import { ModalShell } from '../components/ModalShell'
 import { PortalTable } from '../components/PortalTable'
 import { SectionCard } from '../components/SectionCard'
+import { MERA_PERMISSIONS } from '../lib/access'
 import { usePortal } from '../lib/portalContext'
 import { matchesSearch, normalizeDate, normalizeRows, renderPill } from '../lib/portalUtils'
 
 const fieldClass = 'h-9 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700'
 
 export function EnforcementActions() {
-  const { data, runAction, api, token } = usePortal()
+  const { data, runAction, api, token, hasPermission } = usePortal()
   const [search, setSearch] = useState('')
   const [actionType, setActionType] = useState('')
   const [modalOpen, setModalOpen] = useState(false)
@@ -34,14 +35,20 @@ export function EnforcementActions() {
   const pendingSuspensions = rows
     .filter((row: any) => row.actionType === 'SUSPENSION' || row.actionStatus === 'ESCALATED')
     .slice(0, 6)
+  const canCreateWarning = hasPermission(MERA_PERMISSIONS.ENFORCEMENT_CREATE_WARNING)
+  const canCreateFine = hasPermission(MERA_PERMISSIONS.ENFORCEMENT_CREATE_FINE)
+  const canCreateSuspension = hasPermission(MERA_PERMISSIONS.ENFORCEMENT_CREATE_SUSPENSION)
+  const canApprove = hasPermission(MERA_PERMISSIONS.ENFORCEMENT_APPROVE)
 
   return (
     <div className="flex h-full flex-col gap-4 overflow-y-auto p-4">
       <Toolbar>
-        <Button type="button" size="sm" className="bg-blue-700 hover:bg-blue-800" onClick={() => setModalOpen(true)}>
-          <Plus className="size-4" />
-          Issue Action
-        </Button>
+        {canCreateWarning || canCreateFine || canCreateSuspension ? (
+          <Button type="button" size="sm" className="bg-blue-700 hover:bg-blue-800" onClick={() => setModalOpen(true)}>
+            <Plus className="size-4" />
+            Issue Action
+          </Button>
+        ) : null}
         <div className="flex min-w-[280px] flex-1 items-center gap-2">
           <Search className="size-4 text-slate-400" />
           <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search actions, stations, or flags..." />
@@ -87,6 +94,11 @@ export function EnforcementActions() {
                   <div className="mt-1 text-slate-500">{row.station?.city || 'No district'}</div>
                   <div className="mt-2">{renderPill(row.actionType)}</div>
                   <div className="mt-2 text-slate-600">Officer: {row.actor?.fullName || 'Unknown'}</div>
+                  {canApprove && row.actionType === 'SUSPENSION' ? (
+                    <button type="button" className="mt-3 text-[11px] font-semibold text-blue-700">
+                      Approve Suspension
+                    </button>
+                  ) : null}
                 </div>
               ))
             ) : (
@@ -137,11 +149,11 @@ export function EnforcementActions() {
             ))}
           </select>
           <select className={fieldClass} value={form.actionType} onChange={(event) => setForm({ ...form, actionType: event.target.value })}>
-            <option value="WARNING">Warning</option>
-            <option value="FINE">Fine</option>
-            <option value="SUSPENSION">Suspension</option>
-            <option value="CLOSURE_NOTICE">Closure Notice</option>
-            <option value="FOLLOW_UP_DIRECTIVE">Follow-up Directive</option>
+            {canCreateWarning ? <option value="WARNING">Warning</option> : null}
+            {canCreateFine ? <option value="FINE">Fine</option> : null}
+            {canCreateSuspension ? <option value="SUSPENSION">Suspension</option> : null}
+            {canCreateWarning ? <option value="CLOSURE_NOTICE">Closure Notice</option> : null}
+            {canCreateWarning ? <option value="FOLLOW_UP_DIRECTIVE">Follow-up Directive</option> : null}
           </select>
           <select className={fieldClass} value={form.actionStatus} onChange={(event) => setForm({ ...form, actionStatus: event.target.value })}>
             <option value="OPEN">Open</option>

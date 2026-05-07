@@ -5,9 +5,14 @@ import { logMeraAudit } from "../services/audit.service.js"
 export async function login(req, res) {
   const payload = await authService.login({ payload: req.body, req })
   await logMeraAudit({
+    actorName: payload?.user?.fullName || null,
     actorRole: payload?.user?.role || "UNKNOWN",
+    permissionUsed: "AUTH_LOGIN",
     actionType: "MERA_LOGIN",
     actionDescription: `MERA login for ${payload?.user?.email || "unknown user"}.`,
+    affectedEntity: payload?.user?.publicId || payload?.user?.email || null,
+    ipAddress: req.meraAuth?.ipAddress || (req.header("x-forwarded-for") || req.ip || "").split(",")[0].trim().slice(0, 64) || null,
+    deviceInfo: req.header("user-agent")?.slice(0, 255) || null,
   })
   return ok(res, payload)
 }

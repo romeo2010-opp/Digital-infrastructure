@@ -6,13 +6,14 @@ import { Input } from '../components/ui/input'
 import { ModalShell } from '../components/ModalShell'
 import { PortalTable } from '../components/PortalTable'
 import { SectionCard } from '../components/SectionCard'
+import { MERA_PERMISSIONS } from '../lib/access'
 import { usePortal } from '../lib/portalContext'
 import { normalizeDate, normalizeRows, renderPill } from '../lib/portalUtils'
 
 const fieldClass = 'h-9 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700'
 
 export function FieldInspections() {
-  const { data, runAction, api, token } = usePortal()
+  const { data, runAction, api, token, hasPermission } = usePortal()
   const [typeFilter, setTypeFilter] = useState('')
   const [officerFilter, setOfficerFilter] = useState('')
   const [scheduleOpen, setScheduleOpen] = useState(false)
@@ -43,18 +44,25 @@ export function FieldInspections() {
   const evidenceRows = rows
     .filter((row: any) => row.geotagLat || row.geotagLng)
     .slice(0, 10)
+  const canAssign = hasPermission(MERA_PERMISSIONS.INSPECTIONS_ASSIGN)
+  const canCreate = hasPermission(MERA_PERMISSIONS.INSPECTIONS_CREATE)
+  const canExport = hasPermission(MERA_PERMISSIONS.REPORTS_EXPORT)
 
   return (
     <div className="flex h-full flex-col gap-4 overflow-y-auto p-4">
       <Toolbar>
-        <Button type="button" size="sm" className="bg-blue-700 hover:bg-blue-800" onClick={() => setScheduleOpen(true)}>
-          <Plus className="size-4" />
-          Schedule Inspection
-        </Button>
-        <Button type="button" variant="outline" size="sm" onClick={() => setScheduleOpen(true)}>
-          <Plus className="size-4" />
-          Assign Officer
-        </Button>
+        {canCreate ? (
+          <Button type="button" size="sm" className="bg-blue-700 hover:bg-blue-800" onClick={() => setScheduleOpen(true)}>
+            <Plus className="size-4" />
+            Schedule Inspection
+          </Button>
+        ) : null}
+        {canAssign ? (
+          <Button type="button" variant="outline" size="sm" onClick={() => setScheduleOpen(true)}>
+            <Plus className="size-4" />
+            Assign Officer
+          </Button>
+        ) : null}
         <select className={fieldClass} value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)}>
           <option value="">All Types</option>
           <option value="ROUTINE">Routine</option>
@@ -71,10 +79,12 @@ export function FieldInspections() {
             </option>
           ))}
         </select>
-        <Button type="button" variant="outline" size="sm">
-          <Download className="size-4" />
-          Export
-        </Button>
+        {canExport ? (
+          <Button type="button" variant="outline" size="sm">
+            <Download className="size-4" />
+            Export
+          </Button>
+        ) : null}
       </Toolbar>
 
       <div className="grid min-h-0 flex-1 gap-4">
@@ -168,14 +178,16 @@ export function FieldInspections() {
               </option>
             ))}
           </select>
-          <select className={fieldClass} value={form.officerPublicId} onChange={(event) => setForm({ ...form, officerPublicId: event.target.value })}>
-            <option value="">Default to current officer</option>
-            {normalizeRows(data.users).map((user: any) => (
-              <option key={user.public_id} value={user.public_id}>
-                {user.full_name} • {user.role_name}
-              </option>
-            ))}
-          </select>
+          {canAssign ? (
+            <select className={fieldClass} value={form.officerPublicId} onChange={(event) => setForm({ ...form, officerPublicId: event.target.value })}>
+              <option value="">Default to current officer</option>
+              {normalizeRows(data.users).map((user: any) => (
+                <option key={user.public_id} value={user.public_id}>
+                  {user.full_name} • {user.role_display_name || user.role_code}
+                </option>
+              ))}
+            </select>
+          ) : null}
           <select className={fieldClass} value={form.inspectionType} onChange={(event) => setForm({ ...form, inspectionType: event.target.value })}>
             <option value="ROUTINE">Routine</option>
             <option value="FOLLOW_UP">Follow Up</option>

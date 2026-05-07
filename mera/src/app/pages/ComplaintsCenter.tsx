@@ -7,6 +7,7 @@ import { ModalShell } from '../components/ModalShell'
 import { PortalTable } from '../components/PortalTable'
 import { SectionCard } from '../components/SectionCard'
 import { resolvePortalAssetUrl } from '../lib/portalApi'
+import { MERA_PERMISSIONS } from '../lib/access'
 import { usePortal } from '../lib/portalContext'
 import { normalizeDate, normalizeRows, renderPill } from '../lib/portalUtils'
 
@@ -89,7 +90,7 @@ function renderEvidencePreview(mediaUrl: string) {
 }
 
 export function ComplaintsCenter() {
-  const { data, runAction, api, token } = usePortal()
+  const { data, runAction, api, token, hasPermission } = usePortal()
   const [complaintType, setComplaintType] = useState('')
   const [officerFilter, setOfficerFilter] = useState('')
   const [unresolvedOnly, setUnresolvedOnly] = useState(false)
@@ -121,14 +122,20 @@ export function ComplaintsCenter() {
   const evidenceQueue = rows.filter((row: any) => row.mediaUrl).slice(0, 8)
   const selectedEvidenceUrl = selectedComplaint?.mediaUrl ? resolvePortalAssetUrl(selectedComplaint.mediaUrl) : ''
   const selectedEvidenceName = selectedComplaint?.mediaUrl ? extractEvidenceName(selectedComplaint.mediaUrl) : ''
+  const canAssign = hasPermission(MERA_PERMISSIONS.COMPLAINTS_ASSIGN)
+  const canTriage = hasPermission(MERA_PERMISSIONS.COMPLAINTS_TRIAGE)
+  const canEscalate = hasPermission(MERA_PERMISSIONS.COMPLAINTS_ESCALATE)
+  const canClose = hasPermission(MERA_PERMISSIONS.COMPLAINTS_CLOSE)
 
   return (
     <div className="flex h-full flex-col gap-4 overflow-y-auto p-4">
       <Toolbar>
-        <Button type="button" size="sm" className="bg-blue-700 hover:bg-blue-800" onClick={() => setIntakeOpen(true)}>
-          <Plus className="size-4" />
-          New Complaint Intake
-        </Button>
+        {canAssign || canTriage || canEscalate || canClose ? (
+          <Button type="button" size="sm" className="bg-blue-700 hover:bg-blue-800" onClick={() => setIntakeOpen(true)}>
+            <Plus className="size-4" />
+            New Complaint Intake
+          </Button>
+        ) : null}
         <select className={fieldClass} value={complaintType} onChange={(event) => setComplaintType(event.target.value)}>
           <option value="">All Types</option>
           <option value="HOARDING">Hoarding</option>
@@ -181,30 +188,34 @@ export function ComplaintsCenter() {
                 label: 'Action',
                 render: (row) => (
                   <div className="flex gap-2">
-                    <button
-                      type="button"
-                      className="text-[11px] font-medium text-blue-700"
-                      onClick={(event) => {
-                        event.stopPropagation()
-                        setSelectedComplaint(row)
-                        setAssignOfficerPublicId(row.assignedOfficer?.publicId || '')
-                        setAssignOpen(true)
-                      }}
-                    >
-                      Assign
-                    </button>
-                    <button
-                      type="button"
-                      className="text-[11px] font-medium text-blue-700"
-                      onClick={(event) => {
-                        event.stopPropagation()
-                        setSelectedComplaint(row)
-                        setStatusValue(row.complaintStatus || 'UNDER_INVESTIGATION')
-                        setStatusOpen(true)
-                      }}
-                    >
-                      Update
-                    </button>
+                    {canAssign ? (
+                      <button
+                        type="button"
+                        className="text-[11px] font-medium text-blue-700"
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          setSelectedComplaint(row)
+                          setAssignOfficerPublicId(row.assignedOfficer?.publicId || '')
+                          setAssignOpen(true)
+                        }}
+                      >
+                        Assign
+                      </button>
+                    ) : null}
+                    {canTriage || canEscalate || canClose ? (
+                      <button
+                        type="button"
+                        className="text-[11px] font-medium text-blue-700"
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          setSelectedComplaint(row)
+                          setStatusValue(row.complaintStatus || 'UNDER_INVESTIGATION')
+                          setStatusOpen(true)
+                        }}
+                      >
+                        Update
+                      </button>
+                    ) : null}
                     {row.mediaUrl ? (
                       <button
                         type="button"
@@ -434,7 +445,7 @@ export function ComplaintsCenter() {
           <option value="">Select officer</option>
           {normalizeRows(data.users).map((user: any) => (
             <option key={user.public_id} value={user.public_id}>
-              {user.full_name} • {user.role_name}
+              {user.full_name} • {user.role_display_name || user.role_code}
             </option>
           ))}
         </select>
@@ -464,12 +475,15 @@ export function ComplaintsCenter() {
         }
       >
         <select className={fieldClass} value={statusValue} onChange={(event) => setStatusValue(event.target.value)}>
-          <option value="NEW">New</option>
-          <option value="TRIAGED">Triaged</option>
-          <option value="ASSIGNED">Assigned</option>
-          <option value="UNDER_INVESTIGATION">Under Investigation</option>
-          <option value="RESOLVED">Resolved</option>
-          <option value="DISMISSED">Dismissed</option>
+          {canTriage ? <option value="NEW">New</option> : null}
+          {canTriage ? <option value="REVIEWING">Reviewing</option> : null}
+          {canTriage ? <option value="VERIFIED">Verified</option> : null}
+          {canTriage ? <option value="TRIAGED">Triaged</option> : null}
+          {canTriage ? <option value="UNDER_INVESTIGATION">Under Investigation</option> : null}
+          {canEscalate ? <option value="ESCALATED">Escalated</option> : null}
+          {canClose ? <option value="RESOLVED">Resolved</option> : null}
+          {canClose ? <option value="REJECTED">Rejected</option> : null}
+          {canClose ? <option value="DISMISSED">Dismissed</option> : null}
         </select>
       </ModalShell>
     </div>

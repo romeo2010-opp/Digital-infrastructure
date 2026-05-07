@@ -15,6 +15,8 @@ import {
 } from 'lucide-react'
 import { useLocation, useNavigate } from 'react-router'
 import { useSidebarStats, type SidebarSituation } from '../hooks/useSidebarStats'
+import { usePortal } from '../lib/portalContext'
+import { MERA_PERMISSIONS } from '../lib/access'
 
 const sidebarWidthClass = 'w-[236px] min-w-[236px] max-w-[236px]'
 
@@ -22,43 +24,52 @@ const sections = [
   {
     label: 'Overview',
     items: [
-      { label: 'National dashboard', path: '/dashboard', icon: Grid2X2 },
-      { label: 'Situation monitor', path: '/situation-monitor', icon: Clock3, badgeKey: 'situation' },
+      {
+        label: 'National Dashboard',
+        path: '/dashboard',
+        icon: Grid2X2,
+        permissions: [MERA_PERMISSIONS.DASHBOARD_VIEW_NATIONAL, MERA_PERMISSIONS.DASHBOARD_VIEW_DISTRICT],
+      },
+      {
+        label: 'National Heat Intelligence Map',
+        path: '/national-heat-intelligence-map',
+        icon: Clock3,
+        badgeKey: 'situation',
+        permissions: [MERA_PERMISSIONS.HEATMAP_VIEW],
+      },
     ],
   },
   {
     label: 'Intelligence',
     items: [
-      { label: 'Fuel availability map', path: '/fuel-availability-map', icon: MapPinned },
-      { label: 'Station registry', path: '/station-registry', icon: Grid2X2, badgeKey: 'stationsTotal' },
-      { label: 'Queue monitoring', path: '/queue-monitoring', icon: List, badgeKey: 'avgQueueWait' },
-      { label: 'Fuel deliveries', path: '/fuel-deliveries', icon: Truck },
-      { label: 'Demand forecasting', path: '/demand-forecasting', icon: BarChart3 },
+      { label: 'Hoarding Watchlist', path: '/hoarding-watchlist', icon: MapPinned, permissions: [MERA_PERMISSIONS.FLAGS_VIEW, MERA_PERMISSIONS.AVAILABILITY_AUDIT] },
+      { label: 'Fuel Deliveries', path: '/fuel-deliveries', icon: Truck, permissions: [MERA_PERMISSIONS.DELIVERIES_VIEW] },
+      { label: 'Availability Audit', path: '/availability-audit', icon: List, badgeKey: 'avgQueueWait', permissions: [MERA_PERMISSIONS.AVAILABILITY_VIEW, MERA_PERMISSIONS.AVAILABILITY_AUDIT] },
+      { label: 'Station Regulatory Profiles', path: '/station-regulatory-profiles', icon: Grid2X2, badgeKey: 'stationsTotal', permissions: [MERA_PERMISSIONS.STATIONS_VIEW, MERA_PERMISSIONS.STATIONS_VIEW_DISTRICT] },
     ],
   },
   {
     label: 'Compliance',
     items: [
-      { label: 'Complaints center', path: '/complaints-center', icon: CheckCircle2, badgeKey: 'openComplaints' },
-      { label: 'Compliance flags', path: '/compliance-flags', icon: Flag, badgeKey: 'activeFlags' },
-      { label: 'Field inspections', path: '/field-inspections', icon: CalendarDays, badgeKey: 'activeInspections' },
-      { label: 'Enforcement actions', path: '/enforcement-actions', icon: AlertTriangle, badgeKey: 'pendingEnforcement' },
+      { label: 'Complaints Center', path: '/complaints-center', icon: CheckCircle2, badgeKey: 'openComplaints', permissions: [MERA_PERMISSIONS.COMPLAINTS_VIEW] },
+      { label: 'Compliance Flags', path: '/compliance-flags', icon: Flag, badgeKey: 'activeFlags', permissions: [MERA_PERMISSIONS.FLAGS_VIEW] },
+      { label: 'Field Inspections', path: '/field-inspections', icon: CalendarDays, badgeKey: 'activeInspections', permissions: [MERA_PERMISSIONS.INSPECTIONS_VIEW] },
+      { label: 'Enforcement Actions', path: '/enforcement-actions', icon: AlertTriangle, badgeKey: 'pendingEnforcement', permissions: [MERA_PERMISSIONS.ENFORCEMENT_VIEW] },
+      { label: 'License Registry', path: '/license-registry', icon: CalendarDays, permissions: [MERA_PERMISSIONS.LICENSES_VIEW] },
     ],
   },
   {
     label: 'Analytics',
     items: [
-      { label: 'Reports & intelligence', path: '/reports-intelligence', icon: BarChart3 },
-      { label: 'Trends & analytics', path: '/trends-analytics', icon: BarChart3 },
-      { label: 'Data exports', path: '/data-exports', icon: BarChart3 },
+      { label: 'Reports & Intelligence', path: '/reports-intelligence', icon: BarChart3, permissions: [MERA_PERMISSIONS.REPORTS_VIEW] },
     ],
   },
   {
     label: 'System',
     items: [
       { label: 'Settings', path: '/settings/preferences', icon: Settings },
-      { label: 'Audit logs', path: '/audit-logs', icon: List },
-      { label: 'Users & roles', path: '/users-roles', icon: Users },
+      { label: 'Audit Trail', path: '/audit-trail', icon: List, permissions: [MERA_PERMISSIONS.AUDIT_VIEW] },
+      { label: 'User Administration', path: '/user-administration', icon: Users, permissions: [MERA_PERMISSIONS.USERS_VIEW] },
     ],
   },
 ] as const
@@ -110,6 +121,7 @@ function badgeStyles(kind: 'red' | 'amber' | 'blue' | 'green' | 'gray') {
 export function Sidebar({ user }: { user?: any }) {
   const location = useLocation()
   const navigate = useNavigate()
+  const { hasAnyPermission } = usePortal()
   const {
     stationsOnline,
     stationsTotal,
@@ -187,7 +199,13 @@ export function Sidebar({ user }: { user?: any }) {
       </div>
 
       <nav className="flex-1 overflow-y-auto overflow-x-hidden px-2 pb-3 [scrollbar-width:thin] [scrollbar-color:var(--color-border)_transparent] [&::-webkit-scrollbar]:w-[3px] [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-border">
-        {sections.map((section) => (
+        {sections
+          .map((section) => ({
+            ...section,
+            items: section.items.filter((item: any) => !item.permissions || hasAnyPermission(item.permissions)),
+          }))
+          .filter((section) => section.items.length > 0)
+          .map((section) => (
           <div key={section.label}>
             <div className="px-2.5 pb-1 pt-3 text-[9px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/85">{section.label}</div>
             <div>

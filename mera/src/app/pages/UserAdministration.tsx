@@ -6,13 +6,14 @@ import { Input } from '../components/ui/input'
 import { ModalShell } from '../components/ModalShell'
 import { PortalTable } from '../components/PortalTable'
 import { SectionCard } from '../components/SectionCard'
+import { MERA_PERMISSIONS } from '../lib/access'
 import { usePortal } from '../lib/portalContext'
 import { matchesSearch, normalizeDate, normalizeRows, renderPill } from '../lib/portalUtils'
 
 const fieldClass = 'h-9 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700'
 
 export function UserAdministration() {
-  const { data, runAction, api, token } = usePortal()
+  const { data, runAction, api, token, hasPermission } = usePortal()
   const [search, setSearch] = useState('')
   const [role, setRole] = useState('')
   const [district, setDistrict] = useState('')
@@ -25,15 +26,16 @@ export function UserAdministration() {
     email: '',
     phone: '',
     password: '',
-    roleName: 'COMPLIANCE_OFFICER',
-    district: '',
+    roleName: 'FIELD_COMPLIANCE_OFFICER',
+    districtScope: '',
+    regionScope: '',
     accountStatus: 'ACTIVE',
   })
 
   const rows = useMemo(() => {
     return normalizeRows(data.users).filter((row: any) => {
-      if (role && row.role_name !== role) return false
-      if (district && String(row.district || '') !== district) return false
+      if (role && row.role_code !== role) return false
+      if (district && String(row.district_scope || '') !== district) return false
       return matchesSearch(row, search)
     })
   }, [data.users, district, role, search])
@@ -44,13 +46,20 @@ export function UserAdministration() {
     return acc
   }, {})
 
+  const selectedUserAudit = useMemo(
+    () => normalizeRows(data.auditLogs?.items).filter((row: any) => row.actor_public_id === selectedUser?.public_id).slice(0, 8),
+    [data.auditLogs, selectedUser],
+  )
+
   return (
     <div className="flex h-full flex-col gap-4 overflow-y-auto p-4">
       <Toolbar>
-        <Button type="button" size="sm" className="bg-blue-700 hover:bg-blue-800" onClick={() => setModalOpen(true)}>
-          <UserPlus className="size-4" />
-          Add User
-        </Button>
+        {hasPermission(MERA_PERMISSIONS.USERS_CREATE) ? (
+          <Button type="button" size="sm" className="bg-blue-700 hover:bg-blue-800" onClick={() => setModalOpen(true)}>
+            <UserPlus className="size-4" />
+            Create User
+          </Button>
+        ) : null}
         <div className="flex min-w-[280px] flex-1 items-center gap-2">
           <Search className="size-4 text-slate-400" />
           <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search officers..." />
@@ -58,14 +67,18 @@ export function UserAdministration() {
         <select className={fieldClass} value={role} onChange={(event) => setRole(event.target.value)}>
           <option value="">All Roles</option>
           <option value="SUPER_ADMIN">Super Admin</option>
-          <option value="COMPLIANCE_OFFICER">Compliance Officer</option>
-          <option value="LEGAL_ENFORCEMENT">Legal Enforcement</option>
-          <option value="PUBLIC_COMPLAINT_ANALYST">Public Complaint Analyst</option>
-          <option value="MARKET_ANALYST">Market Analyst</option>
+          <option value="NATIONAL_OPERATIONS_ANALYST">National Operations Analyst</option>
+          <option value="REGIONAL_COMPLIANCE_SUPERVISOR">Regional Compliance Supervisor</option>
+          <option value="FIELD_COMPLIANCE_OFFICER">Field Compliance Officer</option>
+          <option value="PUBLIC_COMPLAINTS_ANALYST">Public Complaints Analyst</option>
+          <option value="LEGAL_ENFORCEMENT_OFFICER">Legal & Enforcement Officer</option>
+          <option value="LICENSING_OFFICER">Licensing Officer</option>
+          <option value="MARKET_SUPPLY_ANALYST">Market / Fuel Supply Analyst</option>
+          <option value="EXECUTIVE_VIEWER">Executive Viewer</option>
         </select>
         <select className={fieldClass} value={district} onChange={(event) => setDistrict(event.target.value)}>
           <option value="">All Districts</option>
-          {Array.from(new Set(rows.map((row: any) => row.district).filter(Boolean))).map((value) => (
+          {Array.from(new Set(rows.map((row: any) => row.district_scope).filter(Boolean))).map((value) => (
             <option key={value} value={value}>
               {value}
             </option>
@@ -77,14 +90,16 @@ export function UserAdministration() {
         </Button>
       </Toolbar>
 
-      <SectionCard title="MERA Officer Registry" subtitle="User accounts, districts, case ownership, and access control">
+      <div className="grid min-h-0 flex-1 gap-4 xl:grid-cols-[1.7fr_1fr]">
+        <SectionCard title="MERA Officer Registry" subtitle="User accounts, districts, case ownership, and access control">
         <PortalTable
           rows={rows}
           columns={[
             { key: 'full_name', label: 'Officer Name' },
-            { key: 'role_name', label: 'Role', render: (row) => renderPill(row.role_name) },
-            { key: 'district', label: 'District', render: (row) => row.district || '-' },
-            { key: 'activeCases', label: 'Active Cases', render: (row) => caseCounts[row.public_id] || 0 },
+            { key: 'email', label: 'Email' },
+            { key: 'role_display_name', label: 'Role', render: (row) => renderPill(row.role_display_name || row.role_code) },
+            { key: 'district_scope', label: 'District Scope', render: (row) => row.district_scope || '-' },
+            { key: 'activeCases', label: 'Active Cases', render: (row) => row.active_cases ?? caseCounts[row.public_id] ?? 0 },
             { key: 'last_login_at', label: 'Last Login', render: (row) => normalizeDate(row.last_login_at) },
             { key: 'account_status', label: 'Account Status', render: (row) => renderPill(row.account_status) },
             {
@@ -97,16 +112,70 @@ export function UserAdministration() {
                   onClick={() => {
                     setSelectedUser(row)
                     setStatusValue(row.account_status || 'ACTIVE')
-                    setStatusOpen(true)
+                    if (hasPermission(MERA_PERMISSIONS.USERS_UPDATE) || hasPermission(MERA_PERMISSIONS.USERS_DISABLE)) {
+                      setStatusOpen(true)
+                    }
                   }}
                 >
-                  Manage
+                  View
                 </button>
               ),
             },
           ]}
         />
-      </SectionCard>
+        </SectionCard>
+        <SectionCard title="Officer Detail Panel" subtitle="Permissions, assigned district, recent actions, and audit history">
+        <div className="space-y-3 px-4 py-3 text-xs">
+          {selectedUser ? (
+            <>
+              <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                <div className="text-sm font-semibold text-slate-900">{selectedUser.full_name}</div>
+                <div className="mt-1 text-slate-500">{selectedUser.email}</div>
+                <div className="mt-2">{renderPill(selectedUser.role_display_name || selectedUser.role_code)}</div>
+              </div>
+              <div className="rounded-md border border-slate-200 bg-white p-3">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Assigned District</div>
+                <div className="mt-2 text-slate-700">{selectedUser.district_scope || 'National scope'}</div>
+              </div>
+              <div className="rounded-md border border-slate-200 bg-white p-3">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Permissions</div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {normalizeRows(selectedUser.permissions).map((permission: string) => (
+                    <span key={permission}>{renderPill(permission)}</span>
+                  ))}
+                </div>
+              </div>
+              <div className="rounded-md border border-slate-200 bg-white p-3">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Recent Actions</div>
+                <div className="mt-2 space-y-2">
+                  {selectedUserAudit.length ? selectedUserAudit.map((row: any) => (
+                    <div key={`${row.id}-${row.created_at}`} className="rounded-md border border-slate-100 bg-slate-50 p-2 text-slate-600">
+                      <div>{row.action_type}</div>
+                      <div className="mt-1 text-slate-500">{normalizeDate(row.created_at)}</div>
+                    </div>
+                  )) : <div className="text-slate-500">No recent actions recorded.</div>}
+                </div>
+              </div>
+              <div className="rounded-md border border-slate-200 bg-white p-3">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">Audit History</div>
+                <div className="mt-2 space-y-2">
+                  {selectedUserAudit.length ? selectedUserAudit.map((row: any) => (
+                    <div key={`audit-${row.id}`} className="rounded-md border border-slate-100 bg-slate-50 p-2 text-slate-600">
+                      <div>{row.affected_entity || row.action_description}</div>
+                      <div className="mt-1 text-slate-500">{row.permission_code || 'No permission code'} • {row.ip_address || 'No IP captured'}</div>
+                    </div>
+                  )) : <div className="text-slate-500">No audit history available.</div>}
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 p-3 text-slate-500">
+              Select an officer from the table to inspect permissions and recent audit history.
+            </div>
+          )}
+        </div>
+        </SectionCard>
+      </div>
 
       <ModalShell
         open={modalOpen}
@@ -136,12 +205,17 @@ export function UserAdministration() {
           <Input value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} type="password" placeholder="Temporary password" />
           <select className={fieldClass} value={form.roleName} onChange={(event) => setForm({ ...form, roleName: event.target.value })}>
             <option value="SUPER_ADMIN">Super Admin</option>
-            <option value="COMPLIANCE_OFFICER">Compliance Officer</option>
-            <option value="LEGAL_ENFORCEMENT">Legal Enforcement</option>
-            <option value="PUBLIC_COMPLAINT_ANALYST">Public Complaint Analyst</option>
-            <option value="MARKET_ANALYST">Market Analyst</option>
+            <option value="NATIONAL_OPERATIONS_ANALYST">National Operations Analyst</option>
+            <option value="REGIONAL_COMPLIANCE_SUPERVISOR">Regional Compliance Supervisor</option>
+            <option value="FIELD_COMPLIANCE_OFFICER">Field Compliance Officer</option>
+            <option value="PUBLIC_COMPLAINTS_ANALYST">Public Complaints Analyst</option>
+            <option value="LEGAL_ENFORCEMENT_OFFICER">Legal & Enforcement Officer</option>
+            <option value="LICENSING_OFFICER">Licensing Officer</option>
+            <option value="MARKET_SUPPLY_ANALYST">Market / Fuel Supply Analyst</option>
+            <option value="EXECUTIVE_VIEWER">Executive Viewer</option>
           </select>
-          <Input value={form.district} onChange={(event) => setForm({ ...form, district: event.target.value })} placeholder="District" />
+          <Input value={form.districtScope} onChange={(event) => setForm({ ...form, districtScope: event.target.value })} placeholder="District scope" />
+          <Input value={form.regionScope} onChange={(event) => setForm({ ...form, regionScope: event.target.value })} placeholder="Region scope" />
           <select className={fieldClass} value={form.accountStatus} onChange={(event) => setForm({ ...form, accountStatus: event.target.value })}>
             <option value="ACTIVE">Active</option>
             <option value="INVITED">Invited</option>

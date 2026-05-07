@@ -6,13 +6,14 @@ import { Input } from '../components/ui/input'
 import { ModalShell } from '../components/ModalShell'
 import { PortalTable } from '../components/PortalTable'
 import { SectionCard } from '../components/SectionCard'
+import { MERA_PERMISSIONS } from '../lib/access'
 import { usePortal } from '../lib/portalContext'
 import { matchesSearch, normalizeDate, normalizeRows, renderPill } from '../lib/portalUtils'
 
 const fieldClass = 'h-9 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700'
 
 export function LicenseRegistry() {
-  const { data, runAction, api, token } = usePortal()
+  const { data, runAction, api, token, hasPermission } = usePortal()
   const [search, setSearch] = useState('')
   const [status, setStatus] = useState('')
   const [modalOpen, setModalOpen] = useState(false)
@@ -41,6 +42,8 @@ export function LicenseRegistry() {
   }, [data.licenseRegistry, search, status])
 
   const alerts = normalizeRows(data.expiryAlerts).slice(0, 8)
+  const canCreate = hasPermission(MERA_PERMISSIONS.LICENSES_CREATE)
+  const canUpdate = hasPermission(MERA_PERMISSIONS.LICENSES_UPDATE)
 
   return (
     <div className="flex h-full flex-col gap-4 overflow-y-auto p-4">
@@ -57,10 +60,12 @@ export function LicenseRegistry() {
           <option value="REVOKED">Revoked</option>
           <option value="EXPIRED">Expired</option>
         </select>
-        <Button type="button" size="sm" className="bg-blue-700 hover:bg-blue-800" onClick={() => setModalOpen(true)}>
-          <Plus className="size-4" />
-          Add License
-        </Button>
+        {canCreate ? (
+          <Button type="button" size="sm" className="bg-blue-700 hover:bg-blue-800" onClick={() => setModalOpen(true)}>
+            <Plus className="size-4" />
+            Add License
+          </Button>
+        ) : null}
         <Button type="button" variant="outline" size="sm">
           <Download className="size-4" />
           Export
@@ -93,6 +98,7 @@ export function LicenseRegistry() {
                     type="button"
                     className="text-[11px] font-medium text-blue-700"
                     onClick={() => {
+                      if (!canUpdate) return
                       setSelectedLicense(row)
                       setEditForm({
                         issueDate: String(row.issueDate || '').slice(0, 10),
@@ -103,7 +109,7 @@ export function LicenseRegistry() {
                       setEditOpen(true)
                     }}
                   >
-                    Edit
+                    {canUpdate ? 'Update License' : 'View'}
                   </button>
                 ),
               },

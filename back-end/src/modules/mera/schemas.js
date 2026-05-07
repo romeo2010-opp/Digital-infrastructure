@@ -45,7 +45,18 @@ export const complaintAssignSchema = z.object({
 })
 
 export const complaintStatusSchema = z.object({
-  complaintStatus: z.enum(["NEW", "TRIAGED", "ASSIGNED", "UNDER_INVESTIGATION", "RESOLVED", "DISMISSED"]),
+  complaintStatus: z.enum([
+    "NEW",
+    "REVIEWING",
+    "VERIFIED",
+    "REJECTED",
+    "ESCALATED",
+    "TRIAGED",
+    "ASSIGNED",
+    "UNDER_INVESTIGATION",
+    "RESOLVED",
+    "DISMISSED",
+  ]),
 })
 
 export const inspectionCreateSchema = z.object({
@@ -195,12 +206,17 @@ export const meraUserCreateSchema = z.object({
   password: z.string().min(8).max(120),
   roleName: z.enum([
     "SUPER_ADMIN",
-    "COMPLIANCE_OFFICER",
-    "LEGAL_ENFORCEMENT",
-    "PUBLIC_COMPLAINT_ANALYST",
-    "MARKET_ANALYST",
+    "NATIONAL_OPERATIONS_ANALYST",
+    "REGIONAL_COMPLIANCE_SUPERVISOR",
+    "FIELD_COMPLIANCE_OFFICER",
+    "PUBLIC_COMPLAINTS_ANALYST",
+    "LEGAL_ENFORCEMENT_OFFICER",
+    "LICENSING_OFFICER",
+    "MARKET_SUPPLY_ANALYST",
+    "EXECUTIVE_VIEWER",
   ]),
-  district: z.string().trim().max(80).optional().nullable(),
+  districtScope: z.string().trim().max(80).optional().nullable(),
+  regionScope: z.string().trim().max(80).optional().nullable(),
   accountStatus: z.enum(["ACTIVE", "INVITED", "SUSPENDED", "DISABLED"]).optional(),
 })
 

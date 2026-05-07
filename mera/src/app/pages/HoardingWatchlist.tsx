@@ -6,13 +6,14 @@ import { Input } from '../components/ui/input'
 import { SectionCard } from '../components/SectionCard'
 import { PortalTable } from '../components/PortalTable'
 import { ModalShell } from '../components/ModalShell'
+import { MERA_PERMISSIONS } from '../lib/access'
 import { usePortal } from '../lib/portalContext'
 import { matchesSearch, normalizeDate, normalizeRows, renderPill } from '../lib/portalUtils'
 
 const fieldClass = 'h-9 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700'
 
 export function HoardingWatchlist() {
-  const { data, runAction, api, token, getHoardingWatchlistDetail } = usePortal()
+  const { data, runAction, api, token, getHoardingWatchlistDetail, hasPermission } = usePortal()
   const [search, setSearch] = useState('')
   const [selectedRow, setSelectedRow] = useState<any>(null)
   const [selectedDetail, setSelectedDetail] = useState<any>(null)
@@ -29,6 +30,9 @@ export function HoardingWatchlist() {
     () => normalizeRows(data.hoardingWatchlist?.items).filter((row: any) => matchesSearch(row, search)),
     [data.hoardingWatchlist, search],
   )
+  const canCreateWarning = hasPermission(MERA_PERMISSIONS.ENFORCEMENT_CREATE_WARNING)
+  const canCreateFine = hasPermission(MERA_PERMISSIONS.ENFORCEMENT_CREATE_FINE)
+  const canCreateSuspension = hasPermission(MERA_PERMISSIONS.ENFORCEMENT_CREATE_SUSPENSION)
 
   const selectRow = async (row: any) => {
     setSelectedRow(row)
@@ -93,7 +97,7 @@ export function HoardingWatchlist() {
           title="Case Detail Panel"
           subtitle="Complaint history, delivery timeline, declarations, inspections, and enforcement"
           actions={
-            selectedRow ? (
+            selectedRow && (canCreateWarning || canCreateFine || canCreateSuspension) ? (
               <Button type="button" size="sm" className="bg-blue-700 hover:bg-blue-800" onClick={() => setActionModalOpen(true)}>
                 <Gavel className="size-4" />
                 New Action
@@ -171,11 +175,11 @@ export function HoardingWatchlist() {
           <Input value={enforcementForm.stationPublicId} onChange={(event) => setEnforcementForm({ ...enforcementForm, stationPublicId: event.target.value })} placeholder="Station Public ID" />
           <Input value={enforcementForm.relatedFlagPublicId} onChange={(event) => setEnforcementForm({ ...enforcementForm, relatedFlagPublicId: event.target.value })} placeholder="Related Flag Public ID" />
           <select className={fieldClass} value={enforcementForm.actionType} onChange={(event) => setEnforcementForm({ ...enforcementForm, actionType: event.target.value })}>
-            <option value="WARNING">Warning</option>
-            <option value="FINE">Fine</option>
-            <option value="SUSPENSION">Suspension</option>
-            <option value="CLOSURE_NOTICE">Closure Notice</option>
-            <option value="FOLLOW_UP_DIRECTIVE">Follow-up Directive</option>
+            {canCreateWarning ? <option value="WARNING">Warning</option> : null}
+            {canCreateFine ? <option value="FINE">Fine</option> : null}
+            {canCreateSuspension ? <option value="SUSPENSION">Suspension</option> : null}
+            {canCreateWarning ? <option value="CLOSURE_NOTICE">Closure Notice</option> : null}
+            {canCreateWarning ? <option value="FOLLOW_UP_DIRECTIVE">Follow-up Directive</option> : null}
           </select>
           <select className={fieldClass} value={enforcementForm.actionStatus} onChange={(event) => setEnforcementForm({ ...enforcementForm, actionStatus: event.target.value })}>
             <option value="OPEN">Open</option>

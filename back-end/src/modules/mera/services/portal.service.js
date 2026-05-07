@@ -30,6 +30,10 @@ function normalizePublicId(value, label) {
   return scoped
 }
 
+function clampNumber(value, min, max) {
+  return Math.min(Math.max(value, min), max)
+}
+
 function normalizeRole(value) {
   const scoped = String(value || "").trim().toUpperCase()
   if (!MERA_ROLE_SET.has(scoped)) throw badRequest("Invalid MERA role")
@@ -42,6 +46,39 @@ function normalizeAccountStatus(value) {
     throw badRequest("Invalid MERA account status")
   }
   return scoped
+}
+
+function districtFilterValue(auth) {
+  return String(auth?.districtScope || "").trim()
+}
+
+function hasDistrictScope(auth) {
+  return Boolean(districtFilterValue(auth))
+}
+
+function isFieldOfficer(auth) {
+  return String(auth?.role || "").trim().toUpperCase() === "FIELD_COMPLIANCE_OFFICER"
+}
+
+function actorAuditContext(actor = null, overrides = {}) {
+  return {
+    actorId: actor?.userId || null,
+    actorName: actor?.fullName || null,
+    actorRole: actor?.role || null,
+    permissionUsed: actor?.permissionUsed || null,
+    ipAddress: actor?.ipAddress || null,
+    deviceInfo: actor?.deviceInfo || null,
+    ...overrides,
+  }
+}
+
+function ensureDistrictAccess(auth, district, label = "record") {
+  if (!hasDistrictScope(auth)) return
+  const actorDistrict = districtFilterValue(auth).toLowerCase()
+  const targetDistrict = String(district || "").trim().toLowerCase()
+  if (!targetDistrict || actorDistrict !== targetDistrict) {
+    throw badRequest(`You do not have access to this ${label}`)
+  }
 }
 
 async function resolveStationId(stationPublicId) {
@@ -71,7 +108,13 @@ async function resolveUserIdByPublicId(userPublicId) {
 async function resolveMeraUserByPublicId(meraUserPublicId) {
   const scopedPublicId = normalizePublicId(meraUserPublicId, "meraUserPublicId")
   const rows = await prisma.$queryRaw`
-    SELECT mu.id, mu.public_id, mu.full_name, mr.role_name
+    SELECT
+      mu.id,
+      mu.public_id,
+      mu.full_name,
+      mu.district_scope,
+      mr.code AS role_code,
+      mr.display_name AS role_display_name
     FROM mera_users mu
     INNER JOIN mera_roles mr ON mr.id = mu.role_id
     WHERE mu.public_id = ${scopedPublicId}
@@ -84,9 +127,15 @@ async function resolveMeraUserByPublicId(meraUserPublicId) {
 
 async function resolveComplaintByPublicId(complaintPublicId) {
   const rows = await prisma.$queryRaw`
-    SELECT id, public_id, station_id, complaint_status
-    FROM public_complaints
-    WHERE public_id = ${normalizePublicId(complaintPublicId, "complaintPublicId")}
+    SELECT
+      pc.id,
+      pc.public_id,
+      pc.station_id,
+      pc.complaint_status,
+      COALESCE(NULLIF(s.city, ''), 'Unknown') AS district
+    FROM public_complaints pc
+    INNER JOIN stations s ON s.id = pc.station_id
+    WHERE pc.public_id = ${normalizePublicId(complaintPublicId, "complaintPublicId")}
     LIMIT 1
   `
   const complaint = rows?.[0]
@@ -94,10 +143,89 @@ async function resolveComplaintByPublicId(complaintPublicId) {
   return complaint
 }
 
+async function getLatestInventoryByStationRows() {
+  const rows = await prisma.$queryRaw`
+    SELECT
+      s.id AS station_id,
+      COALESCE(NULLIF(s.city, ''), 'Unknown') AS district,
+      s.fuel_level,
+      ft.code AS fuel_code,
+      SUM(COALESCE(latest_reading.litres, 0)) AS remaining_litres
+    FROM stations s
+    LEFT JOIN tanks t ON t.station_id = s.id AND t.is_active = 1
+    LEFT JOIN fuel_types ft ON ft.id = t.fuel_type_id
+    LEFT JOIN (
+      SELECT ir.tank_id, ir.litres
+      FROM inventory_readings ir
+      INNER JOIN (
+        SELECT tank_id, MAX(reading_time) AS max_reading_time
+        FROM inventory_readings
+        GROUP BY tank_id
+      ) latest_per_tank
+        ON latest_per_tank.tank_id = ir.tank_id
+       AND latest_per_tank.max_reading_time = ir.reading_time
+    ) latest_reading ON latest_reading.tank_id = t.id
+    WHERE s.is_active = 1
+    GROUP BY s.id, COALESCE(NULLIF(s.city, ''), 'Unknown'), s.fuel_level, ft.code
+  `
+  return Array.isArray(rows) ? rows : []
+}
+
+function buildInventorySnapshot(rows) {
+  const stations = new Map()
+
+  for (const row of rows || []) {
+    const stationId = Number(row?.station_id || 0)
+    if (!stationId) continue
+
+    if (!stations.has(stationId)) {
+      stations.set(stationId, {
+        stationId,
+        district: String(row?.district || 'Unknown'),
+        fuelLevel: String(row?.fuel_level || 'MEDIUM').toUpperCase(),
+        fuelRemaining: {},
+        totalRemainingLitres: 0,
+      })
+    }
+
+    const station = stations.get(stationId)
+    const fuelCode = String(row?.fuel_code || '').trim().toUpperCase()
+    const remainingLitres = Number(row?.remaining_litres || 0)
+
+    if (fuelCode) {
+      station.fuelRemaining[fuelCode] = remainingLitres
+    }
+    station.totalRemainingLitres += remainingLitres
+  }
+
+  const stationList = Array.from(stations.values()).map((station) => {
+    const positiveFuels = Object.entries(station.fuelRemaining).filter(([, litres]) => Number(litres) > 0)
+    const knownFuels = Object.keys(station.fuelRemaining)
+    const outOfStock = knownFuels.length > 0 ? positiveFuels.length === 0 : station.totalRemainingLitres <= 0
+    const partialOutage = knownFuels.length > 1 && positiveFuels.length > 0 && positiveFuels.length < knownFuels.length
+
+    return {
+      ...station,
+      outOfStock,
+      partialOutage,
+    }
+  })
+
+  return {
+    stations: stationList,
+    byStationId: new Map(stationList.map((station) => [station.stationId, station])),
+  }
+}
+
 async function resolveInspectionByPublicId(inspectionPublicId) {
   const rows = await prisma.$queryRaw`
-    SELECT id, public_id, station_id
-    FROM inspections
+    SELECT
+      i.id,
+      i.public_id,
+      i.station_id,
+      COALESCE(NULLIF(s.city, ''), 'Unknown') AS district
+    FROM inspections i
+    INNER JOIN stations s ON s.id = i.station_id
     WHERE public_id = ${normalizePublicId(inspectionPublicId, "inspectionPublicId")}
     LIMIT 1
   `
@@ -108,8 +236,14 @@ async function resolveInspectionByPublicId(inspectionPublicId) {
 
 async function resolveFlagByPublicId(flagPublicId) {
   const rows = await prisma.$queryRaw`
-    SELECT id, public_id, station_id, resolved_status
-    FROM compliance_flags
+    SELECT
+      cf.id,
+      cf.public_id,
+      cf.station_id,
+      cf.resolved_status,
+      COALESCE(NULLIF(s.city, ''), 'Unknown') AS district
+    FROM compliance_flags cf
+    INNER JOIN stations s ON s.id = cf.station_id
     WHERE public_id = ${normalizePublicId(flagPublicId, "flagPublicId")}
     LIMIT 1
   `
@@ -192,10 +326,10 @@ export async function createComplianceFlagRecord({
   `
 
   await logMeraAudit({
-    actorId: actor?.userId || null,
-    actorRole: actor?.role || "SYSTEM",
+    ...actorAuditContext(actor),
     actionType: "MERA_FLAG_CREATED",
     actionDescription: `Compliance flag ${flagType} created for station ${stationId}.`,
+    affectedEntity: publicId,
   })
 
   return {
@@ -265,9 +399,12 @@ export async function createPublicComplaint({
   `
 
   await logMeraAudit({
+    actorName: "Public Portal",
     actorRole: "PUBLIC_PORTAL",
+    permissionUsed: "PUBLIC_COMPLAINT_CREATE",
     actionType: "PUBLIC_COMPLAINT_CREATED",
     actionDescription: `Public complaint ${publicId} created against ${station.name}.`,
+    affectedEntity: publicId,
   })
 
   return {
@@ -282,11 +419,12 @@ export async function createPublicComplaint({
   }
 }
 
-export async function listComplaints(filters = {}) {
+export async function listComplaints(filters = {}, auth = null) {
   const pagination = normalizePagination(filters)
   const statusFilter = String(filters.status || "").trim().toUpperCase()
   const complaintTypeFilter = String(filters.complaintType || "").trim().toUpperCase()
   const districtFilter = `%${String(filters.district || "").trim()}%`
+  const scopedDistrict = districtFilterValue(auth)
 
   const rows = await prisma.$queryRaw`
     SELECT
@@ -313,6 +451,7 @@ export async function listComplaints(filters = {}) {
     WHERE (${statusFilter === ""} = TRUE OR pc.complaint_status = ${statusFilter})
       AND (${complaintTypeFilter === ""} = TRUE OR pc.complaint_type = ${complaintTypeFilter})
       AND (${String(filters.district || "").trim() === ""} = TRUE OR s.city LIKE ${districtFilter})
+      AND (${scopedDistrict === ""} = TRUE OR s.city = ${scopedDistrict})
     ORDER BY pc.created_at DESC
     LIMIT ${pagination.limit}
     OFFSET ${pagination.offset}
@@ -355,6 +494,10 @@ export async function listComplaints(filters = {}) {
 export async function assignComplaint({ complaintPublicId, officerPublicId, actor }) {
   const complaint = await resolveComplaintByPublicId(complaintPublicId)
   const officer = await resolveMeraUserByPublicId(officerPublicId)
+  ensureDistrictAccess(actor, complaint.district, "complaint")
+  if (hasDistrictScope(actor)) {
+    ensureDistrictAccess(actor, officer.district_scope, "officer")
+  }
 
   await prisma.$executeRaw`
     UPDATE public_complaints
@@ -366,10 +509,10 @@ export async function assignComplaint({ complaintPublicId, officerPublicId, acto
   `
 
   await logMeraAudit({
-    actorId: actor.userId,
-    actorRole: actor.role,
+    ...actorAuditContext(actor),
     actionType: "MERA_COMPLAINT_ASSIGNED",
     actionDescription: `Complaint ${complaint.public_id} assigned to ${officer.full_name}.`,
+    affectedEntity: complaint.public_id,
   })
 
   return {
@@ -377,7 +520,7 @@ export async function assignComplaint({ complaintPublicId, officerPublicId, acto
     assignedOfficer: {
       publicId: officer.public_id,
       fullName: officer.full_name,
-      role: officer.role_name,
+      role: officer.role_code,
     },
     complaintStatus: "ASSIGNED",
   }
@@ -385,6 +528,7 @@ export async function assignComplaint({ complaintPublicId, officerPublicId, acto
 
 export async function updateComplaintStatus({ complaintPublicId, complaintStatus, actor }) {
   const complaint = await resolveComplaintByPublicId(complaintPublicId)
+  ensureDistrictAccess(actor, complaint.district, "complaint")
   await prisma.$executeRaw`
     UPDATE public_complaints
     SET complaint_status = ${complaintStatus}, updated_at = CURRENT_TIMESTAMP(3)
@@ -392,10 +536,10 @@ export async function updateComplaintStatus({ complaintPublicId, complaintStatus
   `
 
   await logMeraAudit({
-    actorId: actor.userId,
-    actorRole: actor.role,
+    ...actorAuditContext(actor),
     actionType: "MERA_COMPLAINT_STATUS_UPDATED",
     actionDescription: `Complaint ${complaint.public_id} moved to ${complaintStatus}.`,
+    affectedEntity: complaint.public_id,
   })
 
   return {
@@ -406,6 +550,15 @@ export async function updateComplaintStatus({ complaintPublicId, complaintStatus
 
 export async function createInspection(payload, actor) {
   const station = await resolveStationId(payload.stationPublicId)
+  ensureDistrictAccess(actor, station.city, "station")
+  let officerId = actor.userId
+  if (String(payload.officerPublicId || "").trim()) {
+    const officer = await resolveMeraUserByPublicId(payload.officerPublicId)
+    if (hasDistrictScope(actor)) {
+      ensureDistrictAccess(actor, officer.district_scope, "officer")
+    }
+    officerId = Number(officer.id)
+  }
   const publicId = createPublicId()
   await prisma.$executeRaw`
     INSERT INTO inspections (
@@ -426,7 +579,7 @@ export async function createInspection(payload, actor) {
     VALUES (
       ${publicId},
       ${station.id},
-      ${actor.userId},
+      ${officerId},
       ${payload.inspectionType},
       ${payload.queueLength},
       ${payload.stockVisible},
@@ -441,10 +594,10 @@ export async function createInspection(payload, actor) {
   `
 
   await logMeraAudit({
-    actorId: actor.userId,
-    actorRole: actor.role,
+    ...actorAuditContext(actor),
     actionType: "MERA_INSPECTION_CREATED",
     actionDescription: `Inspection ${publicId} created for ${station.name}.`,
+    affectedEntity: publicId,
   })
 
   return {
@@ -456,16 +609,17 @@ export async function createInspection(payload, actor) {
 
 export async function attachInspectionEvidence({ inspectionPublicId, fileUrl, fileType, actor }) {
   const inspection = await resolveInspectionByPublicId(inspectionPublicId)
+  ensureDistrictAccess(actor, inspection.district, "inspection")
   await prisma.$executeRaw`
     INSERT INTO inspection_evidence (inspection_id, file_url, file_type)
     VALUES (${inspection.id}, ${fileUrl}, ${fileType})
   `
 
   await logMeraAudit({
-    actorId: actor.userId,
-    actorRole: actor.role,
+    ...actorAuditContext(actor),
     actionType: "MERA_INSPECTION_EVIDENCE_UPLOADED",
     actionDescription: `Evidence uploaded for inspection ${inspection.public_id}.`,
+    affectedEntity: inspection.public_id,
   })
 
   return {
@@ -475,9 +629,10 @@ export async function attachInspectionEvidence({ inspectionPublicId, fileUrl, fi
   }
 }
 
-export async function listInspections(filters = {}) {
+export async function listInspections(filters = {}, auth = null) {
   const pagination = normalizePagination(filters)
   const statusFilter = String(filters.status || "").trim().toUpperCase()
+  const scopedDistrict = districtFilterValue(auth)
   const rows = await prisma.$queryRaw`
     SELECT
       i.public_id,
@@ -494,12 +649,15 @@ export async function listInspections(filters = {}) {
       i.created_at,
       s.public_id AS station_public_id,
       s.name AS station_name,
+      s.city AS station_city,
       mu.public_id AS officer_public_id,
       mu.full_name AS officer_name
     FROM inspections i
     INNER JOIN stations s ON s.id = i.station_id
     INNER JOIN mera_users mu ON mu.id = i.officer_id
     WHERE (${statusFilter === ""} = TRUE OR i.inspection_status = ${statusFilter})
+      AND (${scopedDistrict === ""} = TRUE OR s.city = ${scopedDistrict})
+      AND (${isFieldOfficer(auth) === false} = TRUE OR i.officer_id = ${auth?.userId || 0})
     ORDER BY i.created_at DESC
     LIMIT ${pagination.limit}
     OFFSET ${pagination.offset}
@@ -524,6 +682,7 @@ export async function listInspections(filters = {}) {
       station: {
         publicId: row.station_public_id,
         name: row.station_name,
+        city: row.station_city || null,
       },
       officer: {
         publicId: row.officer_public_id,
@@ -533,8 +692,9 @@ export async function listInspections(filters = {}) {
   }
 }
 
-export async function getStationInspectionHistory(stationPublicId) {
+export async function getStationInspectionHistory(stationPublicId, auth = null) {
   const station = await resolveStationId(stationPublicId)
+  ensureDistrictAccess(auth, station.city, "station")
   const rows = await prisma.$queryRaw`
     SELECT
       i.public_id,
@@ -565,6 +725,7 @@ export async function getStationInspectionHistory(stationPublicId) {
 
 export async function createManualFlag(payload, actor) {
   const station = await resolveStationId(payload.stationPublicId)
+  ensureDistrictAccess(actor, station.city, "station")
   const result = await createComplianceFlagRecord({
     stationId: Number(station.id),
     flagType: payload.flagType,
@@ -579,10 +740,11 @@ export async function createManualFlag(payload, actor) {
   }
 }
 
-export async function listFlags(filters = {}) {
+export async function listFlags(filters = {}, auth = null) {
   const pagination = normalizePagination(filters)
   const statusFilter = String(filters.status || "").trim().toUpperCase()
   const severityFilter = String(filters.severity || "").trim().toUpperCase()
+  const scopedDistrict = districtFilterValue(auth)
   const rows = await prisma.$queryRaw`
     SELECT
       cf.public_id,
@@ -595,6 +757,7 @@ export async function listFlags(filters = {}) {
       cf.resolved_at,
       s.public_id AS station_public_id,
       s.name AS station_name,
+      s.city AS station_city,
       mu.public_id AS resolved_by_public_id,
       mu.full_name AS resolved_by_name
     FROM compliance_flags cf
@@ -602,6 +765,7 @@ export async function listFlags(filters = {}) {
     LEFT JOIN mera_users mu ON mu.id = cf.resolved_by
     WHERE (${statusFilter === ""} = TRUE OR cf.resolved_status = ${statusFilter})
       AND (${severityFilter === ""} = TRUE OR cf.severity = ${severityFilter})
+      AND (${scopedDistrict === ""} = TRUE OR s.city = ${scopedDistrict})
     ORDER BY cf.created_at DESC
     LIMIT ${pagination.limit}
     OFFSET ${pagination.offset}
@@ -621,6 +785,7 @@ export async function listFlags(filters = {}) {
       station: {
         publicId: row.station_public_id,
         name: row.station_name,
+        city: row.station_city || null,
       },
       resolvedBy: row.resolved_by_public_id
         ? {
@@ -634,6 +799,7 @@ export async function listFlags(filters = {}) {
 
 export async function resolveFlag({ flagPublicId, resolvedStatus, actor }) {
   const flag = await resolveFlagByPublicId(flagPublicId)
+  ensureDistrictAccess(actor, flag.district, "flag")
   await prisma.$executeRaw`
     UPDATE compliance_flags
     SET
@@ -643,10 +809,10 @@ export async function resolveFlag({ flagPublicId, resolvedStatus, actor }) {
     WHERE id = ${flag.id}
   `
   await logMeraAudit({
-    actorId: actor.userId,
-    actorRole: actor.role,
+    ...actorAuditContext(actor),
     actionType: "MERA_FLAG_RESOLVED",
     actionDescription: `Flag ${flag.public_id} marked ${resolvedStatus}.`,
+    affectedEntity: flag.public_id,
   })
   return {
     flagPublicId: flag.public_id,
@@ -656,9 +822,11 @@ export async function resolveFlag({ flagPublicId, resolvedStatus, actor }) {
 
 export async function createEnforcementAction(payload, actor) {
   const station = await resolveStationId(payload.stationPublicId)
+  ensureDistrictAccess(actor, station.city, "station")
   let relatedFlagId = null
   if (String(payload.relatedFlagPublicId || "").trim()) {
     const flag = await resolveFlagByPublicId(payload.relatedFlagPublicId)
+    ensureDistrictAccess(actor, flag.district, "flag")
     relatedFlagId = Number(flag.id)
   }
   const publicId = createPublicId()
@@ -683,10 +851,10 @@ export async function createEnforcementAction(payload, actor) {
     )
   `
   await logMeraAudit({
-    actorId: actor.userId,
-    actorRole: actor.role,
+    ...actorAuditContext(actor),
     actionType: "MERA_ENFORCEMENT_CREATED",
     actionDescription: `Enforcement action ${publicId} created for ${station.name}.`,
+    affectedEntity: publicId,
   })
   return {
     enforcementPublicId: publicId,
@@ -695,8 +863,9 @@ export async function createEnforcementAction(payload, actor) {
   }
 }
 
-export async function getStationEnforcementHistory(stationPublicId) {
+export async function getStationEnforcementHistory(stationPublicId, auth = null) {
   const station = await resolveStationId(stationPublicId)
+  ensureDistrictAccess(auth, station.city, "station")
   const rows = await prisma.$queryRaw`
     SELECT
       ea.public_id,
@@ -723,9 +892,10 @@ export async function getStationEnforcementHistory(stationPublicId) {
   }
 }
 
-export async function listEnforcementActions(filters = {}) {
+export async function listEnforcementActions(filters = {}, auth = null) {
   const pagination = normalizePagination(filters)
   const statusFilter = String(filters.status || "").trim().toUpperCase()
+  const scopedDistrict = districtFilterValue(auth)
   const rows = await prisma.$queryRaw`
     SELECT
       ea.public_id,
@@ -745,6 +915,7 @@ export async function listEnforcementActions(filters = {}) {
     INNER JOIN mera_users mu ON mu.id = ea.initiated_by
     LEFT JOIN compliance_flags cf ON cf.id = ea.related_flag_id
     WHERE (${statusFilter === ""} = TRUE OR ea.action_status = ${statusFilter})
+      AND (${scopedDistrict === ""} = TRUE OR s.city = ${scopedDistrict})
     ORDER BY ea.issued_at DESC
     LIMIT ${pagination.limit}
     OFFSET ${pagination.offset}
@@ -776,6 +947,7 @@ export async function listEnforcementActions(filters = {}) {
 
 export async function attachLicense(payload, actor) {
   const station = await resolveStationId(payload.stationPublicId)
+  ensureDistrictAccess(actor, station.city, "station")
   await prisma.$executeRaw`
     INSERT INTO fuel_station_licenses (
       station_id,
@@ -795,10 +967,10 @@ export async function attachLicense(payload, actor) {
     )
   `
   await logMeraAudit({
-    actorId: actor.userId,
-    actorRole: actor.role,
+    ...actorAuditContext(actor),
     actionType: "MERA_LICENSE_ATTACHED",
     actionDescription: `License ${payload.licenseNumber} attached to ${station.name}.`,
+    affectedEntity: payload.licenseNumber,
   })
   return {
     stationPublicId: station.public_id,
@@ -808,6 +980,14 @@ export async function attachLicense(payload, actor) {
 }
 
 export async function updateLicense({ licenseId, payload, actor }) {
+  const licenseRows = await prisma.$queryRaw`
+    SELECT COALESCE(NULLIF(s.city, ''), 'Unknown') AS district
+    FROM fuel_station_licenses fsl
+    INNER JOIN stations s ON s.id = fsl.station_id
+    WHERE fsl.id = ${toInteger(licenseId)}
+    LIMIT 1
+  `
+  ensureDistrictAccess(actor, licenseRows?.[0]?.district, "license")
   await prisma.$executeRaw`
     UPDATE fuel_station_licenses
     SET
@@ -819,10 +999,10 @@ export async function updateLicense({ licenseId, payload, actor }) {
     WHERE id = ${toInteger(licenseId)}
   `
   await logMeraAudit({
-    actorId: actor.userId,
-    actorRole: actor.role,
+    ...actorAuditContext(actor),
     actionType: "MERA_LICENSE_UPDATED",
     actionDescription: `License record ${licenseId} updated.`,
+    affectedEntity: `LICENSE:${licenseId}`,
   })
   return {
     licenseId: toInteger(licenseId),
@@ -830,8 +1010,9 @@ export async function updateLicense({ licenseId, payload, actor }) {
   }
 }
 
-export async function getLicenseExpiryAlerts({ days = 60 } = {}) {
+export async function getLicenseExpiryAlerts({ days = 60 } = {}, auth = null) {
   const scopedDays = clamp(toInteger(days, 60), 1, 365)
+  const scopedDistrict = districtFilterValue(auth)
   const rows = await prisma.$queryRaw`
     SELECT
       fsl.id,
@@ -844,14 +1025,16 @@ export async function getLicenseExpiryAlerts({ days = 60 } = {}) {
     FROM fuel_station_licenses fsl
     INNER JOIN stations s ON s.id = fsl.station_id
     WHERE fsl.expiry_date <= DATE_ADD(CURDATE(), INTERVAL ${scopedDays} DAY)
+      AND (${scopedDistrict === ""} = TRUE OR s.city = ${scopedDistrict})
     ORDER BY fsl.expiry_date ASC
   `
   return rows || []
 }
 
-export async function listLicenseRegistry(filters = {}) {
+export async function listLicenseRegistry(filters = {}, auth = null) {
   const pagination = normalizePagination(filters)
   const statusFilter = String(filters.status || "").trim().toUpperCase()
+  const scopedDistrict = districtFilterValue(auth)
   const rows = await prisma.$queryRaw`
     SELECT
       fsl.id,
@@ -867,6 +1050,7 @@ export async function listLicenseRegistry(filters = {}) {
     FROM fuel_station_licenses fsl
     INNER JOIN stations s ON s.id = fsl.station_id
     WHERE (${statusFilter === ""} = TRUE OR fsl.license_status = ${statusFilter})
+      AND (${scopedDistrict === ""} = TRUE OR s.city = ${scopedDistrict})
     ORDER BY fsl.expiry_date ASC, s.name ASC
     LIMIT ${pagination.limit}
     OFFSET ${pagination.offset}
@@ -894,6 +1078,7 @@ export async function listLicenseRegistry(filters = {}) {
 
 export async function createStationStatusLog(payload, actor) {
   const station = await resolveStationId(payload.stationPublicId)
+  ensureDistrictAccess(actor, station.city, "station")
   await prisma.$executeRaw`
     INSERT INTO station_status_logs (
       station_id,
@@ -919,6 +1104,12 @@ export async function createStationStatusLog(payload, actor) {
     activePumps: null,
     reportedBy: actor?.role ? `${actor.role}:${actor.userId || "SYSTEM"}` : payload.reportedSource,
   })
+  await logMeraAudit({
+    ...actorAuditContext(actor),
+    actionType: "MERA_STATION_STATUS_LOG_CREATED",
+    actionDescription: `Station status log created for ${station.name}.`,
+    affectedEntity: station.public_id,
+  })
   return {
     stationPublicId: station.public_id,
     availabilityStatus: payload.availabilityStatus,
@@ -927,6 +1118,7 @@ export async function createStationStatusLog(payload, actor) {
 
 export async function createAvailabilityReport(payload, actor) {
   const station = await resolveStationId(payload.stationPublicId)
+  ensureDistrictAccess(actor, station.city, "station")
   const petrolAvailable = payload.petrolAvailable ? 1 : 0
   const dieselAvailable = payload.dieselAvailable ? 1 : 0
   const activePumps = payload.activePumps ?? null
@@ -965,10 +1157,10 @@ export async function createAvailabilityReport(payload, actor) {
   })
 
   await logMeraAudit({
-    actorId: actor?.userId || null,
-    actorRole: actor?.role || "SYSTEM",
+    ...actorAuditContext(actor),
     actionType: "MERA_AVAILABILITY_REPORT_CREATED",
     actionDescription: `Availability report recorded for ${station.name}.`,
+    affectedEntity: station.public_id,
   })
 
   return {
@@ -980,10 +1172,11 @@ export async function createAvailabilityReport(payload, actor) {
   }
 }
 
-export async function listAvailabilityReports(filters = {}) {
+export async function listAvailabilityReports(filters = {}, auth = null) {
   const pagination = normalizePagination(filters)
   const districtFilter = `%${String(filters.district || "").trim()}%`
   const stationFilter = `%${String(filters.station || "").trim()}%`
+  const scopedDistrict = districtFilterValue(auth)
 
   const rows = await prisma.$queryRaw`
     SELECT
@@ -1007,6 +1200,7 @@ export async function listAvailabilityReports(filters = {}) {
     INNER JOIN stations s ON s.id = sar.station_id
     WHERE (${String(filters.district || "").trim() === ""} = TRUE OR s.city LIKE ${districtFilter})
       AND (${String(filters.station || "").trim() === ""} = TRUE OR s.name LIKE ${stationFilter} OR s.public_id LIKE ${stationFilter})
+      AND (${scopedDistrict === ""} = TRUE OR s.city = ${scopedDistrict})
     ORDER BY sar.created_at DESC
     LIMIT ${pagination.limit}
     OFFSET ${pagination.offset}
@@ -1035,6 +1229,7 @@ export async function listAvailabilityReports(filters = {}) {
 
 export async function createFuelDeliveryLog(payload, actor) {
   const station = await resolveStationId(payload.stationPublicId)
+  ensureDistrictAccess(actor, station.city, "station")
   await prisma.$executeRaw`
     INSERT INTO fuel_delivery_logs (
       station_id,
@@ -1055,10 +1250,10 @@ export async function createFuelDeliveryLog(payload, actor) {
   `
 
   await logMeraAudit({
-    actorId: actor?.userId || null,
-    actorRole: actor?.role || "SYSTEM",
+    ...actorAuditContext(actor),
     actionType: "MERA_FUEL_DELIVERY_LOG_CREATED",
     actionDescription: `Fuel delivery log created for ${station.name}.`,
+    affectedEntity: station.public_id,
   })
 
   return {
@@ -1069,10 +1264,11 @@ export async function createFuelDeliveryLog(payload, actor) {
   }
 }
 
-export async function listFuelDeliveryLogs(filters = {}) {
+export async function listFuelDeliveryLogs(filters = {}, auth = null) {
   const pagination = normalizePagination(filters)
   const districtFilter = `%${String(filters.district || "").trim()}%`
   const stationFilter = `%${String(filters.station || "").trim()}%`
+  const scopedDistrict = districtFilterValue(auth)
 
   const rows = await prisma.$queryRaw`
     SELECT
@@ -1090,6 +1286,7 @@ export async function listFuelDeliveryLogs(filters = {}) {
     INNER JOIN stations s ON s.id = fdl.station_id
     WHERE (${String(filters.district || "").trim() === ""} = TRUE OR s.city LIKE ${districtFilter})
       AND (${String(filters.station || "").trim() === ""} = TRUE OR s.name LIKE ${stationFilter} OR s.public_id LIKE ${stationFilter})
+      AND (${scopedDistrict === ""} = TRUE OR s.city = ${scopedDistrict})
     ORDER BY fdl.delivery_time DESC
     LIMIT ${pagination.limit}
     OFFSET ${pagination.offset}
@@ -1118,10 +1315,17 @@ export async function listFuelDeliveryLogs(filters = {}) {
 
 export async function createFuelPriceReport(payload, actor) {
   const station = await resolveStationId(payload.stationPublicId)
+  ensureDistrictAccess(actor, station.city, "station")
   await prisma.$executeRaw`
     INSERT INTO fuel_price_reports (station_id, petrol_price, diesel_price, submitted_by)
     VALUES (${station.id}, ${payload.petrolPrice}, ${payload.dieselPrice}, ${actor?.userId || null})
   `
+  await logMeraAudit({
+    ...actorAuditContext(actor),
+    actionType: "MERA_FUEL_PRICE_REPORT_CREATED",
+    actionDescription: `Fuel price report recorded for ${station.name}.`,
+    affectedEntity: station.public_id,
+  })
   return {
     stationPublicId: station.public_id,
     petrolPrice: payload.petrolPrice,
@@ -1129,31 +1333,110 @@ export async function createFuelPriceReport(payload, actor) {
   }
 }
 
-export async function getDashboardOverview() {
-  const [stationsRows, complaintsRows, flagsRows, actionsRows] = await Promise.all([
-    prisma.$queryRaw`SELECT COUNT(*) AS totalStations FROM stations WHERE is_active = 1`,
+export async function getDashboardOverview(auth = null) {
+  const scopedDistrict = districtFilterValue(auth)
+  const [stationsRows, inventoryRows, complaintsRows, flagsRows, actionsRows] = await Promise.all([
+    prisma.$queryRaw`
+      SELECT
+        COUNT(*) AS totalStations,
+        SUM(CASE WHEN fuel_level = 'LOW' THEN 1 ELSE 0 END) AS lowStockStations,
+        SUM(CASE WHEN fuel_level = 'MEDIUM' THEN 1 ELSE 0 END) AS mediumStockStations,
+        SUM(CASE WHEN fuel_level = 'HIGH' THEN 1 ELSE 0 END) AS highStockStations
+      FROM stations
+      WHERE is_active = 1
+        AND (${scopedDistrict === ""} = TRUE OR city = ${scopedDistrict})
+    `,
+    prisma.$queryRaw`
+      SELECT
+        t.station_id,
+        ft.code AS fuel_code,
+        SUM(COALESCE(latest_reading.litres, 0)) AS remaining_litres
+      FROM tanks t
+      INNER JOIN fuel_types ft ON ft.id = t.fuel_type_id
+      LEFT JOIN (
+        SELECT ir.tank_id, ir.litres
+        FROM inventory_readings ir
+        INNER JOIN (
+          SELECT tank_id, MAX(reading_time) AS max_reading_time
+          FROM inventory_readings
+          GROUP BY tank_id
+        ) latest_per_tank
+          ON latest_per_tank.tank_id = ir.tank_id
+         AND latest_per_tank.max_reading_time = ir.reading_time
+      ) latest_reading ON latest_reading.tank_id = t.id
+      WHERE t.is_active = 1
+        AND (${scopedDistrict === ""} = TRUE OR EXISTS (
+          SELECT 1
+          FROM stations s
+          WHERE s.id = t.station_id
+            AND s.city = ${scopedDistrict}
+        ))
+      GROUP BY t.station_id, ft.code
+    `,
     prisma.$queryRaw`
       SELECT
         COUNT(*) AS totalComplaints,
         SUM(CASE WHEN complaint_status IN ('NEW', 'TRIAGED', 'ASSIGNED', 'UNDER_INVESTIGATION') THEN 1 ELSE 0 END) AS openComplaints
       FROM public_complaints
+      WHERE (${scopedDistrict === ""} = TRUE OR EXISTS (
+        SELECT 1 FROM stations s WHERE s.id = public_complaints.station_id AND s.city = ${scopedDistrict}
+      ))
     `,
     prisma.$queryRaw`
       SELECT
         COUNT(*) AS totalFlags,
         SUM(CASE WHEN resolved_status IN ('OPEN', 'UNDER_REVIEW') THEN 1 ELSE 0 END) AS openFlags
       FROM compliance_flags
+      WHERE (${scopedDistrict === ""} = TRUE OR EXISTS (
+        SELECT 1 FROM stations s WHERE s.id = compliance_flags.station_id AND s.city = ${scopedDistrict}
+      ))
     `,
     prisma.$queryRaw`
       SELECT
         COUNT(*) AS totalActions,
         SUM(CASE WHEN action_status IN ('OPEN', 'IN_PROGRESS', 'ESCALATED') THEN 1 ELSE 0 END) AS activeActions
       FROM enforcement_actions
+      WHERE (${scopedDistrict === ""} = TRUE OR EXISTS (
+        SELECT 1 FROM stations s WHERE s.id = enforcement_actions.station_id AND s.city = ${scopedDistrict}
+      ))
     `,
   ])
 
+  const inventorySummaryRows = Array.isArray(inventoryRows) ? inventoryRows : []
+  const stationsTotal = Number(stationsRows?.[0]?.totalStations || 0)
+  const inventorySnapshot = buildInventorySnapshot(inventorySummaryRows)
+  const fuelAvailabilityBuckets = {
+    PETROL: new Set(),
+    DIESEL: new Set(),
+    KEROSENE: new Set(),
+  }
+
+  inventorySnapshot.stations.forEach((station) => {
+    Object.entries(fuelAvailabilityBuckets).forEach(([fuelCode, bucket]) => {
+      if (Number(station.fuelRemaining[fuelCode] || 0) > 0) {
+        bucket.add(station.stationId)
+      }
+    })
+  })
+
+  const outOfStockStations = inventorySnapshot.stations.filter((station) => station.outOfStock).length
+  const partialOutageStations = inventorySnapshot.stations.filter((station) => station.partialOutage).length
+
+  const fuelAvailabilityByType = [
+    { label: "Petrol", code: "PETROL", value: fuelAvailabilityBuckets.PETROL.size, total: stationsTotal },
+    { label: "Diesel", code: "DIESEL", value: fuelAvailabilityBuckets.DIESEL.size, total: stationsTotal },
+    { label: "Kerosene", code: "KEROSENE", value: fuelAvailabilityBuckets.KEROSENE.size, total: stationsTotal },
+    { label: "Out of Stock", code: "OUT_OF_STOCK", value: outOfStockStations, total: stationsTotal },
+  ]
+
   return {
-    totalStations: Number(stationsRows?.[0]?.totalStations || 0),
+    totalStations: stationsTotal,
+    lowStockStations: Number(stationsRows?.[0]?.lowStockStations || 0),
+    mediumStockStations: Number(stationsRows?.[0]?.mediumStockStations || 0),
+    highStockStations: Number(stationsRows?.[0]?.highStockStations || 0),
+    outOfStockStations,
+    partialOutageStations,
+    fuelAvailabilityByType,
     totalComplaints: Number(complaintsRows?.[0]?.totalComplaints || 0),
     openComplaints: Number(complaintsRows?.[0]?.openComplaints || 0),
     totalFlags: Number(flagsRows?.[0]?.totalFlags || 0),
@@ -1163,37 +1446,219 @@ export async function getDashboardOverview() {
   }
 }
 
-export async function getSidebarStats() {
+export async function getDemandForecastSummary(auth = null) {
+  const [overview, inventoryRows, districtShortagesRows, transactionRows, queueRows, complaintRows, deliveryRows, flagRows] = await Promise.all([
+    getDashboardOverview(auth),
+    getLatestInventoryByStationRows(),
+    getDistrictShortageSummaries(auth),
+    prisma.$queryRaw`
+      SELECT
+        COALESCE(NULLIF(s.city, ''), 'Unknown') AS district,
+        HOUR(tx.occurred_at) AS hour_bucket,
+        SUM(tx.litres) AS litres
+      FROM transactions tx
+      INNER JOIN stations s ON s.id = tx.station_id
+      WHERE tx.occurred_at >= DATE_SUB(CURRENT_TIMESTAMP(3), INTERVAL 7 DAY)
+      GROUP BY COALESCE(NULLIF(s.city, ''), 'Unknown'), HOUR(tx.occurred_at)
+    `,
+    prisma.$queryRaw`
+      SELECT
+        COALESCE(NULLIF(s.city, ''), 'Unknown') AS district,
+        COUNT(*) AS active_queue_count,
+        AVG(TIMESTAMPDIFF(MINUTE, qe.joined_at, CURRENT_TIMESTAMP(3))) AS avg_wait_minutes
+      FROM queue_entries qe
+      INNER JOIN stations s ON s.id = qe.station_id
+      WHERE qe.status IN ('WAITING', 'CALLED', 'LATE')
+      GROUP BY COALESCE(NULLIF(s.city, ''), 'Unknown')
+    `,
+    prisma.$queryRaw`
+      SELECT
+        COALESCE(NULLIF(s.city, ''), 'Unknown') AS district,
+        COUNT(*) AS open_complaints
+      FROM public_complaints pc
+      INNER JOIN stations s ON s.id = pc.station_id
+      WHERE pc.complaint_status IN ('NEW', 'TRIAGED', 'ASSIGNED', 'UNDER_INVESTIGATION')
+      GROUP BY COALESCE(NULLIF(s.city, ''), 'Unknown')
+    `,
+    prisma.$queryRaw`
+      SELECT
+        COALESCE(NULLIF(s.city, ''), 'Unknown') AS district,
+        MAX(fd.delivered_time) AS last_delivery_time,
+        SUM(CASE WHEN fd.delivered_time >= DATE_SUB(CURRENT_TIMESTAMP(3), INTERVAL 48 HOUR) THEN COALESCE(fd.litres, 0) ELSE 0 END) AS recent_delivery_litres
+      FROM fuel_deliveries fd
+      INNER JOIN stations s ON s.id = fd.station_id
+      GROUP BY COALESCE(NULLIF(s.city, ''), 'Unknown')
+    `,
+    prisma.$queryRaw`
+      SELECT
+        COALESCE(NULLIF(s.city, ''), 'Unknown') AS district,
+        COUNT(*) AS active_flags
+      FROM compliance_flags cf
+      INNER JOIN stations s ON s.id = cf.station_id
+      WHERE cf.resolved_status IN ('OPEN', 'UNDER_REVIEW')
+      GROUP BY COALESCE(NULLIF(s.city, ''), 'Unknown')
+    `,
+  ])
+
+  const inventorySnapshot = buildInventorySnapshot(inventoryRows)
+  const shortageMap = new Map(normalizeRows(districtShortagesRows).map((row) => [String(row.district || 'Unknown'), row]))
+  const queueMap = new Map(normalizeRows(queueRows).map((row) => [String(row.district || 'Unknown'), row]))
+  const complaintMap = new Map(normalizeRows(complaintRows).map((row) => [String(row.district || 'Unknown'), row]))
+  const deliveryMap = new Map(normalizeRows(deliveryRows).map((row) => [String(row.district || 'Unknown'), row]))
+  const flagMap = new Map(normalizeRows(flagRows).map((row) => [String(row.district || 'Unknown'), row]))
+
+  const hourlyByDistrict = new Map()
+  for (const row of normalizeRows(transactionRows)) {
+    const district = String(row.district || 'Unknown')
+    const hour = Number(row.hour_bucket || 0)
+    const litres = Number(row.litres || 0)
+    if (!hourlyByDistrict.has(district)) hourlyByDistrict.set(district, new Map())
+    const districtHours = hourlyByDistrict.get(district)
+    districtHours.set(hour, [...(districtHours.get(hour) || []), litres])
+  }
+
+  const districtStations = new Map()
+  inventorySnapshot.stations.forEach((station) => {
+    const district = String(station.district || 'Unknown')
+    if (!districtStations.has(district)) districtStations.set(district, [])
+    districtStations.get(district).push(station)
+  })
+
+  const now = new Date()
+  const forecastRows = Array.from(districtStations.entries()).map(([district, stations]) => {
+    const shortage = shortageMap.get(district) || {}
+    const queue = queueMap.get(district) || {}
+    const complaints = complaintMap.get(district) || {}
+    const deliveries = deliveryMap.get(district) || {}
+    const flags = flagMap.get(district) || {}
+    const hourMap = hourlyByDistrict.get(district) || new Map()
+
+    const projectedDemandLitres = Array.from({ length: 6 }).reduce((sum, _value, index) => {
+      const hour = new Date(now.getTime() + (index + 1) * 60 * 60 * 1000).getHours()
+      const samples = hourMap.get(hour) || []
+      if (!samples.length) return sum
+      return sum + samples.reduce((acc, sample) => acc + sample, 0) / samples.length
+    }, 0)
+
+    const inventoryLitres = stations.reduce((sum, station) => sum + Number(station.totalRemainingLitres || 0), 0)
+    const outOfStockCount = stations.filter((station) => station.outOfStock).length
+    const partialCount = stations.filter((station) => station.partialOutage).length
+    const totalStations = Number(shortage.total_stations || stations.length || 0)
+    const shortageStations = Number(shortage.shortage_stations || 0)
+    const avgWaitMinutes = Math.round(Number(queue.avg_wait_minutes || 0))
+    const openComplaints = Number(complaints.open_complaints || 0)
+    const activeFlags = Number(flags.active_flags || 0)
+    const recentDeliveries = Number(deliveries.recent_delivery_litres || 0)
+    const coverageHours = projectedDemandLitres > 0 ? inventoryLitres / (projectedDemandLitres / 6) : null
+    const shortageRatio = totalStations > 0 ? shortageStations / totalStations : 0
+    const outageRatio = stations.length > 0 ? outOfStockCount / stations.length : 0
+    const partialRatio = stations.length > 0 ? partialCount / stations.length : 0
+    const queueFactor = clampNumber(avgWaitMinutes / 30, 0, 1)
+    const complaintFactor = clampNumber(openComplaints / 6, 0, 1)
+    const flagFactor = clampNumber(activeFlags / 4, 0, 1)
+    const deliveryReliefFactor = recentDeliveries > 0 ? 0.12 : 0
+    const coverageRisk = coverageHours === null ? 0.5 : clampNumber((12 - coverageHours) / 12, 0, 1)
+
+    const pressureScore = Math.round(
+      (
+        shortageRatio * 0.28 +
+        outageRatio * 0.26 +
+        partialRatio * 0.12 +
+        queueFactor * 0.12 +
+        complaintFactor * 0.08 +
+        flagFactor * 0.08 +
+        coverageRisk * 0.18 -
+        deliveryReliefFactor
+      ) * 100
+    )
+
+    const outlook =
+      pressureScore >= 75 ? 'Critical' : pressureScore >= 55 ? 'Elevated' : pressureScore >= 35 ? 'Watch' : 'Stable'
+
+    const recommendation =
+      pressureScore >= 75
+        ? 'Pre-position supply and escalate field oversight immediately.'
+        : pressureScore >= 55
+          ? 'Coordinate deliveries and monitor queue growth closely.'
+          : pressureScore >= 35
+            ? 'Maintain observation and verify next delivery timing.'
+            : 'Demand posture remains stable.'
+
+    return {
+      district,
+      totalStations,
+      shortageStations,
+      outOfStockStations: outOfStockCount,
+      partialOutageStations: partialCount,
+      projectedDemandLitres: Math.round(projectedDemandLitres),
+      inventoryLitres: Math.round(inventoryLitres),
+      coverageHours: coverageHours === null ? null : Math.round(coverageHours * 10) / 10,
+      avgWaitMinutes,
+      openComplaints,
+      activeFlags,
+      pressureScore: clampNumber(pressureScore, 0, 100),
+      outlook,
+      recommendation,
+      nextDelivery: deliveries.last_delivery_time || null,
+    }
+  }).sort((a, b) => b.pressureScore - a.pressureScore)
+
+  const nationalSignal = forecastRows.length
+    ? Math.round(forecastRows.reduce((sum, row) => sum + row.pressureScore, 0) / forecastRows.length)
+    : 0
+
+  const summary = {
+    nationalSignal,
+    criticalDistricts: forecastRows.filter((row) => row.outlook === 'Critical').length,
+    elevatedDistricts: forecastRows.filter((row) => row.outlook === 'Elevated').length,
+    constrainedStations: forecastRows.reduce((sum, row) => sum + row.outOfStockStations + row.partialOutageStations, 0),
+    totalProjectedDemandLitres: forecastRows.reduce((sum, row) => sum + row.projectedDemandLitres, 0),
+    explanation:
+      "Forecast scores blend live shortages, full and partial outages, projected hourly demand, queue waits, open complaints, active flags, and recent delivery relief.",
+  }
+
+  return {
+    generatedAt: new Date().toISOString(),
+    summary,
+    rows: forecastRows,
+  }
+}
+
+function normalizeRows(items) {
+  return Array.isArray(items) ? items : []
+}
+
+const OUT_OF_STOCK_STATES = new Set(["DRY", "OUT_OF_STOCK"])
+
+function normalizeStationState(value) {
+  return String(value || "").trim().toUpperCase()
+}
+
+function isOutOfStockHeatmapRow(row) {
+  const availability = normalizeStationState(row?.availability_status)
+  const petrol = normalizeStationState(row?.petrol_status)
+  const diesel = normalizeStationState(row?.diesel_status)
+
+  if (OUT_OF_STOCK_STATES.has(availability)) return true
+  return OUT_OF_STOCK_STATES.has(petrol) && OUT_OF_STOCK_STATES.has(diesel)
+}
+
+function isLiveReportingHeatmapRow(row) {
+  return !["", "UNKNOWN", "OFFLINE"].includes(normalizeStationState(row?.availability_status))
+}
+
+export async function getSidebarStats(auth = null) {
   const [
-    stationsTotalRows,
-    availabilitySummaryRows,
+    overview,
+    heatmapRows,
     queueWaitRows,
     complaintsRows,
     flagsRows,
     inspectionsRows,
     enforcementRows,
-    shortageDistrictRows,
   ] = await Promise.all([
-    prisma.$queryRaw`SELECT COUNT(*) AS total FROM stations WHERE is_active = 1`,
-    prisma.$queryRaw`
-      SELECT
-        SUM(CASE WHEN COALESCE(latest_status.availability_status, 'UNKNOWN') = 'AVAILABLE' THEN 1 ELSE 0 END) AS stations_online,
-        SUM(CASE WHEN COALESCE(latest_status.availability_status, 'UNKNOWN') = 'DRY' THEN 1 ELSE 0 END) AS out_of_stock,
-        SUM(CASE WHEN COALESCE(latest_status.availability_status, 'UNKNOWN') = 'LIMITED' THEN 1 ELSE 0 END) AS low_stock
-      FROM stations s
-      LEFT JOIN (
-        SELECT ssl.station_id, ssl.availability_status
-        FROM station_status_logs ssl
-        INNER JOIN (
-          SELECT station_id, MAX(created_at) AS max_created_at
-          FROM station_status_logs
-          GROUP BY station_id
-        ) latest_per_station
-          ON latest_per_station.station_id = ssl.station_id
-         AND latest_per_station.max_created_at = ssl.created_at
-      ) latest_status ON latest_status.station_id = s.id
-      WHERE s.is_active = 1
-    `,
+    getDashboardOverview(auth),
+    getShortageHeatmapData(auth),
     prisma.$queryRaw`
       SELECT AVG(TIMESTAMPDIFF(MINUTE, joined_at, CURRENT_TIMESTAMP(3))) AS avg_wait
       FROM queue_entries
@@ -1219,39 +1684,23 @@ export async function getSidebarStats() {
       FROM enforcement_actions
       WHERE action_status IN ('OPEN', 'IN_PROGRESS', 'ESCALATED')
     `,
-    prisma.$queryRaw`
-      SELECT COUNT(*) AS total
-      FROM (
-        SELECT COALESCE(NULLIF(s.city, ''), 'Unknown') AS district
-        FROM stations s
-        LEFT JOIN (
-          SELECT ssl.station_id, ssl.availability_status
-          FROM station_status_logs ssl
-          INNER JOIN (
-            SELECT station_id, MAX(created_at) AS max_created_at
-            FROM station_status_logs
-            GROUP BY station_id
-          ) latest_per_station
-            ON latest_per_station.station_id = ssl.station_id
-           AND latest_per_station.max_created_at = ssl.created_at
-        ) latest_status ON latest_status.station_id = s.id
-        WHERE s.is_active = 1
-          AND COALESCE(latest_status.availability_status, 'UNKNOWN') IN ('DRY', 'LIMITED')
-        GROUP BY COALESCE(NULLIF(s.city, ''), 'Unknown')
-      ) shortage_districts
-    `,
   ])
 
-  const stationsTotal = Number(stationsTotalRows?.[0]?.total || 0)
-  const stationsOnline = Number(availabilitySummaryRows?.[0]?.stations_online || 0)
-  const outOfStock = Number(availabilitySummaryRows?.[0]?.out_of_stock || 0)
-  const lowStock = Number(availabilitySummaryRows?.[0]?.low_stock || 0)
+  const heatmap = Array.isArray(heatmapRows) ? heatmapRows : []
+  const stationsTotal = Number(overview?.totalStations || heatmap.length || 0)
+  const stationsOnline = heatmap.filter((row) => isLiveReportingHeatmapRow(row)).length
+  const outOfStock = Number(overview?.outOfStockStations || 0)
+  const lowStock = Number(overview?.lowStockStations || 0)
   const avgQueueWait = Math.round(Number(queueWaitRows?.[0]?.avg_wait || 0))
   const openComplaints = Number(complaintsRows?.[0]?.total || 0)
   const activeFlags = Number(flagsRows?.[0]?.total || 0)
   const activeInspections = Number(inspectionsRows?.[0]?.total || 0)
   const pendingEnforcement = Number(enforcementRows?.[0]?.total || 0)
-  const shortageDistricts = Number(shortageDistrictRows?.[0]?.total || 0)
+  const shortageDistricts = new Set(
+    heatmap
+      .filter((row) => isOutOfStockHeatmapRow(row) || normalizeStationState(row?.availability_status) === "LIMITED")
+      .map((row) => String(row?.city || 'Unknown').trim() || 'Unknown'),
+  ).size
 
   let nationalSituation = "STABLE"
   let situationDetail = "Supply stable · national network normal"
@@ -1286,7 +1735,8 @@ export async function getSidebarStats() {
   }
 }
 
-export async function getFlaggedStations() {
+export async function getFlaggedStations(auth = null) {
+  const scopedDistrict = districtFilterValue(auth)
   const rows = await prisma.$queryRaw`
     SELECT
       s.public_id,
@@ -1297,13 +1747,15 @@ export async function getFlaggedStations() {
     FROM compliance_flags cf
     INNER JOIN stations s ON s.id = cf.station_id
     WHERE cf.resolved_status IN ('OPEN', 'UNDER_REVIEW')
+      AND (${scopedDistrict === ""} = TRUE OR s.city = ${scopedDistrict})
     GROUP BY s.id, s.public_id, s.name, s.city
     ORDER BY open_flags DESC, s.name ASC
   `
   return rows || []
 }
 
-export async function getShortageHeatmapData() {
+export async function getShortageHeatmapData(auth = null) {
+  const scopedDistrict = districtFilterValue(auth)
   const rows = await prisma.$queryRaw`
     SELECT
       s.public_id,
@@ -1334,12 +1786,14 @@ export async function getShortageHeatmapData() {
       s.updated_at
     FROM stations s
     WHERE s.is_active = 1
+      AND (${scopedDistrict === ""} = TRUE OR s.city = ${scopedDistrict})
     ORDER BY s.name ASC
   `
   return rows || []
 }
 
-export async function getComplaintMetrics() {
+export async function getComplaintMetrics(auth = null) {
+  const scopedDistrict = districtFilterValue(auth)
   const [summaryRows, typeRows] = await Promise.all([
     prisma.$queryRaw`
       SELECT
@@ -1347,12 +1801,18 @@ export async function getComplaintMetrics() {
         COUNT(*) AS total
       FROM public_complaints
       WHERE created_at >= DATE_SUB(CURRENT_TIMESTAMP(3), INTERVAL 6 MONTH)
+        AND (${scopedDistrict === ""} = TRUE OR EXISTS (
+          SELECT 1 FROM stations s WHERE s.id = public_complaints.station_id AND s.city = ${scopedDistrict}
+        ))
       GROUP BY DATE_FORMAT(created_at, '%Y-%m')
       ORDER BY bucket ASC
     `,
     prisma.$queryRaw`
       SELECT complaint_type, COUNT(*) AS total
       FROM public_complaints
+      WHERE (${scopedDistrict === ""} = TRUE OR EXISTS (
+        SELECT 1 FROM stations s WHERE s.id = public_complaints.station_id AND s.city = ${scopedDistrict}
+      ))
       GROUP BY complaint_type
       ORDER BY total DESC, complaint_type ASC
     `,
@@ -1363,11 +1823,15 @@ export async function getComplaintMetrics() {
   }
 }
 
-export async function getInspectionMetrics() {
+export async function getInspectionMetrics(auth = null) {
+  const scopedDistrict = districtFilterValue(auth)
   const [statusRows, officerRows] = await Promise.all([
     prisma.$queryRaw`
       SELECT inspection_status, COUNT(*) AS total
       FROM inspections
+      WHERE (${scopedDistrict === ""} = TRUE OR EXISTS (
+        SELECT 1 FROM stations s WHERE s.id = inspections.station_id AND s.city = ${scopedDistrict}
+      ))
       GROUP BY inspection_status
       ORDER BY total DESC, inspection_status ASC
     `,
@@ -1378,6 +1842,8 @@ export async function getInspectionMetrics() {
         COUNT(i.id) AS inspections_count
       FROM inspections i
       INNER JOIN mera_users mu ON mu.id = i.officer_id
+      INNER JOIN stations s ON s.id = i.station_id
+      WHERE (${scopedDistrict === ""} = TRUE OR s.city = ${scopedDistrict})
       GROUP BY mu.id, mu.public_id, mu.full_name
       ORDER BY inspections_count DESC, mu.full_name ASC
       LIMIT 10
@@ -1389,7 +1855,8 @@ export async function getInspectionMetrics() {
   }
 }
 
-export async function getTopComplaintStations() {
+export async function getTopComplaintStations(auth = null) {
+  const scopedDistrict = districtFilterValue(auth)
   const rows = await prisma.$queryRaw`
     SELECT
       s.public_id,
@@ -1398,6 +1865,7 @@ export async function getTopComplaintStations() {
       COUNT(pc.id) AS complaints_count
     FROM public_complaints pc
     INNER JOIN stations s ON s.id = pc.station_id
+    WHERE (${scopedDistrict === ""} = TRUE OR s.city = ${scopedDistrict})
     GROUP BY s.id, s.public_id, s.name, s.city
     ORDER BY complaints_count DESC, s.name ASC
     LIMIT 10
@@ -1405,7 +1873,8 @@ export async function getTopComplaintStations() {
   return rows || []
 }
 
-export async function getDistrictShortageSummaries() {
+export async function getDistrictShortageSummaries(auth = null) {
+  const scopedDistrict = districtFilterValue(auth)
   const rows = await prisma.$queryRaw`
     SELECT
       COALESCE(NULLIF(s.city, ''), 'Unknown') AS district,
@@ -1425,13 +1894,15 @@ export async function getDistrictShortageSummaries() {
       ) AS shortage_stations
     FROM stations s
     WHERE s.is_active = 1
+      AND (${scopedDistrict === ""} = TRUE OR s.city = ${scopedDistrict})
     GROUP BY COALESCE(NULLIF(s.city, ''), 'Unknown')
     ORDER BY shortage_stations DESC, district ASC
   `
   return rows || []
 }
 
-export async function getRepeatedOffenders() {
+export async function getRepeatedOffenders(auth = null) {
+  const scopedDistrict = districtFilterValue(auth)
   const rows = await prisma.$queryRaw`
     SELECT
       s.public_id,
@@ -1443,6 +1914,7 @@ export async function getRepeatedOffenders() {
     LEFT JOIN compliance_flags cf ON cf.station_id = s.id
     LEFT JOIN enforcement_actions ea ON ea.station_id = s.id
     WHERE s.is_active = 1
+      AND (${scopedDistrict === ""} = TRUE OR s.city = ${scopedDistrict})
     GROUP BY s.id, s.public_id, s.name, s.city
     HAVING flag_count >= 2 OR enforcement_count >= 1
     ORDER BY flag_count DESC, enforcement_count DESC, s.name ASC
@@ -1450,7 +1922,8 @@ export async function getRepeatedOffenders() {
   return rows || []
 }
 
-export async function getMonthlyRegulatoryReports() {
+export async function getMonthlyRegulatoryReports(auth = null) {
+  const scopedDistrict = districtFilterValue(auth)
   const rows = await prisma.$queryRaw`
     SELECT
       DATE_FORMAT(pc.created_at, '%Y-%m') AS month_bucket,
@@ -1463,20 +1936,25 @@ export async function getMonthlyRegulatoryReports() {
     LEFT JOIN compliance_flags cf ON DATE_FORMAT(cf.created_at, '%Y-%m') = DATE_FORMAT(pc.created_at, '%Y-%m')
     LEFT JOIN enforcement_actions ea ON DATE_FORMAT(ea.issued_at, '%Y-%m') = DATE_FORMAT(pc.created_at, '%Y-%m')
     WHERE pc.created_at >= DATE_SUB(CURRENT_TIMESTAMP(3), INTERVAL 12 MONTH)
+      AND (${scopedDistrict === ""} = TRUE OR EXISTS (
+        SELECT 1 FROM stations s WHERE s.id = pc.station_id AND s.city = ${scopedDistrict}
+      ))
     GROUP BY DATE_FORMAT(pc.created_at, '%Y-%m')
     ORDER BY month_bucket ASC
   `
   return rows || []
 }
 
-export async function listMeraUsers() {
+export async function listMeraUsers(auth = null) {
+  const scopedDistrict = districtFilterValue(auth)
   const rows = await prisma.$queryRaw`
     SELECT
       mu.public_id,
       mu.full_name,
       mu.email,
       mu.phone,
-      mu.district,
+      mu.district_scope,
+      mu.region_scope,
       mu.account_status,
       mu.created_at,
       (
@@ -1484,20 +1962,48 @@ export async function listMeraUsers() {
         FROM mera_auth_sessions mas
         WHERE mas.mera_user_id = mu.id
       ) AS last_login_at,
-      mr.role_name,
-      mr.role_description
+      mr.code AS role_code,
+      mr.display_name AS role_display_name,
+      mr.description AS role_description,
+      (
+        SELECT COUNT(*)
+        FROM public_complaints pc
+        WHERE pc.assigned_officer_id = mu.id
+          AND pc.complaint_status IN ('NEW', 'REVIEWING', 'VERIFIED', 'ESCALATED', 'TRIAGED', 'ASSIGNED', 'UNDER_INVESTIGATION')
+      ) AS active_cases
     FROM mera_users mu
     INNER JOIN mera_roles mr ON mr.id = mu.role_id
+    WHERE (${scopedDistrict === ""} = TRUE OR mu.district_scope = ${scopedDistrict})
     ORDER BY mu.created_at DESC
   `
-  return rows || []
+  const permissionRows = await prisma.$queryRaw`
+    SELECT
+      mu.public_id AS user_public_id,
+      mp.code AS permission_code
+    FROM mera_users mu
+    INNER JOIN mera_roles mr ON mr.id = mu.role_id
+    INNER JOIN mera_role_permissions mrp ON mrp.role_id = mr.id
+    INNER JOIN mera_permissions mp ON mp.id = mrp.permission_id
+    WHERE (${scopedDistrict === ""} = TRUE OR mu.district_scope = ${scopedDistrict})
+  `
+  const permissionMap = new Map()
+  for (const row of permissionRows || []) {
+    const userPublicId = String(row.user_public_id || "").trim()
+    if (!permissionMap.has(userPublicId)) permissionMap.set(userPublicId, [])
+    permissionMap.get(userPublicId).push(String(row.permission_code || "").trim())
+  }
+
+  return (rows || []).map((row) => ({
+    ...row,
+    permissions: permissionMap.get(String(row.public_id || "").trim()) || [],
+  }))
 }
 
 export async function createMeraUser(payload, actor) {
   const rows = await prisma.$queryRaw`
     SELECT id
     FROM mera_roles
-    WHERE role_name = ${normalizeRole(payload.roleName)}
+    WHERE code = ${normalizeRole(payload.roleName)}
     LIMIT 1
   `
   const roleId = rows?.[0]?.id
@@ -1513,7 +2019,8 @@ export async function createMeraUser(payload, actor) {
       phone,
       password_hash,
       role_id,
-      district,
+      district_scope,
+      region_scope,
       account_status
     )
     VALUES (
@@ -1523,15 +2030,16 @@ export async function createMeraUser(payload, actor) {
       ${payload.phone || null},
       ${passwordHash},
       ${roleId},
-      ${payload.district || null},
+      ${payload.districtScope || null},
+      ${payload.regionScope || null},
       ${normalizeAccountStatus(payload.accountStatus || "ACTIVE")}
     )
   `
   await logMeraAudit({
-    actorId: actor.userId,
-    actorRole: actor.role,
+    ...actorAuditContext(actor),
     actionType: "MERA_USER_CREATED",
     actionDescription: `MERA user ${payload.fullName} created with role ${payload.roleName}.`,
+    affectedEntity: publicId,
   })
   return {
     publicId,
@@ -1543,6 +2051,7 @@ export async function createMeraUser(payload, actor) {
 
 export async function updateMeraUserStatus({ meraUserPublicId, accountStatus, actor }) {
   const user = await resolveMeraUserByPublicId(meraUserPublicId)
+  ensureDistrictAccess(actor, user.district_scope, "user")
   const normalizedStatus = normalizeAccountStatus(accountStatus)
   await prisma.$executeRaw`
     UPDATE mera_users
@@ -1550,10 +2059,10 @@ export async function updateMeraUserStatus({ meraUserPublicId, accountStatus, ac
     WHERE id = ${user.id}
   `
   await logMeraAudit({
-    actorId: actor.userId,
-    actorRole: actor.role,
+    ...actorAuditContext(actor),
     actionType: "MERA_USER_STATUS_UPDATED",
     actionDescription: `MERA user ${user.full_name} moved to ${normalizedStatus}.`,
+    affectedEntity: user.public_id,
   })
   return {
     publicId: user.public_id,
@@ -1561,19 +2070,25 @@ export async function updateMeraUserStatus({ meraUserPublicId, accountStatus, ac
   }
 }
 
-export async function listMeraAuditLogs({ page = 1, limit = 50 } = {}) {
+export async function listMeraAuditLogs({ page = 1, limit = 50 } = {}, auth = null) {
   const pagination = normalizePagination({ page, limit })
+  const scopedDistrict = districtFilterValue(auth)
   const rows = await prisma.$queryRaw`
     SELECT
       alm.id,
       alm.actor_role,
+      alm.permission_code,
       alm.action_type,
       alm.action_description,
+      alm.affected_entity,
+      alm.ip_address,
+      alm.device_info,
       alm.created_at,
       mu.public_id AS actor_public_id,
-      mu.full_name AS actor_name
+      COALESCE(mu.full_name, alm.actor_name) AS actor_name
     FROM audit_logs_mera alm
     LEFT JOIN mera_users mu ON mu.id = alm.actor_id
+    WHERE (${scopedDistrict === ""} = TRUE OR mu.district_scope = ${scopedDistrict} OR alm.actor_id IS NULL)
     ORDER BY alm.created_at DESC
     LIMIT ${pagination.limit}
     OFFSET ${pagination.offset}
@@ -1585,7 +2100,8 @@ export async function listMeraAuditLogs({ page = 1, limit = 50 } = {}) {
   }
 }
 
-export async function listStationRegulatoryProfiles() {
+export async function listStationRegulatoryProfiles(auth = null) {
+  const scopedDistrict = districtFilterValue(auth)
   const rows = await prisma.$queryRaw`
     SELECT
       s.public_id,
@@ -1617,13 +2133,15 @@ export async function listStationRegulatoryProfiles() {
       GROUP BY station_id
     ) complaints ON complaints.station_id = s.id
     WHERE s.is_active = 1
+      AND (${scopedDistrict === ""} = TRUE OR s.city = ${scopedDistrict})
     ORDER BY s.name ASC
   `
   return rows || []
 }
 
-export async function getStationRegulatoryProfile(stationPublicId) {
+export async function getStationRegulatoryProfile(stationPublicId, auth = null) {
   const station = await resolveStationId(stationPublicId)
+  ensureDistrictAccess(auth, station.city, "station")
   const [licenseRows, complaintRows, flagRows, enforcementRows] = await Promise.all([
     prisma.$queryRaw`
       SELECT id, license_number, issue_date, expiry_date, license_status, compliance_conditions

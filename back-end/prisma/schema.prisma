@@ -487,38 +487,60 @@ model promotion_redemptions {
 }
 
 model mera_roles {
-  id               Int          @id @db.UnsignedTinyInt
-  role_name        String       @unique(map: "role_name") @db.VarChar(64)
-  role_description String       @db.VarChar(255)
-  created_at       DateTime     @default(now()) @db.Timestamp(3)
-  updated_at       DateTime     @default(now()) @db.Timestamp(3)
-  mera_users       mera_users[]
+  id                    Int                     @id @db.UnsignedTinyInt
+  code                  String                  @unique(map: "role_name") @db.VarChar(64)
+  display_name          String?                 @db.VarChar(120)
+  description           String                  @db.VarChar(255)
+  created_at            DateTime                @default(now()) @db.Timestamp(3)
+  updated_at            DateTime                @default(now()) @db.Timestamp(3)
+  mera_role_permissions mera_role_permissions[]
+  mera_users            mera_users[]
+}
+
+model mera_permissions {
+  id                    Int                     @id @default(autoincrement()) @db.UnsignedSmallInt
+  code                  String                  @unique @db.VarChar(96)
+  description           String                  @db.VarChar(255)
+  created_at            DateTime                @default(now()) @db.Timestamp(3)
+  updated_at            DateTime                @default(now()) @db.Timestamp(3)
+  mera_role_permissions mera_role_permissions[]
+}
+
+model mera_role_permissions {
+  role_id       Int              @db.UnsignedTinyInt
+  permission_id Int              @db.UnsignedSmallInt
+  mera_roles    mera_roles       @relation(fields: [role_id], references: [id], onDelete: Cascade, onUpdate: Restrict, map: "fk_mera_role_permissions_role")
+  permissions   mera_permissions @relation(fields: [permission_id], references: [id], onDelete: Cascade, onUpdate: Restrict, map: "fk_mera_role_permissions_permission")
+
+  @@id([role_id, permission_id])
 }
 
 model mera_users {
-  id                  BigInt                   @id @default(autoincrement()) @db.UnsignedBigInt
-  public_id           String                   @unique(map: "public_id") @db.Char(26)
-  full_name           String                   @db.VarChar(120)
-  email               String                   @unique(map: "email") @db.VarChar(160)
-  phone               String?                  @db.VarChar(24)
-  password_hash       String                   @db.VarChar(255)
-  role_id             Int                      @db.UnsignedTinyInt
-  district            String?                  @db.VarChar(80)
-  account_status      mera_users_account_status @default(INVITED)
-  created_at          DateTime                 @default(now()) @db.Timestamp(3)
-  updated_at          DateTime                 @default(now()) @db.Timestamp(3)
-  audit_logs_mera     audit_logs_mera[]
-  compliance_flags    compliance_flags[]       @relation("compliance_flags_resolved_by")
-  enforcement_actions enforcement_actions[]    @relation("enforcement_actions_actor")
-  fuel_price_reports  fuel_price_reports[]
-  inspections         inspections[]
-  mera_auth_sessions  mera_auth_sessions[]
+  id                    BigInt                    @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id             String                    @unique(map: "public_id") @db.Char(26)
+  full_name             String                    @db.VarChar(120)
+  email                 String                    @unique(map: "email") @db.VarChar(160)
+  phone                 String?                   @db.VarChar(24)
+  password_hash         String                    @db.VarChar(255)
+  role_id               Int                       @db.UnsignedTinyInt
+  district_scope        String?                   @db.VarChar(80)
+  region_scope          String?                   @db.VarChar(80)
+  account_status        mera_users_account_status @default(INVITED)
+  last_login_at         DateTime?                 @db.Timestamp(3)
+  created_at            DateTime                  @default(now()) @db.Timestamp(3)
+  updated_at            DateTime                  @default(now()) @db.Timestamp(3)
+  audit_logs_mera       audit_logs_mera[]
+  compliance_flags      compliance_flags[]        @relation("compliance_flags_resolved_by")
+  enforcement_actions   enforcement_actions[]     @relation("enforcement_actions_actor")
+  fuel_price_reports    fuel_price_reports[]
+  inspections           inspections[]
+  mera_auth_sessions    mera_auth_sessions[]
   mera_user_preferences mera_user_preferences?
-  public_complaints   public_complaints[]      @relation("public_complaints_officer")
-  station_status_logs station_status_logs[]
-  mera_roles          mera_roles               @relation(fields: [role_id], references: [id], onUpdate: Restrict, map: "fk_mera_users_role")
+  public_complaints     public_complaints[]       @relation("public_complaints_officer")
+  station_status_logs   station_status_logs[]
+  mera_roles            mera_roles                @relation(fields: [role_id], references: [id], onUpdate: Restrict, map: "fk_mera_users_role")
 
-  @@index([district], map: "idx_mera_users_district")
+  @@index([district_scope], map: "idx_mera_users_district")
   @@index([role_id, account_status], map: "idx_mera_users_role_status")
 }
 
@@ -704,9 +726,14 @@ model fuel_price_reports {
 model audit_logs_mera {
   id                 BigInt      @id @default(autoincrement()) @db.UnsignedBigInt
   actor_id           BigInt?     @db.UnsignedBigInt
+  actor_name         String?     @db.VarChar(120)
   actor_role         String?     @db.VarChar(64)
+  permission_code    String?     @db.VarChar(96)
   action_type        String      @db.VarChar(96)
   action_description String      @db.Text
+  affected_entity    String?     @db.VarChar(255)
+  ip_address         String?     @db.VarChar(64)
+  device_info        String?     @db.VarChar(255)
   created_at         DateTime    @default(now()) @db.Timestamp(3)
   mera_users         mera_users? @relation(fields: [actor_id], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "fk_audit_logs_mera_actor")
 

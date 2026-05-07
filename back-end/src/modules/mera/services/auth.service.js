@@ -4,6 +4,7 @@ import jwt from "jsonwebtoken"
 import { prisma } from "../../../db/prisma.js"
 import { badRequest } from "../../../utils/http.js"
 import { createPublicId } from "../../common/db.js"
+import { normalizePermissionList } from "../permissions.js"
 import { logMeraAudit } from "./audit.service.js"
 
 const MERA_ACCESS_TOKEN_TTL_MIN = Number(process.env.MERA_ACCESS_TOKEN_TTL_MIN || 480)
@@ -16,6 +17,85 @@ function hashToken(token) {
   return crypto.createHash("sha256").update(token).digest("hex")
 }
 
+function normalizeAccessRows(rows = []) {
+  const firstRow = rows?.[0]
+  if (!firstRow?.id) return null
+
+  return {
+    id: Number(firstRow.id),
+    publicId: String(firstRow.public_id || "").trim(),
+    fullName: String(firstRow.full_name || "").trim(),
+    email: String(firstRow.email || "").trim(),
+    phone: String(firstRow.phone || "").trim() || null,
+    password_hash: String(firstRow.password_hash || "").trim() || null,
+    districtScope: String(firstRow.district_scope || "").trim() || null,
+    regionScope: String(firstRow.region_scope || "").trim() || null,
+    accountStatus: String(firstRow.account_status || "").trim(),
+    lastLoginAt: firstRow.last_login_at || null,
+    role: {
+      id: Number(firstRow.role_id || 0),
+      code: String(firstRow.role_code || "").trim().toUpperCase(),
+      displayName: String(firstRow.role_display_name || "").trim() || null,
+      description: String(firstRow.role_description || "").trim() || null,
+    },
+    permissions: normalizePermissionList(rows.map((row) => row.permission_code).filter(Boolean)),
+  }
+}
+
+export async function getMeraUserAccessById(meraUserId) {
+  const rows = await prisma.$queryRaw`
+    SELECT
+      mu.id,
+      mu.public_id,
+      mu.full_name,
+      mu.email,
+      mu.phone,
+      mu.password_hash,
+      mu.district_scope,
+      mu.region_scope,
+      mu.account_status,
+      mu.last_login_at,
+      mr.id AS role_id,
+      mr.code AS role_code,
+      mr.display_name AS role_display_name,
+      mr.description AS role_description,
+      mp.code AS permission_code
+    FROM mera_users mu
+    INNER JOIN mera_roles mr ON mr.id = mu.role_id
+    LEFT JOIN mera_role_permissions mrp ON mrp.role_id = mr.id
+    LEFT JOIN mera_permissions mp ON mp.id = mrp.permission_id
+    WHERE mu.id = ${meraUserId}
+  `
+  return normalizeAccessRows(rows)
+}
+
+async function getMeraUserAccessByEmail(email) {
+  const rows = await prisma.$queryRaw`
+    SELECT
+      mu.id,
+      mu.public_id,
+      mu.full_name,
+      mu.email,
+      mu.phone,
+      mu.password_hash,
+      mu.district_scope,
+      mu.region_scope,
+      mu.account_status,
+      mu.last_login_at,
+      mr.id AS role_id,
+      mr.code AS role_code,
+      mr.display_name AS role_display_name,
+      mr.description AS role_description,
+      mp.code AS permission_code
+    FROM mera_users mu
+    INNER JOIN mera_roles mr ON mr.id = mu.role_id
+    LEFT JOIN mera_role_permissions mrp ON mrp.role_id = mr.id
+    LEFT JOIN mera_permissions mp ON mp.id = mrp.permission_id
+    WHERE mu.email = ${email}
+  `
+  return normalizeAccessRows(rows)
+}
+
 function signMeraAccessToken(identity) {
   const secret = getMeraJwtSecret()
   if (!secret) throw badRequest("MERA JWT secret is not configured")
@@ -26,35 +106,15 @@ function signMeraAccessToken(identity) {
       sub: identity.userPublicId,
       uid: identity.userId,
       sid: identity.sessionPublicId,
-      role: identity.roleName,
-      district: identity.district,
+      role: identity.roleCode,
+      district: identity.districtScope,
+      region: identity.regionScope,
     },
     secret,
     {
       expiresIn: `${MERA_ACCESS_TOKEN_TTL_MIN}m`,
     }
   )
-}
-
-export async function getMeraUserByEmail(email) {
-  const rows = await prisma.$queryRaw`
-    SELECT
-      mu.id,
-      mu.public_id,
-      mu.full_name,
-      mu.email,
-      mu.phone,
-      mu.password_hash,
-      mu.district,
-      mu.account_status,
-      mr.role_name,
-      mr.role_description
-    FROM mera_users mu
-    INNER JOIN mera_roles mr ON mr.id = mu.role_id
-    WHERE mu.email = ${email}
-    LIMIT 1
-  `
-  return rows?.[0] || null
 }
 
 async function createMeraSession({ meraUserId, req }) {
@@ -99,38 +159,49 @@ export async function getActiveMeraSession(sessionPublicId, meraUserId) {
   return rows?.[0] || null
 }
 
-export async function buildMeraAuthPayload(userRow, req) {
-  const scopedRole = String(userRow?.role_name || "").trim().toUpperCase()
-  if (!userRow?.id || !scopedRole) throw badRequest("MERA account is not configured correctly")
-  if (String(userRow.account_status || "").toUpperCase() !== "ACTIVE") {
+export async function buildMeraAuthPayload(accessRow, req) {
+  const scopedRole = String(accessRow?.role?.code || "").trim().toUpperCase()
+  if (!accessRow?.id || !scopedRole) throw badRequest("MERA account is not configured correctly")
+  if (String(accessRow.accountStatus || "").toUpperCase() !== "ACTIVE") {
     throw badRequest("MERA account is not active")
   }
 
   const { sessionPublicId } = await createMeraSession({
-    meraUserId: Number(userRow.id),
+    meraUserId: Number(accessRow.id),
     req,
   })
 
+  await prisma.$executeRaw`
+    UPDATE mera_users
+    SET last_login_at = CURRENT_TIMESTAMP(3), updated_at = CURRENT_TIMESTAMP(3)
+    WHERE id = ${accessRow.id}
+  `
+
   const accessToken = signMeraAccessToken({
-    userPublicId: String(userRow.public_id || "").trim(),
-    userId: Number(userRow.id),
+    userPublicId: String(accessRow.publicId || "").trim(),
+    userId: Number(accessRow.id),
     sessionPublicId,
-    roleName: scopedRole,
-    district: String(userRow.district || "").trim() || null,
+    roleCode: scopedRole,
+    districtScope: accessRow.districtScope,
+    regionScope: accessRow.regionScope,
   })
 
   return {
     accessToken,
     sessionPublicId,
     user: {
-      publicId: String(userRow.public_id || "").trim(),
-      fullName: String(userRow.full_name || "").trim(),
-      email: String(userRow.email || "").trim(),
-      phone: String(userRow.phone || "").trim() || null,
-      district: String(userRow.district || "").trim() || null,
+      publicId: accessRow.publicId,
+      fullName: accessRow.fullName,
+      email: accessRow.email,
+      phone: accessRow.phone,
+      districtScope: accessRow.districtScope,
+      regionScope: accessRow.regionScope,
       role: scopedRole,
-      roleDescription: String(userRow.role_description || "").trim() || null,
-      accountStatus: String(userRow.account_status || "").trim(),
+      roleDisplayName: accessRow.role.displayName,
+      roleDescription: accessRow.role.description,
+      permissions: accessRow.permissions,
+      accountStatus: accessRow.accountStatus,
+      lastLoginAt: new Date().toISOString(),
     },
   }
 }
@@ -140,7 +211,7 @@ export async function login({ payload, req }) {
   const password = String(payload?.password || "")
   if (!email || !password) throw badRequest("Email and password are required")
 
-  const user = await getMeraUserByEmail(email)
+  const user = await getMeraUserAccessByEmail(email)
   if (!user?.id || !user.password_hash) throw badRequest("Invalid MERA credentials")
 
   const matches = await bcrypt.compare(password, String(user.password_hash || ""))
@@ -152,37 +223,24 @@ export async function login({ payload, req }) {
 export async function me(auth) {
   const session = await getActiveMeraSession(auth?.sessionPublicId, auth?.userId)
   if (!session?.public_id) throw badRequest("MERA session expired")
-
-  const rows = await prisma.$queryRaw`
-    SELECT
-      mu.id,
-      mu.public_id,
-      mu.full_name,
-      mu.email,
-      mu.phone,
-      mu.district,
-      mu.account_status,
-      mr.role_name,
-      mr.role_description
-    FROM mera_users mu
-    INNER JOIN mera_roles mr ON mr.id = mu.role_id
-    WHERE mu.id = ${auth.userId}
-    LIMIT 1
-  `
-  const user = rows?.[0]
+  const user = await getMeraUserAccessById(auth.userId)
   if (!user?.id) throw badRequest("MERA user was not found")
 
   return {
     sessionPublicId: session.public_id,
     user: {
-      publicId: String(user.public_id || "").trim(),
-      fullName: String(user.full_name || "").trim(),
-      email: String(user.email || "").trim(),
-      phone: String(user.phone || "").trim() || null,
-      district: String(user.district || "").trim() || null,
-      role: String(user.role_name || "").trim(),
-      roleDescription: String(user.role_description || "").trim() || null,
-      accountStatus: String(user.account_status || "").trim(),
+      publicId: user.publicId,
+      fullName: user.fullName,
+      email: user.email,
+      phone: user.phone,
+      districtScope: user.districtScope,
+      regionScope: user.regionScope,
+      role: user.role.code,
+      roleDisplayName: user.role.displayName,
+      roleDescription: user.role.description,
+      permissions: user.permissions,
+      accountStatus: user.accountStatus,
+      lastLoginAt: user.lastLoginAt,
     },
   }
 }
@@ -195,11 +253,13 @@ async function getMeraUserById(meraUserId) {
       mu.full_name,
       mu.email,
       mu.phone,
-      mu.district,
+      mu.district_scope,
+      mu.region_scope,
       mu.password_hash,
       mu.account_status,
-      mr.role_name,
-      mr.role_description
+      mr.code AS role_code,
+      mr.display_name AS role_display_name,
+      mr.description AS role_description
     FROM mera_users mu
     INNER JOIN mera_roles mr ON mr.id = mu.role_id
     WHERE mu.id = ${meraUserId}

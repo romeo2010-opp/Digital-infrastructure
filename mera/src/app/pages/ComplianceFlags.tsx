@@ -6,13 +6,14 @@ import { Input } from '../components/ui/input'
 import { ModalShell } from '../components/ModalShell'
 import { PortalTable } from '../components/PortalTable'
 import { SectionCard } from '../components/SectionCard'
+import { MERA_PERMISSIONS } from '../lib/access'
 import { usePortal } from '../lib/portalContext'
 import { matchesSearch, normalizeDate, normalizeRows, renderPill } from '../lib/portalUtils'
 
 const fieldClass = 'h-9 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700'
 
 export function ComplianceFlags() {
-  const { data, runAction, api, token } = usePortal()
+  const { data, runAction, api, token, hasPermission } = usePortal()
   const [search, setSearch] = useState('')
   const [severity, setSeverity] = useState('')
   const [selectedFlag, setSelectedFlag] = useState<any>(null)
@@ -33,6 +34,8 @@ export function ComplianceFlags() {
       return matchesSearch(row, search)
     })
   }, [data.flags, search, severity])
+  const canCreate = hasPermission(MERA_PERMISSIONS.FLAGS_CREATE)
+  const canResolve = hasPermission(MERA_PERMISSIONS.FLAGS_RESOLVE)
 
   return (
     <div className="flex h-full flex-col gap-4 overflow-y-auto p-4">
@@ -48,10 +51,12 @@ export function ComplianceFlags() {
           <option value="HIGH">High</option>
           <option value="CRITICAL">Critical</option>
         </select>
-        <Button type="button" size="sm" className="bg-blue-700 hover:bg-blue-800" onClick={() => setModalOpen(true)}>
-          <Plus className="size-4" />
-          New Flag
-        </Button>
+        {canCreate ? (
+          <Button type="button" size="sm" className="bg-blue-700 hover:bg-blue-800" onClick={() => setModalOpen(true)}>
+            <Plus className="size-4" />
+            New Flag
+          </Button>
+        ) : null}
         <Button type="button" variant="outline" size="sm">
           <Download className="size-4" />
           Export
@@ -75,20 +80,23 @@ export function ComplianceFlags() {
               {
                 key: 'action',
                 label: 'Action',
-                render: (row) => (
-                  <button
-                    type="button"
-                    className="text-[11px] font-medium text-blue-700"
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      setSelectedFlag(row)
-                      setResolveStatus(row.resolvedStatus || 'UNDER_REVIEW')
-                      setResolveOpen(true)
-                    }}
-                  >
-                    Resolve
-                  </button>
-                ),
+                render: (row) =>
+                  canResolve ? (
+                    <button
+                      type="button"
+                      className="text-[11px] font-medium text-blue-700"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        setSelectedFlag(row)
+                        setResolveStatus(row.resolvedStatus || 'UNDER_REVIEW')
+                        setResolveOpen(true)
+                      }}
+                    >
+                      Resolve
+                    </button>
+                  ) : (
+                    <span className="text-[11px] font-medium text-slate-500">View</span>
+                  ),
               },
             ]}
           />

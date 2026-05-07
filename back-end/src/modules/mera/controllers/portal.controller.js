@@ -29,7 +29,7 @@ export async function createComplaint(req, res) {
 }
 
 export async function listComplaints(req, res) {
-  return ok(res, await portalService.listComplaints(req.query))
+  return ok(res, await portalService.listComplaints(req.query, req.meraAuth))
 }
 
 export async function assignComplaint(req, res) {
@@ -76,11 +76,11 @@ export async function uploadInspectionEvidence(req, res) {
 }
 
 export async function listInspections(req, res) {
-  return ok(res, await portalService.listInspections(req.query))
+  return ok(res, await portalService.listInspections(req.query, req.meraAuth))
 }
 
 export async function stationInspectionHistory(req, res) {
-  return ok(res, await portalService.getStationInspectionHistory(req.params.publicId))
+  return ok(res, await portalService.getStationInspectionHistory(req.params.publicId, req.meraAuth))
 }
 
 export async function createFlag(req, res) {
@@ -88,7 +88,7 @@ export async function createFlag(req, res) {
 }
 
 export async function listFlags(req, res) {
-  return ok(res, await portalService.listFlags(req.query))
+  return ok(res, await portalService.listFlags(req.query, req.meraAuth))
 }
 
 export async function resolveFlag(req, res) {
@@ -110,11 +110,11 @@ export async function createEnforcementAction(req, res) {
 }
 
 export async function listEnforcementActions(req, res) {
-  return ok(res, await portalService.listEnforcementActions(req.query))
+  return ok(res, await portalService.listEnforcementActions(req.query, req.meraAuth))
 }
 
 export async function stationEnforcementHistory(req, res) {
-  return ok(res, await portalService.getStationEnforcementHistory(req.params.publicId))
+  return ok(res, await portalService.getStationEnforcementHistory(req.params.publicId, req.meraAuth))
 }
 
 export async function attachLicense(req, res) {
@@ -122,7 +122,7 @@ export async function attachLicense(req, res) {
 }
 
 export async function listLicenses(req, res) {
-  return ok(res, await portalService.listLicenseRegistry(req.query))
+  return ok(res, await portalService.listLicenseRegistry(req.query, req.meraAuth))
 }
 
 export async function updateLicense(req, res) {
@@ -137,7 +137,7 @@ export async function updateLicense(req, res) {
 }
 
 export async function getExpiryAlerts(req, res) {
-  return ok(res, await portalService.getLicenseExpiryAlerts(req.query))
+  return ok(res, await portalService.getLicenseExpiryAlerts(req.query, req.meraAuth))
 }
 
 export async function createStationStatusLog(req, res) {
@@ -157,7 +157,7 @@ export async function createAvailabilityReport(req, res) {
 }
 
 export async function listAvailabilityReports(req, res) {
-  return ok(res, await portalService.listAvailabilityReports(req.query))
+  return ok(res, await portalService.listAvailabilityReports(req.query, req.meraAuth))
 }
 
 export async function createFuelDeliveryLog(req, res) {
@@ -168,15 +168,15 @@ export async function createFuelDeliveryLog(req, res) {
 }
 
 export async function listFuelDeliveryLogs(req, res) {
-  return ok(res, await portalService.listFuelDeliveryLogs(req.query))
+  return ok(res, await portalService.listFuelDeliveryLogs(req.query, req.meraAuth))
 }
 
 export async function listHoardingWatchlist(req, res) {
-  return ok(res, await listHoardingWatchlistService(req.query))
+  return ok(res, await listHoardingWatchlistService(req.query, req.meraAuth))
 }
 
 export async function getHoardingWatchlistDetail(req, res) {
-  return ok(res, await getHoardingWatchlistDetailService(req.params.publicId))
+  return ok(res, await getHoardingWatchlistDetailService(req.params.publicId, req.meraAuth))
 }
 
 export async function createFuelPriceReport(req, res) {
@@ -184,47 +184,51 @@ export async function createFuelPriceReport(req, res) {
 }
 
 export async function dashboardOverview(req, res) {
-  return ok(res, await portalService.getDashboardOverview())
+  return ok(res, await portalService.getDashboardOverview(req.meraAuth))
 }
 
 export async function flaggedStations(req, res) {
-  return ok(res, await portalService.getFlaggedStations())
+  return ok(res, await portalService.getFlaggedStations(req.meraAuth))
 }
 
 export async function shortageHeatmap(req, res) {
-  return ok(res, await portalService.getShortageHeatmapData())
+  return ok(res, await portalService.getShortageHeatmapData(req.meraAuth))
 }
 
 export async function complaintMetrics(req, res) {
-  return ok(res, await portalService.getComplaintMetrics())
+  return ok(res, await portalService.getComplaintMetrics(req.meraAuth))
 }
 
 export async function inspectionMetrics(req, res) {
-  return ok(res, await portalService.getInspectionMetrics())
+  return ok(res, await portalService.getInspectionMetrics(req.meraAuth))
 }
 
 export async function sidebarStats(req, res) {
-  return ok(res, await portalService.getSidebarStats())
+  return ok(res, await portalService.getSidebarStats(req.meraAuth))
+}
+
+export async function demandForecastSummary(req, res) {
+  return ok(res, await portalService.getDemandForecastSummary(req.meraAuth))
 }
 
 export async function topComplaintStations(req, res) {
-  return ok(res, await portalService.getTopComplaintStations())
+  return ok(res, await portalService.getTopComplaintStations(req.meraAuth))
 }
 
 export async function districtShortageSummaries(req, res) {
-  return ok(res, await portalService.getDistrictShortageSummaries())
+  return ok(res, await portalService.getDistrictShortageSummaries(req.meraAuth))
 }
 
 export async function repeatedOffenders(req, res) {
-  return ok(res, await portalService.getRepeatedOffenders())
+  return ok(res, await portalService.getRepeatedOffenders(req.meraAuth))
 }
 
 export async function monthlyReports(req, res) {
-  return ok(res, await portalService.getMonthlyRegulatoryReports())
+  return ok(res, await portalService.getMonthlyRegulatoryReports(req.meraAuth))
 }
 
 export async function listUsers(req, res) {
-  return ok(res, await portalService.listMeraUsers())
+  return ok(res, await portalService.listMeraUsers(req.meraAuth))
 }
 
 export async function createUser(req, res) {
@@ -243,13 +247,13 @@ export async function updateUserStatus(req, res) {
 }
 
 export async function listAuditLogs(req, res) {
-  return ok(res, await portalService.listMeraAuditLogs(req.query))
+  return ok(res, await portalService.listMeraAuditLogs(req.query, req.meraAuth))
 }
 
 export async function listRegulatoryProfiles(req, res) {
-  return ok(res, await portalService.listStationRegulatoryProfiles())
+  return ok(res, await portalService.listStationRegulatoryProfiles(req.meraAuth))
 }
 
 export async function getRegulatoryProfile(req, res) {
-  return ok(res, await portalService.getStationRegulatoryProfile(req.params.publicId))
+  return ok(res, await portalService.getStationRegulatoryProfile(req.params.publicId, req.meraAuth))
 }

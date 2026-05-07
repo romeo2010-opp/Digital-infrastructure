@@ -15,7 +15,7 @@ export function PageHeader({
   onLogout: () => void
 }) {
   return (
-    <header className="h-[92px] bg-[#f1f6f4] px-5">
+    <header className="h-[92px] bg-[#ffffff] px-5">
       <div className="flex h-full items-center justify-between gap-4">
         <div className="min-w-0">
           <h2 className="truncate text-[0.98rem] font-semibold tracking-[-0.02em] text-slate-900">{title}</h2>

@@ -1,6 +1,7 @@
 import jwt from "jsonwebtoken"
 import { prisma } from "../../../db/prisma.js"
-import { getMeraJwtSecretForMiddleware } from "../services/auth.service.js"
+import { hasMeraPermission, normalizeRoleList } from "../permissions.js"
+import { getMeraJwtSecretForMiddleware, getMeraUserAccessById } from "../services/auth.service.js"
 
 function unauthorized(res, message = "Unauthorized") {
   return res.status(401).json({
@@ -47,12 +48,28 @@ export async function requireMeraAuth(req, res, next) {
       return unauthorized(res, "MERA session revoked or expired")
     }
 
+    const access = await getMeraUserAccessById(Number(payload.uid))
+    if (!access?.id) {
+      return unauthorized(res, "MERA user was not found")
+    }
+    if (String(access.accountStatus || "").trim().toUpperCase() !== "ACTIVE") {
+      return unauthorized(res, "MERA account is not active")
+    }
+
     req.meraAuth = {
       userId: Number(payload.uid),
       userPublicId: String(payload.sub || "").trim() || null,
       sessionPublicId: activeSession.public_id,
-      role: String(payload.role || "").trim().toUpperCase() || null,
-      district: String(payload.district || "").trim() || null,
+      fullName: access.fullName,
+      email: access.email,
+      role: access.role.code,
+      roleDisplayName: access.role.displayName,
+      permissions: access.permissions,
+      districtScope: access.districtScope,
+      regionScope: access.regionScope,
+      accountStatus: access.accountStatus,
+      ipAddress: (req.header("x-forwarded-for") || req.ip || "").split(",")[0].trim().slice(0, 64) || null,
+      deviceInfo: req.header("user-agent")?.slice(0, 255) || null,
     }
     return next()
   } catch (error) {
@@ -64,9 +81,7 @@ export async function requireMeraAuth(req, res, next) {
 }
 
 export function requireMeraRole(roles = []) {
-  const normalizedRoles = Array.isArray(roles)
-    ? roles.map((item) => String(item || "").trim().toUpperCase()).filter(Boolean)
-    : []
+  const normalizedRoles = normalizeRoleList(roles)
 
   return function checkMeraRole(req, res, next) {
     const activeRole = String(req.meraAuth?.role || "").trim().toUpperCase()
@@ -78,4 +93,44 @@ export function requireMeraRole(roles = []) {
     }
     return next()
   }
+}
+
+export function requireMeraPermission(permissionCode) {
+  const normalizedPermissions = Array.isArray(permissionCode)
+    ? permissionCode
+    : [permissionCode]
+
+  return function checkMeraPermission(req, res, next) {
+    const matchedPermission = normalizedPermissions.find((candidate) => hasMeraPermission(req.meraAuth, candidate))
+    if (!matchedPermission) {
+      return res.status(403).json({
+        ok: false,
+        error: "Forbidden",
+      })
+    }
+    req.meraPermission = String(matchedPermission).trim().toUpperCase()
+    req.meraAuth.permissionUsed = req.meraPermission
+    return next()
+  }
+}
+
+export function requireDistrictScope(req, res, next) {
+  const role = String(req.meraAuth?.role || "").trim().toUpperCase()
+  const hasDistrictScope = Boolean(String(req.meraAuth?.districtScope || "").trim())
+
+  if (
+    [
+      "REGIONAL_COMPLIANCE_SUPERVISOR",
+      "FIELD_COMPLIANCE_OFFICER",
+      "PUBLIC_COMPLAINTS_ANALYST",
+    ].includes(role) &&
+    !hasDistrictScope
+  ) {
+    return res.status(403).json({
+      ok: false,
+      error: "A district scope is required for this MERA account",
+    })
+  }
+
+  return next()
 }

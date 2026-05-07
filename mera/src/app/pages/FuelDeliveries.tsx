@@ -6,13 +6,14 @@ import { Input } from '../components/ui/input'
 import { ModalShell } from '../components/ModalShell'
 import { PortalTable } from '../components/PortalTable'
 import { SectionCard } from '../components/SectionCard'
+import { MERA_PERMISSIONS } from '../lib/access'
 import { usePortal } from '../lib/portalContext'
 import { matchesSearch, normalizeDate, normalizeRows, renderPill } from '../lib/portalUtils'
 
 const fieldClass = 'h-9 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700'
 
 export function FuelDeliveries() {
-  const { data, runAction, api, token } = usePortal()
+  const { data, runAction, api, token, hasPermission } = usePortal()
   const [search, setSearch] = useState('')
   const [modalOpen, setModalOpen] = useState(false)
   const [form, setForm] = useState({
@@ -32,14 +33,18 @@ export function FuelDeliveries() {
   const irregularities = rows
     .filter((row: any) => String(row.verificationStatus || '').toUpperCase().includes('PENDING'))
     .slice(0, 6)
+  const canCreate = hasPermission(MERA_PERMISSIONS.DELIVERIES_CREATE)
+  const canVerify = hasPermission(MERA_PERMISSIONS.DELIVERIES_VERIFY)
 
   return (
     <div className="flex h-full flex-col gap-4 overflow-y-auto p-4">
       <Toolbar>
-        <Button type="button" size="sm" className="bg-blue-700 hover:bg-blue-800" onClick={() => setModalOpen(true)}>
-          <Plus className="size-4" />
-          Log Delivery
-        </Button>
+        {canCreate ? (
+          <Button type="button" size="sm" className="bg-blue-700 hover:bg-blue-800" onClick={() => setModalOpen(true)}>
+            <Plus className="size-4" />
+            Log Delivery
+          </Button>
+        ) : null}
         <div className="flex min-w-[260px] flex-1 items-center gap-2">
           <Search className="size-4 text-slate-400" />
           <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Filter by station or district..." />
@@ -63,7 +68,16 @@ export function FuelDeliveries() {
               { key: 'estimatedVolume', label: 'Estimated Volume', render: (row) => row.estimatedVolume ? `${row.estimatedVolume} L` : '-' },
               { key: 'sourceType', label: 'Source Type' },
               { key: 'reportedBy', label: 'Reported By' },
-              { key: 'verificationStatus', label: 'Verification Status', render: (row) => renderPill(row.verificationStatus || 'PENDING_REVIEW') },
+              {
+                key: 'verificationStatus',
+                label: 'Verification Status',
+                render: (row) => (
+                  <div className="flex items-center gap-2">
+                    {renderPill(row.verificationStatus || 'PENDING_REVIEW')}
+                    {canVerify ? <span className="text-[11px] font-medium text-blue-700">Verify Delivery</span> : null}
+                  </div>
+                ),
+              },
             ]}
           />
         </SectionCard>

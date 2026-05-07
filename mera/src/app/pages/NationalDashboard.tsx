@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
 import { usePortal } from '../lib/portalContext'
+import { useSidebarStats } from '../hooks/useSidebarStats'
 import { normalizeDate, normalizeRows } from '../lib/portalUtils'
 
 type Tone = 'good' | 'bad' | 'neutral' | 'info'
@@ -125,19 +126,19 @@ function SummaryCard({
 
 export function NationalDashboard() {
   const { data } = usePortal()
+  const sidebarStats = useSidebarStats()
 
   const heatmapRows = normalizeRows(data.heatmap)
   const watchlistRows = normalizeRows(data.hoardingWatchlist?.items)
   const complaintRows = normalizeRows(data.complaints?.items)
   const inspectionRows = normalizeRows(data.inspections?.items)
   const districtRows = normalizeRows(data.districtShortages)
-  const availabilityRows = normalizeRows(data.availabilityReports?.items)
   const auditRows = normalizeRows(data.auditLogs?.items)
 
   const stationTotal = Number(data.overview?.totalStations || heatmapRows.length || 0)
   const onlineStations = heatmapRows.filter((row: any) => !['DRY', 'OFFLINE', 'OUT_OF_STOCK'].includes(String(row.availability_status || '').toUpperCase())).length
-  const outOfStockStations = heatmapRows.filter((row: any) => String(row.availability_status || '').toUpperCase() === 'DRY').length
-  const lowStockStations = heatmapRows.filter((row: any) => ['LIMITED', 'LOW', 'PARTIAL'].includes(String(row.availability_status || '').toUpperCase())).length
+  const outOfStockStations = Number(data.overview?.outOfStockStations || 0)
+  const lowStockStations = Number(data.overview?.lowStockStations || 0)
   const criticalAlerts = watchlistRows.filter((row: any) => String(row.escalationStatus || '').toUpperCase() === 'CRITICAL').length
 
   const queueRows = useMemo(
@@ -160,6 +161,12 @@ export function NationalDashboard() {
     queueRows.length > 0
       ? queueRows.reduce((sum: number, row: any) => sum + Number(row.avgWait || 0), 0) / queueRows.length
       : 0
+  const hasLiveKpiSnapshot = Boolean(sidebarStats.lastSync)
+  const kpiStationTotal = hasLiveKpiSnapshot ? sidebarStats.stationsTotal : stationTotal
+  const kpiOnlineStations = hasLiveKpiSnapshot ? sidebarStats.stationsOnline : onlineStations
+  const kpiOutOfStockStations = hasLiveKpiSnapshot ? sidebarStats.outOfStock : outOfStockStations
+  const kpiLowStockStations = hasLiveKpiSnapshot ? sidebarStats.lowStock : lowStockStations
+  const kpiAvgQueueWait = hasLiveKpiSnapshot ? sidebarStats.avgQueueWait : avgQueueWait
 
   const openComplaintRows = complaintRows.filter((row: any) => !['RESOLVED', 'DISMISSED', 'CLOSED'].includes(getComplaintStatus(row)))
   const resolvedComplaintRows = complaintRows.filter((row: any) => ['RESOLVED', 'CLOSED'].includes(getComplaintStatus(row)))
@@ -212,18 +219,38 @@ export function NationalDashboard() {
     })
 
   const fuelAvailability = useMemo(() => {
-    const totalAvailabilityRows = availabilityRows.length || 1
-    const petrolAvailable = availabilityRows.filter((row: any) => Boolean(row.petrolAvailable)).length
-    const dieselAvailable = availabilityRows.filter((row: any) => Boolean(row.dieselAvailable)).length
-    const keroseneEstimate = Math.max(0, Math.min(totalAvailabilityRows, Math.round((petrolAvailable + dieselAvailable) / 2)))
+    const rows = Array.isArray(data.overview?.fuelAvailabilityByType) ? data.overview.fuelAvailabilityByType : []
+    const fallbackTotal = stationTotal || 1
+
+    const byCode = new Map(rows.map((row: any) => [String(row.code || '').toUpperCase(), row]))
 
     return [
-      { label: 'Petrol', value: petrolAvailable, total: totalAvailabilityRows, tone: 'good' as Tone },
-      { label: 'Diesel', value: dieselAvailable, total: totalAvailabilityRows, tone: 'info' as Tone },
-      { label: 'Kerosene', value: keroseneEstimate, total: totalAvailabilityRows, tone: 'neutral' as Tone },
-      { label: 'Out of Stock', value: outOfStockStations, total: stationTotal || 1, tone: 'bad' as Tone },
+      {
+        label: 'Petrol',
+        value: Number(byCode.get('PETROL')?.value || 0),
+        total: Number(byCode.get('PETROL')?.total || fallbackTotal),
+        tone: 'good' as Tone,
+      },
+      {
+        label: 'Diesel',
+        value: Number(byCode.get('DIESEL')?.value || 0),
+        total: Number(byCode.get('DIESEL')?.total || fallbackTotal),
+        tone: 'info' as Tone,
+      },
+      {
+        label: 'Kerosene',
+        value: Number(byCode.get('KEROSENE')?.value || 0),
+        total: Number(byCode.get('KEROSENE')?.total || fallbackTotal),
+        tone: 'neutral' as Tone,
+      },
+      {
+        label: 'Out of Stock',
+        value: Number(byCode.get('OUT_OF_STOCK')?.value || outOfStockStations),
+        total: Number(byCode.get('OUT_OF_STOCK')?.total || fallbackTotal),
+        tone: 'bad' as Tone,
+      },
     ]
-  }, [availabilityRows, outOfStockStations, stationTotal])
+  }, [data.overview?.fuelAvailabilityByType, outOfStockStations, stationTotal])
 
   const recentActivity = auditRows.slice(0, 10).map((row: any) => {
     const type = String(row.action_type || '').toUpperCase()
@@ -244,42 +271,42 @@ export function NationalDashboard() {
   const kpis = [
     {
       label: 'Total Stations',
-      value: stationTotal,
+      value: kpiStationTotal,
       sublabel: `${heatmapRows.length} reporting records live`,
-      trend: stationTotal > 0 ? 'National registry loaded' : 'Awaiting registry sync',
+      trend: kpiStationTotal > 0 ? 'National registry loaded' : 'Awaiting registry sync',
       tone: 'info' as Tone,
-      progress: stationTotal > 0 ? (heatmapRows.length / stationTotal) * 100 : 0,
+      progress: kpiStationTotal > 0 ? (heatmapRows.length / kpiStationTotal) * 100 : 0,
     },
     {
       label: 'Stations Online',
-      value: onlineStations,
-      sublabel: `${stationTotal > 0 ? Math.round((onlineStations / stationTotal) * 100) : 0}% reporting live`,
-      trend: onlineStations >= outOfStockStations ? 'Healthy reporting state' : 'Watch live declarations',
+      value: kpiOnlineStations,
+      sublabel: `${kpiStationTotal > 0 ? Math.round((kpiOnlineStations / kpiStationTotal) * 100) : 0}% reporting live`,
+      trend: kpiOnlineStations >= kpiOutOfStockStations ? 'Healthy reporting state' : 'Watch live declarations',
       tone: 'good' as Tone,
-      progress: stationTotal > 0 ? (onlineStations / stationTotal) * 100 : 0,
+      progress: kpiStationTotal > 0 ? (kpiOnlineStations / kpiStationTotal) * 100 : 0,
     },
     {
       label: 'Out of Stock',
-      value: outOfStockStations,
+      value: kpiOutOfStockStations,
       sublabel: 'Dry stations confirmed',
-      trend: outOfStockStations > 0 ? 'Escalation pressure rising' : 'No dry stations flagged',
+      trend: kpiOutOfStockStations > 0 ? 'Escalation pressure rising' : 'No dry stations flagged',
       tone: 'bad' as Tone,
-      progress: stationTotal > 0 ? (outOfStockStations / stationTotal) * 100 : 0,
+      progress: kpiStationTotal > 0 ? (kpiOutOfStockStations / kpiStationTotal) * 100 : 0,
     },
     {
       label: 'Low Stock',
-      value: lowStockStations,
-      sublabel: 'Limited supply declarations',
-      trend: lowStockStations > 0 ? 'Monitor replenishment windows' : 'No limited-stock cases',
+      value: kpiLowStockStations,
+      sublabel: 'Fuel-status constrained stations',
+      trend: kpiLowStockStations > 0 ? 'Monitor replenishment windows' : 'No limited-stock cases',
       tone: 'neutral' as Tone,
-      progress: stationTotal > 0 ? (lowStockStations / stationTotal) * 100 : 0,
+      progress: kpiStationTotal > 0 ? (kpiLowStockStations / kpiStationTotal) * 100 : 0,
     },
     {
       label: 'Avg Queue Wait',
-      value: formatMinutes(avgQueueWait),
+      value: formatMinutes(kpiAvgQueueWait),
       sublabel: `${queueRows.length} queues sampled`,
-      trend: avgQueueWait > 25 ? 'Queues above tolerance' : avgQueueWait > 15 ? 'Queue pressure building' : 'Queue times stable',
-      tone: avgQueueWait > 25 ? 'bad' : avgQueueWait > 15 ? 'neutral' : 'good',
+      trend: kpiAvgQueueWait > 25 ? 'Queues above tolerance' : kpiAvgQueueWait > 15 ? 'Queue pressure building' : 'Queue times stable',
+      tone: kpiAvgQueueWait > 25 ? 'bad' : kpiAvgQueueWait > 15 ? 'neutral' : 'good',
     },
     {
       label: 'Critical Alerts',

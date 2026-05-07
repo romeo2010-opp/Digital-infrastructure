@@ -100,6 +100,10 @@ export const portalApi = {
     return request('/api/mera/dashboard/sidebar-stats', { token, signal })
   },
 
+  getDemandForecastSummary(token: string) {
+    return request('/api/mera/dashboard/demand-forecast', { token })
+  },
+
   getHoardingWatchlist(token: string) {
     return request('/api/mera/hoarding-watchlist', { token })
   },

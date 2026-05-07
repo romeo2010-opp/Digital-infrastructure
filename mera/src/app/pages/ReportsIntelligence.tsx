@@ -3,11 +3,14 @@ import { Toolbar } from '../components/Toolbar'
 import { Button } from '../components/ui/button'
 import { PortalTable } from '../components/PortalTable'
 import { SectionCard } from '../components/SectionCard'
+import { MERA_PERMISSIONS } from '../lib/access'
 import { usePortal } from '../lib/portalContext'
 import { normalizeDate, normalizeRows, renderPill } from '../lib/portalUtils'
 
 export function ReportsIntelligence() {
-  const { data, refresh } = usePortal()
+  const { data, refresh, hasPermission } = usePortal()
+  const canExport = hasPermission(MERA_PERMISSIONS.REPORTS_EXPORT)
+  const canGenerate = hasPermission(MERA_PERMISSIONS.REPORTS_GENERATE)
 
   const reportRows = [
     {
@@ -58,10 +61,12 @@ export function ReportsIntelligence() {
   return (
     <div className="flex h-full flex-col gap-4 overflow-y-auto p-4">
       <Toolbar>
-        <Button type="button" variant="outline" size="sm">
-          <Download className="size-4" />
-          Export Intelligence
-        </Button>
+        {canExport ? (
+          <Button type="button" variant="outline" size="sm">
+            <Download className="size-4" />
+            Export Intelligence
+          </Button>
+        ) : null}
       </Toolbar>
 
       <div className="grid min-h-0 flex-1 gap-4 xl:grid-cols-[1.35fr_1fr]">
@@ -99,10 +104,12 @@ export function ReportsIntelligence() {
                     <div className="mt-1 text-xs text-slate-500">{item.summary}</div>
                   </div>
                 </div>
-                <Button type="button" size="sm" className="mt-3 bg-blue-700 hover:bg-blue-800" onClick={item.action}>
-                  <RefreshCw className="size-4" />
-                  Generate
-                </Button>
+                {canGenerate ? (
+                  <Button type="button" size="sm" className="mt-3 bg-blue-700 hover:bg-blue-800" onClick={item.action}>
+                    <RefreshCw className="size-4" />
+                    Generate
+                  </Button>
+                ) : null}
               </div>
             ))}
           </div>
