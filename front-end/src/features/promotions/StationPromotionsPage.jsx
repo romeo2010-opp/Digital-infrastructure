@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Navbar from "../../components/Navbar";
 import { promotionsApi } from "../../api/promotionsApi";
 import { useStationChangeWatcher } from "../../hooks/useStationChangeWatcher";
+import { useTopLoading } from "../../layout/TopLoadingContext";
 import "../settings/settings.css";
 import "./promotions.css";
 
@@ -203,9 +204,14 @@ function normalizeFormByPromotionKind(currentForm, nextPromotionKind) {
 }
 
 export default function StationPromotionsPage() {
+  const { setTopLoading } = useTopLoading();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    setTopLoading("promotions", loading);
+  }, [loading, setTopLoading]);
   const [message, setMessage] = useState("");
   const [form, setForm] = useState(INITIAL_FORM);
   const [editingCampaignId, setEditingCampaignId] = useState("");
@@ -215,6 +221,7 @@ export default function StationPromotionsPage() {
     litres: "40",
     paymentMethod: "CASH",
   });
+  const previewFormRef = useRef(previewForm);
   const [preview, setPreview] = useState(null);
   const [nowTick, setNowTick] = useState(() => Date.now());
   const [expiredModalOpen, setExpiredModalOpen] = useState(false);
@@ -222,7 +229,11 @@ export default function StationPromotionsPage() {
   const isFlashKind = form.promotionKind === "FLASH_PRICE";
   const isCashbackKind = form.promotionKind === "CASHBACK";
 
-  async function refreshPreview(currentPreviewForm = previewForm) {
+  useEffect(() => {
+    previewFormRef.current = previewForm;
+  }, [previewForm]);
+
+  const refreshPreview = useCallback(async (currentPreviewForm = previewFormRef.current) => {
     try {
       const result = await promotionsApi.preview({
         fuelTypeCode: currentPreviewForm.fuelTypeCode,
@@ -235,27 +246,27 @@ export default function StationPromotionsPage() {
       setPreview(null);
       setError(previewError?.message || "Unable to load pricing preview");
     }
-  }
+  }, []);
 
-  async function refresh() {
+  const refresh = useCallback(async ({ showLoader = true } = {}) => {
     try {
-      setLoading(true);
+      if (showLoader) setLoading(true);
       setError("");
       const [campaigns] = await Promise.all([
         promotionsApi.list(),
-        refreshPreview(previewForm),
+        refreshPreview(previewFormRef.current),
       ]);
       setData(campaigns);
     } catch (requestError) {
       setError(requestError?.message || "Unable to load promotion campaigns");
     } finally {
-      setLoading(false);
+      if (showLoader) setLoading(false);
     }
-  }
+  }, [refreshPreview]);
 
   useEffect(() => {
     refresh();
-  }, []);
+  }, [refresh]);
 
   useEffect(() => {
     const timerId = window.setInterval(() => {
@@ -266,7 +277,7 @@ export default function StationPromotionsPage() {
 
   useStationChangeWatcher({
     onChange: async () => {
-      await refresh();
+      await refresh({ showLoader: false });
     },
   });
 

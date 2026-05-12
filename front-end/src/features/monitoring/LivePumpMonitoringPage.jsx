@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router-dom"
 import Navbar from "../../components/Navbar"
 import { monitoringApi } from "../../api/monitoringApi"
 import { formatDateTime } from "../../utils/dateTime"
+import { useTopLoading } from "../../layout/TopLoadingContext"
 import "./liveMonitoring.css"
 
 const avatar =
@@ -83,6 +84,7 @@ function applyMonitoringUpdate(snapshot, update) {
 }
 
 export default function LivePumpMonitoringPage() {
+  const { setTopLoading } = useTopLoading()
   const { pumpId: routePumpId } = useParams()
   const pumpId = useMemo(() => decodeURIComponent(String(routePumpId || "")).trim(), [routePumpId])
 
@@ -94,6 +96,10 @@ export default function LivePumpMonitoringPage() {
   const retryIndexRef = useRef(0)
   const reconnectTimerRef = useRef(0)
   const cleanupSocketRef = useRef(() => {})
+
+  useEffect(() => {
+    setTopLoading("monitoring", loading)
+  }, [loading, setTopLoading])
 
   const loadSnapshot = useCallback(
     async ({ showLoader = false } = {}) => {
@@ -169,7 +175,7 @@ export default function LivePumpMonitoringPage() {
             if (message.type === "monitoring:subscribed") {
               retryIndexRef.current = 0
               setConnection("Live")
-              loadSnapshot({ showLoader: false })
+              void loadSnapshot({ showLoader: false })
               return
             }
 

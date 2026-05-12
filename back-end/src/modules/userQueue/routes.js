@@ -3517,8 +3517,8 @@ router.post(
               body: alert.message,
               tag: alert.publicId || result?.transfer?.publicId || `wallet-transfer-${Date.now()}`,
               url: "/m/wallet",
-              icon: "/smartlogo.png",
-              badge: "/smartlogo.png",
+              icon: "/smartlink.png",
+              badge: "/smartlink.png",
             },
             data: {
               alertPublicId: alert.publicId || null,
@@ -4903,8 +4903,8 @@ router.post(
           body: alert.message,
           tag: alert.publicId || ticketId,
           url: "/m/help",
-          icon: "/smartlogo.png",
-          badge: "/smartlogo.png",
+          icon: "/smartlink.png",
+          badge: "/smartlink.png",
         },
         data: {
           alertPublicId: alert.publicId || null,

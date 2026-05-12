@@ -29,6 +29,7 @@ export function AuthProvider({ children }) {
   const [isAuthenticated, setIsAuthenticated] = useState(false)
   const [session, setSession] = useState(getSessionMeta())
   const [showStationPicker, setShowStationPicker] = useState(false)
+  const [stationPickerIntent, setStationPickerIntent] = useState("manual")
   const refreshTimerRef = useRef(0)
 
   function clearRefreshTimer() {
@@ -72,6 +73,7 @@ export function AuthProvider({ children }) {
         setSession(getSessionMeta())
         setIsAuthenticated(false)
         setShowStationPicker(false)
+        setStationPickerIntent("manual")
         if (typeof window !== "undefined") {
           window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT))
         }
@@ -89,7 +91,9 @@ export function AuthProvider({ children }) {
     setSessionMeta(nextSession)
     setSession(nextSession)
     setIsAuthenticated(true)
-    setShowStationPicker(promptStationSelection && nextSession.stationMemberships.length > 1)
+    const shouldPromptStationSelection = promptStationSelection && nextSession.stationMemberships.length > 1
+    setStationPickerIntent(shouldPromptStationSelection ? "login" : "manual")
+    setShowStationPicker(shouldPromptStationSelection)
     scheduleTokenRefresh()
     return nextSession
   }
@@ -106,6 +110,7 @@ export function AuthProvider({ children }) {
       setSession(getSessionMeta())
       setIsAuthenticated(false)
       setShowStationPicker(false)
+      setStationPickerIntent("manual")
       clearRefreshTimer()
     } finally {
       setLoading(false)
@@ -143,6 +148,7 @@ export function AuthProvider({ children }) {
       setSession(getSessionMeta())
       setIsAuthenticated(false)
       setShowStationPicker(false)
+      setStationPickerIntent("manual")
       setLoading(false)
     }
 
@@ -199,6 +205,7 @@ export function AuthProvider({ children }) {
       setSession(getSessionMeta())
       setIsAuthenticated(false)
       setShowStationPicker(false)
+      setStationPickerIntent("manual")
       clearRefreshTimer()
       throw error
     }
@@ -218,10 +225,6 @@ export function AuthProvider({ children }) {
       },
       { promptStationSelection: false }
     )
-    if (typeof window !== "undefined") {
-      window.location.reload()
-      return me
-    }
     return me
   }
 
@@ -239,6 +242,7 @@ export function AuthProvider({ children }) {
     setSession(getSessionMeta())
     setIsAuthenticated(false)
     setShowStationPicker(false)
+    setStationPickerIntent("manual")
   }
 
   function updateSessionStation(patch) {
@@ -266,12 +270,19 @@ export function AuthProvider({ children }) {
       switchStation,
       logout,
       showStationPicker,
-      openStationPicker: () => setShowStationPicker(true),
-      closeStationPicker: () => setShowStationPicker(false),
+      stationPickerIntent,
+      openStationPicker: (intent = "manual") => {
+        setStationPickerIntent(intent === "login" ? "login" : "manual")
+        setShowStationPicker(true)
+      },
+      closeStationPicker: () => {
+        setShowStationPicker(false)
+        setStationPickerIntent("manual")
+      },
       updateSessionStation,
       isApiMode,
     }),
-    [loading, isAuthenticated, session, isApiMode, showStationPicker]
+    [loading, isAuthenticated, session, isApiMode, showStationPicker, stationPickerIntent]
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

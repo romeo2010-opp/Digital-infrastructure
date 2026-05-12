@@ -2,9 +2,7 @@
   min-height: 100vh;
   box-sizing: border-box;
   padding: 84px 16px 16px;
-  background:
-    radial-gradient(circle at 8% 0%, rgba(13, 114, 129, 0.12), transparent 28%),
-    linear-gradient(180deg, #eef5fb 0%, #e1ebf5 100%);
+  background: #ffffff;
 }
 
 .internal-modal-backdrop.settings-modal-backdrop {
@@ -194,9 +192,7 @@
 .settings-hero {
   border: 1px solid #c4d8ef;
   border-radius: 10px;
-  background:
-    radial-gradient(circle at 90% 10%, rgba(46, 127, 196, 0.16), transparent 30%),
-    linear-gradient(180deg, #f5faff 0%, #e8f1fb 100%);
+  background: #ffffff;
   padding: 14px;
   display: grid;
   gap: 12px;
@@ -250,8 +246,8 @@
 .settings-card button {
   height: 34px;
   border-radius: 6px;
-  border: 1px solid #477fbe;
-  background: linear-gradient(180deg, #3a76b5 0%, #295f97 100%);
+  border: 1px solid #078c83;
+  background: linear-gradient(180deg, #0f887f 0%, #0a6d65 100%);
   color: #fff;
   font-size: 12px;
   font-weight: 700;
@@ -407,7 +403,7 @@
   padding: 12px 14px;
   border-top: 1px solid #e5e7eb;
   border-bottom: 1px solid #e5e7eb;
-  background: linear-gradient(180deg, #f7fbff 0%, #eef6ff 100%);
+  background: linear-gradient(180deg, #f7f8fb 0%, #f7f8fb 100%);
 }
 
 .settings-pilot-pump-copy {
@@ -438,7 +434,7 @@
   padding: 14px 16px;
   border: 1px solid #d9e7f5;
   border-radius: 14px;
-  background: linear-gradient(180deg, #f8fbff 0%, #f1f7ff 100%);
+  background: linear-gradient(180deg, #f7f8fb 0%, #f7f8fb 100%);
 }
 
 .settings-pilot-summary strong {
@@ -539,7 +535,7 @@
 
 .settings-message {
   border: 1px solid #bad8f4;
-  background: #e8f4ff;
+  background: #ecfbfb;
   color: #315c86;
 }
 

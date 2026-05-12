@@ -13,13 +13,13 @@ export const helpContent = {
             "Confirm nozzle and pump status in Settings > Pumps.",
             "Check if the pump/nozzle was manually paused.",
             "Refresh Digital Queue snapshot to force latest status pull.",
-            "Record a test transaction from Transactions Test to validate mapping.",
+            "Record a test transaction from Transactions to validate mapping.",
             "If issue continues, restart local pump controller and retry.",
           ],
           linksToRoutes: [
             { label: "Digital Queue", to: "/digitalQueue" },
             { label: "Settings", to: "/settings" },
-            { label: "Transactions Test", to: "/transactions-test" },
+            { label: "Transactions", to: "/transactions" },
           ],
           escalateText: "If this persists, report issue with screenshot and pump/nozzle ID.",
         },
@@ -36,7 +36,7 @@ export const helpContent = {
             "Retry with a small test transaction to confirm ingestion.",
           ],
           linksToRoutes: [
-            { label: "Transactions Test", to: "/transactions-test" },
+            { label: "Transactions", to: "/transactions" },
             { label: "Reports", to: "/reports" },
             { label: "Settings", to: "/settings" },
           ],
@@ -172,7 +172,7 @@ export const helpContent = {
             "Verify reports/transactions after pending count reaches zero.",
           ],
           linksToRoutes: [
-            { label: "Transactions Test", to: "/transactions-test" },
+            { label: "Transactions", to: "/transactions" },
             { label: "Reports", to: "/reports" },
           ],
           escalateText: "If sync does not clear, report issue with screenshot of pending count.",
@@ -186,12 +186,12 @@ export const helpContent = {
       title: "Fuel is selling but not reflecting in SmartLink",
       checklist: [
         "Confirm ONLINE/OFFLINE state and pending count.",
-        "Check Transactions Test for latest entries.",
+        "Check Transactions for latest entries.",
         "Refresh Reports snapshot for the same date range.",
         "Verify nozzle mapping under Settings.",
       ],
       linksToRoutes: [
-        { label: "Transactions Test", to: "/transactions-test" },
+        { label: "Transactions", to: "/transactions" },
         { label: "Reports", to: "/reports" },
         { label: "Settings", to: "/settings" },
       ],

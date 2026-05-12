@@ -80,6 +80,7 @@ function PortalShell() {
   const { session, user, login, logout, bootLoading, loginError, loading } = usePortal()
   const activeMeta = resolveMeta(location.pathname)
   const landingPath = firstAccessiblePath(user)
+  const isStationProfilesPage = location.pathname.startsWith('/station-regulatory-profiles')
 
   if (!session?.accessToken) {
     return <LoginScreen onLogin={login} loading={bootLoading} error={loginError} />
@@ -94,11 +95,11 @@ function PortalShell() {
   }
 
   return (
-    <div className="flex h-screen overflow-hidden bg-[#eef3f1] text-slate-900">
-      <Sidebar user={user} />
+    <div className={`flex h-screen overflow-hidden text-slate-900 ${isStationProfilesPage ? 'bg-[#f8fafc]' : 'bg-[#eef3f1]'}`}>
+      <Sidebar user={user} theme={isStationProfilesPage ? 'light' : 'default'} />
       <div className="min-w-0 flex-1 overflow-hidden p-3 pl-1.5">
-        <div className="flex h-full min-w-0 flex-col overflow-hidden bg-[#f6faf8] shadow-none">
-          <PageHeader title={activeMeta.title} subtitle={activeMeta.subtitle} user={user} loading={loading} onLogout={logout} />
+        <div className={`flex h-full min-w-0 flex-col overflow-hidden shadow-none ${isStationProfilesPage ? 'bg-white' : 'bg-[#f6faf8]'}`}>
+          <PageHeader title={activeMeta.title} subtitle={activeMeta.subtitle} user={user} loading={loading} onLogout={logout} theme={isStationProfilesPage ? 'light' : 'default'} />
           <main className="min-h-0 flex-1 overflow-hidden">
             <Routes>
               <Route path="/" element={<Navigate to={landingPath} replace />} />

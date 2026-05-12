@@ -5,6 +5,7 @@ import { useAuth } from "../../auth/AuthContext"
 import { accountApi } from "../../api/accountApi"
 import { formatDateTime as formatDateTimeUtc } from "../../utils/dateTime"
 import { applyThemePreference } from "../../utils/theme"
+import { useTopLoading } from "../../layout/TopLoadingContext"
 import "./account.css"
 
 const avatar =
@@ -46,6 +47,7 @@ function Feedback({ error, message }) {
 }
 
 export default function MyAccountPage() {
+  const { setTopLoading } = useTopLoading()
   const { session, logout } = useAuth()
   const location = useLocation()
   const [activeSection, setActiveSection] = useState("profile")
@@ -82,6 +84,10 @@ export default function MyAccountPage() {
   const [privacyBusy, setPrivacyBusy] = useState(false)
   const [privacyReason, setPrivacyReason] = useState("")
   const [privacyError, setPrivacyError] = useState("")
+
+  useEffect(() => {
+    setTopLoading("account", profileLoading || sessionsLoading || preferencesLoading)
+  }, [profileLoading, sessionsLoading, preferencesLoading, setTopLoading])
   const [privacyMessage, setPrivacyMessage] = useState("")
 
   async function loadProfile() {

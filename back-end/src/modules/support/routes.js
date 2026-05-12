@@ -253,8 +253,8 @@ async function notifySupportUser({
       body: alert.message,
       tag: alert.publicId || `support-${Date.now()}`,
       url: path,
-      icon: "/smartlogo.png",
-      badge: "/smartlogo.png",
+      icon: "/smartlink.png",
+      badge: "/smartlink.png",
     },
     data: {
       alertPublicId: alert.publicId || null,

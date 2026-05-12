@@ -1,5 +1,6 @@
 # Dependencies
 node_modules/
+.venv/
 package-lock.json
 yarn.lock
 

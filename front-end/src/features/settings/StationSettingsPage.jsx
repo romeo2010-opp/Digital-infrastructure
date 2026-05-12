@@ -4,6 +4,7 @@ import { useAuth } from "../../auth/AuthContext";
 import { settingsApi } from "../../api/settingsApi";
 import { STATION_PLAN_FEATURES } from "../../subscription/planCatalog";
 import { useStationPlan } from "../../subscription/useStationPlan";
+import { useTopLoading } from "../../layout/TopLoadingContext";
 import "./settings.css";
 
 const avatar =
@@ -22,18 +23,12 @@ const FALLBACK_TIME_ZONES = Object.freeze([
 
 function LoadingScreen() {
   return (
-    <div className="settings-loading-container">
-      <div className="settings-loading-content">
-        <div className="settings-loading-spinner">
-          <div className="settings-spinner-circle"></div>
-        </div>
-        <h2>Loading Settings</h2>
-        <p>Fetching your station configuration...</p>
-        <div className="settings-loading-skeleton-section">
-          <div className="settings-skeleton-item"></div>
-          <div className="settings-skeleton-item"></div>
-          <div className="settings-skeleton-item"></div>
-        </div>
+    <div className="settings-inline-loading" aria-live="polite">
+      <p>Fetching your station configuration...</p>
+      <div className="settings-loading-skeleton-section">
+        <div className="settings-skeleton-item"></div>
+        <div className="settings-skeleton-item"></div>
+        <div className="settings-skeleton-item"></div>
       </div>
     </div>
   );
@@ -128,6 +123,7 @@ function escapeHtml(value) {
 export default function StationSettingsPage({ modal = false, onClose = null }) {
   const { session, updateSessionStation } = useAuth();
   const stationPlan = useStationPlan();
+  const { setTopLoading } = useTopLoading();
   const isManager = session?.role === "MANAGER";
   const [active, setActive] = useState("station");
   const [loading, setLoading] = useState(true);
@@ -250,6 +246,10 @@ export default function StationSettingsPage({ modal = false, onClose = null }) {
   useEffect(() => {
     refresh();
   }, []);
+
+  useEffect(() => {
+    setTopLoading(modal ? "settings-modal" : "settings", loading);
+  }, [loading, modal, setTopLoading]);
 
   useEffect(() => {
     if (!modal) return undefined;

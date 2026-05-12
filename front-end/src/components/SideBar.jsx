@@ -7,10 +7,9 @@ import {
   SettingsIcon,
   AccountIcon,
   InboxIcon,
-  SmartLinkLogo,HelpIcon,
+  SmartLinkLogo,HelpIcon, SmartLinkBlack, SmartLinkWhite,
   ReportIcon,
   LogOut,
-  LockIcon,
 } from "../utils/icons";
 import { Link, useLocation } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
@@ -23,13 +22,14 @@ const mainMenu = [
   { label: "Reservations", icon: <OrdersIcon />, to: "/reservations", feature: STATION_PLAN_FEATURES.RESERVATIONS },
   { label: "Digital Queue", icon: <CustomersIcon />, to: "/digitalQueue", feature: STATION_PLAN_FEATURES.DIGITAL_QUEUE },
   { label: "Insights", icon: <ReportIcon />, to: "/insights", feature: STATION_PLAN_FEATURES.INSIGHTS },
+  { label: "Transactions", icon: <BillingIcon />, to: "/transactions", feature: STATION_PLAN_FEATURES.TRANSACTIONS_VIEW },
+  { label: "Settlements", icon: <BillingIcon />, to: "/settlements", feature: STATION_PLAN_FEATURES.TRANSACTIONS_VIEW },
   { label: "Promotions", icon: <BillingIcon />, to: "/promotions", feature: STATION_PLAN_FEATURES.TRANSACTIONS_RECORD },
   { label: "Billing", icon: <BillingIcon /> }  
 ];
 
 const systemMenu = [
   { label: "Settings", icon: <SettingsIcon />, to: "/settings" },
-  { label : "Log Out", icon: <LogOut/>, action: "logout"}
 ];
 
 
@@ -38,8 +38,45 @@ const accountMenu = [
   { label: "My Account", icon: <AccountIcon/>, to: "/account" },
   { label: "Get Help", icon: <HelpIcon/>, to: "/help" },
   { label: "Report", icon: <ReportIcon/>, to: "/reports" },
-  { label: "Transactions", icon: <BillingIcon />, to: "/transactions-test", feature: STATION_PLAN_FEATURES.TRANSACTIONS_RECORD },
 ];
+
+function ChevronRightIcon({ className = "" }) {
+  return (
+    <svg
+      className={className}
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.9"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="m9 6 6 6-6 6" />
+    </svg>
+  )
+}
+
+function ChevronDownIcon({ className = "" }) {
+  return (
+    <svg
+      className={className}
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.9"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="m6 9 6 6 6-6" />
+    </svg>
+  )
+}
 
 export default function Sidebar() {
   const { logout, session } = useAuth()
@@ -49,11 +86,8 @@ export default function Sidebar() {
     isSidebarOpen,
     isSidebarCollapsed,
     desktopSidebarWidth,
-    setDesktopSidebarWidth,
     closeSidebar,
   } = useAppShell()
-  const sidebarRef = React.useRef(null);
-  const isResizing = React.useRef(false);
   const location = useLocation()
 
   React.useEffect(() => {
@@ -64,29 +98,6 @@ export default function Sidebar() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.pathname])
 
-  // Mouse move
-  React.useEffect(() => {
-    const handleMouseMove = (e) => {
-      if (isMobile || isSidebarCollapsed) return;
-      if (!isResizing.current) return;
-      const newWidth = e.clientX;
-      if (newWidth > 200 && newWidth < 500) { // min/max width
-        setDesktopSidebarWidth(newWidth);
-      }
-    };
-
-    const handleMouseUp = () => {
-      isResizing.current = false;
-    };
-
-    window.addEventListener("mousemove", handleMouseMove);
-    window.addEventListener("mouseup", handleMouseUp);
-    return () => {
-      window.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("mouseup", handleMouseUp);
-    };
-  }, []);
-
   const fullName = session?.user?.fullName || "Station User"
   const email = session?.user?.email || session?.user?.phone || "signed-in@smartlink"
   const initials = (fullName || "S")
@@ -95,8 +106,9 @@ export default function Sidebar() {
     .slice(0, 2)
     .map((chunk) => chunk[0].toUpperCase())
     .join("")
+  const primaryMenu = [...mainMenu, ...accountMenu]
 
-  const resolvedWidth = isMobile ? 280 : isSidebarCollapsed ? 88 : desktopSidebarWidth
+  const resolvedWidth = isMobile ? 256 : isSidebarCollapsed ? 88 : desktopSidebarWidth
   return (
     <>
       {isMobile && isSidebarOpen ? (
@@ -108,65 +120,57 @@ export default function Sidebar() {
         />
       ) : null}
       <aside
-        ref={sidebarRef}
         className={`sidebar ${isMobile && isSidebarOpen ? "open" : ""} ${
           isSidebarCollapsed && !isMobile ? "collapsed" : ""
         }`}
         style={{ width: resolvedWidth }}
       >
-      {/* App Identity */}
-      <div className="sidebar__brand">
-        <SmartLinkLogo/>
-        <div className="sidebar__brand-copy">
-          <h1>SmartLink</h1>
-          <p>Fuel Infrastructure</p>
+        <div className="sidebar__brand">
+          <div className="sidebar__brand-mark">
+            <SmartLinkWhite/>
+          </div>
+          <div className="sidebar__brand-copy">
+            <h1>SmartLink</h1>
+          </div>
         </div>
-      </div>
-      <div className="sidebar__content">
-        <p className="sidebar__title">MAIN MENU</p>
-        <nav className="sidebar__section">
-          {mainMenu.map((item) => (
-            <SidebarItem key={item.label} {...item} stationPlan={stationPlan} />
-          ))}
-        </nav>
 
-        <nav className="sidebar__section">
-          <p className="sidebar__title">ACCOUNT</p>
-          {accountMenu.map((item) => (
-            <SidebarItem key={item.label} {...item} stationPlan={stationPlan} />
-          ))}
-        </nav>
-
-        <nav className="sidebar__section sidebar__section--bottom">
-          {systemMenu.map((item) => (
-            <SidebarItem
-              key={item.label}
-              {...item}
-              stationPlan={stationPlan}
-              onAction={(action) => {
-                if (action === "logout") {
-                  logout()
-                }
-              }}
-            />
-          ))}
-        </nav>
-      </div>
-
-      <div className="sidebar__user">
-        <div className="avatar">{initials}</div>
-        <div className="sidebar__user-copy">
-          <strong>{fullName}</strong>
-          <small>{email}</small>
-          <small>{stationPlan.planName}</small>
+        <div className="sidebar__content">
+          <nav className="sidebar__nav">
+            {primaryMenu.map((item) => (
+              <SidebarItem key={item.label} {...item} stationPlan={stationPlan} />
+            ))}
+          </nav>
         </div>
-      </div>
 
-      {/* Drag handle */}
-      <div
-        className="sidebar__resizer"
-        onMouseDown={() => (isResizing.current = true)}
-      />
+        <div className="sidebar__footer">
+          <nav className="sidebar__footer-nav">
+            {systemMenu.map((item) => (
+              <SidebarItem
+                key={item.label}
+                {...item}
+                stationPlan={stationPlan}
+              />
+            ))}
+          </nav>
+
+          <div className="sidebar__user">
+            <div className="avatar">{initials}</div>
+            <div className="sidebar__user-copy">
+              <strong>{fullName}</strong>
+              <small>{stationPlan.planName}</small>
+            </div>
+            <button
+              type="button"
+              className="sidebar__logout"
+              aria-label="Sign out"
+              title={`Sign out ${email}`}
+              onClick={logout}
+            >
+              <LogOut />
+            </button>
+            <ChevronDownIcon className="sidebar__footer-chevron" />
+          </div>
+        </div>
       </aside>
     </>
   );
@@ -190,19 +194,12 @@ function SidebarItem({ icon, label, to, action, onAction, feature, stationPlan }
         title={description || label}
         style={{ border: "none", background: "transparent", width: "100%", textAlign: "left", cursor: "pointer" }}
       >
-        <span className="icon">{icon}</span>
+        <span className="sidebar__item-icon">{icon}</span>
         <span className="sidebar__item-copy">
-          <span className="sidebar__item-label-row">
-            <span>{label}</span>
-            {isLocked ? (
-              <span className="sidebar__lock-pill">
-                <LockIcon />
-                <span>Locked</span>
-              </span>
-            ) : null}
-          </span>
-          {isLocked && requiredPlan ? <small>Requires {requiredPlan.name}</small> : null}
+          <span className="sidebar__item-label">{label}</span>
+          {isLocked && requiredPlan ? <small>{requiredPlan.name}</small> : null}
         </span>
+        <ChevronRightIcon className="sidebar__item-chevron" />
       </button>
     )
   }
@@ -216,19 +213,12 @@ function SidebarItem({ icon, label, to, action, onAction, feature, stationPlan }
       className={itemClassName}
       aria-disabled={isLocked ? "true" : undefined}
     >
-      <span className="icon">{icon}</span>
+      <span className="sidebar__item-icon">{icon}</span>
       <span className="sidebar__item-copy">
-        <span className="sidebar__item-label-row">
-          <span>{label}</span>
-          {isLocked ? (
-            <span className="sidebar__lock-pill">
-              <LockIcon />
-              <span>Locked</span>
-            </span>
-          ) : null}
-        </span>
-        {isLocked && requiredPlan ? <small>Requires {requiredPlan.name}</small> : null}
+        <span className="sidebar__item-label">{label}</span>
+        {isLocked && requiredPlan ? <small>{requiredPlan.name}</small> : null}
       </span>
+      {!isActive ? <ChevronRightIcon className="sidebar__item-chevron" /> : null}
     </Link>
   );
 }

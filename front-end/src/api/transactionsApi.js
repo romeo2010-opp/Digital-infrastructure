@@ -16,6 +16,50 @@ function cacheKey(stationPublicId, kind) {
   return `transactions:${kind}:${stationPublicId}`
 }
 
+function readFilenameFromDisposition(disposition, fallback) {
+  if (!disposition) return fallback
+  const utfMatch = disposition.match(/filename\*=UTF-8''([^;]+)/i)
+  if (utfMatch?.[1]) return decodeURIComponent(utfMatch[1])
+  const asciiMatch = disposition.match(/filename="?([^";]+)"?/i)
+  if (asciiMatch?.[1]) return asciiMatch[1]
+  return fallback
+}
+
+function buildTransactionParams(filters = {}) {
+  const params = new URLSearchParams()
+  if (filters.page) params.set("page", String(filters.page))
+  if (filters.pageSize) params.set("pageSize", String(filters.pageSize))
+  if (filters.search) params.set("search", filters.search)
+  if (filters.from) params.set("from", filters.from)
+  if (filters.to) params.set("to", filters.to)
+  if (filters.paymentMethod && filters.paymentMethod !== "ALL") {
+    params.set("paymentMethod", filters.paymentMethod)
+  }
+  if (filters.scope) params.set("scope", filters.scope)
+  return params
+}
+
+function normalizeListResponse(payload, filters = {}) {
+  if (Array.isArray(payload)) {
+    return {
+      items: payload,
+      total: payload.length,
+      page: Number(filters.page || 1),
+      pageSize: Number(filters.pageSize || payload.length || 10),
+      totalPages: 1,
+    }
+  }
+
+  const items = Array.isArray(payload?.items) ? payload.items : []
+  return {
+    items,
+    total: Number(payload?.total || items.length),
+    page: Number(payload?.page || filters.page || 1),
+    pageSize: Number(payload?.pageSize || filters.pageSize || 10),
+    totalPages: Math.max(1, Number(payload?.totalPages || 1)),
+  }
+}
+
 async function getCachedSnapshot(key, fallback) {
   try {
     const cached = await getSnapshot(key)
@@ -51,15 +95,21 @@ export const transactionsApi = {
     }
   },
   async listRecent() {
+    const result = await this.list({ page: 1, pageSize: 50 })
+    return result.items
+  },
+  async list(filters = {}) {
     const stationPublicId = stationPublicIdOrThrow()
-    const key = cacheKey(stationPublicId, "recent")
+    const params = buildTransactionParams(filters)
+    const key = cacheKey(stationPublicId, `list:${params.toString() || "default"}`)
     if (!isBrowserOnline()) {
-      return getCachedSnapshot(key, [])
+      return getCachedSnapshot(key, normalizeListResponse([], filters))
     }
     try {
-      const rows = await httpClient.get(`/api/stations/${stationPublicId}/transactions`)
-      await saveCachedSnapshot(key, rows || [])
-      return rows || []
+      const payload = await httpClient.get(`/api/stations/${stationPublicId}/transactions?${params.toString()}`)
+      const normalized = normalizeListResponse(payload, filters)
+      await saveCachedSnapshot(key, normalized)
+      return normalized
     } catch (error) {
       const cached = await getCachedSnapshot(key, null)
       if (cached) return cached
@@ -132,5 +182,40 @@ export const transactionsApi = {
       blob: await response.blob(),
       filename: `smartlink-${transactionPublicId}-receipt.pdf`,
     }
+  },
+  async exportCsv(filters = {}) {
+    const stationPublicId = stationPublicIdOrThrow()
+    const baseUrl = import.meta.env.VITE_API_BASE_URL || ""
+    const accessToken = getAccessToken()
+    const params = buildTransactionParams(filters)
+    const response = await fetch(
+      `${baseUrl}/api/stations/${stationPublicId}/transactions/export/csv?${params.toString()}`,
+      {
+        method: "GET",
+        credentials: "include",
+        headers: {
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+        },
+      }
+    )
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}))
+      throw new Error(payload?.error || "Failed to export transactions")
+    }
+
+    const blob = await response.blob()
+    const filename = readFilenameFromDisposition(
+      response.headers.get("content-disposition"),
+      "smartlink_transactions.csv"
+    )
+    const url = window.URL.createObjectURL(blob)
+    const anchor = document.createElement("a")
+    anchor.href = url
+    anchor.download = filename
+    document.body.appendChild(anchor)
+    anchor.click()
+    anchor.remove()
+    window.URL.revokeObjectURL(url)
+    return filename
   },
 }

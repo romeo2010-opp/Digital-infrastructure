@@ -2,9 +2,7 @@
   min-height: 100vh;
   box-sizing: border-box;
   padding: 84px 16px 16px;
-  background:
-    radial-gradient(circle at 8% 0%, rgba(13, 114, 129, 0.12), transparent 28%),
-    linear-gradient(180deg, #eef5fb 0%, #e1ebf5 100%);
+  background: #ffffff;
 }
 
 .reservations-shell {
@@ -17,16 +15,14 @@
 .panel-lite {
   border: 1px solid #cfddef;
   border-radius: 10px;
-  background: linear-gradient(180deg, #f8fbff 0%, #edf3fb 100%);
+  background: #ffffff;
   box-shadow: 0 6px 18px rgba(37, 77, 120, 0.08);
 }
 
 .reservations-hero {
   border: 1px solid #c4d8ef;
   border-radius: 10px;
-  background:
-    radial-gradient(circle at 90% 10%, rgba(46, 127, 196, 0.16), transparent 30%),
-    linear-gradient(180deg, #f5faff 0%, #e8f1fb 100%);
+  background: #ffffff;
   padding: 14px;
   display: grid;
   gap: 12px;
@@ -118,7 +114,7 @@
   height: 36px;
   border-radius: 6px;
   border: 1px solid #9eb9d8;
-  background: linear-gradient(180deg, #f7fbff 0%, #e9f2fb 100%);
+  background: linear-gradient(180deg, #f7f8fb 0%, #eceff5 100%);
   color: #24486f;
   font-size: 12px;
   font-weight: 600;
@@ -158,7 +154,7 @@
   padding: 9px 10px;
   border-radius: 6px;
   border: 1px solid #bad8f4;
-  background: #e8f4ff;
+  background: #ecfbfb;
   color: #315c86;
   font-size: 12px;
 }
@@ -176,7 +172,7 @@
   border-radius: 8px;
   color: #627992;
   font-size: 13px;
-  background: #f8fbff;
+  background: #f7f8fb;
 }
 
 .reservation-grid {
@@ -220,7 +216,7 @@
 
 .reservation-list li.active {
   border-color: #9dbbe0;
-  background: #eef5ff;
+  background: #f7f8fb;
 }
 
 .view-btn {
@@ -304,8 +300,8 @@
 
 .row-actions button,
 .reservation-form button {
-  border: 1px solid #477fbe;
-  background: linear-gradient(180deg, #3a76b5 0%, #295f97 100%);
+  border: 1px solid #078c83;
+  background: linear-gradient(180deg, #0f887f 0%, #0a6d65 100%);
   color: #fff;
   border-radius: 6px;
   height: 32px;

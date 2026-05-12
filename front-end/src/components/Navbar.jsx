@@ -9,6 +9,7 @@ import {
   pushSystemAlerts,
   subscribeSystemAlerts,
 } from "../utils/systemAlerts"
+import { readBusinessMood, subscribeBusinessMood } from "../utils/businessMood"
 
 function alertIdentityKey(item) {
   return [
@@ -19,9 +20,36 @@ function alertIdentityKey(item) {
   ].join("|")
 }
 
+function useTimedDisclosure(open, durationMs = 180) {
+  const [shouldRender, setShouldRender] = useState(open)
+  const [phase, setPhase] = useState(open ? "is-open" : "is-closed")
+
+  useEffect(() => {
+    if (open) {
+      setShouldRender(true)
+      setPhase("is-opening")
+      const timerId = window.setTimeout(() => setPhase("is-open"), 16)
+      return () => window.clearTimeout(timerId)
+    }
+
+    if (!shouldRender) {
+      setPhase("is-closed")
+      return undefined
+    }
+
+    setPhase("is-closing")
+    const timerId = window.setTimeout(() => {
+      setShouldRender(false)
+      setPhase("is-closed")
+    }, durationMs)
+    return () => window.clearTimeout(timerId)
+  }, [durationMs, open, shouldRender])
+
+  return { shouldRender, phase }
+}
+
 function Navbar({
   pagetitle = 'Dashboard',
-  image,
   userName,
   onMenuClick,
   count,
@@ -37,6 +65,21 @@ function Navbar({
   const [globalAlerts, setGlobalAlerts] = useState(() => getSystemAlerts())
   const [offlineState, setOfflineState] = useState(getOfflineState())
   const [dismissedAlertKeys, setDismissedAlertKeys] = useState(() => new Set())
+  const stationPublicId = session?.station?.publicId || "default"
+  const [businessMood, setBusinessMood] = useState(() => readBusinessMood(stationPublicId))
+  const userInitials = resolvedUserName
+    .split(" ")
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() || "")
+    .join("") || "SU"
+  const stationMembershipCount = Array.isArray(session?.stationMemberships) ? session.stationMemberships.length : 0
+  const canSwitchStation = stationMembershipCount > 1
+  const stationName = session?.station?.name || "No active station"
+  const stationPublicIdLabel = session?.station?.publicId || "No station ID"
+  const roleLabel = session?.role || "VIEWER"
+  const alertsDisclosure = useTimedDisclosure(showAlerts)
+  const userMenuDisclosure = useTimedDisclosure(showUserMenu)
 
   const normalizedAlerts = useMemo(
     () =>
@@ -131,6 +174,8 @@ function Navbar({
 
   useEffect(() => subscribeOfflineState(setOfflineState), [])
 
+  useEffect(() => subscribeBusinessMood(stationPublicId, setBusinessMood), [stationPublicId])
+
   function handleClearAllMessages() {
     setDismissedAlertKeys((prev) => {
       const next = new Set(prev)
@@ -139,6 +184,12 @@ function Navbar({
     })
     clearSystemAlerts()
   }
+
+  const connectivityLabel = offlineState.network === "OFFLINE"
+    ? "Offline"
+    : offlineState.sync === "SYNCING"
+      ? "Syncing"
+      : "Online"
 
   return (
     <nav className="topbar">
@@ -154,39 +205,49 @@ function Navbar({
               <path d="M4 6h16M4 12h16M4 18h16" />
             </svg>
           </button>
-          <h1 className="topbar-title">{pagetitle}</h1>
         </div>
 
         <div className="topbar-end">
-          <div className="topbar-connectivity" role="status" aria-live="polite">
-            <span
-              className={`topbar-connectivity-state ${
-                offlineState.sync === "SYNCING"
-                  ? "syncing"
-                  : offlineState.network === "ONLINE"
-                    ? "online"
-                    : "offline"
-              }`}
-            >
-              {offlineState.sync === "SYNCING" ? "SYNCING" : offlineState.network}
+          <button type="button" className="topbar-text-btn">Start guide</button>
+          <button
+            type="button"
+            className="topbar-mode-toggle"
+            aria-label="Toggle test mode"
+          >
+            <span>Test Mode</span>
+            <span className="topbar-switch" aria-hidden="true">
+              <span className="topbar-switch-thumb" />
             </span>
-            <span className="topbar-connectivity-pending">Pending {offlineState.pendingCount}</span>
-          </div>
-
-          <button type="button" className="icon-btn" aria-label="Notifications">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M15 17h5l-1.4-1.4A2 2 0 0 1 18 14.2V11a6 6 0 1 0-12 0v3.2c0 .5-.2 1-.6 1.4L4 17h5" />
-              <path d="M9.5 17a2.5 2.5 0 0 0 5 0" />
-            </svg>
           </button>
+          <button type="button" className="topbar-text-btn">Docs</button>
+
+          <span className={`topbar-status-pill ${businessMood ? "has-mood" : ""}`} title={businessMood ? `Today's mood: ${businessMood.label}` : connectivityLabel}>
+            {businessMood ? (
+              <>
+                <picture className="topbar-status-gif">
+                  <source srcSet={businessMood.webpSrc} type="image/webp" />
+                  <img src={businessMood.gifSrc} alt={businessMood.emoji} width="22" height="22" />
+                </picture>
+                <span>Today: {businessMood.label}</span>
+              </>
+            ) : (
+              <>
+                <span className={`topbar-status-dot ${offlineState.network === "OFFLINE" ? "is-offline" : "is-online"}`} aria-hidden="true" />
+                <span>{connectivityLabel}</span>
+              </>
+            )}
+          </span>
 
           <div className="topbar-messages" ref={alertsRef}>
             <button
               type="button"
-              className={`icon-btn has-badge ${showAlerts ? "active" : ""}`}
-              aria-label="Messages"
+              className={`icon-btn has-badge topbar-utility-btn ${showAlerts ? "active" : ""}`}
+              aria-label="Notifications"
               aria-expanded={showAlerts}
-              onClick={() => setShowAlerts((prev) => !prev)}
+              onClick={() => {
+                setShowUserMenu(false)
+                setShowAlerts((prev) => !prev)
+              }}
             >
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M4 6h16v12H4z" />
@@ -195,11 +256,14 @@ function Navbar({
               <span className="badge">{badgeCount}</span>
             </button>
 
-            {showAlerts ? (
-              <div className="topbar-messages-popover" role="dialog" aria-label="System messages">
-                <header>
-                  <strong>System Messages</strong>
-                  <small>{mergedAlerts.length} item{mergedAlerts.length === 1 ? "" : "s"}</small>
+            {alertsDisclosure.shouldRender ? (
+              <div className={`topbar-messages-popover ${alertsDisclosure.phase}`} role="dialog" aria-label="System messages">
+                <header className="topbar-popover-header">
+                  <div>
+                    <strong>System alerts</strong>
+                    <small>{mergedAlerts.length ? `${mergedAlerts.length} active message${mergedAlerts.length === 1 ? "" : "s"}` : "No active messages"}</small>
+                  </div>
+                  <span className="topbar-popover-count">{badgeCount}</span>
                 </header>
                 {mergedAlerts.length ? (
                   <div className="topbar-messages-tools">
@@ -208,7 +272,7 @@ function Navbar({
                       className="topbar-messages-clear"
                       onClick={handleClearAllMessages}
                     >
-                      Clear All
+                      Clear all
                     </button>
                   </div>
                 ) : null}
@@ -216,13 +280,14 @@ function Navbar({
                   {mergedAlerts.length ? (
                     mergedAlerts.map((item) => (
                       <article key={item.id} className={`topbar-message-item topbar-message-${item.type.toLowerCase()}`}>
-                        <h4>{item.title}</h4>
+                        <div className="topbar-message-title-row">
+                          <span className="topbar-message-severity-dot" aria-hidden="true" />
+                          <h4>{item.title}</h4>
+                        </div>
                         <p>{item.body || "-"}</p>
-                        {item.meta || item.occurrences > 1 ? (
-                          <small>
-                            {[item.meta || "", item.occurrences > 1 ? `x${item.occurrences}` : ""].filter(Boolean).join(" · ")}
-                          </small>
-                        ) : null}
+                        <small>
+                          {[item.source || pagetitle || "SYSTEM", item.meta || "", item.occurrences > 1 ? `x${item.occurrences}` : ""].filter(Boolean).join(" · ")}
+                        </small>
                       </article>
                     ))
                   ) : (
@@ -233,45 +298,50 @@ function Navbar({
             ) : null}
           </div>
 
-          <button type="button" className="icon-btn" aria-label="Help">
+          <button type="button" className="icon-btn topbar-utility-btn" aria-label="Theme">
             <svg viewBox="0 0 24 24" aria-hidden="true">
-              <circle cx="12" cy="12" r="9" />
-              <path d="M9.4 9.2a2.7 2.7 0 1 1 4.2 2.3c-.9.6-1.4 1.1-1.4 2.1" />
-              <circle cx="12" cy="16.9" r=".6" />
+              <circle cx="12" cy="12" r="4.2" />
+              <path d="M12 2.5v2.2M12 19.3v2.2M4.7 4.7l1.6 1.6M17.7 17.7l1.6 1.6M2.5 12h2.2M19.3 12h2.2M4.7 19.3l1.6-1.6M17.7 6.3l1.6-1.6" />
             </svg>
           </button>
-
           <div className="topbar-user-menu" ref={userMenuRef}>
             <button
               type="button"
               className={`topbar-user ${showUserMenu ? "open" : ""}`}
               aria-label="Account menu"
               aria-expanded={showUserMenu}
-              onClick={() => setShowUserMenu((prev) => !prev)}
+              onClick={() => {
+                setShowAlerts(false)
+                setShowUserMenu((prev) => !prev)
+              }}
             >
-              <img src={image} alt={resolvedUserName} />
-              <span>{resolvedUserName}</span>
-              <svg viewBox="0 0 20 20" aria-hidden="true">
-                <path d="m5 7 5 5 5-5" />
-              </svg>
+              <span className="topbar-user-avatar" aria-hidden="true">{userInitials}</span>
             </button>
 
-            {showUserMenu ? (
-              <div className="topbar-user-popover" role="menu" aria-label="Account options">
+            {userMenuDisclosure.shouldRender ? (
+              <div className={`topbar-user-popover ${userMenuDisclosure.phase}`} role="menu" aria-label="Account options">
                 <div className="topbar-user-popover-section">
-                  <strong>{session?.station?.name || "No active station"}</strong>
-                  <small>{session?.role || "VIEWER"}</small>
+                  <span className="topbar-user-popover-avatar" aria-hidden="true">{userInitials}</span>
+                  <div className="topbar-user-popover-copy">
+                    <strong>{resolvedUserName}</strong>
+                    <small>{stationName}</small>
+                    <span className="topbar-user-station-id">{stationPublicIdLabel}</span>
+                  </div>
+                  <span className="topbar-user-role-chip">{roleLabel}</span>
                 </div>
 
                 <button
                   type="button"
                   className="topbar-user-action"
+                  disabled={!canSwitchStation}
                   onClick={() => {
+                    if (!canSwitchStation) return
                     setShowUserMenu(false)
-                    openStationPicker()
+                    openStationPicker("manual")
                   }}
                 >
-                  Switch station
+                  <span>Switch station</span>
+                  <small>{canSwitchStation ? `${stationMembershipCount} linked stations` : "Only one station linked"}</small>
                 </button>
 
                 <button
@@ -282,7 +352,8 @@ function Navbar({
                     logout()
                   }}
                 >
-                  Switch account
+                  <span>Switch account</span>
+                  <small>Return to login</small>
                 </button>
 
                 <button
@@ -293,7 +364,8 @@ function Navbar({
                     logout()
                   }}
                 >
-                  Log out
+                  <span>Log out</span>
+                  <small>End this session</small>
                 </button>
               </div>
             ) : null}

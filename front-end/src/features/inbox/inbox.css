@@ -193,7 +193,7 @@
 
 .inbox-ticket-actions button {
   border: 1px solid #bfd1e7;
-  background: #f7fbff;
+  background: #f7f8fb;
   border-radius: 8px;
   padding: 7px 10px;
   color: #204f7d;
@@ -267,7 +267,7 @@
 }
 
 .inbox-thread-item.support {
-  background: #eef6ff;
+  background: #f7f8fb;
 }
 
 .inbox-thread-item.station {

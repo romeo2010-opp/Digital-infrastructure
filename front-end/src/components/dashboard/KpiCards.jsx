@@ -114,7 +114,7 @@ export default function KpiCards({ snapshot: initialSnapshot = null }) {
         value: Number(snapshot.kpis?.totalLitres || 0).toLocaleString(),
         unit: "Liters Today",
         label: "Sold Today",
-        tone: "blue",
+        tone: "teal",
       },
       {
         icon: "wallet",

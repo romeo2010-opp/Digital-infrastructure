@@ -19,6 +19,7 @@ import { subscribeOfflineState } from "../../offline/network"
 import { useStationChangeWatcher } from "../../hooks/useStationChangeWatcher"
 import { STATION_PLAN_FEATURES } from "../../subscription/planCatalog"
 import { useStationPlan } from "../../subscription/useStationPlan"
+import { useTopLoading } from "../../layout/TopLoadingContext"
 import "./reports.css"
 
 const avatar =
@@ -34,6 +35,7 @@ function toStationBoundaryIso(datePart, timePart) {
 }
 
 export default function StationReportsPage() {
+  const { setTopLoading } = useTopLoading()
   const stationPlan = useStationPlan()
   const [filters, setFilters] = useState({
     preset: "TODAY",
@@ -63,6 +65,10 @@ export default function StationReportsPage() {
   const [anomalyEvents, setAnomalyEvents] = useState([])
   const [anomalyGeneratedAt, setAnomalyGeneratedAt] = useState(null)
   const [anomalyLoading, setAnomalyLoading] = useState(false)
+
+  useEffect(() => {
+    setTopLoading("reports", loading || anomalyLoading)
+  }, [loading, anomalyLoading, setTopLoading])
   const [anomalyError, setAnomalyError] = useState("")
   const anomalyWindowRef = useRef(anomalyWindow)
 
@@ -96,7 +102,7 @@ export default function StationReportsPage() {
       if (showLoader) setLoading(true)
       setAnomalyError("")
       const insightsEnabled = stationPlan.hasFeature(STATION_PLAN_FEATURES.INSIGHTS)
-      setAnomalyLoading(insightsEnabled)
+      if (showLoader) setAnomalyLoading(insightsEnabled)
       const fromIso = toStationBoundaryIso(filters.fromDate, "00:00:00")
       const toIso = toStationBoundaryIso(filters.toDate, "23:59:59")
       const [snapshotResult, metricsResult, eventsResult] = await Promise.allSettled([
@@ -135,7 +141,7 @@ export default function StationReportsPage() {
     } catch (error) {
       showError(error)
     } finally {
-      setAnomalyLoading(false)
+      if (showLoader) setAnomalyLoading(false)
       if (showLoader) setLoading(false)
     }
   }, [filters, showError, stationPlan])

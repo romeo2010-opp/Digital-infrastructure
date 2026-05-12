@@ -94,7 +94,15 @@ export const AccountIcon = () => (
 );
 
 export const SmartLinkLogo = () => (
- <img src="/logo13.png" width={"55px"} height={"40px"}/>
+ <img src="/smartlink.png" width={"55px"} height={"40px"}/>
+);
+
+export const SmartLinkWhite = () => (
+ <img src="/smartlink-mark-tight.png" width={"256"} height={"256"} alt="" aria-hidden="true"/>
+);
+
+export const SmartLinkBlack = () => (
+ <img src="/favicon(black).png" width={"55px"} height={"40px"}/>
 );
 
 export const Folder = () => (

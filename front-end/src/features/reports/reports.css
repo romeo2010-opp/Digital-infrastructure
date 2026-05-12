@@ -2,9 +2,7 @@
   min-height: 100vh;
   box-sizing: border-box;
   padding: 84px 16px 16px;
-  background:
-    radial-gradient(circle at 8% 0%, rgba(13, 114, 129, 0.12), transparent 28%),
-    linear-gradient(180deg, #eef5fb 0%, #e1ebf5 100%);
+  background: #ffffff;
 }
 
 .reports-shell {
@@ -27,7 +25,7 @@
 .reports-panel {
   border: 1px solid #cfddef;
   border-radius: 8px;
-  background: linear-gradient(180deg, #f8fbff 0%, #edf3fb 100%);
+  background: #ffffff;
   padding: 12px;
 }
 
@@ -142,7 +140,7 @@
 .reports-export-modal-cancel {
   border: 1px solid #b9cfe8 !important;
   background: #ffffff !important;
-  color: #295f97 !important;
+  color: #0a6d65 !important;
 }
 
 .reports-actions button,
@@ -154,8 +152,8 @@
 .reports-drawer button {
   height: 34px;
   border-radius: 6px;
-  border: 1px solid #477fbe;
-  background: linear-gradient(180deg, #3a76b5 0%, #295f97 100%);
+  border: 1px solid #078c83;
+  background: linear-gradient(180deg, #0f887f 0%, #0a6d65 100%);
   color: #fff;
   font-size: 12px;
   font-weight: 700;
@@ -173,7 +171,7 @@
   grid-column: 1 / -1;
   padding: 8px 10px;
   border-radius: 6px;
-  background: #e8f4ff;
+  background: #ecfbfb;
   border: 1px solid #bad8f4;
   color: #315c86;
   font-size: 12px;
@@ -246,7 +244,7 @@
   border: 1px dashed #aac5e5;
   border-radius: 8px;
   padding: 10px;
-  background: #f7fbff;
+  background: #f7f8fb;
 }
 
 .reports-chart-placeholder h4 {
@@ -412,7 +410,7 @@
 
 .reports-export-loading {
   width: min(420px, calc(100vw - 20px));
-  background: #f8fbff;
+  background: #f7f8fb;
   border: 1px solid #c6d8ee;
   border-radius: 8px;
   padding: 14px;
@@ -458,8 +456,8 @@
 .reports-error-actions button {
   height: 34px;
   border-radius: 6px;
-  border: 1px solid #477fbe;
-  background: linear-gradient(180deg, #3a76b5 0%, #295f97 100%);
+  border: 1px solid #078c83;
+  background: linear-gradient(180deg, #0f887f 0%, #0a6d65 100%);
   color: #fff;
   font-size: 12px;
   font-weight: 700;
@@ -469,7 +467,7 @@
 
 .reports-modal {
   width: min(460px, calc(100vw - 20px));
-  background: #f8fbff;
+  background: #f7f8fb;
   border: 1px solid #c6d8ee;
   border-radius: 8px;
   padding: 12px;
@@ -491,7 +489,7 @@
   right: -340px;
   width: 320px;
   height: calc(100vh - 90px);
-  background: #f8fbff;
+  background: #f7f8fb;
   border-left: 1px solid #c7daef;
   box-shadow: -8px 0 20px rgba(17, 46, 76, 0.08);
   transition: right 240ms ease;

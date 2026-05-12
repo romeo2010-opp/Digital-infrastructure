@@ -3,6 +3,7 @@ import Navbar from "../components/Navbar"
 import { reservationsApi } from "../api/reservationsApi"
 import { useStationChangeWatcher } from "../hooks/useStationChangeWatcher"
 import { getAppTimeZone, zonedLocalDateTimeStringToUtcIso } from "../utils/dateTime"
+import { useTopLoading } from "../layout/TopLoadingContext"
 import "../assets/reservations.css"
 
 const avatar =
@@ -99,6 +100,7 @@ function collectCompletionPayload(reservation) {
 }
 
 export default function Reservations() {
+  const { setTopLoading } = useTopLoading()
   const isApiMode = (import.meta.env.VITE_DATA_SOURCE || "api").toLowerCase() === "api"
   const [reservations, setReservations] = useState(seedReservations)
   const [search, setSearch] = useState("")
@@ -110,6 +112,10 @@ export default function Reservations() {
   const [loadError, setLoadError] = useState("")
   const [actionState, setActionState] = useState({ type: "", id: "" })
   const [lookupState, setLookupState] = useState({ loading: false, matchedUser: null, error: "" })
+
+  useEffect(() => {
+    setTopLoading("reservations", loading || lookupState.loading)
+  }, [loading, lookupState.loading, setTopLoading])
   const [stats, setStats] = useState({
     total: seedReservations.length,
     pending: seedReservations.filter((item) => item.status === "Pending").length,

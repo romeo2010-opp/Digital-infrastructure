@@ -13,16 +13,21 @@ import InboxPage from "./features/inbox/InboxPage"
 import GetHelpPage from "./features/help/GetHelpPage"
 import MyAccountPage from "./features/account/MyAccountPage"
 import TransactionsTestPage from "./pages/TransactionsTestPage"
+import SettlementsPage from "./pages/SettlementsPage"
 import LivePumpMonitoringPage from "./features/monitoring/LivePumpMonitoringPage"
 import Login from './pages/Login'
+import LoginBriefing from "./components/LoginBriefing"
 import { useAuth } from "./auth/AuthContext";
 import { accountApi } from "./api/accountApi";
+import { briefingApi } from "./api/briefingApi";
 import { applyThemePreference, getStoredThemePreference } from "./utils/theme";
 import { startSyncEngine, stopSyncEngine } from "./offline/sync";
 import { AppShellProvider, useAppShell } from "./layout/AppShellContext";
+import { TopLoadingProvider, useTopLoading } from "./layout/TopLoadingContext";
 import PlanLockedPage from "./subscription/PlanLockedPage";
 import { STATION_PLAN_FEATURES } from "./subscription/planCatalog";
 import { useStationPlan } from "./subscription/useStationPlan";
+import './assets/station-theme.css'
 
 const APP_NAME = "SmartLink"
 const ROUTE_TITLES = [
@@ -36,7 +41,9 @@ const ROUTE_TITLES = [
   { path: "/inbox", title: "Inbox" },
   { path: "/help", title: "Help" },
   { path: "/account", title: "My Account" },
+  { path: "/transactions", title: "Transactions" },
   { path: "/transactions-test", title: "Transactions" },
+  { path: "/settlements", title: "Settlements" },
   { path: "/monitoring/pumps/:pumpId", title: "Live Monitoring" },
 ]
 
@@ -108,16 +115,45 @@ function buildWelcomeTourSteps(plan) {
   return steps
 }
 
-function StationSelectionDialog({ memberships, currentStationPublicId, onSelect, onClose }) {
+function StationSelectionDialog({ memberships, currentStationPublicId, intent = "manual", onSelect, onClose }) {
+  const normalizedMemberships = useMemo(
+    () =>
+      (Array.isArray(memberships) ? memberships : [])
+        .filter((membership) => membership?.station?.publicId)
+        .map((membership) => ({
+          ...membership,
+          stationPublicId: membership.station.publicId,
+          stationName: membership.station.name || "Unnamed station",
+          role: membership.role || "VIEWER",
+        })),
+    [memberships]
+  )
+  const defaultStationId = currentStationPublicId || normalizedMemberships[0]?.stationPublicId || ""
+  const [selectedStationId, setSelectedStationId] = useState(defaultStationId)
   const [pendingStationId, setPendingStationId] = useState("")
   const [error, setError] = useState("")
+  const isLoginIntent = intent === "login"
+  const selectedMembership = normalizedMemberships.find((membership) => membership.stationPublicId === selectedStationId)
+  const selectedIsCurrent = selectedStationId && selectedStationId === currentStationPublicId
+  const isPending = Boolean(pendingStationId)
 
-  async function handleSelect(stationPublicId) {
-    if (!stationPublicId || stationPublicId === pendingStationId) return
-    setPendingStationId(stationPublicId)
+  useEffect(() => {
+    setSelectedStationId(defaultStationId)
+    setError("")
+  }, [defaultStationId])
+
+  async function handleContinue() {
+    if (!selectedStationId || isPending) return
+    if (selectedIsCurrent) {
+      onClose()
+      return
+    }
+
+    setPendingStationId(selectedStationId)
     setError("")
     try {
-      await onSelect(stationPublicId)
+      await onSelect(selectedStationId)
+      onClose()
     } catch (selectError) {
       setError(selectError?.message || "Unable to switch station")
     } finally {
@@ -126,99 +162,78 @@ function StationSelectionDialog({ memberships, currentStationPublicId, onSelect,
   }
 
   return (
-    <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 1600,
-        background: "rgba(15, 23, 42, 0.42)",
-        display: "grid",
-        placeItems: "center",
-        padding: "24px",
-      }}
-    >
-      <div
-        style={{
-          width: "min(560px, calc(100vw - 32px))",
-          maxHeight: "calc(100vh - 48px)",
-          overflowY: "auto",
-          borderRadius: "16px",
-          border: "1px solid #d9e3ef",
-          background: "linear-gradient(180deg, #fbfdff 0%, #f1f5fa 100%)",
-          boxShadow: "0 24px 48px rgba(15, 23, 42, 0.18)",
-          padding: "22px",
-          boxSizing: "border-box",
-        }}
-      >
-        <header style={{ marginBottom: "16px", textAlign: "left" }}>
-          <h2 style={{ margin: 0, color: "#16385f", fontSize: "24px", fontWeight: 700 }}>Choose a station</h2>
-          <p style={{ margin: "8px 0 0", color: "#547293", fontSize: "14px", lineHeight: 1.45 }}>
-            This account is linked to multiple stations. Select the station workspace you want to enter.
+    <div className="station-picker-backdrop" role="presentation">
+      <div className="station-picker-modal">
+        <header className="station-picker-header">
+          <span>{isLoginIntent ? "Station access" : "Station switcher"}</span>
+          <h2>{isLoginIntent ? "Choose your station" : "Switch station"}</h2>
+          <p>
+            {isLoginIntent
+              ? "This account is linked to multiple stations. Confirm the workspace you want to enter."
+              : "Select a station first, then switch when you are ready. The current page will refresh its data without reloading the browser."}
           </p>
         </header>
 
-        <div style={{ display: "grid", gap: "12px" }}>
-          {memberships.map((membership) => {
-            const stationPublicId = membership?.station?.publicId || ""
+        <div className="station-picker-list">
+          {normalizedMemberships.map((membership) => {
+            const stationPublicId = membership.stationPublicId
             const isCurrent = stationPublicId === currentStationPublicId
-            const isPending = pendingStationId === stationPublicId
+            const isSelected = stationPublicId === selectedStationId
+            const optionPending = pendingStationId === stationPublicId
             return (
               <button
                 key={stationPublicId}
                 type="button"
-                onClick={() => handleSelect(stationPublicId)}
-                disabled={isPending}
-                style={{
-                  textAlign: "left",
-                  borderRadius: "14px",
-                  border: isCurrent ? "1px solid #8fb4dc" : "1px solid #d5e1ef",
-                  background: isCurrent ? "#eaf3ff" : "#ffffff",
-                  padding: "16px 18px",
-                  cursor: isPending ? "wait" : "pointer",
+                onClick={() => {
+                  if (isPending) return
+                  setSelectedStationId(stationPublicId)
+                  setError("")
                 }}
+                disabled={isPending}
+                aria-pressed={isSelected}
+                className={`station-picker-option ${isCurrent ? "is-current" : ""} ${isSelected ? "is-selected" : ""} ${optionPending ? "is-pending" : ""}`}
               >
-                <strong style={{ display: "block", color: "#1a416c", fontSize: "16px" }}>
-                  {membership?.station?.name || "Unnamed station"}
-                </strong>
-                <span style={{ display: "block", marginTop: "4px", color: "#5f7e9f", fontSize: "13px" }}>
-                  Role: {membership?.role || "VIEWER"}
+                <span className="station-picker-option-main">
+                  <strong>{membership.stationName}</strong>
+                  <small>{stationPublicId} · {membership.role}</small>
                 </span>
-                {isCurrent ? (
-                  <span style={{ display: "inline-block", marginTop: "8px", color: "#23588f", fontSize: "12px", fontWeight: 700 }}>
-                    Current station
+                <span className="station-picker-option-meta">
+                  <span className="station-picker-role-chip">{membership.role}</span>
+                  <span className="station-picker-option-status">
+                    {optionPending ? "Switching..." : isCurrent ? "Current" : isSelected ? "Selected" : "Available"}
                   </span>
-                ) : null}
-                {isPending ? (
-                  <span style={{ display: "inline-block", marginTop: "8px", color: "#23588f", fontSize: "12px", fontWeight: 700 }}>
-                    Switching...
-                  </span>
-                ) : null}
+                </span>
               </button>
             )
           })}
         </div>
 
         {error ? (
-          <p style={{ margin: "14px 0 0", color: "#a13030", fontSize: "13px", textAlign: "left" }}>{error}</p>
+          <p className="station-picker-error">{error}</p>
         ) : null}
 
-        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "16px" }}>
+        <div className="station-picker-actions">
           <button
             type="button"
+            className="station-picker-secondary"
             onClick={onClose}
-            disabled={Boolean(pendingStationId)}
-            style={{
-              height: "38px",
-              borderRadius: "10px",
-              border: "1px solid #cad8e8",
-              background: "#ffffff",
-              color: "#2d557e",
-              padding: "0 14px",
-              fontWeight: 600,
-              cursor: pendingStationId ? "not-allowed" : "pointer",
-            }}
+            disabled={isPending}
           >
-            Continue with current station
+            {isLoginIntent ? "Continue with current station" : "Cancel"}
+          </button>
+          <button
+            type="button"
+            className="station-picker-primary"
+            onClick={handleContinue}
+            disabled={!selectedMembership || isPending}
+          >
+            {isPending
+              ? "Switching..."
+              : selectedIsCurrent
+                ? "Continue with current station"
+                : isLoginIntent
+                  ? "Enter station"
+                  : "Switch station"}
           </button>
         </div>
       </div>
@@ -250,19 +265,19 @@ function WelcomeTourModal({ open, stepIndex, saving, error, onNext, onBack, onFi
           maxHeight: "calc(100vh - 48px)",
           overflowY: "auto",
           borderRadius: "20px",
-          border: "1px solid #d9e3ef",
-          background: "linear-gradient(180deg, #fbfdff 0%, #f1f5fa 100%)",
+          border: "1px solid #e0e3e6",
+          background: "#ffffff",
           boxShadow: "0 28px 56px rgba(15, 23, 42, 0.22)",
           padding: "24px",
           boxSizing: "border-box",
         }}
       >
         <header style={{ display: "grid", gap: "8px", marginBottom: "18px" }}>
-          <span style={{ color: "#5b7a9a", fontSize: "12px", fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase" }}>
+          <span style={{ color: "#747984", fontSize: "12px", fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase" }}>
             First Login Tour · Step {stepIndex + 1} of {steps.length}
           </span>
-          <h2 style={{ margin: 0, color: "#16385f", fontSize: "26px", fontWeight: 800 }}>{step.title}</h2>
-          <p style={{ margin: 0, color: "#547293", fontSize: "14px", lineHeight: 1.55 }}>{step.body}</p>
+          <h2 style={{ margin: 0, color: "#16191f", fontSize: "26px", fontWeight: 800 }}>{step.title}</h2>
+          <p style={{ margin: 0, color: "#747984", fontSize: "14px", lineHeight: 1.55 }}>{step.body}</p>
         </header>
 
         <div style={{ display: "grid", gap: "12px", marginBottom: "18px" }}>
@@ -271,10 +286,10 @@ function WelcomeTourModal({ open, stepIndex, saving, error, onNext, onBack, onFi
               key={item}
               style={{
                 borderRadius: "14px",
-                border: "1px solid #d9e3ef",
+                border: "1px solid #e0e3e6",
                 background: "#ffffff",
                 padding: "14px 16px",
-                color: "#24476d",
+                color: "#4d535d",
                 fontSize: "14px",
                 lineHeight: 1.45,
               }}
@@ -294,9 +309,9 @@ function WelcomeTourModal({ open, stepIndex, saving, error, onNext, onBack, onFi
             style={{
               height: "40px",
               borderRadius: "10px",
-              border: "1px solid #cad8e8",
+              border: "1px solid #d1d7dd",
               background: "#ffffff",
-              color: "#2d557e",
+              color: "#4d535d",
               padding: "0 14px",
               fontWeight: 600,
               cursor: saving || stepIndex === 0 ? "not-allowed" : "pointer",
@@ -314,9 +329,9 @@ function WelcomeTourModal({ open, stepIndex, saving, error, onNext, onBack, onFi
                 style={{
                   height: "40px",
                   borderRadius: "10px",
-                  border: "1px solid #cad8e8",
+                  border: "1px solid #d1d7dd",
                   background: "#ffffff",
-                  color: "#2d557e",
+                  color: "#4d535d",
                   padding: "0 14px",
                   fontWeight: 600,
                   cursor: saving ? "not-allowed" : "pointer",
@@ -332,8 +347,8 @@ function WelcomeTourModal({ open, stepIndex, saving, error, onNext, onBack, onFi
               style={{
                 height: "40px",
                 borderRadius: "10px",
-                border: "1px solid #1f4e89",
-                background: "#1f4e89",
+                border: "1px solid #078c83",
+                background: "#078c83",
                 color: "#ffffff",
                 padding: "0 16px",
                 fontWeight: 700,
@@ -349,11 +364,25 @@ function WelcomeTourModal({ open, stepIndex, saving, error, onNext, onBack, onFi
   )
 }
 
+function LoginBriefingModal({ briefing, managerName, onDismiss }) {
+  if (!briefing) return null
+
+  return (
+    <div
+      className="login-briefing-backdrop"
+      aria-modal="true"
+    >
+      <LoginBriefing briefing={briefing} managerName={managerName} onDismiss={onDismiss} />
+    </div>
+  )
+}
+
 function AppRouterFrame({
   loading,
   isAuthenticated,
   session,
   showStationPicker,
+  stationPickerIntent,
   closeStationPicker,
   switchStation,
   welcomeTourSteps,
@@ -361,6 +390,9 @@ function AppRouterFrame({
   welcomeTourStep,
   welcomeTourSaving,
   welcomeTourError,
+  loginBriefing,
+  loginBriefingOpen,
+  dismissLoginBriefing,
   setWelcomeTourStep,
   finishWelcomeTour,
 }) {
@@ -370,6 +402,7 @@ function AppRouterFrame({
   const navigate = useNavigate()
   const backgroundLocation = location.state?.backgroundLocation || null
   const isSettingsModalOpen = isAuthenticated && location.pathname === "/settings"
+  const stationRouteKey = isAuthenticated ? (session?.station?.publicId || "station") : "public"
 
   function closeSettingsModal() {
     if (backgroundLocation) {
@@ -395,7 +428,7 @@ function AppRouterFrame({
         }}
       >
         {isAuthenticated ? (
-          <Routes location={backgroundLocation || location}>
+          <Routes key={stationRouteKey} location={backgroundLocation || location}>
             <Route path="/" element={<Dashboard />} />
             <Route
               path="/reservations"
@@ -434,11 +467,27 @@ function AppRouterFrame({
             <Route path="/help" element={<GetHelpPage />} />
             <Route path="/account" element={<MyAccountPage />} />
             <Route
+              path="/transactions"
+              element={
+                stationPlan.hasFeature(STATION_PLAN_FEATURES.TRANSACTIONS_VIEW)
+                  ? <TransactionsTestPage />
+                  : <PlanLockedPage title="Transactions" featureName="Transaction history" requiredPlan={stationPlan.getRequirement(STATION_PLAN_FEATURES.TRANSACTIONS_VIEW)} />
+              }
+            />
+            <Route
               path="/transactions-test"
               element={
-                stationPlan.hasFeature(STATION_PLAN_FEATURES.TRANSACTIONS_RECORD)
+                stationPlan.hasFeature(STATION_PLAN_FEATURES.TRANSACTIONS_VIEW)
                   ? <TransactionsTestPage />
-                  : <PlanLockedPage title="Transactions" featureName="Transaction recording" requiredPlan={stationPlan.getRequirement(STATION_PLAN_FEATURES.TRANSACTIONS_RECORD)} />
+                  : <PlanLockedPage title="Transactions" featureName="Transaction history" requiredPlan={stationPlan.getRequirement(STATION_PLAN_FEATURES.TRANSACTIONS_VIEW)} />
+              }
+            />
+            <Route
+              path="/settlements"
+              element={
+                stationPlan.hasFeature(STATION_PLAN_FEATURES.TRANSACTIONS_VIEW)
+                  ? <SettlementsPage />
+                  : <PlanLockedPage title="Settlements" featureName="Settlement status" requiredPlan={stationPlan.getRequirement(STATION_PLAN_FEATURES.TRANSACTIONS_VIEW)} />
               }
             />
             <Route
@@ -462,12 +511,20 @@ function AppRouterFrame({
         <StationSelectionDialog
           memberships={session?.stationMemberships || []}
           currentStationPublicId={session?.station?.publicId || ""}
+          intent={stationPickerIntent}
           onSelect={switchStation}
           onClose={closeStationPicker}
         />
       ) : null}
+      {isAuthenticated && !showStationPicker && loginBriefingOpen ? (
+        <LoginBriefingModal
+          briefing={loginBriefing}
+          managerName={session?.user?.fullName || "Manager"}
+          onDismiss={dismissLoginBriefing}
+        />
+      ) : null}
       <WelcomeTourModal
-        open={Boolean(isAuthenticated && welcomeTourOpen && !showStationPicker) ? { steps: welcomeTourSteps } : null}
+        open={Boolean(isAuthenticated && welcomeTourOpen && !showStationPicker && !loginBriefingOpen) ? { steps: welcomeTourSteps } : null}
         stepIndex={welcomeTourStep}
         saving={welcomeTourSaving}
         error={welcomeTourError}
@@ -486,16 +543,32 @@ function AppContent() {
     isApiMode,
     session,
     showStationPicker,
+    stationPickerIntent,
     closeStationPicker,
     switchStation,
   } = useAuth()
   const stationPlan = useStationPlan()
+  const { setTopLoading } = useTopLoading()
   const welcomeTourSteps = useMemo(() => buildWelcomeTourSteps(stationPlan), [stationPlan])
   const [preferences, setPreferences] = useState(null)
   const [welcomeTourOpen, setWelcomeTourOpen] = useState(false)
   const [welcomeTourStep, setWelcomeTourStep] = useState(0)
   const [welcomeTourSaving, setWelcomeTourSaving] = useState(false)
   const [welcomeTourError, setWelcomeTourError] = useState("")
+  const [loginBriefing, setLoginBriefing] = useState(null)
+  const [loginBriefingOpen, setLoginBriefingOpen] = useState(false)
+  const [loginBriefingReady, setLoginBriefingReady] = useState(false)
+
+  const briefingStorageKey = useMemo(() => {
+    const stationPublicId = String(session?.station?.publicId || "").trim()
+    const userPublicId = String(session?.user?.publicId || "").trim()
+    if (!stationPublicId || !userPublicId) return ""
+    return `smartlink:login-briefing:${userPublicId}:${stationPublicId}`
+  }, [session?.station?.publicId, session?.user?.publicId])
+
+  useEffect(() => {
+    setTopLoading("auth", loading)
+  }, [loading, setTopLoading])
 
   useEffect(() => {
     const storedPreference = getStoredThemePreference() || "SYSTEM"
@@ -536,12 +609,72 @@ function AppContent() {
       return
     }
     if (showStationPicker) return
+    if (!loginBriefingReady) return
     if (preferences && !preferences.completedWelcomeTour) {
       setWelcomeTourStep(0)
       setWelcomeTourOpen(true)
       setWelcomeTourError("")
     }
-  }, [isApiMode, isAuthenticated, preferences, showStationPicker])
+  }, [isApiMode, isAuthenticated, loginBriefingReady, preferences, showStationPicker])
+
+  useEffect(() => {
+    setLoginBriefing(null)
+    setLoginBriefingOpen(false)
+    setLoginBriefingReady(false)
+  }, [briefingStorageKey])
+
+  useEffect(() => {
+    if (!isAuthenticated || !isApiMode) {
+      setLoginBriefingReady(true)
+      return undefined
+    }
+    if (showStationPicker) return undefined
+    const stationPublicId = String(session?.station?.publicId || "").trim()
+    if (!stationPublicId || !briefingStorageKey) return undefined
+
+    if (window.sessionStorage.getItem(briefingStorageKey)) {
+      setLoginBriefingReady(true)
+      return undefined
+    }
+
+    let canceled = false
+    setTopLoading("login-briefing", true)
+    ;(async () => {
+      try {
+        const payload = await briefingApi.getStationBriefing(stationPublicId)
+        if (canceled) return
+        setLoginBriefing(payload?.briefing || null)
+        setLoginBriefingOpen(Boolean(payload?.briefing))
+        setLoginBriefingReady(false)
+      } catch {
+        if (canceled) return
+        setLoginBriefing(null)
+        setLoginBriefingOpen(false)
+        setLoginBriefingReady(true)
+      } finally {
+        if (!canceled) setTopLoading("login-briefing", false)
+      }
+    })()
+
+    return () => {
+      canceled = true
+      setTopLoading("login-briefing", false)
+    }
+  }, [briefingStorageKey, isApiMode, isAuthenticated, session?.station?.publicId, setTopLoading, showStationPicker])
+
+  function dismissLoginBriefing(details = {}) {
+    if (briefingStorageKey) {
+      window.sessionStorage.setItem(
+        briefingStorageKey,
+        JSON.stringify({
+          dismissedAt: new Date().toISOString(),
+          slidesViewed: Array.isArray(details?.slidesViewed) ? details.slidesViewed : [],
+        })
+      )
+    }
+    setLoginBriefingOpen(false)
+    setLoginBriefingReady(true)
+  }
 
   async function finishWelcomeTour() {
     if (!isApiMode) {
@@ -558,6 +691,15 @@ function AppContent() {
       setWelcomeTourError(error?.message || "Unable to save welcome tour progress")
     } finally {
       setWelcomeTourSaving(false)
+    }
+  }
+
+  async function switchStationWithLoading(stationPublicId) {
+    setTopLoading("station-switch", true)
+    try {
+      return await switchStation(stationPublicId)
+    } finally {
+      setTopLoading("station-switch", false)
     }
   }
 
@@ -578,13 +720,17 @@ function AppContent() {
         isApiMode={isApiMode}
         session={session}
         showStationPicker={showStationPicker}
+        stationPickerIntent={stationPickerIntent}
         closeStationPicker={closeStationPicker}
-        switchStation={switchStation}
+        switchStation={switchStationWithLoading}
         welcomeTourSteps={welcomeTourSteps}
         welcomeTourOpen={welcomeTourOpen}
         welcomeTourStep={welcomeTourStep}
         welcomeTourSaving={welcomeTourSaving}
         welcomeTourError={welcomeTourError}
+        loginBriefing={loginBriefing}
+        loginBriefingOpen={loginBriefingOpen}
+        dismissLoginBriefing={dismissLoginBriefing}
         setWelcomeTourStep={setWelcomeTourStep}
         finishWelcomeTour={finishWelcomeTour}
       />
@@ -595,7 +741,9 @@ function AppContent() {
 function App() {
   return (
     <AppShellProvider>
-      <AppContent />
+      <TopLoadingProvider>
+        <AppContent />
+      </TopLoadingProvider>
     </AppShellProvider>
   )
 }

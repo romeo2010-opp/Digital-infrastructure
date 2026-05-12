@@ -19,7 +19,7 @@ echo "Starting user-frontend..."
 
 # Start MERA
 echo "Starting MERA..."
-(cd MERA && npm run dev) &
+(cd mera && npm run dev) &
 
 # Start frontend
 echo "Starting Vite internal"

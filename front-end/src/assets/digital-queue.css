@@ -2,9 +2,7 @@
   min-height: 100vh;
   box-sizing: border-box;
   padding: 84px 16px 16px;
-  background:
-    radial-gradient(circle at 20% 10%, rgba(43, 85, 140, 0.2), transparent 34%),
-    linear-gradient(180deg, #ecf2fb 0%, #dfe7f4 100%);
+  background: #ffffff;
 }
 
 .queue-shell {
@@ -20,7 +18,7 @@
 .queue-list-panel,
 .queue-detail-panel,
 .queue-form-panel {
-  background: linear-gradient(180deg, #f8fbff 0%, #edf3fb 100%);
+  background: #ffffff;
   border: 1px solid #cfddef;
   border-radius: 8px;
 }
@@ -48,8 +46,8 @@
 .queue-actions button {
   height: 36px;
   padding: 0 12px;
-  border: 1px solid #477fbe;
-  background: linear-gradient(180deg, #3a76b5 0%, #295f97 100%);
+  border: 1px solid #078c83;
+  background: linear-gradient(180deg, #0f887f 0%, #0a6d65 100%);
   color: #fff;
   border-radius: 6px;
   font-size: 13px;
@@ -85,7 +83,7 @@
   margin: 0;
   border-radius: 8px;
   border: 1px solid #b9d4f3;
-  background: #e9f4ff;
+  background: #ecfbfb;
   color: #27507f;
   padding: 10px 12px;
   font-size: 13px;
@@ -200,7 +198,7 @@
 .item-ops button,
 .queue-form-panel button {
   border: 1px solid #c3d6ed;
-  background: #eff6ff;
+  background: #f7f8fb;
   color: #2b4b74;
   border-radius: 5px;
   height: 30px;

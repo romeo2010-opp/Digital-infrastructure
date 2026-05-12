@@ -230,8 +230,8 @@ async function notifyUsersOfStationPriceChange({ station, previousPrices, nextPr
           body: alert.message,
           tag: alert.publicId || `station-price-${station?.public_id || Date.now()}`,
           url: station?.public_id ? `/m/stations/${station.public_id}` : "/m/alerts",
-          icon: "/smartlogo.png",
-          badge: "/smartlogo.png",
+          icon: "/smartlink.png",
+          badge: "/smartlink.png",
         },
         data: {
           alertPublicId: alert.publicId || null,

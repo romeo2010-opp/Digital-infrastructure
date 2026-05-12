@@ -4,6 +4,7 @@ import { attendantApi } from "../../api/attendantApi"
 import { useStationChangeWatcher } from "../../hooks/useStationChangeWatcher"
 import { formatDateTime } from "../../utils/dateTime"
 import { pushSystemAlert } from "../../utils/systemAlerts"
+import { useTopLoading } from "../../layout/TopLoadingContext"
 import "./attendantDesk.css"
 
 const avatar =
@@ -109,7 +110,7 @@ function StatusPill({ value, tone = "neutral" }) {
   return <span className={`ad-pill ad-pill-${tone}`}>{humanize(value) || "-"}</span>
 }
 
-function SummaryCard({ label, value, helper, accent = "blue", detail = "" }) {
+function SummaryCard({ label, value, helper, accent = "teal", detail = "" }) {
   return (
     <article className={`ad-summary-card ad-summary-card-${accent}`}>
       <div className="ad-summary-card-top">
@@ -166,10 +167,10 @@ function DeskPulse({
       </div>
 
       <div className="ad-pulse-stats">
-        <PulseStat label="Visible Orders" value={filteredOrders.length} tone="blue" />
+        <PulseStat label="Visible Orders" value={filteredOrders.length} tone="teal" />
         <PulseStat label="Service Ready" value={serviceReadyCount} tone="green" />
         <PulseStat label="Urgent Timers" value={urgentOrders.length} tone={urgentOrders.length ? "amber" : "neutral"} />
-        <PulseStat label="Pump Activity" value={activePumpSessions.length} tone="blue" />
+        <PulseStat label="Pump Activity" value={activePumpSessions.length} tone="teal" />
         <PulseStat label="Telemetry Attention" value={telemetryAttentionCount} tone={telemetryAttentionCount ? "red" : "neutral"} />
         <PulseStat label="Open Refunds" value={openRefunds} tone={openRefunds ? "amber" : "neutral"} />
       </div>
@@ -498,6 +499,7 @@ function AuditPanel({ audit, loading, onClose }) {
 }
 
 export default function AttendantDeskPage() {
+  const { setTopLoading } = useTopLoading()
   const [snapshot, setSnapshot] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
@@ -507,6 +509,10 @@ export default function AttendantDeskPage() {
   const [modal, setModal] = useState(null)
   const [audit, setAudit] = useState(null)
   const [auditLoading, setAuditLoading] = useState(false)
+
+  useEffect(() => {
+    setTopLoading("attendant", loading || auditLoading)
+  }, [loading, auditLoading, setTopLoading])
 
   const refreshDashboard = useCallback(async ({ showLoader = true } = {}) => {
     try {
@@ -723,7 +729,7 @@ export default function AttendantDeskPage() {
             value={snapshot?.summary?.liveOrders || 0}
             helper="Orders currently visible on the operations board"
             detail={`${assignedOrders} already assigned`}
-            accent="blue"
+            accent="teal"
           />
           <SummaryCard
             label="Dispensing"

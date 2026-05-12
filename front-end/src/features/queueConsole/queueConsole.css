@@ -2,9 +2,7 @@
   min-height: 100vh;
   box-sizing: border-box;
   padding: 84px 16px 16px;
-  background:
-    radial-gradient(circle at 20% 10%, rgba(43, 85, 140, 0.2), transparent 34%),
-    linear-gradient(180deg, #ecf2fb 0%, #dfe7f4 100%);
+  background: #ffffff;
 }
 
 .qc-console {
@@ -17,7 +15,7 @@
 .qc-panel {
   border: 1px solid #cfddef;
   border-radius: 8px;
-  background: linear-gradient(180deg, #f8fbff 0%, #edf3fb 100%);
+  background: #ffffff;
   padding: 12px;
 }
 
@@ -97,8 +95,8 @@
 .qc-panel button {
   height: 34px;
   border-radius: 6px;
-  border: 1px solid #477fbe;
-  background: linear-gradient(180deg, #3a76b5 0%, #295f97 100%);
+  border: 1px solid #078c83;
+  background: linear-gradient(180deg, #0f887f 0%, #0a6d65 100%);
   color: #fff;
   font-size: 12px;
   font-weight: 700;
@@ -216,7 +214,7 @@
 }
 
 .qc-queue-list th {
-  color: #16385f;
+  color: #16191f;
   font-size: 12px;
 }
 

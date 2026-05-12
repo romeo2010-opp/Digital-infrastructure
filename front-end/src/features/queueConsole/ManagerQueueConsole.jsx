@@ -12,6 +12,7 @@ import WalkInModePanel from "./WalkInModePanel"
 import QueueRulesPanel from "./QueueRulesPanel"
 import ActivityLogPanel from "./ActivityLogPanel"
 import { formatDateTime } from "../../utils/dateTime"
+import { useTopLoading } from "../../layout/TopLoadingContext"
 import "./queueConsole.css"
 
 const avatar =
@@ -43,11 +44,16 @@ function enrichEntries(entries) {
 }
 
 export default function ManagerQueueConsole() {
+  const { setTopLoading } = useTopLoading()
   const [snapshot, setSnapshot] = useState(null)
   const [loading, setLoading] = useState(true)
   const [statusFilter, setStatusFilter] = useState("All")
   const [searchText, setSearchText] = useState("")
   const [actionError, setActionError] = useState("")
+
+  useEffect(() => {
+    setTopLoading("queue-console", loading)
+  }, [loading, setTopLoading])
 
   const refreshSnapshot = useCallback(async ({ showLoader = true } = {}) => {
     try {

@@ -2,10 +2,7 @@
   min-height: 100vh;
   box-sizing: border-box;
   padding: 84px 16px 16px;
-  background:
-    radial-gradient(circle at top left, rgba(61, 126, 196, 0.16), transparent 28%),
-    radial-gradient(circle at top right, rgba(24, 118, 86, 0.08), transparent 24%),
-    linear-gradient(180deg, #f5f8fc 0%, #eaf1f8 100%);
+  background: #ffffff;
 }
 
 .ad-shell {
@@ -40,11 +37,10 @@
   padding: 24px;
   display: grid;
   gap: 18px;
-  background:
-    linear-gradient(135deg, rgba(13, 48, 82, 0.96) 0%, rgba(23, 73, 117, 0.92) 58%, rgba(20, 98, 89, 0.84) 100%);
-  border-color: rgba(36, 86, 128, 0.58);
-  color: #f6fbff;
-  box-shadow: 0 20px 40px rgba(13, 36, 59, 0.2);
+  background: #ffffff;
+  border-color: #d4e0ec;
+  color: #17395d;
+  box-shadow: 0 16px 32px rgba(17, 50, 84, 0.08);
 }
 
 .ad-pulse h2,
@@ -56,7 +52,7 @@
 }
 
 .ad-pulse h2 {
-  color: #ffffff;
+  color: #17395d;
 }
 
 .ad-pulse p,
@@ -72,7 +68,7 @@
 }
 
 .ad-pulse p {
-  color: rgba(231, 241, 250, 0.82);
+  color: #5f7f9d;
 }
 
 .ad-pulse-hero {
@@ -89,7 +85,7 @@
 }
 
 .ad-pulse-copy small {
-  color: rgba(206, 225, 244, 0.84);
+  color: #5f7f9d;
   text-transform: uppercase;
   letter-spacing: 0.1em;
   font-size: 12px;
@@ -106,12 +102,12 @@
   gap: 6px;
   border-radius: 16px;
   padding: 14px 16px;
-  background: rgba(255, 255, 255, 0.1);
-  border: 1px solid rgba(198, 219, 239, 0.2);
+  background: #f8fafc;
+  border: 1px solid #d4e0ec;
 }
 
 .ad-pulse-meta-card span {
-  color: rgba(206, 225, 244, 0.74);
+  color: #5f7f9d;
   font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -180,8 +176,8 @@
   font-size: 22px;
 }
 
-.ad-pulse-stat-blue {
-  background: rgba(78, 149, 219, 0.16);
+.ad-pulse-stat-teal {
+  background: rgba(25, 199, 202, 0.16);
 }
 
 .ad-pulse-stat-green {
@@ -254,8 +250,8 @@
   text-align: right;
 }
 
-.ad-summary-card-blue {
-  background: linear-gradient(180deg, rgba(240, 248, 255, 0.96) 0%, rgba(229, 240, 252, 0.96) 100%);
+.ad-summary-card-teal {
+  background: linear-gradient(180deg, rgba(236, 251, 251, 0.96) 0%, rgba(247, 248, 251, 0.96) 100%);
 }
 
 .ad-summary-card-green {
@@ -388,7 +384,7 @@
   padding: 13px 14px;
   border-radius: 14px;
   border: 1px solid #d7e2ed;
-  background: #f7fbff;
+  background: #f7f8fb;
 }
 
 .ad-order-priority span {
@@ -420,7 +416,7 @@
   padding: 12px 14px;
   border-radius: 14px;
   border: 1px solid #d7e2ed;
-  background: linear-gradient(180deg, #f8fbff 0%, #f1f6fb 100%);
+  background: linear-gradient(180deg, #f7f8fb 0%, #f7f8fb 100%);
 }
 
 .ad-order-assignment span {

@@ -26,6 +26,7 @@ import attendantRoutes from "./modules/attendant/routes.js"
 import assistantRoutes, { publicAssistantRouter } from "./modules/assistant/routes.js"
 import fuelOrdersRoutes, { fuelOrderGatewayRoutes } from "./modules/fuelOrders/routes.js"
 import transactionPublicRoutes from "./modules/transactions/public.routes.js"
+import briefingRoutes from "./modules/briefing/routes.js"
 import authRouter from "./modules/auth/auth.router.js"
 import authApiRouter from "./modules/auth/auth.api.router.js"
 import internalAuthRoutes from "./modules/internal/auth.routes.js"
@@ -100,6 +101,7 @@ apiRouter.use(promotionsRoutes)
 apiRouter.use(attendantRoutes)
 apiRouter.use(assistantRoutes)
 apiRouter.use(fuelOrdersRoutes)
+apiRouter.use(briefingRoutes)
 apiRouter.use(authApiRouter)
 
 app.use("/auth", authRouter)

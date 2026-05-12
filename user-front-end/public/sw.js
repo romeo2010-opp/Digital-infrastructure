@@ -19,8 +19,8 @@ self.addEventListener("push", (event) => {
   const title = payload?.title || "SmartLink Alert"
   const options = {
     body: payload?.body || "You have a new SmartLink alert.",
-    icon: payload?.icon || "/smartlogo.png",
-    badge: payload?.badge || "/smartlogo.png",
+    icon: payload?.icon || "/smartlink.png",
+    badge: payload?.badge || "/smartlink.png",
     tag: payload?.tag || "smartlink-alert",
     data: {
       url: payload?.url || "/m/alerts",

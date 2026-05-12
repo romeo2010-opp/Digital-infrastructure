@@ -2,16 +2,14 @@ import { createContext, useContext, useEffect, useMemo, useState } from "react"
 
 const MOBILE_BREAKPOINT_PX = 768
 const DESKTOP_COLLAPSED_WIDTH = 88
-const DESKTOP_EXPANDED_WIDTH = 280
+const DESKTOP_EXPANDED_WIDTH = 256
 const SIDEBAR_WIDTH_STORAGE_KEY = "smartlink.sidebarWidth"
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "smartlink.sidebarCollapsed"
 
 const AppShellContext = createContext(null)
 
 function getStoredSidebarWidth() {
-  const value = Number(window.localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY) || DESKTOP_EXPANDED_WIDTH)
-  if (!Number.isFinite(value)) return DESKTOP_EXPANDED_WIDTH
-  return Math.min(500, Math.max(220, value))
+  return DESKTOP_EXPANDED_WIDTH
 }
 
 function getStoredCollapsedState() {
@@ -75,8 +73,8 @@ export function AppShellProvider({ children }) {
       openSidebar() {
         if (isMobile) setIsSidebarOpen(true)
       },
-      setDesktopSidebarWidth(width) {
-        setDesktopSidebarWidth(Math.min(500, Math.max(220, width)))
+      setDesktopSidebarWidth() {
+        setDesktopSidebarWidth(DESKTOP_EXPANDED_WIDTH)
       },
     }),
     [activeSidebarWidth, desktopSidebarWidth, isMobile, isSidebarCollapsed, isSidebarOpen]

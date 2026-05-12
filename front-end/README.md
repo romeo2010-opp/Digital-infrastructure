@@ -20,13 +20,19 @@ If you are developing a production application, we recommend using TypeScript wi
 Set these in `front-end/.env` when you want UI pages to use backend APIs:
 
 ```env
-VITE_API_BASE_URL=http://localhost:4000
 VITE_DATA_SOURCE=api
+VITE_API_BASE_URL=
+VITE_DEV_API_TARGET=http://127.0.0.1:4000
+VITE_WS_BASE_URL=
 ```
 
 Default data source is API. Set `VITE_DATA_SOURCE=mock` only if you want local mock behavior.
 If frontend and backend share the same host (recommended), leave `VITE_API_BASE_URL` blank.
-In dev, blank `VITE_API_BASE_URL` uses the Vite proxy (`/api`, `/auth`, `/health`) from `vite.config.js`.
+In dev, blank `VITE_API_BASE_URL` uses the Vite proxy (`/api`, `/auth`, `/health`, `/ws`) from `vite.config.js`.
+
+For public tunnel testing, point the tunnel to the Vite app (`http://localhost:5000`) and keep both `VITE_API_BASE_URL` and `VITE_WS_BASE_URL` blank. The browser will connect to the current public origin, so HTTPS tunnel pages use `wss://<tunnel-host>/ws/station-changes` instead of trying to reach `localhost` or a LAN IP from the remote device.
+
+Set `VITE_WS_BASE_URL` only when the Station Manager app must connect to a separate public websocket/API host.
 
 Production note:
 - If frontend is served from the same host as backend (recommended with Cloudflared), set `VITE_API_BASE_URL=` (blank).

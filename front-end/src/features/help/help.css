@@ -2,9 +2,7 @@
   min-height: 100vh;
   box-sizing: border-box;
   padding: 84px 16px 16px;
-  background:
-    radial-gradient(circle at 8% 0%, rgba(13, 114, 129, 0.12), transparent 28%),
-    linear-gradient(180deg, #eef5fb 0%, #e1ebf5 100%);
+  background: #ffffff;
 }
 
 .help-v1-shell {
@@ -17,7 +15,7 @@
 .help-v1-panel {
   border: 1px solid #cfddef;
   border-radius: 8px;
-  background: linear-gradient(180deg, #f8fbff 0%, #edf3fb 100%);
+  background: #ffffff;
   padding: 12px;
 }
 
@@ -41,7 +39,7 @@
   padding: 4px 9px;
   border-radius: 999px;
   border: 1px solid #bfd2e7;
-  background: #f7fbff;
+  background: #f7f8fb;
   color: #325a85;
 }
 
@@ -258,7 +256,7 @@
 }
 
 .help-v1-ticket-head span {
-  color: #5f7f9f;
+  color: #747984;
   font-size: 12px;
 }
 
@@ -304,7 +302,7 @@
   border-radius: 999px;
   padding: 3px 8px;
   color: #24507d;
-  background: #f7fbff;
+  background: #f7f8fb;
   font-size: 11px;
 }
 
@@ -361,7 +359,7 @@
 
 .help-v1-empty {
   margin: 0;
-  color: #5f7f9f;
+  color: #747984;
   font-size: 13px;
 }
 
@@ -381,7 +379,7 @@
   overflow: auto;
   border: 1px solid #c6d8ee;
   border-radius: 10px;
-  background: #f8fbff;
+  background: #f7f8fb;
 }
 
 .help-v1-drawer {

@@ -1,10 +1,11 @@
 import { useState } from "react"
-import { SmartLinkLogo } from "../utils/icons"
 import { useAuth } from "../auth/AuthContext"
+import { useTopLoading } from "../layout/TopLoadingContext"
 import "../assets/login.css"
 
 export default function Login({ bootstrapping = false }) {
   const { login, isApiMode } = useAuth()
+  const { setTopLoading } = useTopLoading()
   const [form, setForm] = useState({
     email: "",
     password: "",
@@ -20,6 +21,7 @@ export default function Login({ bootstrapping = false }) {
     event.preventDefault()
     setError("")
     setLoading(true)
+    setTopLoading("login", true)
 
     try {
       await login({
@@ -30,44 +32,36 @@ export default function Login({ bootstrapping = false }) {
       setError(err.message || "Login failed")
     } finally {
       setLoading(false)
+      setTopLoading("login", false)
     }
   }
 
   return (
     <section className="login-page">
       <article className="login-layout">
-        <aside className="login-showcase">
-          <header className="login-showcase-brand">
-            <SmartLinkLogo />
-            <div>
-              <h1>SmartLink</h1>
-              <p>Fuel Infrastructure Cloud</p>
-            </div>
-          </header>
-          <div className="login-showcase-copy">
-            <h2>Station Operations Suite</h2>
-            <p>Manage queues, pumps, reports, and station activity from one secure dashboard.</p>
-            <ul>
-              <li>Live queue and reservation management</li>
-              <li>Pump status controls and alerts</li>
-              <li>Shift reports with audit traceability</li>
-            </ul>
-          </div>
-        </aside>
-
         <div className="login-card">
+          <span className="login-brand-mark" aria-hidden="true">
+            <img src="/smartlink-mark-tight.png" alt="" />
+          </span>
+
           <header className="login-card-header">
-            <h3>Sign In</h3>
-            <p>Use your station credentials to continue.</p>
+            <h1>Welcome back</h1>
+            <p>Log in to your SmartLink station account</p>
           </header>
+
+          <div className="login-divider" aria-hidden="true">
+            <span />
+            <strong>continue with email</strong>
+            <span />
+          </div>
 
           {bootstrapping ? (
             <p className="login-note">Checking active session...</p>
           ) : null}
 
           <form className="login-form" onSubmit={onSubmit}>
-            <label>
-              Email
+            <label className="login-field">
+              <span>Email</span>
               <input
                 type="email"
                 value={form.email}
@@ -76,8 +70,13 @@ export default function Login({ bootstrapping = false }) {
               />
             </label>
 
-            <label>
-              Password
+            <label className="login-field">
+              <span className="login-label-row">
+                <span>Password</span>
+                <button type="button" className="login-inline-action">
+                  Forgot password?
+                </button>
+              </span>
               <input
                 type="password"
                 value={form.password}
@@ -87,15 +86,33 @@ export default function Login({ bootstrapping = false }) {
               />
             </label>
 
+            <div className="login-verification" aria-label="Verification placeholder">
+              <span className="login-verification-check" aria-hidden="true" />
+              <span className="login-verification-text">I&apos;m not a robot</span>
+              <span className="login-captcha-mark" aria-hidden="true">
+                <span />
+                <small>reCAPTCHA</small>
+              </span>
+            </div>
+
             {error ? <p className="login-error">{error}</p> : null}
 
             {!isApiMode ? <p className="login-note">Mock mode is active. Set `VITE_DATA_SOURCE=api` for backend auth.</p> : null}
 
-            <button type="submit" disabled={loading}>
-              {loading ? "Signing in..." : "Sign In"}
+            <button type="submit" className="login-submit" disabled={loading}>
+              {loading ? "Signing in..." : "Log in"}
             </button>
+
+            <p className="login-signup">
+              First time around here?{" "}
+              <button type="button">Contact administrator</button>
+            </p>
           </form>
         </div>
+
+        <aside className="login-showcase" aria-label="SmartLink station workspace">
+          <img src="/login-person-laptop.png" alt="Person using a laptop" />
+        </aside>
       </article>
     </section>
   )

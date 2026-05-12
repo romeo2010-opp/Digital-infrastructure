@@ -20,7 +20,7 @@
 .promotions-card {
   border-radius: 18px;
   border: 1px solid var(--promotions-line);
-  background: linear-gradient(180deg, #ffffff 0%, #f9fbfe 100%);
+  background: #ffffff;
   box-shadow: 0 12px 30px rgba(15, 23, 42, 0.06);
   min-width: 0;
 }
@@ -63,7 +63,7 @@
   padding: 10px 12px;
   border: 1px solid #d4dfeb;
   border-radius: 10px;
-  background: #f7fbff;
+  background: #f7f8fb;
   color: var(--promotions-muted);
   font-size: 12px;
   line-height: 1.45;
@@ -111,7 +111,7 @@
   min-height: 36px;
   padding: 0 12px;
   border: 1px solid #c9d8e6;
-  background: #f7fbff;
+  background: #f7f8fb;
   color: #244b6c;
   max-width: 100%;
 }
@@ -215,9 +215,7 @@
   padding: 18px;
   border-radius: 18px;
   border: 1px solid var(--promotions-line);
-  background:
-    radial-gradient(circle at top right, rgba(14, 140, 116, 0.08), transparent 26%),
-    linear-gradient(180deg, #ffffff 0%, #f8fbfd 100%);
+  background: #ffffff;
   min-width: 0;
 }
 

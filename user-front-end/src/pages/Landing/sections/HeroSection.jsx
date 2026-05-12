@@ -1,12 +1,9 @@
-import { motion as _motion, useReducedMotion, useScroll, useTransform } from 'framer-motion'
+import { motion as _motion, useReducedMotion } from 'framer-motion'
 import { useTranslation } from 'react-i18next'
-import { TypewriterText } from '../components/TypewriterText'
 
 export function HeroSection({ onPrimaryAction, onSecondaryAction }) {
   const { t } = useTranslation()
   const prefersReducedMotion = useReducedMotion()
-  const { scrollYProgress } = useScroll()
-  const parallaxY = useTransform(scrollYProgress, [0, 1], [0, -20])
 
   const staggerContainer = {
     hidden: {},
@@ -24,11 +21,14 @@ export function HeroSection({ onPrimaryAction, onSecondaryAction }) {
 
   return (
     <section id='product' className='landing-hero-wrap'>
-      <_motion.div
-        className='landing-hero-bg'
-        style={prefersReducedMotion ? undefined : { y: parallaxY }}
+      <img
+        src='/landing/hero-fuel-network.png'
+        alt=''
+        className='landing-hero-image'
         aria-hidden='true'
+        loading='eager'
       />
+      <div className='landing-hero-bg' aria-hidden='true' />
       <div className='landing-hero-shell'>
         <_motion.div
           className='landing-hero'
@@ -43,9 +43,9 @@ export function HeroSection({ onPrimaryAction, onSecondaryAction }) {
             <_motion.h1 variants={childVariant}>
               <span className='landing-hero-title-accent'>{t('landing.hero.titleLead')}</span>
               <span className='landing-hero-title-stack'>
-                <span><TypewriterText text={t('landing.hero.titleLine1')} speed={120} delay={200} /></span>
-                <span><TypewriterText text={t('landing.hero.titleLine2')} speed={120} delay={2200} /></span>
-                <span><TypewriterText text={t('landing.hero.titleLine3')} speed={120} delay={4200} /></span>
+                <span>{t('landing.hero.titleLine1')}</span>
+                <span>{t('landing.hero.titleLine2')}</span>
+                <span>{t('landing.hero.titleLine3')}</span>
               </span>
             </_motion.h1>
             <_motion.p className='landing-hero-subtitle' variants={childVariant}>
@@ -78,10 +78,13 @@ export function HeroSection({ onPrimaryAction, onSecondaryAction }) {
             </_motion.ul>
           </div>
 
-          <_motion.div className='landing-hero-support' variants={childVariant}>
+          <_motion.div className='landing-network-console' variants={childVariant}>
             <article className='landing-hero-panel'>
-              <p className='landing-hero-panel-label'>{t('landing.hero.panelEyebrow')}</p>
-              <strong className='landing-hero-panel-title'>{t('landing.hero.panelTitle')}</strong>
+              <div>
+                <p className='landing-hero-panel-label'>{t('landing.hero.panelEyebrow')}</p>
+                <strong className='landing-hero-panel-title'>{t('landing.hero.panelTitle')}</strong>
+              </div>
+              <span className='landing-console-live'>{t('landing.hero.status.active')}</span>
               <p className='landing-hero-panel-copy'>{t('landing.hero.panelSub')}</p>
             </article>
 
@@ -97,6 +100,21 @@ export function HeroSection({ onPrimaryAction, onSecondaryAction }) {
               <article>
                 <strong>{t('landing.hero.metric3Value')}</strong>
                 <span>{t('landing.hero.metric3Label')}</span>
+              </article>
+            </div>
+
+            <div className='landing-console-feed' aria-label='SmartLink operating signals'>
+              <article>
+                <span>{t('landing.hero.summary1Title')}</span>
+                <strong>{t('landing.hero.summary1Body')}</strong>
+              </article>
+              <article>
+                <span>{t('landing.hero.summary2Title')}</span>
+                <strong>{t('landing.hero.summary2Body')}</strong>
+              </article>
+              <article>
+                <span>{t('landing.hero.summary3Title')}</span>
+                <strong>{t('landing.hero.summary3Body')}</strong>
               </article>
             </div>
           </_motion.div>

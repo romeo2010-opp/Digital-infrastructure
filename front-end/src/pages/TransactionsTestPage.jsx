@@ -1,33 +1,22 @@
-import { useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import Navbar from "../components/Navbar"
-import { promotionsApi } from "../api/promotionsApi"
 import { transactionsApi } from "../api/transactionsApi"
-import { formatDateTime } from "../utils/dateTime"
+import { formatDateTime, shiftUtcISODate, utcTodayISO } from "../utils/dateTime"
 import { useStationChangeWatcher } from "../hooks/useStationChangeWatcher"
+import { useTopLoading } from "../layout/TopLoadingContext"
 import "../features/settings/settings.css"
 import "./transactions.css"
 
 const avatar =
-  "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 80 80'%3E%3Crect width='80' height='80' rx='40' fill='%23dbe8ff'/%3E%3Ccircle cx='40' cy='30' r='14' fill='%2357779f'/%3E%3Cpath d='M14 73c4-14 16-22 26-22s22 8 26 22' fill='%2357779f'/%3E%3C/svg%3E"
+  "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 80 80'%3E%3Crect width='80' height='80' rx='40' fill='%23eef1ee'/%3E%3Ccircle cx='40' cy='30' r='14' fill='%2343a646'/%3E%3Cpath d='M14 73c4-14 16-22 26-22s22 8 26 22' fill='%2343a646'/%3E%3C/svg%3E"
+
+const PAGE_SIZE = 10
+const PAYMENT_METHODS = ["ALL", "CASH", "MOBILE_MONEY", "CARD", "SMARTPAY", "OTHER"]
 
 function toNumberSafe(value) {
   if (value === null || value === undefined || value === "") return 0
-  if (typeof value === "number") return Number.isFinite(value) ? value : 0
-  if (typeof value === "string") {
-    const parsed = Number(value)
-    return Number.isFinite(parsed) ? parsed : 0
-  }
-  if (typeof value === "object") {
-    if (Array.isArray(value.d) && value.d.length) {
-      const parsed = Number(value.d[0])
-      if (Number.isFinite(parsed)) return parsed
-    }
-    if (typeof value.toString === "function") {
-      const parsed = Number(value.toString())
-      if (Number.isFinite(parsed)) return parsed
-    }
-  }
-  return 0
+  const numeric = Number(value)
+  return Number.isFinite(numeric) ? numeric : 0
 }
 
 function formatMoney(value) {
@@ -49,143 +38,154 @@ function normalizeLabel(value, fallback = "-") {
   return text || fallback
 }
 
-export default function TransactionsTestPage() {
-  const [pumps, setPumps] = useState([])
-  const [rows, setRows] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [message, setMessage] = useState("")
-  const [error, setError] = useState("")
-  const [previewLoading, setPreviewLoading] = useState(false)
-  const [preview, setPreview] = useState(null)
-  const [receipt, setReceipt] = useState(null)
-  const [receiptLoading, setReceiptLoading] = useState(false)
-  const [submitting, setSubmitting] = useState(false)
-  const [downloadingId, setDownloadingId] = useState("")
-  const [viewingReceiptId, setViewingReceiptId] = useState("")
-  const [form, setForm] = useState({
-    pumpPublicId: "",
-    nozzlePublicId: "",
-    totalVolume: "40",
-    paymentMethod: "CASH",
-    userPublicId: "",
-    cashbackDestination: "WALLET",
-    paymentReference: "",
-    note: "",
-  })
+function monthValueForOffset(offset = 0) {
+  const base = new Date(`${utcTodayISO()}T00:00:00.000Z`)
+  base.setUTCDate(1)
+  base.setUTCMonth(base.getUTCMonth() + offset)
+  return `${base.getUTCFullYear()}-${String(base.getUTCMonth() + 1).padStart(2, "0")}`
+}
 
-  async function refresh() {
-    try {
-      setLoading(true)
-      setError("")
-      const [pumpRows, recentRows] = await Promise.all([
-        transactionsApi.getPumps(),
-        transactionsApi.listRecent(),
-      ])
-      setPumps(pumpRows || [])
-      setRows(recentRows || [])
-      if (!form.pumpPublicId && pumpRows?.length) {
-        const firstPump = pumpRows[0]
-        const firstNozzle = firstPump?.nozzles?.[0]
-        setForm((prev) => ({
-          ...prev,
-          pumpPublicId: firstPump.public_id,
-          nozzlePublicId: firstNozzle?.public_id || "",
-        }))
-      }
-    } catch (refreshError) {
-      setError(refreshError?.message || "Failed to load transaction data")
-    } finally {
-      setLoading(false)
-    }
+function getMonthBounds(monthValue, { capToday = false } = {}) {
+  const [year, month] = String(monthValue || monthValueForOffset(0)).split("-").map(Number)
+  const start = new Date(Date.UTC(year, month - 1, 1))
+  const end = new Date(Date.UTC(year, month, 0))
+  const today = utcTodayISO()
+  const to = end.toISOString().slice(0, 10)
+  return {
+    from: start.toISOString().slice(0, 10),
+    to: capToday && to > today ? today : to,
   }
+}
+
+function createInitialFilters() {
+  const today = utcTodayISO()
+  return {
+    search: "",
+    preset: "TODAY",
+    from: today,
+    to: today,
+    paymentMethod: "ALL",
+  }
+}
+
+function applyDatePreset(filters, preset) {
+  const today = utcTodayISO()
+  if (preset === "TODAY") return { ...filters, preset, from: today, to: today }
+  if (preset === "YESTERDAY") {
+    const yesterday = shiftUtcISODate(today, -1)
+    return { ...filters, preset, from: yesterday, to: yesterday }
+  }
+  if (preset === "LAST_7_DAYS") {
+    return { ...filters, preset, from: shiftUtcISODate(today, -6), to: today }
+  }
+  if (preset === "THIS_MONTH") {
+    return { ...filters, preset, ...getMonthBounds(monthValueForOffset(0), { capToday: true }) }
+  }
+  return { ...filters, preset: "CUSTOM" }
+}
+
+function statusClassName(value) {
+  const normalized = String(value || "").toLowerCase()
+  if (normalized.includes("paid") || normalized.includes("recorded") || normalized.includes("settled")) {
+    return "transactions-status transactions-status--success"
+  }
+  if (normalized.includes("pending") || normalized.includes("review") || normalized.includes("unchanged")) {
+    return "transactions-status transactions-status--warning"
+  }
+  if (normalized.includes("cancel") || normalized.includes("fail") || normalized.includes("void")) {
+    return "transactions-status transactions-status--danger"
+  }
+  return "transactions-status"
+}
+
+function ArrowIcon({ direction }) {
+  const path = direction === "next" ? "m9 6 6 6-6 6" : "m15 18-6-6 6-6"
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d={path} stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
+export default function TransactionsTestPage() {
+  const { setTopLoading } = useTopLoading()
+  const [draftFilters, setDraftFilters] = useState(() => createInitialFilters())
+  const [appliedFilters, setAppliedFilters] = useState(() => createInitialFilters())
+  const [page, setPage] = useState(1)
+  const [result, setResult] = useState({ items: [], total: 0, page: 1, pageSize: PAGE_SIZE, totalPages: 1 })
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState("")
+  const [message, setMessage] = useState("")
+  const [downloadingId, setDownloadingId] = useState("")
+  const [exportOpen, setExportOpen] = useState(false)
+  const [exporting, setExporting] = useState("")
+  const [selectedMonth, setSelectedMonth] = useState(() => monthValueForOffset(0))
+  const messageTimerRef = useRef(0)
+  const maxMonth = useMemo(() => monthValueForOffset(0), [])
+
+  useEffect(() => {
+    setTopLoading("transactions", loading || Boolean(downloadingId) || Boolean(exporting))
+  }, [loading, downloadingId, exporting, setTopLoading])
+
+  useEffect(() => () => window.clearTimeout(messageTimerRef.current), [])
+
+  const refresh = useCallback(async ({ showLoader = true } = {}) => {
+    try {
+      if (showLoader) setLoading(true)
+      setError("")
+      const payload = await transactionsApi.list({
+        ...appliedFilters,
+        page,
+        pageSize: PAGE_SIZE,
+      })
+      setResult(payload)
+      if (payload.page !== page) setPage(payload.page)
+    } catch (refreshError) {
+      setError(refreshError?.message || "Failed to load transactions")
+    } finally {
+      if (showLoader) setLoading(false)
+    }
+  }, [appliedFilters, page])
 
   useEffect(() => {
     refresh()
-  }, [])
+  }, [refresh])
 
   useStationChangeWatcher({
     onChange: async () => {
-      await refresh()
+      setPage(1)
+      await refresh({ showLoader: false })
     },
   })
 
-  const selectedPump = useMemo(
-    () => pumps.find((pump) => pump.public_id === form.pumpPublicId),
-    [form.pumpPublicId, pumps]
-  )
-  const selectedNozzles = selectedPump?.nozzles || []
-  const selectedNozzle = useMemo(
-    () => selectedNozzles.find((nozzle) => nozzle.public_id === form.nozzlePublicId) || null,
-    [form.nozzlePublicId, selectedNozzles]
-  )
-  const selectedFuelCode = String(
-    selectedNozzle?.fuel_code || selectedNozzle?.fuel_type_code || selectedPump?.fuel_code || ""
-  )
-    .trim()
-    .toUpperCase()
+  function showMessage(nextMessage) {
+    setMessage(nextMessage)
+    window.clearTimeout(messageTimerRef.current)
+    messageTimerRef.current = window.setTimeout(() => setMessage(""), 2600)
+  }
 
-  useEffect(() => {
-    let cancelled = false
+  function applyFilters(event) {
+    event.preventDefault()
+    setAppliedFilters(draftFilters)
+    setPage(1)
+  }
 
-    async function loadPreview() {
-      if (!selectedFuelCode || Number(form.totalVolume) <= 0) {
-        setPreview(null)
-        return
-      }
-
-      try {
-        setPreviewLoading(true)
-        const result = await promotionsApi.preview({
-          fuelTypeCode: selectedFuelCode,
-          litres: Number(form.totalVolume),
-          paymentMethod: form.paymentMethod,
-          cashbackDestination: form.cashbackDestination,
-        })
-        if (!cancelled) {
-          setPreview(result)
-        }
-      } catch (previewError) {
-        if (!cancelled) {
-          setPreview(null)
-          setError(previewError?.message || "Unable to load pricing preview")
-        }
-      } finally {
-        if (!cancelled) {
-          setPreviewLoading(false)
-        }
-      }
-    }
-
-    loadPreview()
-    return () => {
-      cancelled = true
-    }
-  }, [form.cashbackDestination, form.paymentMethod, form.totalVolume, selectedFuelCode])
-
-  async function viewReceipt(transactionPublicId) {
-    try {
-      setReceiptLoading(true)
-      setViewingReceiptId(transactionPublicId)
-      setError("")
-      const payload = await transactionsApi.getReceipt(transactionPublicId)
-      setReceipt(payload)
-    } catch (receiptError) {
-      setError(receiptError?.message || "Unable to load receipt preview")
-    } finally {
-      setReceiptLoading(false)
-      setViewingReceiptId("")
-    }
+  function resetFilters() {
+    const next = createInitialFilters()
+    setDraftFilters(next)
+    setAppliedFilters(next)
+    setPage(1)
   }
 
   async function downloadReceipt(transactionPublicId) {
     try {
       setDownloadingId(transactionPublicId)
       setError("")
-      const result = await transactionsApi.downloadReceipt(transactionPublicId)
-      const url = window.URL.createObjectURL(result.blob)
+      const receipt = await transactionsApi.downloadReceipt(transactionPublicId)
+      const url = window.URL.createObjectURL(receipt.blob)
       const anchor = document.createElement("a")
       anchor.href = url
-      anchor.download = result.filename || `smartlink-${transactionPublicId}-receipt.pdf`
+      anchor.download = receipt.filename || `smartlink-${transactionPublicId}-receipt.pdf`
       document.body.appendChild(anchor)
       anchor.click()
       anchor.remove()
@@ -197,394 +197,297 @@ export default function TransactionsTestPage() {
     }
   }
 
-  async function submit(event) {
-    event.preventDefault()
+  async function exportTransactions(label, filters) {
     try {
-      setSubmitting(true)
+      setExporting(label)
       setError("")
-      setReceipt(null)
-      if (!selectedNozzle?.public_id || !selectedFuelCode) {
-        throw new Error("Select a pump and nozzle before recording a transaction")
-      }
-
-      const finalPayable = Number(preview?.pricing?.finalPayable || 0)
-      if (!(finalPayable > 0)) {
-        throw new Error("Pricing preview is unavailable for this transaction")
-      }
-
-      const result = await transactionsApi.create({
-        pumpPublicId: form.pumpPublicId,
-        nozzlePublicId: form.nozzlePublicId || undefined,
-        totalVolume: Number(form.totalVolume),
-        amount: finalPayable,
-        paymentMethod: form.paymentMethod,
-        userPublicId: form.userPublicId || undefined,
-        cashbackDestination: form.cashbackDestination,
-        paymentReference: form.paymentReference || undefined,
-        note: form.note || undefined,
-        requestedLitres: Number(form.totalVolume),
-      })
-
-      if (result?.queued) {
-        setRows((prev) => [result.optimisticRow, ...prev].slice(0, 50))
-        setMessage("Transaction saved offline and queued for sync")
-      } else {
-        setMessage("Transaction recorded successfully")
-        if (result?.data?.public_id) {
-          await viewReceipt(result.data.public_id)
-        }
-        await refresh()
-      }
-
-      setForm((prev) => ({
-        ...prev,
-        totalVolume: "40",
-        userPublicId: "",
-        paymentReference: "",
-        note: "",
-      }))
-      window.setTimeout(() => setMessage(""), 2200)
-    } catch (submitError) {
-      setError(submitError?.message || "Failed to create transaction")
+      const filename = await transactionsApi.exportCsv(filters)
+      setExportOpen(false)
+      showMessage(`CSV download started: ${filename}`)
+    } catch (exportError) {
+      setError(exportError?.message || "Unable to export transactions")
     } finally {
-      setSubmitting(false)
+      setExporting("")
     }
   }
 
-  const previewPricing = preview?.pricing || null
+  function exportCurrentPage() {
+    return exportTransactions("current-page", {
+      ...appliedFilters,
+      page: result.page || page,
+      pageSize: result.pageSize || PAGE_SIZE,
+      scope: "page",
+    })
+  }
+
+  function exportMonth(monthValue, label, capToday = false) {
+    const bounds = getMonthBounds(monthValue, { capToday })
+    return exportTransactions(label, {
+      search: appliedFilters.search,
+      paymentMethod: appliedFilters.paymentMethod,
+      from: bounds.from,
+      to: bounds.to,
+      scope: "range",
+    })
+  }
+
+  const rows = Array.isArray(result.items) ? result.items : []
+  const canGoPrevious = !loading && (result.page || page) > 1
+  const canGoNext = !loading && (result.page || page) < (result.totalPages || 1)
+  const visibleRangeStart = result.total ? ((result.page || page) - 1) * (result.pageSize || PAGE_SIZE) + 1 : 0
+  const visibleRangeEnd = result.total
+    ? Math.min((result.page || page) * (result.pageSize || PAGE_SIZE), result.total)
+    : 0
 
   return (
     <div className="settings-page transactions-page">
-      <Navbar pagetitle="Transactions & Receipts" image={avatar} count={0} />
-      <section className="settings-shell">
+      <Navbar pagetitle="Transactions" image={avatar} count={0} />
+      <section className="settings-shell transactions-shell">
         <article className="settings-hero transactions-hero">
           <div>
-            <h2>Record fuel sales with live promotional pricing</h2>
-            <p>Checkout uses the pricing engine in real time, separates station and SmartLink funding, and opens the receipt immediately after settlement for download or dispute review.</p>
+            <span className="transactions-eyebrow">Station ledger</span>
+            <h2>Transactions</h2>
+            <p>Search, filter, download receipts, and export authoritative backend CSV snapshots.</p>
           </div>
-          <div className="settings-hero-badges">
+          <div className="transactions-hero-metrics">
             <article>
-              <span>Recent transactions</span>
-              <strong>{rows.length}</strong>
+              <span>Total rows</span>
+              <strong>{Number(result.total || 0).toLocaleString()}</strong>
             </article>
             <article>
-              <span>Selected fuel</span>
-              <strong>{selectedFuelCode || "-"}</strong>
+              <span>Showing</span>
+              <strong>{visibleRangeStart}-{visibleRangeEnd}</strong>
             </article>
             <article>
-              <span>Direct discount</span>
-              <strong>{formatMoney(previewPricing?.totalDirectDiscount || 0)}</strong>
-            </article>
-            <article>
-              <span>Cashback</span>
-              <strong>{formatMoney(previewPricing?.cashback || 0)}</strong>
+              <span>Payment</span>
+              <strong>{appliedFilters.paymentMethod === "ALL" ? "All" : appliedFilters.paymentMethod}</strong>
             </article>
           </div>
         </article>
 
-        <div className="transactions-grid">
-          <article className="settings-card transactions-card">
-            <h3>Checkout</h3>
-            {message ? <p className="settings-message">{message}</p> : null}
-            {error ? <p className="settings-error">{error}</p> : null}
-            <form className="settings-grid transactions-form" onSubmit={submit}>
-              <label>
-                Pump / dispenser
-                <select
-                  value={form.pumpPublicId}
-                  onChange={(event) => {
-                    const pumpPublicId = event.target.value
-                    const pump = pumps.find((item) => item.public_id === pumpPublicId)
-                    const firstNozzle = pump?.nozzles?.[0]
-                    setForm((prev) => ({
-                      ...prev,
-                      pumpPublicId,
-                      nozzlePublicId: firstNozzle?.public_id || "",
-                    }))
-                  }}
-                  required
-                >
-                  <option value="" disabled>
-                    Select pump
-                  </option>
-                  {pumps.map((pump) => (
-                    <option key={pump.public_id} value={pump.public_id}>
-                      Pump {pump.pump_number} ({(pump.fuel_codes || []).join("/") || "UNMAPPED"}) - {pump.status}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Nozzle
-                <select
-                  value={form.nozzlePublicId}
-                  onChange={(event) => setForm((prev) => ({ ...prev, nozzlePublicId: event.target.value }))}
-                  required
-                >
-                  {!selectedNozzles.length ? <option value="">No nozzle configured</option> : null}
-                  {selectedNozzles.map((nozzle) => (
-                    <option key={nozzle.public_id} value={nozzle.public_id}>
-                      #{nozzle.nozzle_number} {nozzle.side ? `(${nozzle.side})` : ""} - {nozzle.fuel_code || "UNKNOWN"} - {nozzle.status}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Litres
-                <input
-                  type="number"
-                  min="0.001"
-                  step="0.001"
-                  value={form.totalVolume}
-                  onChange={(event) => setForm((prev) => ({ ...prev, totalVolume: event.target.value }))}
-                  required
-                />
-              </label>
-              <label>
-                Payment method
-                <select
-                  value={form.paymentMethod}
-                  onChange={(event) => setForm((prev) => ({ ...prev, paymentMethod: event.target.value }))}
-                >
-                  <option value="CASH">CASH</option>
-                  <option value="MOBILE_MONEY">MOBILE_MONEY</option>
-                  <option value="CARD">CARD</option>
-                  <option value="OTHER">OTHER</option>
-                  <option value="SMARTPAY">SMARTPAY</option>
-                </select>
-              </label>
-              <label>
-                User public ID
-                <input
-                  value={form.userPublicId}
-                  placeholder="Optional for cashback credit"
-                  onChange={(event) => setForm((prev) => ({ ...prev, userPublicId: event.target.value }))}
-                />
-              </label>
-              <label>
-                Cashback destination
-                <select
-                  value={form.cashbackDestination}
-                  onChange={(event) => setForm((prev) => ({ ...prev, cashbackDestination: event.target.value }))}
-                >
-                  <option value="WALLET">Wallet</option>
-                  <option value="LOYALTY">Loyalty</option>
-                  <option value="NONE">None</option>
-                </select>
-              </label>
-              <label>
-                Payment reference
-                <input
-                  value={form.paymentReference}
-                  placeholder="MM / card / forecourt reference"
-                  onChange={(event) => setForm((prev) => ({ ...prev, paymentReference: event.target.value }))}
-                />
-              </label>
-              <label className="transactions-form-wide">
-                Note
-                <textarea
-                  value={form.note}
-                  placeholder="Optional operational note"
-                  onChange={(event) => setForm((prev) => ({ ...prev, note: event.target.value }))}
-                />
-              </label>
-              <div className="transactions-form-actions transactions-form-wide">
-                <button type="submit" disabled={submitting || previewLoading || !previewPricing}>
-                  {submitting ? "Recording..." : "Record transaction"}
-                </button>
-              </div>
-            </form>
-          </article>
+        <form className="transactions-toolbar transactions-card" onSubmit={applyFilters}>
+          <label className="transactions-search-field">
+            Search
+            <input
+              type="search"
+              value={draftFilters.search}
+              placeholder="Transaction, receipt, pump, fuel..."
+              onChange={(event) => setDraftFilters((current) => ({ ...current, search: event.target.value }))}
+            />
+          </label>
+          <label>
+            Date
+            <select
+              value={draftFilters.preset}
+              onChange={(event) => setDraftFilters((current) => applyDatePreset(current, event.target.value))}
+            >
+              <option value="TODAY">Today</option>
+              <option value="YESTERDAY">Yesterday</option>
+              <option value="LAST_7_DAYS">Last 7 days</option>
+              <option value="THIS_MONTH">This month</option>
+              <option value="CUSTOM">Custom</option>
+            </select>
+          </label>
+          <label>
+            From
+            <input
+              type="date"
+              value={draftFilters.from}
+              max={utcTodayISO()}
+              onChange={(event) =>
+                setDraftFilters((current) => ({ ...current, from: event.target.value, preset: "CUSTOM" }))
+              }
+            />
+          </label>
+          <label>
+            To
+            <input
+              type="date"
+              value={draftFilters.to}
+              max={utcTodayISO()}
+              onChange={(event) =>
+                setDraftFilters((current) => ({ ...current, to: event.target.value, preset: "CUSTOM" }))
+              }
+            />
+          </label>
+          <label>
+            Payment
+            <select
+              value={draftFilters.paymentMethod}
+              onChange={(event) => setDraftFilters((current) => ({ ...current, paymentMethod: event.target.value }))}
+            >
+              {PAYMENT_METHODS.map((method) => (
+                <option key={method} value={method}>
+                  {method === "ALL" ? "All methods" : method}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="transactions-toolbar-actions">
+            <button type="submit" className="transactions-black-btn">Apply</button>
+            <button type="button" className="transactions-muted-btn" onClick={resetFilters}>Reset</button>
+            <button type="button" className="transactions-black-btn" onClick={() => setExportOpen(true)}>
+              Export
+            </button>
+          </div>
+        </form>
 
-          <article className="settings-card transactions-card">
-            <h3>Pricing breakdown</h3>
-            {previewLoading ? <p className="transactions-empty-copy">Calculating live pricing…</p> : null}
-            {!previewLoading && !previewPricing ? (
-              <p className="transactions-empty-copy">Choose a pump, nozzle, and litres to preview the payable amount.</p>
-            ) : null}
-            {previewPricing ? (
-              <>
-                <div className="transactions-summary-grid">
-                  <article>
-                    <span>Official pump price</span>
-                    <strong>{formatMoney(preview.basePricePerLitre)}</strong>
-                  </article>
-                  <article>
-                    <span>Total payable</span>
-                    <strong>{formatMoney(previewPricing.finalPayable)}</strong>
-                  </article>
-                  <article>
-                    <span>Cashback earned</span>
-                    <strong>{formatMoney(previewPricing.cashback)}</strong>
-                  </article>
-                  <article>
-                    <span>Effective net price / litre</span>
-                    <strong>{formatMoney(previewPricing.effectivePricePerLitre)}</strong>
-                  </article>
-                </div>
-                <div className="transactions-breakdown-list">
-                  <div>
-                    <span>Litres</span>
-                    <strong>{formatVolume(previewPricing.litres)}</strong>
-                  </div>
-                  <div>
-                    <span>Base subtotal</span>
-                    <strong>{formatMoney(previewPricing.subtotal)}</strong>
-                  </div>
-                  <div>
-                    <span>Station discount</span>
-                    <strong>{formatMoney(previewPricing.stationDiscount)}</strong>
-                  </div>
-                  <div>
-                    <span>SmartLink discount</span>
-                    <strong>{formatMoney(previewPricing.smartlinkDiscount)}</strong>
-                  </div>
-                  <div>
-                    <span>Total direct discount</span>
-                    <strong>{formatMoney(previewPricing.totalDirectDiscount)}</strong>
-                  </div>
-                  <div>
-                    <span>Cashback</span>
-                    <strong>{formatMoney(previewPricing.cashback)}</strong>
-                  </div>
-                </div>
-                <div className="transactions-chip-row">
-                  {(previewPricing.promoLabelsApplied || []).length ? (
-                    previewPricing.promoLabelsApplied.map((label) => (
-                      <span key={label} className="transactions-chip">
-                        {label}
-                      </span>
-                    ))
-                  ) : (
-                    <span className="transactions-chip">No active promotion for this checkout</span>
-                  )}
-                </div>
-              </>
-            ) : null}
-          </article>
-        </div>
+        {message ? <p className="settings-message">{message}</p> : null}
+        {error ? <p className="settings-error">{error}</p> : null}
 
-        <div className="transactions-grid">
-          <article className="settings-card transactions-card">
-            <h3>Receipt preview</h3>
-            {receiptLoading ? <p className="transactions-empty-copy">Loading receipt…</p> : null}
-            {!receiptLoading && !receipt ? (
-              <p className="transactions-empty-copy">Record a sale or open a recent transaction receipt to preview the thermal receipt fields before downloading the PDF.</p>
-            ) : null}
-            {receipt ? (
-              <div className="transactions-receipt">
-                <div className="transactions-receipt-head">
-                  <strong>{receipt.systemName || "SmartLink"}</strong>
-                  <span>{receipt.stationName}</span>
-                  <small>{receipt.stationLocation}</small>
-                </div>
-                <div className="transactions-receipt-section">
-                  <div><span>Transaction</span><strong>{receipt.transactionId}</strong></div>
-                  <div><span>Date</span><strong>{formatDateTime(receipt.occurredAt)}</strong></div>
-                  <div><span>Pump</span><strong>{receipt.pumpNumber ? `Pump ${receipt.pumpNumber}` : "-"}</strong></div>
-                  <div><span>Nozzle</span><strong>{normalizeLabel(receipt.nozzleLabel)}</strong></div>
-                  <div><span>Fuel</span><strong>{normalizeLabel(receipt.fuelType)}</strong></div>
-                  <div><span>Litres</span><strong>{formatVolume(receipt.litres)}</strong></div>
-                </div>
-                <div className="transactions-receipt-section">
-                  <div><span>Base subtotal</span><strong>{formatMoney(receipt.baseSubtotal)}</strong></div>
-                  <div><span>Direct discount</span><strong>{formatMoney(receipt.totalDirectDiscount)}</strong></div>
-                  <div><span>Cashback</span><strong>{formatMoney(receipt.cashbackTotal)}</strong></div>
-                  <div><span>Final paid</span><strong>{formatMoney(receipt.finalAmountPaid)}</strong></div>
-                </div>
-                {(receipt.discountLines || []).length ? (
-                  <div className="transactions-receipt-lines">
-                    {(receipt.discountLines || []).map((line, index) => (
-                      <div key={`${line.label}-${index}`}>
-                        <span>{normalizeLabel(line.label)}</span>
-                        <strong>- {formatMoney(line.amount)}</strong>
-                      </div>
-                    ))}
-                  </div>
+        <article className="transactions-card transactions-table-card">
+          <header className="transactions-card-head">
+            <div>
+              <h3>Transaction history</h3>
+              <p>{loading ? "Loading transactions..." : `${Number(result.total || 0).toLocaleString()} matching rows`}</p>
+            </div>
+          </header>
+
+          <div className="transactions-table-wrap">
+            <table className="transactions-table">
+              <thead>
+                <tr>
+                  <th>Transaction</th>
+                  <th>Fuel / pump</th>
+                  <th>Litres</th>
+                  <th>Payment</th>
+                  <th>Status</th>
+                  <th>Settlement</th>
+                  <th className="transactions-cell-number">Paid</th>
+                  <th>Receipt</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loading ? (
+                  <tr>
+                    <td className="transactions-table-empty" colSpan={8}>Loading transaction history...</td>
+                  </tr>
                 ) : null}
-                {(receipt.cashbackLines || []).length ? (
-                  <div className="transactions-receipt-lines">
-                    {(receipt.cashbackLines || []).map((line, index) => (
-                      <div key={`${line.label}-${index}`}>
-                        <span>{normalizeLabel(line.label)}</span>
-                        <strong>{formatMoney(line.amount)}</strong>
-                      </div>
-                    ))}
-                  </div>
+                {!loading && !rows.length ? (
+                  <tr>
+                    <td className="transactions-table-empty" colSpan={8}>No transactions match the selected filters.</td>
+                  </tr>
                 ) : null}
-                <div className="transactions-chip-row">
-                  {(receipt.promoLabelsApplied || []).length ? (
-                    receipt.promoLabelsApplied.map((label) => (
-                      <span key={label} className="transactions-chip">
-                        {label}
+                {!loading && rows.map((row) => (
+                  <tr key={row.public_id}>
+                    <td>
+                      <strong>{row.public_id}</strong>
+                      <div className="transactions-table-meta">{formatDateTime(row.occurred_at)}</div>
+                      {row.receipt_verification_ref ? (
+                        <div className="transactions-table-meta">Ref {row.receipt_verification_ref}</div>
+                      ) : null}
+                    </td>
+                    <td>
+                      <strong>{normalizeLabel(row.fuel_code)}</strong>
+                      <div className="transactions-table-meta">
+                        {row.pump_number ? `Pump ${row.pump_number}` : "Pump -"}
+                        {row.nozzle_number ? ` / Nozzle ${row.nozzle_number}` : ""}
+                      </div>
+                    </td>
+                    <td>{formatVolume(row.litres)}</td>
+                    <td>{normalizeLabel(row.payment_method)}</td>
+                    <td>
+                      <span className={statusClassName(row.status)}>{normalizeLabel(row.status)}</span>
+                    </td>
+                    <td>
+                      <span className={statusClassName(row.settlement_impact_status)}>
+                        {normalizeLabel(row.settlement_impact_status)}
                       </span>
-                    ))
-                  ) : (
-                    <span className="transactions-chip">Standard pump pricing</span>
-                  )}
-                </div>
-                <div className="transactions-receipt-meta">
-                  <span>Verification ref: {normalizeLabel(receipt.verificationReference)}</span>
-                  <span>Payment: {normalizeLabel(receipt.paymentMethod)}</span>
-                </div>
-              </div>
-            ) : null}
-          </article>
+                    </td>
+                    <td className="transactions-cell-number">{formatMoney(row.final_amount_paid || row.total_amount)}</td>
+                    <td>
+                      <button
+                        type="button"
+                        className="transactions-row-btn"
+                        onClick={() => downloadReceipt(row.public_id)}
+                        disabled={downloadingId === row.public_id}
+                      >
+                        {downloadingId === row.public_id ? "Preparing..." : "PDF"}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
 
-          <article className="settings-card transactions-card">
-            <h3>Recent transactions</h3>
-            {loading ? <p className="transactions-empty-copy">Loading recent transaction history…</p> : null}
-            {!loading && !rows.length ? <p className="transactions-empty-copy">No transactions recorded yet.</p> : null}
-            {!loading && rows.length ? (
-              <div className="transactions-table-wrap">
-                <table className="transactions-table">
-                  <thead>
-                    <tr>
-                      <th>Tx ID</th>
-                      <th>Fuel</th>
-                      <th>Litres</th>
-                      <th>Subtotal</th>
-                      <th>Discount</th>
-                      <th>Cashback</th>
-                      <th>Paid</th>
-                      <th>Receipt</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rows.map((row) => (
-                      <tr key={row.public_id}>
-                        <td>
-                          <strong>{row.public_id}</strong>
-                          <div className="transactions-table-meta">{formatDateTime(row.occurred_at)}</div>
-                        </td>
-                        <td>
-                          <strong>{normalizeLabel(row.fuel_code)}</strong>
-                          <div className="transactions-table-meta">{row.pump_number ? `Pump ${row.pump_number}` : "-"}</div>
-                        </td>
-                        <td>{formatVolume(row.litres)}</td>
-                        <td>{formatMoney(row.subtotal || row.total_amount)}</td>
-                        <td>{formatMoney(row.total_direct_discount || 0)}</td>
-                        <td>{formatMoney(row.cashback_total || 0)}</td>
-                        <td>{formatMoney(row.final_amount_paid || row.total_amount)}</td>
-                        <td>
-                          <div className="transactions-row-actions">
-                            <button type="button" onClick={() => viewReceipt(row.public_id)} disabled={viewingReceiptId === row.public_id}>
-                              {viewingReceiptId === row.public_id ? "Opening..." : "Preview"}
-                            </button>
-                            <button type="button" onClick={() => downloadReceipt(row.public_id)} disabled={downloadingId === row.public_id}>
-                              {downloadingId === row.public_id ? "Preparing..." : "PDF"}
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ) : null}
-          </article>
-        </div>
+          <footer className="transactions-pagination">
+            <span>
+              Page {result.page || page} of {result.totalPages || 1}
+            </span>
+            <div className="transactions-pagination-buttons">
+              <button
+                type="button"
+                className="transactions-page-arrow transactions-page-arrow--prev"
+                onClick={() => setPage((current) => Math.max(1, current - 1))}
+                disabled={!canGoPrevious}
+                aria-label="Previous transactions page"
+              >
+                <ArrowIcon direction="prev" />
+              </button>
+              <button
+                type="button"
+                className="transactions-page-arrow transactions-page-arrow--next"
+                onClick={() => setPage((current) => current + 1)}
+                disabled={!canGoNext}
+                aria-label="Next transactions page"
+              >
+                <ArrowIcon direction="next" />
+              </button>
+            </div>
+          </footer>
+        </article>
       </section>
+
+      {exportOpen ? (
+        <div className="transactions-export-backdrop" role="dialog" aria-modal="true" aria-label="Export transactions">
+          <div className="transactions-export-modal">
+            <header>
+              <div>
+                <span className="transactions-eyebrow">CSV export</span>
+                <h3>Export transactions</h3>
+              </div>
+              <button type="button" className="transactions-export-close" onClick={() => setExportOpen(false)} aria-label="Close export dialog">
+                Close
+              </button>
+            </header>
+            <div className="transactions-export-options">
+              <button type="button" onClick={exportCurrentPage} disabled={Boolean(exporting)}>
+                <strong>Current table page</strong>
+                <span>Exports the visible page with active filters.</span>
+              </button>
+              <button type="button" onClick={() => exportMonth(monthValueForOffset(0), "this-month", true)} disabled={Boolean(exporting)}>
+                <strong>This month</strong>
+                <span>Exports this month with current search and payment filters.</span>
+              </button>
+              <button type="button" onClick={() => exportMonth(monthValueForOffset(-1), "last-month")} disabled={Boolean(exporting)}>
+                <strong>Last month</strong>
+                <span>Exports last month with current search and payment filters.</span>
+              </button>
+            </div>
+            <div className="transactions-export-month">
+              <label>
+                Selected month
+                <input
+                  type="month"
+                  value={selectedMonth}
+                  max={maxMonth}
+                  onChange={(event) => setSelectedMonth(event.target.value)}
+                />
+              </label>
+              <button
+                type="button"
+                className="transactions-black-btn"
+                onClick={() => exportMonth(selectedMonth, "selected-month", selectedMonth === maxMonth)}
+                disabled={Boolean(exporting)}
+              >
+                {exporting === "selected-month" ? "Exporting..." : "Export month"}
+              </button>
+            </div>
+            {exporting ? <p className="transactions-empty-copy">Preparing CSV export...</p> : null}
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }

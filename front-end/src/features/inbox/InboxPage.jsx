@@ -4,6 +4,7 @@ import { useAuth } from "../../auth/AuthContext"
 import { supportApi } from "../../api/supportApi"
 import { defaultSupportConfig } from "../../config/supportConfig"
 import { getOfflineState, subscribeOfflineState } from "../../offline/network"
+import { useTopLoading } from "../../layout/TopLoadingContext"
 import ReportIssueModal from "../help/components/ReportIssueModal"
 import SupportContacts from "../help/components/SupportContacts"
 import "../help/help.css"
@@ -118,6 +119,7 @@ function SupportConversationModal({
 }
 
 export default function InboxPage() {
+  const { setTopLoading } = useTopLoading()
   const { session } = useAuth()
   const canContactSupport = ["MANAGER", "ATTENDANT"].includes(String(session?.role || "").toUpperCase())
   const [offlineState, setOfflineState] = useState(getOfflineState())
@@ -131,6 +133,10 @@ export default function InboxPage() {
   const [selectedTicketId, setSelectedTicketId] = useState(null)
   const [ticketThread, setTicketThread] = useState([])
   const [ticketThreadLoading, setTicketThreadLoading] = useState(false)
+
+  useEffect(() => {
+    setTopLoading("inbox", loading || ticketThreadLoading)
+  }, [loading, ticketThreadLoading, setTopLoading])
   const [ticketThreadError, setTicketThreadError] = useState("")
   const [ticketDraftMessage, setTicketDraftMessage] = useState("")
   const [sendingTicketMessage, setSendingTicketMessage] = useState(false)

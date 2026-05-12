@@ -8,7 +8,7 @@
   "theme_color": "#1a9f59",
   "icons": [
     {
-      "src": "/smartlogo.png",
+      "src": "/smartlink.png",
       "sizes": "133x133",
       "type": "image/png"
     }

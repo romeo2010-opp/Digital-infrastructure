@@ -1,13 +1,14 @@
 import { defineConfig, loadEnv } from 'vite'
 import { visualizer } from 'rollup-plugin-visualizer'
 import react from '@vitejs/plugin-react'
+import tailwindcss from '@tailwindcss/vite'
 
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
   const devApiTarget = env.VITE_DEV_API_TARGET || 'http://127.0.0.1:4000'
   return {
-    plugins: [react(),visualizer({ open: true, gzip: true })],
+    plugins: [react(), tailwindcss(), visualizer({ open: true, gzip: true })],
     server: {
       host: '0.0.0.0',
       port: Number(env.VITE_DEV_PORT || 5000),

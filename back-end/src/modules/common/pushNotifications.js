@@ -78,8 +78,8 @@ export async function sendPushAlertToUser({ userId, notification = {}, data = {}
   const payload = JSON.stringify({
     title: String(notification?.title || "SmartLink Alert").trim() || "SmartLink Alert",
     body: String(notification?.body || "You have a new alert.").trim() || "You have a new alert.",
-    icon: String(notification?.icon || "/smartlogo.png").trim() || "/smartlogo.png",
-    badge: String(notification?.badge || "/smartlogo.png").trim() || "/smartlogo.png",
+    icon: String(notification?.icon || "/smartlink.png").trim() || "/smartlink.png",
+    badge: String(notification?.badge || "/smartlink.png").trim() || "/smartlink.png",
     tag: String(notification?.tag || `smartlink-alert-${Date.now()}`).trim(),
     url: String(notification?.url || "/m/alerts").trim() || "/m/alerts",
     data: data || {},

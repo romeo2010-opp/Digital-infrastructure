@@ -16,10 +16,7 @@
   min-height: 100vh;
   box-sizing: border-box;
   padding: 84px 14px 16px;
-  background:
-    radial-gradient(circle at 5% -10%, rgba(123, 177, 240, 0.28), transparent 36%),
-    radial-gradient(circle at 96% 2%, rgba(109, 204, 188, 0.2), transparent 34%),
-    linear-gradient(180deg, var(--acc-bg) 0%, var(--acc-bg-2) 100%);
+  background: #ffffff;
 }
 
 .account-shell.account-shell-v3 {
@@ -47,9 +44,7 @@
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 10px;
   align-items: center;
-  background:
-    radial-gradient(circle at 90% 16%, rgba(104, 172, 237, 0.18), transparent 35%),
-    linear-gradient(130deg, #f8fcff 0%, #eef5ff 100%);
+  background: #ffffff;
 }
 
 .account-v3-ribbon-copy h2 {
@@ -83,7 +78,7 @@
   padding: 10px 12px;
   display: grid;
   gap: 4px;
-  background: linear-gradient(180deg, #fdfefe 0%, #f4f9ff 100%);
+  background: #ffffff;
 }
 
 .account-v3-kpi-strip span {
@@ -116,7 +111,7 @@
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
-  background: linear-gradient(180deg, #f8fcff 0%, #f3f8ff 100%);
+  background: #ffffff;
 }
 
 .account-v3-nav-tabs button {
@@ -302,7 +297,7 @@
   padding: 14px;
   display: grid;
   gap: 10px;
-  background: linear-gradient(180deg, #f8fcff 0%, #f3f8ff 100%);
+  background: linear-gradient(180deg, #f8fcff 0%, #f2f5f4 100%);
 }
 
 .account-v3-mini-card h4 {
@@ -372,7 +367,7 @@
   border: 1px dashed #c7dbee;
   border-radius: 10px;
   padding: 11px 12px;
-  background: #f8fbff;
+  background: #f7f8fb;
   color: #6f89a4;
   font-size: 0.78rem;
 }
@@ -512,7 +507,7 @@
   align-items: center;
   font-size: 0.7rem;
   color: #6d88a4;
-  background: #f7fbff;
+  background: #f7f8fb;
 }
 
 .account-v3-password-rules li.ok {
@@ -556,7 +551,7 @@
 .account-v3-btn-secondary {
   border-color: #bfd6ed;
   color: #2f6198;
-  background: #f1f7ff;
+  background: #f7f8fb;
 }
 
 .account-v3-btn-danger {
@@ -674,7 +669,7 @@
 
 .account-v3-table-wrap th {
   border-top: 0;
-  background: #f1f7ff;
+  background: #f7f8fb;
   color: #29496a;
 }
 
@@ -687,7 +682,7 @@
 .account-v3-toggle-grid label {
   border: 1px solid #d2e1ef;
   border-radius: 11px;
-  background: #f8fbff;
+  background: #f7f8fb;
   padding: 10px;
   display: flex;
   align-items: center;
@@ -908,8 +903,8 @@
 
 [data-theme="dark"] .account-v3-password-rules li {
   border-color: #395572;
-  color: #9cb4d0;
-  background: #132439;
+  color: #aeb8c2;
+  background: #172126;
 }
 
 [data-theme="dark"] .account-v3-password-rules li.ok {
@@ -919,8 +914,8 @@
 }
 
 [data-theme="dark"] .account-v3-security-note {
-  border-top-color: #38536f;
-  color: #9ab2ce;
+  border-top-color: #3a464c;
+  color: #aeb8c2;
 }
 
 [data-theme="dark"] .account-v3-ribbon-copy h2,

@@ -2,9 +2,7 @@
   min-height: 100vh;
   box-sizing: border-box;
   padding: 84px 16px 16px;
-  background:
-    radial-gradient(circle at 16% 10%, rgba(40, 79, 132, 0.2), transparent 34%),
-    linear-gradient(180deg, #ebf2fb 0%, #e0e8f5 100%);
+  background: #ffffff;
 }
 
 .lm-shell {
@@ -17,7 +15,7 @@
 .lm-header {
   border: 1px solid #cfddef;
   border-radius: 8px;
-  background: linear-gradient(180deg, #f8fbff 0%, #edf3fb 100%);
+  background: #ffffff;
   padding: 12px;
   display: flex;
   justify-content: space-between;
@@ -102,7 +100,7 @@
 }
 
 .lm-table th {
-  color: #16385f;
+  color: #16191f;
   font-size: 12px;
 }
 

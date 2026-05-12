@@ -727,8 +727,8 @@ async function notifySupportUserCaseStatus({
       body: alert.message,
       tag: alert.publicId || `support-${Date.now()}`,
       url: "/m/help",
-      icon: "/smartlogo.png",
-      badge: "/smartlogo.png",
+      icon: "/smartlink.png",
+      badge: "/smartlink.png",
     },
     data: {
       alertPublicId: alert.publicId || null,
@@ -785,8 +785,8 @@ async function notifyRefundRequestStatus({
       body: alert.message,
       tag: alert.publicId || `refund-${Date.now()}`,
       url: "/m/wallet",
-      icon: "/smartlogo.png",
-      badge: "/smartlogo.png",
+      icon: "/smartlink.png",
+      badge: "/smartlink.png",
     },
     data: {
       alertPublicId: alert.publicId || null,

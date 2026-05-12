@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react"
 import Navbar from "../../components/Navbar"
 import { insightsApi } from "../../api/insightsApi"
 import { utcTodayISO } from "../../utils/dateTime"
+import { useTopLoading } from "../../layout/TopLoadingContext"
 import "./insights.css"
 
 const avatar =
@@ -55,8 +56,13 @@ function renderNoDataRow(colSpan, text = "No data available.") {
 }
 
 export default function StationInsightsPage() {
+  const { setTopLoading } = useTopLoading()
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
+
+  useEffect(() => {
+    setTopLoading("insights", loading)
+  }, [loading, setTopLoading])
   const [isExporting, setIsExporting] = useState(false)
 
   const [summary, setSummary] = useState(null)

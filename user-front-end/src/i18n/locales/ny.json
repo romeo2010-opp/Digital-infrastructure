@@ -1,6 +1,6 @@
 {
   "landing": {
-    "metaTitle": "SmartLink | Pulatifomu ya Mafuta",
+    "metaTitle": "SmartLink | Network ya Mafuta ku Malawi",
 
     "nav": {
       "product": "Ntchito",
@@ -34,48 +34,52 @@
     "modal": {
       "title": "Sankhani Chilankhulo",
       "description": "Sankhani chilankhulo chimene mukufuna kugwiritsa ntchito pa SmartLink.",
+      "tag": "Takulandirani",
       "english": "Pitilizani mu Chingerezi",
-      "chichewa": "Pitilizani mu Chichewa"
+      "englishDescription": "Gwiritsani SmartLink mu Chingerezi pa ntchito zonse.",
+      "chichewa": "Pitilizani mu Chichewa",
+      "chichewaDescription": "Gwiritsani SmartLink mu Chichewa kuti njira ikhale yosavuta.",
+      "note": "Mutha kusintha chilankhulo ichi nthawi ina pa menyu yapamwamba."
     },
 
     "hero": {
-      "eyebrow": "Pulatifomu ya mafuta ku Malawi",
-      "titleLead": "Kusintha",
-      "titleLine1": "Mmene Mafuta",
-      "titleLine2": "Amafikira kwa Oyendetsa,",
-      "titleLine3": "Ma Station ndi Ma Network.",
-      "subtitle": "SmartLink imapereka kuoneka kwa ma station pa nthawi yeniyeni, kuwona mizere, kusungitsa, ndi kuyendetsa bwino ntchito zonse za pa station mu pulatifomu imodzi.",
+      "eyebrow": "Network ya mafuta ku Malawi",
+      "titleLead": "Mafuta a live,",
+      "titleLine1": "mizere,",
+      "titleLine2": "malipiro, ndi",
+      "titleLine3": "station control.",
+      "subtitle": "SmartLink imalumikiza oyendetsa, ogwira ntchito pa station, ma fleet, ndi anzawo kuti onse awone supply, mizere, malipiro, ndi kayendedwe ka station pa nthawi yeniyeni.",
       "ctaPrimary": "Pezani Mafuta Pafupi",
       "ctaSecondary": "Lowani pa SmartLink",
       "badge1": "Kupezeka kwa nthawi yeniyeni",
       "badge2": "Kuwona mzere",
       "badge3": "Kukonzeka kwa kusungitsa",
 
-      "metric1Value": "Ma station a live",
-      "metric1Label": "Kupezeka kwa mafuta kumaoneka musanasankhe station",
+      "metric1Value": "Station grid",
+      "metric1Label": "Availability, mtundu wa mafuta, ndi service readiness mu view imodzi",
 
-      "metric2Value": "Kuwongolera mzere",
-      "metric2Label": "Kuchuluka kwa mzere kumaoneka pa nthawi yeniyeni",
+      "metric2Value": "Queue pressure",
+      "metric2Label": "Oyendetsa amaona kuchuluka kwa demand asanafike pa station",
 
-      "metric3Value": "Wallet ndi prepay",
-      "metric3Label": "Malipiro ndi kusungitsa zonse mu pulatifomu imodzi",
+      "metric3Value": "Payment layer",
+      "metric3Label": "Wallet, prepay, reservation, ndi reconciliation zikukonzeka",
 
       "status": {
         "active": "Ikugwira ntchito"
       },
 
-      "panelEyebrow": "Pulatifomu",
-      "panelTitle": "Yapangidwa kuti igwirizane ndi ntchito zenizeni za ma station.",
-      "panelSub": "Ulendo wa mafuta wosalala kwa oyendetsa ndi kuwongolera kolimba kwa oyang’anira.",
+      "panelEyebrow": "Network command",
+      "panelTitle": "Yapangidwa kuti igwire ntchito zenizeni za forecourt.",
+      "panelSub": "Operating layer yomveka bwino ya supply, mizere, service windows, malipiro, ndi malipoti.",
 
       "summary1Title": "Kupezeka",
-      "summary1Body": "Deta ya stock pa nthawi yeniyeni kuchokera ku ma station",
+      "summary1Body": "Stock ndi service status kuchokera ku ma station",
 
       "summary2Title": "Mizere",
       "summary2Body": "Dikirani limawoneka musanayende",
 
       "summary3Title": "Malipiro",
-      "summary3Body": "Prepay, wallet, ndi loyalty zonse zilipo",
+      "summary3Body": "Wallet, prepay, ndi reconciliation-ready flows",
 
       "tileBadgeLive": "LIVE",
       "tileBadgeNew": "ZATSOPANO",
@@ -94,9 +98,9 @@
     },
 
     "mapPreview": {
-      "eyebrow": "Kwa oyendetsa",
-      "title": "Sankhani station yabwino pogwiritsa ntchito deta yeniyeni, osati mphekesera.",
-      "subtitle": "Fananitsani ma station apafupi, onani kuchuluka kwa mzere, tsimikizani mtundu wa mafuta, ndi kusankha mwanzeru musanayende.",
+      "eyebrow": "Network ya oyendetsa",
+      "title": "Sankhani route pogwiritsa ntchito zinthu zenizeni za station, osati mphekesera.",
+      "subtitle": "Oyendetsa amafanana ma station apafupi, kutsimikiza mtundu wa mafuta, kuwona wait pressure, ndi kusankha stop yabwino musanayende.",
       "bullet1": "Onani ma station ndi momwe mzere ulili",
       "bullet2": "Sungitsani nthawi ya service",
       "bullet3": "Landirani ma alert pa kusintha kwa service",
@@ -140,35 +144,35 @@
     },
 
     "features": {
-      "eyebrow": "Zinthu zazikulu",
-      "title": "Mphamvu zazikulu za SmartLink",
-      "subtitle": "SmartLink imayang’ana pa kupeza mafuta, kuwongolera ma station, ndi malipiro a digito.",
+      "eyebrow": "Infrastructure modules",
+      "title": "Control layer ya kayendedwe ka mafuta",
+      "subtitle": "SmartLink imamangidwa pa zisankho zenizeni za pa station: kupita kuti, pali mafuta ati, mzere ndi wautali bwanji, ndi momwe transaction ikulandilidwa.",
 
-      "availabilityTitle": "Kupezeka kwa mafuta pa nthawi yeniyeni",
-      "availabilityBody": "Ma station amapereka deta ya stock kuti oyendetsa asankhe mwanzeru.",
+      "availabilityTitle": "Driver discovery",
+      "availabilityBody": "Onetsani availability, service status, ndi confidence ya station asanayende.",
 
-      "queueTitle": "Kuwona mzere",
-      "queueBody": "Dziwani momwe mzere ulili musanayende.",
+      "queueTitle": "Queue ndi reservation control",
+      "queueBody": "Onetsani wait pressure, gawani demand ku ma station apafupi, ndi kutsegula reservation windows.",
 
-      "reservationTitle": "Kusungitsa ndi kulipira pasadakhale",
-      "reservationBody": "Sungitsani nthawi ndi kuchepetsa kudikirira.",
+      "reservationTitle": "Wallet ndi prepay",
+      "reservationBody": "Thandizani malipiro a digito kuti counter ikhale yosavuta ndi settlement iwoneke bwino.",
 
-      "verifiedTitle": "Zida za ma station",
-      "verifiedBody": "Oyang’anira amatha kuwongolera mapampu ndi service mosavuta.",
+      "verifiedTitle": "Station operating console",
+      "verifiedBody": "Attendants ndi managers asinthe pumps, queues, deliveries, ndi service readiness pa malo amodzi.",
 
-      "alertsTitle": "Telemetry ndi malipoti",
-      "alertsBody": "Deta imathandiza kuyang’anira ndi kupanga malipoti.",
+      "alertsTitle": "Telemetry ndi reporting",
+      "alertsBody": "Events za operation zisanduke exports, alerts, reconciliation, ndi malipoti okonzekera MERA.",
 
-      "transparencyTitle": "Wallet ndi malipiro",
-      "transparencyBody": "Malipiro ndi loyalty zimachitika mosavuta mu pulatifomu imodzi."
+      "transparencyTitle": "Network trust layer",
+      "transparencyBody": "Perekani information yoyera kwa oyendetsa ndi anzawo pa supply, wait time, service, ndi accountability."
     },
 
     "stations": {
       "eyebrow": "Pulatifomu",
-      "title": "Pulatifomu imodzi ya oyendetsa, ma station, ma fleet, ndi anzawo.",
-      "subtitle": "SmartLink imawoneka yosavuta kwa ogwiritsa ntchito koma ili ndi mphamvu yayikulu kumbuyo kwake.",
+      "title": "Operating layer imodzi ya oyendetsa, ma station, ma fleet, ndi anzawo.",
+      "subtitle": "Kwa oyendetsa SmartLink imakhala yosavuta, koma kumbuyo kwake imapatsa operators control surface yamphamvu.",
 
-      "description": "Gwiritsani ntchito SmartLink kuchepetsa kudzaza pa station, kukulitsa chidaliro cha makasitomala, kuthandiza malipiro a digito, ndi kupanga deta yolondola.",
+      "description": "Gwiritsani SmartLink kuchepetsa kudzaza pa station, kukonza kulumikizana, kuthandiza malipiro a digito, ndi kupanga operational data yoyera.",
 
       "cta": "Pemphani demo ya station",
 
@@ -191,8 +195,8 @@
       "enterprisePoint3": "Deta yolumikizidwa",
 
       "devEyebrow": "Zida za ma developer",
-      "devTitle": "Integrations zogwirizana ndi ma station enieni.",
-      "devBody": "Lumikizani queue events, malipiro, telemetry, ndi malipoti mu ma system anu.",
+      "devTitle": "Integrations zogwirizana ndi station infrastructure yeniyeni.",
+      "devBody": "Lumikizani queue events, wallet workflows, telemetry, deliveries, reporting, ndi monitoring mu ma system anu.",
 
       "devChip1": "Telemetry",
       "devChip2": "Reservation events",
@@ -201,8 +205,8 @@
     },
 
     "trust": {
-      "eyebrow": "Chikhulupiriro",
-      "title": "Yapangidwa kuti ichepetse mizere ndi kukonza service.",
+      "eyebrow": "Operating evidence",
+      "title": "Yapangidwa kuchepetsa mizere, kukonza kulumikizana kwa station, ndi accountability.",
 
       "item1Value": "Nthawi yeniyeni",
       "item1Label": "Availability ndi mzere zimawoneka nthawi yomweyo",
@@ -219,8 +223,8 @@
 
     "finalCta": {
       "eyebrow": "Yambani",
-      "title": "Pezani mafuta mosavuta nthawi zonse.",
-      "subtitle": "Lowani pa SmartLink kuti muwone ma station, kuyendetsa queue, ndi kugwiritsa ntchito malipiro a digito.",
+      "title": "Pangani fuel stop iliyonse ikhale yosavuta kupanga plan komanso yosavuta kuyendetsa.",
+      "subtitle": "Tsegulani live map, lembetsani station, kapena konzekeretsani operations team pa queue visibility, malipiro a wallet, ndi station reporting.",
       "primary": "Pezani Mafuta Pafupi",
       "secondary": "Lowani pa SmartLink",
       "note": "Yapangidwa kwa ogwiritsa ntchito ku Malawi, ma station, ndi anzawo."

@@ -156,8 +156,8 @@ export async function notifyUserOfCashbackAward({
         body: alert?.message || notification.body,
         tag: alert?.publicId || transaction?.publicId || `cashback-${Date.now()}`,
         url: "/m/alerts",
-        icon: "/smartlogo.png",
-        badge: "/smartlogo.png",
+        icon: "/smartlink.png",
+        badge: "/smartlink.png",
       },
       data: {
         alertPublicId: alert?.publicId || null,

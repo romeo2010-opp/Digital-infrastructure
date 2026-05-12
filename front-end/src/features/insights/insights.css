@@ -2,9 +2,7 @@
   min-height: 100vh;
   box-sizing: border-box;
   padding: 84px 16px 16px;
-  background:
-    radial-gradient(circle at 8% 0%, rgba(20, 94, 132, 0.12), transparent 28%),
-    linear-gradient(180deg, #eef4fa 0%, #e1eaf4 100%);
+  background: #ffffff;
 }
 
 .insights-shell {
@@ -17,7 +15,7 @@
 .insights-header {
   border: 1px solid #cfddef;
   border-radius: 8px;
-  background: linear-gradient(180deg, #f8fbff 0%, #edf3fb 100%);
+  background: #ffffff;
   padding: 14px;
 }
 
@@ -46,7 +44,7 @@
   min-width: 180px;
   border: 1px solid #2c5f94;
   border-radius: 8px;
-  background: linear-gradient(180deg, #2f6aa6 0%, #295f97 100%);
+  background: linear-gradient(180deg, #0f887f 0%, #0a6d65 100%);
   color: #ffffff;
   font-size: 13px;
   font-weight: 700;
@@ -69,7 +67,7 @@
 .insights-panel {
   border: 1px solid #cfddef;
   border-radius: 8px;
-  background: linear-gradient(180deg, #f8fbff 0%, #edf3fb 100%);
+  background: #ffffff;
   padding: 12px;
 }
 

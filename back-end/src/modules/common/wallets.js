@@ -3353,8 +3353,8 @@ async function notifyUserOfReceivedWalletTransfer(transfer) {
         body: alert?.message || notification.body,
         tag: alert?.publicId || `wallet-transfer-${String(transfer?.publicId || "").trim() || Date.now()}`,
         url: "/m/wallet",
-        icon: "/smartlogo.png",
-        badge: "/smartlogo.png",
+        icon: "/smartlink.png",
+        badge: "/smartlink.png",
       },
       data: {
         alertPublicId: alert?.publicId || null,
