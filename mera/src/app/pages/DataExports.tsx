@@ -1,6 +1,7 @@
 import { Download, FileSpreadsheet, FileText, TableProperties } from 'lucide-react'
 import { Button } from '../components/ui/button'
 import { SectionCard } from '../components/SectionCard'
+import { SectionKpiStrip } from '../components/SectionKpiStrip'
 import { PortalTable } from '../components/PortalTable'
 import { usePortal } from '../lib/portalContext'
 import { normalizeDate, normalizeRows, renderPill } from '../lib/portalUtils'
@@ -45,9 +46,29 @@ export function DataExports() {
       updatedAt: new Date().toISOString(),
     },
   ]
+  const recentExportRows = exportRows.filter((row) => row.freshness === 'Live' || row.freshness === 'Rolling')
+  const reportPackageRows = exportRows.filter((row) => ['XLSX', 'CSV'].includes(row.format))
+  const evidenceBackedRows = exportRows.filter((row) => /complaint|flag|audit/i.test(row.dataset))
+  const exportColumns = [
+    { key: 'dataset', label: 'Dataset' },
+    { key: 'source', label: 'Source' },
+    { key: 'format', label: 'Format' },
+    { key: 'freshness', label: 'Freshness' },
+    { key: 'updatedAt', label: 'Updated', render: (row: any) => normalizeDate(row.updatedAt) },
+  ]
 
   return (
     <div className="flex h-full flex-col gap-4 overflow-y-auto p-4">
+      <SectionKpiStrip
+        columns={exportColumns}
+        items={[
+          { label: 'Available Exports', value: exportRows.length, rows: exportRows, accent: '#2563eb' },
+          { label: 'Recent Exports', value: recentExportRows.length, rows: recentExportRows, accent: '#10b981' },
+          { label: 'Report Packages', value: reportPackageRows.length, rows: reportPackageRows, accent: '#7c3aed' },
+          { label: 'Evidence-backed Outputs', value: evidenceBackedRows.length, rows: evidenceBackedRows, tone: evidenceBackedRows.length ? 'good' : 'neutral', accent: '#f59e0b' },
+        ]}
+      />
+
       <div className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
         <SectionCard title="Export Catalogue" subtitle="Structured data outputs prepared from current MERA operational datasets">
           <PortalTable

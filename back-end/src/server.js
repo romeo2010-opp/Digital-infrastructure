@@ -8,9 +8,11 @@ import { attachUserQueueWebSocket } from "./realtime/userQueueWebSocket.js"
 import { attachUserStationChangesWebSocket } from "./realtime/userStationChangesWebSocket.js"
 import { attachUserAlertsWebSocket } from "./realtime/userAlertsWebSocket.js"
 import { attachInternalChatWebSocket } from "./realtime/internalChatWebSocket.js"
+import { attachMeraDashboardWebSocket } from "./realtime/meraDashboardWebSocket.js"
 import { startMonitoringStateWatcher } from "./modules/monitoring/monitoring.service.js"
 import { startQueueLiveUpdateWatcher } from "./realtime/queueLiveUpdateWatcher.js"
 import { isTwilioVoiceConfigured } from "./modules/assistant/twilio-voice.service.js"
+import { startMeraStationStatusLogger } from "./modules/mera/services/statusLogger.service.js"
 
 const port = Number(process.env.PORT || 4000)
 const host = process.env.HOST || "0.0.0.0"
@@ -23,13 +25,16 @@ async function bootstrap() {
   const userStationWsState = await attachUserStationChangesWebSocket(server)
   const userAlertsWsState = await attachUserAlertsWebSocket(server)
   const internalChatWsState = await attachInternalChatWebSocket(server)
+  const meraDashboardWsState = await attachMeraDashboardWebSocket(server)
   const stopWatcher = startStationChangeWatcher()
   const stopMonitoringWatcher = startMonitoringStateWatcher()
   const stopQueueLiveUpdateWatcher = startQueueLiveUpdateWatcher()
+  const stopMeraStationStatusLogger = startMeraStationStatusLogger()
   const shutdown = () => {
     stopWatcher()
     stopMonitoringWatcher()
     stopQueueLiveUpdateWatcher()
+    stopMeraStationStatusLogger()
   }
   process.on("exit", shutdown)
   process.on("SIGINT", shutdown)
@@ -69,6 +74,10 @@ async function bootstrap() {
     if (internalChatWsState?.enabled) {
       // eslint-disable-next-line no-console
       console.log(`SmartLink internal chat feed listening on ws://${host}:${port}${internalChatWsState.path}`)
+    }
+    if (meraDashboardWsState?.enabled) {
+      // eslint-disable-next-line no-console
+      console.log(`SmartLink MERA dashboard feed listening on ws://${host}:${port}${meraDashboardWsState.path}`)
     }
   })
 }

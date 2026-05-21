@@ -2,12 +2,15 @@ import bcrypt from "bcryptjs"
 import crypto from "crypto"
 import jwt from "jsonwebtoken"
 import { prisma } from "../../../db/prisma.js"
-import { badRequest } from "../../../utils/http.js"
+import { badRequest, notFound } from "../../../utils/http.js"
 import { createPublicId } from "../../common/db.js"
 import { normalizePermissionList } from "../permissions.js"
 import { logMeraAudit } from "./audit.service.js"
+import { sendMeraLoginCodeEmail } from "./email.service.js"
 
 const MERA_ACCESS_TOKEN_TTL_MIN = Number(process.env.MERA_ACCESS_TOKEN_TTL_MIN || 480)
+const MERA_LOGIN_CODE_RESEND_COOLDOWN_SECONDS = Number(process.env.MERA_LOGIN_CODE_RESEND_COOLDOWN_SECONDS || 60)
+export const MERA_TRUSTED_DEVICE_COOKIE = "mera_trusted_device"
 
 function getMeraJwtSecret() {
   return process.env.JWT_MERA_ACCESS_SECRET || process.env.JWT_ACCESS_SECRET || ""
@@ -15,6 +18,68 @@ function getMeraJwtSecret() {
 
 function hashToken(token) {
   return crypto.createHash("sha256").update(token).digest("hex")
+}
+
+export function hashMeraLoginSecret(secret) {
+  return hashToken(String(secret || ""))
+}
+
+export function generateMeraLoginCode() {
+  return String(crypto.randomInt(0, 1000000)).padStart(6, "0")
+}
+
+export function maskMeraEmail(email) {
+  const [name = "", domain = ""] = String(email || "").trim().split("@")
+  if (!name || !domain) return "your email address"
+  const visibleName = name.length <= 2 ? `${name[0] || "*"}*` : `${name.slice(0, 2)}${"*".repeat(Math.min(4, name.length - 2))}`
+  const [domainName = "", ...rest] = domain.split(".")
+  const visibleDomain = domainName.length <= 2 ? `${domainName[0] || "*"}*` : `${domainName.slice(0, 2)}${"*".repeat(Math.min(4, domainName.length - 2))}`
+  return `${visibleName}@${[visibleDomain, ...rest].filter(Boolean).join(".")}`
+}
+
+function getMeraLoginCodeTtlMin() {
+  return Math.max(1, Number(process.env.MERA_LOGIN_CODE_TTL_MIN || 10))
+}
+
+export function getMeraLoginCodeMaxAttempts() {
+  return Math.max(1, Number(process.env.MERA_LOGIN_CODE_MAX_ATTEMPTS || 5))
+}
+
+function getMeraTrustedDeviceDays() {
+  return Math.max(1, Number(process.env.MERA_TRUSTED_DEVICE_DAYS || 30))
+}
+
+function getRequestIp(req) {
+  return (req.header("x-forwarded-for") || req.ip || "").split(",")[0].trim().slice(0, 64) || null
+}
+
+function getRequestUserAgent(req) {
+  return req.header("user-agent")?.slice(0, 255) || null
+}
+
+function readBoolean(value) {
+  return ["1", "true", "yes", "on"].includes(String(value || "").trim().toLowerCase())
+}
+
+function buildTrustedDeviceCookieOptions() {
+  const maxAge = getMeraTrustedDeviceDays() * 24 * 60 * 60 * 1000
+  const domain = String(process.env.COOKIE_DOMAIN || "").trim() || undefined
+
+  return {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: readBoolean(process.env.COOKIE_SECURE),
+    path: "/api/mera/auth",
+    maxAge,
+    ...(domain ? { domain } : {}),
+  }
+}
+
+function parseTrustedDeviceCookie(rawCookie) {
+  const raw = String(rawCookie || "").trim()
+  const [publicId, token] = raw.split(".")
+  if (!publicId || !token) return null
+  return { publicId, token }
 }
 
 function normalizeAccessRows(rows = []) {
@@ -121,8 +186,8 @@ async function createMeraSession({ meraUserId, req }) {
   const sessionPublicId = createPublicId()
   const sessionToken = crypto.randomBytes(40).toString("base64url")
   const sessionHash = hashToken(sessionToken)
-  const userAgent = req.header("user-agent")?.slice(0, 255) || null
-  const ipAddress = (req.header("x-forwarded-for") || req.ip || "").split(",")[0].trim().slice(0, 64) || null
+  const userAgent = getRequestUserAgent(req)
+  const ipAddress = getRequestIp(req)
 
   await prisma.$executeRaw`
     INSERT INTO mera_auth_sessions (
@@ -206,7 +271,162 @@ export async function buildMeraAuthPayload(accessRow, req) {
   }
 }
 
-export async function login({ payload, req }) {
+async function getTrustedDeviceForRequest(meraUserId, req) {
+  const cookie = parseTrustedDeviceCookie(req.cookies?.[MERA_TRUSTED_DEVICE_COOKIE])
+  if (!cookie) return null
+
+  const tokenHash = hashToken(cookie.token)
+  const rows = await prisma.$queryRaw`
+    SELECT public_id
+    FROM mera_trusted_devices
+    WHERE public_id = ${cookie.publicId}
+      AND mera_user_id = ${Number(meraUserId)}
+      AND token_hash = ${tokenHash}
+      AND revoked_at IS NULL
+      AND expires_at > CURRENT_TIMESTAMP(3)
+    LIMIT 1
+  `
+  const trustedDevice = rows?.[0] || null
+  if (!trustedDevice?.public_id) return null
+
+  prisma.$executeRaw`
+    UPDATE mera_trusted_devices
+    SET
+      last_used_at = CURRENT_TIMESTAMP(3),
+      user_agent = ${getRequestUserAgent(req)},
+      ip_address = ${getRequestIp(req)}
+    WHERE public_id = ${trustedDevice.public_id}
+  `.catch(() => {})
+
+  return trustedDevice
+}
+
+async function createLoginChallenge({ user, req }) {
+  const code = generateMeraLoginCode()
+  const codeHash = hashToken(code)
+  const challengePublicId = createPublicId()
+  const ttlMin = getMeraLoginCodeTtlMin()
+  const cooldownSeconds = Math.max(10, MERA_LOGIN_CODE_RESEND_COOLDOWN_SECONDS)
+  const userAgent = getRequestUserAgent(req)
+  const ipAddress = getRequestIp(req)
+
+  await prisma.$executeRaw`
+    INSERT INTO mera_login_challenges (
+      public_id,
+      mera_user_id,
+      code_hash,
+      user_agent,
+      ip_address,
+      expires_at,
+      resend_available_at
+    )
+    VALUES (
+      ${challengePublicId},
+      ${Number(user.id)},
+      ${codeHash},
+      ${userAgent},
+      ${ipAddress},
+      DATE_ADD(CURRENT_TIMESTAMP(3), INTERVAL ${ttlMin} MINUTE),
+      DATE_ADD(CURRENT_TIMESTAMP(3), INTERVAL ${cooldownSeconds} SECOND)
+    )
+  `
+
+  const createdRows = await prisma.$queryRaw`
+    SELECT public_id, expires_at, resend_available_at
+    FROM mera_login_challenges
+    WHERE public_id = ${challengePublicId}
+    LIMIT 1
+  `
+
+  const created = createdRows?.[0] || null
+  if (!created?.public_id) throw badRequest("Unable to create MERA login challenge")
+
+  try {
+    await sendMeraLoginCodeEmail({
+      to: user.email,
+      code,
+      expiresAt: created.expires_at,
+      fullName: user.fullName,
+    })
+  } catch (error) {
+    await prisma.$executeRaw`
+      UPDATE mera_login_challenges
+      SET consumed_at = CURRENT_TIMESTAMP(3), updated_at = CURRENT_TIMESTAMP(3)
+      WHERE public_id = ${challengePublicId}
+    `.catch(() => {})
+    throw error
+  }
+
+  return {
+    challengeRequired: true,
+    challengeId: created.public_id,
+    maskedEmail: maskMeraEmail(user.email),
+    expiresAt: created.expires_at,
+    resendAvailableAt: created.resend_available_at,
+  }
+}
+
+async function getLoginChallenge(challengeId) {
+  const rows = await prisma.$queryRaw`
+    SELECT
+      id,
+      public_id,
+      mera_user_id,
+      code_hash,
+      attempt_count,
+      resend_count,
+      expires_at,
+      resend_available_at,
+      consumed_at
+    FROM mera_login_challenges
+    WHERE public_id = ${String(challengeId || "").trim()}
+    LIMIT 1
+  `
+  return rows?.[0] || null
+}
+
+function assertChallengeUsable(challenge) {
+  if (!challenge?.public_id) throw badRequest("Invalid or expired login challenge")
+  if (challenge.consumed_at) throw badRequest("This login code has already been used")
+
+  const expiresAt = challenge.expires_at ? new Date(challenge.expires_at) : null
+  if (!expiresAt || Number.isNaN(expiresAt.getTime()) || expiresAt.getTime() <= Date.now()) {
+    throw badRequest("Login code has expired")
+  }
+}
+
+async function createTrustedDevice({ meraUserId, req }) {
+  const publicId = createPublicId()
+  const token = crypto.randomBytes(40).toString("base64url")
+  const tokenHash = hashToken(token)
+  const trustedDays = getMeraTrustedDeviceDays()
+
+  await prisma.$executeRaw`
+    INSERT INTO mera_trusted_devices (
+      public_id,
+      mera_user_id,
+      token_hash,
+      user_agent,
+      ip_address,
+      expires_at
+    )
+    VALUES (
+      ${publicId},
+      ${Number(meraUserId)},
+      ${tokenHash},
+      ${getRequestUserAgent(req)},
+      ${getRequestIp(req)},
+      DATE_ADD(CURRENT_TIMESTAMP(3), INTERVAL ${trustedDays} DAY)
+    )
+  `
+  return {
+    name: MERA_TRUSTED_DEVICE_COOKIE,
+    value: `${publicId}.${token}`,
+    options: buildTrustedDeviceCookieOptions(),
+  }
+}
+
+async function authenticateMeraLogin(payload) {
   const email = String(payload?.email || "").trim().toLowerCase()
   const password = String(payload?.password || "")
   if (!email || !password) throw badRequest("Email and password are required")
@@ -217,7 +437,125 @@ export async function login({ payload, req }) {
   const matches = await bcrypt.compare(password, String(user.password_hash || ""))
   if (!matches) throw badRequest("Invalid MERA credentials")
 
-  return buildMeraAuthPayload(user, req)
+  return user
+}
+
+export async function login({ payload, req }) {
+  const user = await authenticateMeraLogin(payload)
+  const trustedDevice = await getTrustedDeviceForRequest(user.id, req)
+  if (trustedDevice?.public_id) return buildMeraAuthPayload(user, req)
+
+  return createLoginChallenge({ user, req })
+}
+
+export async function verifyLoginCode({ payload, req }) {
+  const challenge = await getLoginChallenge(payload?.challengeId)
+  assertChallengeUsable(challenge)
+
+  const maxAttempts = getMeraLoginCodeMaxAttempts()
+  if (Number(challenge.attempt_count || 0) >= maxAttempts) {
+    throw badRequest("Too many login code attempts. Request a new code.")
+  }
+
+  const submittedHash = hashToken(String(payload?.code || "").trim())
+  if (submittedHash !== String(challenge.code_hash || "")) {
+    const nextAttemptCount = Number(challenge.attempt_count || 0) + 1
+    await prisma.$executeRaw`
+      UPDATE mera_login_challenges
+      SET
+        attempt_count = attempt_count + 1,
+        consumed_at = CASE WHEN ${nextAttemptCount} >= ${maxAttempts} THEN CURRENT_TIMESTAMP(3) ELSE consumed_at END,
+        updated_at = CURRENT_TIMESTAMP(3)
+      WHERE id = ${challenge.id}
+    `
+    throw badRequest("Invalid login code")
+  }
+
+  const consumedCount = await prisma.$executeRaw`
+    UPDATE mera_login_challenges
+    SET consumed_at = CURRENT_TIMESTAMP(3), updated_at = CURRENT_TIMESTAMP(3)
+    WHERE id = ${challenge.id}
+      AND consumed_at IS NULL
+  `
+  if (Number(consumedCount || 0) < 1) throw badRequest("This login code has already been used")
+
+  const user = await getMeraUserAccessById(Number(challenge.mera_user_id))
+  if (!user?.id) throw badRequest("MERA user was not found")
+
+  const session = await buildMeraAuthPayload(user, req)
+  const trustedDeviceCookie = payload?.trustDevice
+    ? await createTrustedDevice({ meraUserId: user.id, req })
+    : null
+
+  return { session, trustedDeviceCookie }
+}
+
+export async function resendLoginCode({ payload, req }) {
+  const challenge = await getLoginChallenge(payload?.challengeId)
+  assertChallengeUsable(challenge)
+
+  const resendAt = challenge.resend_available_at ? new Date(challenge.resend_available_at) : null
+  if (resendAt && !Number.isNaN(resendAt.getTime()) && resendAt.getTime() > Date.now()) {
+    throw badRequest("Please wait before requesting another login code")
+  }
+
+  const user = await getMeraUserAccessById(Number(challenge.mera_user_id))
+  if (!user?.id) throw badRequest("MERA user was not found")
+
+  const code = generateMeraLoginCode()
+  const codeHash = hashToken(code)
+  const ttlMin = getMeraLoginCodeTtlMin()
+  const cooldownSeconds = Math.max(10, MERA_LOGIN_CODE_RESEND_COOLDOWN_SECONDS)
+
+  await prisma.$executeRaw`
+    UPDATE mera_login_challenges
+    SET
+      code_hash = ${codeHash},
+      attempt_count = 0,
+      resend_count = resend_count + 1,
+      user_agent = ${getRequestUserAgent(req)},
+      ip_address = ${getRequestIp(req)},
+      expires_at = DATE_ADD(CURRENT_TIMESTAMP(3), INTERVAL ${ttlMin} MINUTE),
+      resend_available_at = DATE_ADD(CURRENT_TIMESTAMP(3), INTERVAL ${cooldownSeconds} SECOND),
+      updated_at = CURRENT_TIMESTAMP(3)
+    WHERE id = ${challenge.id}
+      AND consumed_at IS NULL
+  `
+
+  const updatedRows = await prisma.$queryRaw`
+    SELECT public_id, expires_at, resend_available_at
+    FROM mera_login_challenges
+    WHERE id = ${challenge.id}
+      AND consumed_at IS NULL
+    LIMIT 1
+  `
+
+  const updated = updatedRows?.[0] || null
+  if (!updated?.public_id) throw badRequest("Unable to resend MERA login code")
+
+  try {
+    await sendMeraLoginCodeEmail({
+      to: user.email,
+      code,
+      expiresAt: updated.expires_at,
+      fullName: user.fullName,
+    })
+  } catch (error) {
+    await prisma.$executeRaw`
+      UPDATE mera_login_challenges
+      SET consumed_at = CURRENT_TIMESTAMP(3), updated_at = CURRENT_TIMESTAMP(3)
+      WHERE id = ${challenge.id}
+    `.catch(() => {})
+    throw error
+  }
+
+  return {
+    challengeRequired: true,
+    challengeId: updated.public_id,
+    maskedEmail: maskMeraEmail(user.email),
+    expiresAt: updated.expires_at,
+    resendAvailableAt: updated.resend_available_at,
+  }
 }
 
 export async function me(auth) {
@@ -522,6 +860,93 @@ export async function patchMyPreferences(auth, payload) {
     LIMIT 1
   `
   return toMeraPreferencesResponse(rows?.[0] || null)
+}
+
+function mapMeraSession(row, auth) {
+  return {
+    publicId: row.public_id,
+    current: row.public_id === auth?.sessionPublicId,
+    userAgent: row.user_agent || null,
+    ipAddress: row.ip_address || null,
+    lastSeenAt: row.last_seen_at || null,
+    createdAt: row.created_at || null,
+    expiresAt: row.expires_at || null,
+    revokedAt: row.revoked_at || null,
+  }
+}
+
+export async function listSessions(auth) {
+  if (!auth?.userId) throw badRequest("Missing MERA user")
+  const rows = await prisma.$queryRaw`
+    SELECT public_id, user_agent, ip_address, last_seen_at, created_at, expires_at, revoked_at
+    FROM mera_auth_sessions
+    WHERE mera_user_id = ${auth.userId}
+      AND revoked_at IS NULL
+      AND expires_at > CURRENT_TIMESTAMP(3)
+    ORDER BY
+      CASE WHEN public_id = ${auth.sessionPublicId} THEN 0 ELSE 1 END,
+      last_seen_at DESC,
+      created_at DESC
+  `
+  return {
+    items: (rows || []).map((row) => mapMeraSession(row, auth)),
+  }
+}
+
+export async function revokeOtherSessions(auth) {
+  if (!auth?.userId) throw badRequest("Missing MERA user")
+  const revokedCount = await prisma.$executeRaw`
+    UPDATE mera_auth_sessions
+    SET revoked_at = CURRENT_TIMESTAMP(3)
+    WHERE mera_user_id = ${auth.userId}
+      AND public_id <> ${auth.sessionPublicId}
+      AND revoked_at IS NULL
+      AND expires_at > CURRENT_TIMESTAMP(3)
+  `
+  await logMeraAudit({
+    actorId: auth.userId,
+    actorName: auth.fullName,
+    actorRole: auth.role,
+    permissionUsed: "AUTH_SESSION_REVOKE",
+    actionType: "MERA_OTHER_SESSIONS_REVOKED",
+    actionDescription: "MERA user revoked other active device sessions.",
+  })
+  return { revokedCount: Number(revokedCount || 0) }
+}
+
+export async function revokeSession(auth, sessionPublicId) {
+  if (!auth?.userId) throw badRequest("Missing MERA user")
+  const scopedPublicId = String(sessionPublicId || "").trim()
+  if (!scopedPublicId) throw badRequest("session publicId is required")
+  if (scopedPublicId === auth.sessionPublicId) {
+    throw badRequest("Use sign out to end the current device session")
+  }
+
+  const rows = await prisma.$queryRaw`
+    SELECT public_id
+    FROM mera_auth_sessions
+    WHERE public_id = ${scopedPublicId}
+      AND mera_user_id = ${auth.userId}
+    LIMIT 1
+  `
+  if (!rows?.[0]?.public_id) throw notFound("MERA session not found")
+
+  await prisma.$executeRaw`
+    UPDATE mera_auth_sessions
+    SET revoked_at = COALESCE(revoked_at, CURRENT_TIMESTAMP(3))
+    WHERE public_id = ${scopedPublicId}
+      AND mera_user_id = ${auth.userId}
+  `
+  await logMeraAudit({
+    actorId: auth.userId,
+    actorName: auth.fullName,
+    actorRole: auth.role,
+    permissionUsed: "AUTH_SESSION_REVOKE",
+    actionType: "MERA_SESSION_REVOKED",
+    actionDescription: `MERA user revoked device session ${scopedPublicId}.`,
+    affectedEntity: scopedPublicId,
+  })
+  return { publicId: scopedPublicId, revoked: true }
 }
 
 export async function logout(auth) {

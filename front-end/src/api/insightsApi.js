@@ -94,6 +94,11 @@ export const insightsApi = {
     return httpClient.get(`/api/stations/${stationPublicId}/insights/queue-prediction`)
   },
 
+  getOpsPrediction({ fuelType = "PETROL" } = {}) {
+    const stationPublicId = stationPublicIdOrThrow()
+    return httpClient.get(`/api/stations/${stationPublicId}/insights/ops-prediction${buildQuery({ fuelType })}`)
+  },
+
   getDemandForecast({ hours = 6 } = {}) {
     const stationPublicId = stationPublicIdOrThrow()
     return httpClient.get(`/api/stations/${stationPublicId}/insights/demand-forecast${buildQuery({ hours })}`)

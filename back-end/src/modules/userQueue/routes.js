@@ -1680,6 +1680,10 @@ async function resolveRefundableWalletTransactionForUser({ userId, transactionPu
           AND qe.public_id IS NOT NULL
           AND wallet_tx.related_entity_id = qe.public_id
         )
+        OR (
+          wallet_tx.related_entity_type = 'TRANSACTION'
+          AND wallet_tx.related_entity_id = tx.public_id
+        )
       )
      AND wallet_tx.transaction_type IN ('PAYMENT', 'RESERVATION_PAYMENT', 'QUEUE_FEE')
      AND wallet_tx.transaction_status = 'POSTED'
@@ -2782,6 +2786,7 @@ router.get(
               AND lt.transaction_type IN ('PAYMENT', 'RESERVATION_PAYMENT', 'QUEUE_FEE')
               AND (
                 (tx.public_id IS NOT NULL AND lt.external_reference = tx.public_id)
+                OR (tx.public_id IS NOT NULL AND lt.related_entity_type = 'TRANSACTION' AND lt.related_entity_id = tx.public_id)
                 OR (qe.public_id IS NOT NULL AND lt.related_entity_type = 'QUEUE' AND lt.related_entity_id = qe.public_id)
                 OR (tx.payment_reference IS NOT NULL AND tx.payment_reference <> '' AND lt.transaction_reference = tx.payment_reference)
               )
@@ -2978,6 +2983,7 @@ router.get(
               AND lt.transaction_type IN ('PAYMENT', 'RESERVATION_PAYMENT', 'QUEUE_FEE')
               AND (
                 (tx.public_id IS NOT NULL AND lt.external_reference = tx.public_id)
+                OR (tx.public_id IS NOT NULL AND lt.related_entity_type = 'TRANSACTION' AND lt.related_entity_id = tx.public_id)
                 OR (ur.public_id IS NOT NULL AND lt.related_entity_type = 'RESERVATION' AND lt.related_entity_id = ur.public_id)
                 OR (qe.public_id IS NOT NULL AND lt.related_entity_type = 'QUEUE' AND lt.related_entity_id = qe.public_id)
                 OR (tx.payment_reference IS NOT NULL AND tx.payment_reference <> '' AND lt.transaction_reference = tx.payment_reference)
@@ -3013,8 +3019,17 @@ router.get(
       }
       receipt = buildReservationReceiptPayload(row)
       }
+    } else if (receiptType === "transaction") {
+      receipt = await getUserTransactionReceiptPayloadByLink({
+        userId: authUserId,
+        receiptType,
+        reference,
+      })
+      if (!receipt) {
+        throw badRequest("Transaction receipt not found.")
+      }
     } else {
-      throw badRequest("receiptType must be either queue or reservation.")
+      throw badRequest("receiptType must be either queue, reservation, or transaction.")
     }
 
     const fileName = `smartpay_${safeFilenamePart(receipt.reference || reference)}_receipt.pdf`

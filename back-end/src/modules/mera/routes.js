@@ -10,7 +10,10 @@ import {
 } from "./middleware/upload.js"
 import * as authController from "./controllers/auth.controller.js"
 import * as portalController from "./controllers/portal.controller.js"
+import * as searchController from "./controllers/search.controller.js"
+import * as taskController from "./controllers/task.controller.js"
 import {
+  caseIdParamSchema,
   complaintAssignSchema,
   complaintListQuerySchema,
   complaintStatusSchema,
@@ -21,6 +24,7 @@ import {
   flagCreateSchema,
   flagListQuerySchema,
   flagResolveSchema,
+  fullSearchQuerySchema,
   fuelDeliveryListQuerySchema,
   fuelDeliveryLogSchema,
   fuelPriceReportSchema,
@@ -33,13 +37,28 @@ import {
   licenseIdParamSchema,
   licenseListQuerySchema,
   licenseUpdateSchema,
+  meraChangePasswordSchema,
+  meraLoginCodeResendSchema,
+  meraLoginCodeVerifySchema,
   meraLoginSchema,
+  meraPreferencesPatchSchema,
+  meraProfilePatchSchema,
   meraUserCreateSchema,
   meraUserStatusSchema,
   paginationQuerySchema,
   publicIdParamSchema,
   publicStationsQuerySchema,
+  searchQuerySchema,
   stationStatusLogSchema,
+  taskCompleteSchema,
+  taskCreateSchema,
+  taskEscalateSchema,
+  taskEvidenceSchema,
+  taskListQuerySchema,
+  taskNoteSchema,
+  taskNumberParamSchema,
+  taskStatusSchema,
+  taskUpdateSchema,
   verifyRoleQuerySchema,
 } from "./schemas.js"
 import { MERA_PERMISSIONS } from "./permissions.js"
@@ -56,7 +75,7 @@ const loginLimiter = rateLimit({
 })
 
 function rememberUploadedFile(req, _res, next) {
-  req.uploadedFileUrl = buildUploadedFileUrl(req.file)
+  req.uploadedFileUrl = buildUploadedFileUrl(req.file, req)
   req.uploadedFileType = inferUploadedFileType(req.file)
   next()
 }
@@ -117,6 +136,24 @@ meraPublicRouter.post(
 )
 
 meraPublicRouter.post(
+  "/api/mera/auth/login/verify",
+  loginLimiter,
+  asyncHandler(async (req, res) => {
+    req.body = meraLoginCodeVerifySchema.parse(req.body || {})
+    return authController.verifyLoginCode(req, res)
+  })
+)
+
+meraPublicRouter.post(
+  "/api/mera/auth/login/resend",
+  loginLimiter,
+  asyncHandler(async (req, res) => {
+    req.body = meraLoginCodeResendSchema.parse(req.body || {})
+    return authController.resendLoginCode(req, res)
+  })
+)
+
+meraPublicRouter.post(
   "/api/mera/complaints",
   complaintMediaUpload,
   rememberUploadedFile,
@@ -129,12 +166,242 @@ meraPublicRouter.post(
 meraProtectedRouter.use(requireMeraAuth)
 
 meraProtectedRouter.get("/auth/me", asyncHandler(authController.me))
+meraProtectedRouter.patch(
+  "/auth/me",
+  asyncHandler(async (req, res) => {
+    req.body = meraProfilePatchSchema.parse(req.body || {})
+    return authController.patchMe(req, res)
+  })
+)
 meraProtectedRouter.post("/auth/logout", asyncHandler(authController.logout))
+meraProtectedRouter.patch(
+  "/auth/password",
+  asyncHandler(async (req, res) => {
+    req.body = meraChangePasswordSchema.parse(req.body || {})
+    return authController.changePassword(req, res)
+  })
+)
+meraProtectedRouter.get("/auth/preferences", asyncHandler(authController.getMyPreferences))
+meraProtectedRouter.patch(
+  "/auth/preferences",
+  asyncHandler(async (req, res) => {
+    req.body = meraPreferencesPatchSchema.parse(req.body || {})
+    return authController.patchMyPreferences(req, res)
+  })
+)
+meraProtectedRouter.get("/auth/sessions", asyncHandler(authController.listSessions))
+meraProtectedRouter.post("/auth/sessions/revoke-others", asyncHandler(authController.revokeOtherSessions))
+meraProtectedRouter.post(
+  "/auth/sessions/:publicId/revoke",
+  asyncHandler(async (req, res) => {
+    req.params = publicIdParamSchema.parse(req.params || {})
+    return authController.revokeSession(req, res)
+  })
+)
 meraProtectedRouter.get(
   "/auth/verify-role",
   asyncHandler(async (req, res) => {
     req.query = verifyRoleQuerySchema.parse(req.query || {})
     return authController.verifyRole(req, res)
+  })
+)
+
+meraProtectedRouter.get("/snapshot", asyncHandler(portalController.snapshot))
+
+meraProtectedRouter.get(
+  "/search",
+  asyncHandler(async (req, res) => {
+    req.query = searchQuerySchema.parse(req.query || {})
+    return searchController.quickSearch(req, res)
+  })
+)
+meraProtectedRouter.get(
+  "/search/full",
+  asyncHandler(async (req, res) => {
+    req.query = fullSearchQuerySchema.parse(req.query || {})
+    return searchController.fullSearch(req, res)
+  })
+)
+meraProtectedRouter.get(
+  "/station-managers/:publicId",
+  requireMeraPermission([MERA_PERMISSIONS.STATIONS_VIEW, MERA_PERMISSIONS.STATIONS_VIEW_DISTRICT]),
+  requireDistrictScope,
+  asyncHandler(async (req, res) => {
+    req.params = publicIdParamSchema.parse(req.params || {})
+    return searchController.getStationManagerDetail(req, res)
+  })
+)
+meraProtectedRouter.get(
+  "/cases/:caseId",
+  requireMeraPermission([MERA_PERMISSIONS.FLAGS_VIEW, MERA_PERMISSIONS.ENFORCEMENT_VIEW]),
+  requireDistrictScope,
+  asyncHandler(async (req, res) => {
+    req.params = caseIdParamSchema.parse(req.params || {})
+    return searchController.getCaseDetail(req, res)
+  })
+)
+meraProtectedRouter.get(
+  "/documents/task-evidence/:evidenceId",
+  requireMeraPermission([MERA_PERMISSIONS.TASKS_VIEW_ALL, MERA_PERMISSIONS.TASKS_VIEW_ASSIGNED, MERA_PERMISSIONS.TASKS_VIEW_EXECUTIVE, MERA_PERMISSIONS.TASKS_WORK]),
+  requireDistrictScope,
+  asyncHandler(async (req, res) => searchController.getTaskEvidenceDetail(req, res))
+)
+meraProtectedRouter.get(
+  "/documents/complaint-media/:publicId",
+  requireMeraPermission(MERA_PERMISSIONS.COMPLAINTS_VIEW),
+  requireDistrictScope,
+  asyncHandler(async (req, res) => {
+    req.params = publicIdParamSchema.parse(req.params || {})
+    return searchController.getComplaintMediaDetail(req, res)
+  })
+)
+
+meraProtectedRouter.get(
+  "/tasks/stats/overview",
+  requireMeraPermission([
+    MERA_PERMISSIONS.TASKS_STATS_VIEW,
+    MERA_PERMISSIONS.TASKS_VIEW_ALL,
+    MERA_PERMISSIONS.TASKS_VIEW_ASSIGNED,
+    MERA_PERMISSIONS.TASKS_VIEW_EXECUTIVE,
+  ]),
+  requireDistrictScope,
+  asyncHandler(taskController.taskStatsOverview)
+)
+meraProtectedRouter.get(
+  "/tasks/my",
+  requireMeraPermission([MERA_PERMISSIONS.TASKS_VIEW_ASSIGNED, MERA_PERMISSIONS.TASKS_WORK]),
+  requireDistrictScope,
+  asyncHandler(async (req, res) => {
+    req.query = taskListQuerySchema.parse(req.query || {})
+    return taskController.listMyTasks(req, res)
+  })
+)
+meraProtectedRouter.get(
+  "/tasks",
+  requireMeraPermission([
+    MERA_PERMISSIONS.TASKS_VIEW_ALL,
+    MERA_PERMISSIONS.TASKS_VIEW_ASSIGNED,
+    MERA_PERMISSIONS.TASKS_VIEW_EXECUTIVE,
+  ]),
+  requireDistrictScope,
+  asyncHandler(async (req, res) => {
+    req.query = taskListQuerySchema.parse(req.query || {})
+    return taskController.listTasks(req, res)
+  })
+)
+meraProtectedRouter.post(
+  "/tasks",
+  requireMeraPermission([MERA_PERMISSIONS.TASKS_CREATE, MERA_PERMISSIONS.TASKS_ASSIGN, MERA_PERMISSIONS.TASKS_MANAGE]),
+  requireDistrictScope,
+  asyncHandler(async (req, res) => {
+    req.body = taskCreateSchema.parse(req.body || {})
+    return taskController.createTask(req, res)
+  })
+)
+meraProtectedRouter.get(
+  "/tasks/:taskNumber",
+  requireMeraPermission([
+    MERA_PERMISSIONS.TASKS_VIEW_ALL,
+    MERA_PERMISSIONS.TASKS_VIEW_ASSIGNED,
+    MERA_PERMISSIONS.TASKS_VIEW_EXECUTIVE,
+    MERA_PERMISSIONS.TASKS_WORK,
+  ]),
+  requireDistrictScope,
+  asyncHandler(async (req, res) => {
+    req.params = taskNumberParamSchema.parse(req.params || {})
+    return taskController.getTask(req, res)
+  })
+)
+meraProtectedRouter.patch(
+  "/tasks/:taskNumber",
+  requireMeraPermission([MERA_PERMISSIONS.TASKS_MANAGE, MERA_PERMISSIONS.TASKS_ASSIGN, MERA_PERMISSIONS.TASKS_WORK]),
+  requireDistrictScope,
+  asyncHandler(async (req, res) => {
+    req.params = taskNumberParamSchema.parse(req.params || {})
+    req.body = taskUpdateSchema.parse(req.body || {})
+    return taskController.updateTask(req, res)
+  })
+)
+meraProtectedRouter.patch(
+  "/tasks/:taskNumber/status",
+  requireMeraPermission([MERA_PERMISSIONS.TASKS_MANAGE, MERA_PERMISSIONS.TASKS_WORK]),
+  requireDistrictScope,
+  asyncHandler(async (req, res) => {
+    req.params = taskNumberParamSchema.parse(req.params || {})
+    req.body = taskStatusSchema.parse(req.body || {})
+    return taskController.changeTaskStatus(req, res)
+  })
+)
+meraProtectedRouter.post(
+  "/tasks/:taskNumber/notes",
+  requireMeraPermission([MERA_PERMISSIONS.TASKS_MANAGE, MERA_PERMISSIONS.TASKS_WORK]),
+  requireDistrictScope,
+  asyncHandler(async (req, res) => {
+    req.params = taskNumberParamSchema.parse(req.params || {})
+    req.body = taskNoteSchema.parse(req.body || {})
+    return taskController.addTaskNote(req, res)
+  })
+)
+meraProtectedRouter.post(
+  "/tasks/:taskNumber/evidence",
+  requireMeraPermission([MERA_PERMISSIONS.TASKS_ADD_EVIDENCE, MERA_PERMISSIONS.TASKS_MANAGE]),
+  requireDistrictScope,
+  inspectionEvidenceUpload,
+  rememberUploadedFile,
+  asyncHandler(async (req, res) => {
+    req.params = taskNumberParamSchema.parse(req.params || {})
+    req.body = taskEvidenceSchema.parse(req.body || {})
+    return taskController.addTaskEvidence(req, res)
+  })
+)
+meraProtectedRouter.post(
+  "/tasks/:taskNumber/escalate",
+  requireMeraPermission([MERA_PERMISSIONS.TASKS_MANAGE, MERA_PERMISSIONS.TASKS_WORK]),
+  requireDistrictScope,
+  asyncHandler(async (req, res) => {
+    req.params = taskNumberParamSchema.parse(req.params || {})
+    req.body = taskEscalateSchema.parse(req.body || {})
+    return taskController.escalateTask(req, res)
+  })
+)
+meraProtectedRouter.post(
+  "/tasks/:taskNumber/complete",
+  requireMeraPermission([MERA_PERMISSIONS.TASKS_MANAGE, MERA_PERMISSIONS.TASKS_WORK]),
+  requireDistrictScope,
+  asyncHandler(async (req, res) => {
+    req.params = taskNumberParamSchema.parse(req.params || {})
+    req.body = taskCompleteSchema.parse(req.body || {})
+    return taskController.completeTask(req, res)
+  })
+)
+meraProtectedRouter.get(
+  "/users/assignable",
+  requireMeraPermission([MERA_PERMISSIONS.TASKS_ASSIGN, MERA_PERMISSIONS.TASKS_CREATE, MERA_PERMISSIONS.TASKS_MANAGE]),
+  requireDistrictScope,
+  asyncHandler(taskController.listAssignableUsers)
+)
+meraProtectedRouter.get(
+  "/notifications",
+  requireMeraPermission([
+    MERA_PERMISSIONS.TASKS_VIEW_ASSIGNED,
+    MERA_PERMISSIONS.TASKS_VIEW_ALL,
+    MERA_PERMISSIONS.TASKS_VIEW_EXECUTIVE,
+  ]),
+  asyncHandler(async (req, res) => {
+    req.query = paginationQuerySchema.parse(req.query || {})
+    return taskController.listNotifications(req, res)
+  })
+)
+meraProtectedRouter.patch(
+  "/notifications/:publicId/read",
+  requireMeraPermission([
+    MERA_PERMISSIONS.TASKS_VIEW_ASSIGNED,
+    MERA_PERMISSIONS.TASKS_VIEW_ALL,
+    MERA_PERMISSIONS.TASKS_VIEW_EXECUTIVE,
+  ]),
+  asyncHandler(async (req, res) => {
+    req.params = publicIdParamSchema.parse(req.params || {})
+    return taskController.markNotificationRead(req, res)
   })
 )
 
@@ -180,6 +447,18 @@ meraProtectedRouter.get(
   requireDistrictScope,
   asyncHandler(portalController.demandForecastSummary)
 )
+meraProtectedRouter.get(
+  "/dashboard/ops-predictions",
+  requireMeraPermission(MERA_PERMISSIONS.REPORTS_VIEW),
+  requireDistrictScope,
+  asyncHandler(portalController.opsPredictions)
+)
+meraProtectedRouter.get(
+  "/dashboard/national-operations",
+  requireMeraPermission([MERA_PERMISSIONS.DASHBOARD_VIEW_NATIONAL, MERA_PERMISSIONS.DASHBOARD_VIEW_DISTRICT]),
+  requireDistrictScope,
+  asyncHandler(portalController.nationalOperationsDashboard)
+)
 
 meraProtectedRouter.get(
   "/hoarding-watchlist",
@@ -207,6 +486,15 @@ meraProtectedRouter.get(
   asyncHandler(async (req, res) => {
     req.query = complaintListQuerySchema.parse(req.query || {})
     return portalController.listComplaints(req, res)
+  })
+)
+meraProtectedRouter.get(
+  "/complaints/:publicId",
+  requireMeraPermission(MERA_PERMISSIONS.COMPLAINTS_VIEW),
+  requireDistrictScope,
+  asyncHandler(async (req, res) => {
+    req.params = publicIdParamSchema.parse(req.params || {})
+    return searchController.getComplaintDetail(req, res)
   })
 )
 meraProtectedRouter.patch(
@@ -362,6 +650,14 @@ meraProtectedRouter.get(
     return portalController.getExpiryAlerts(req, res)
   })
 )
+meraProtectedRouter.get(
+  "/licenses/:licenseId",
+  requireMeraPermission(MERA_PERMISSIONS.LICENSES_VIEW),
+  asyncHandler(async (req, res) => {
+    req.params = licenseIdParamSchema.parse(req.params || {})
+    return searchController.getLicenseDetail(req, res)
+  })
+)
 
 meraProtectedRouter.post(
   "/station-status-logs",
@@ -459,8 +755,25 @@ meraProtectedRouter.get(
     return portalController.getRegulatoryProfile(req, res)
   })
 )
+meraProtectedRouter.get(
+  "/stations/:publicId",
+  requireMeraPermission([MERA_PERMISSIONS.STATIONS_VIEW, MERA_PERMISSIONS.STATIONS_VIEW_DISTRICT]),
+  requireDistrictScope,
+  asyncHandler(async (req, res) => {
+    req.params = publicIdParamSchema.parse(req.params || {})
+    return searchController.getStationDetail(req, res)
+  })
+)
 
 meraProtectedRouter.get("/users", requireMeraPermission(MERA_PERMISSIONS.USERS_VIEW), asyncHandler(portalController.listUsers))
+meraProtectedRouter.get(
+  "/users/:publicId",
+  requireMeraPermission(MERA_PERMISSIONS.USERS_VIEW),
+  asyncHandler(async (req, res) => {
+    req.params = publicIdParamSchema.parse(req.params || {})
+    return searchController.getUserDetail(req, res)
+  })
+)
 meraProtectedRouter.post(
   "/users",
   requireMeraPermission(MERA_PERMISSIONS.USERS_CREATE),

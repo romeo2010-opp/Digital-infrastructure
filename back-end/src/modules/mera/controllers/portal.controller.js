@@ -1,5 +1,6 @@
 import { ok } from "../../../utils/http.js"
 import * as portalService from "../services/portal.service.js"
+import * as taskService from "../services/task.service.js"
 import {
   evaluateComplaintDrivenFlags,
   evaluateDryStatusFlags,
@@ -10,6 +11,152 @@ import {
   getHoardingWatchlistDetail as getHoardingWatchlistDetailService,
   listHoardingWatchlist as listHoardingWatchlistService,
 } from "../services/hoarding.service.js"
+import { hasMeraPermission, MERA_PERMISSIONS } from "../permissions.js"
+
+const snapshotDefaults = {
+  overview: null,
+  flaggedStations: [],
+  heatmap: [],
+  complaintMetrics: null,
+  inspectionMetrics: null,
+  demandForecastSummary: null,
+  nationalOperations: null,
+  opsPredictions: { items: [], errors: [] },
+  tasks: { items: [] },
+  myTasks: { items: [], counts: { byStatus: {}, byPriority: {} } },
+  taskStats: null,
+  assignableUsers: [],
+  notifications: { unreadCount: 0, items: [] },
+  hoardingWatchlist: { items: [] },
+  fuelDeliveryLogs: { items: [] },
+  availabilityReports: { items: [] },
+  complaints: { items: [] },
+  flags: { items: [] },
+  inspections: { items: [] },
+  enforcementActions: { items: [] },
+  profiles: [],
+  licenseRegistry: { items: [] },
+  expiryAlerts: [],
+  topComplaintStations: [],
+  districtShortages: [],
+  repeatedOffenders: [],
+  monthlyReports: [],
+  users: [],
+  auditLogs: { items: [] },
+}
+
+function canAny(auth, permissions = []) {
+  return permissions.some((permission) => hasMeraPermission(auth, permission))
+}
+
+async function buildSnapshot(auth) {
+  const requests = [
+    [
+      "overview",
+      canAny(auth, [MERA_PERMISSIONS.DASHBOARD_VIEW_NATIONAL, MERA_PERMISSIONS.DASHBOARD_VIEW_DISTRICT]),
+      () => portalService.getDashboardOverview(auth),
+    ],
+    ["flaggedStations", hasMeraPermission(auth, MERA_PERMISSIONS.FLAGS_VIEW), () => portalService.getFlaggedStations(auth)],
+    ["heatmap", hasMeraPermission(auth, MERA_PERMISSIONS.HEATMAP_VIEW), () => portalService.getShortageHeatmapData(auth)],
+    ["complaintMetrics", hasMeraPermission(auth, MERA_PERMISSIONS.COMPLAINTS_VIEW), () => portalService.getComplaintMetrics(auth)],
+    ["inspectionMetrics", hasMeraPermission(auth, MERA_PERMISSIONS.INSPECTIONS_VIEW), () => portalService.getInspectionMetrics(auth)],
+    ["demandForecastSummary", hasMeraPermission(auth, MERA_PERMISSIONS.REPORTS_VIEW), () => portalService.getDemandForecastSummary(auth)],
+    ["opsPredictions", hasMeraPermission(auth, MERA_PERMISSIONS.REPORTS_VIEW), () => portalService.getMeraOpsPredictions(auth)],
+    [
+      "nationalOperations",
+      canAny(auth, [MERA_PERMISSIONS.DASHBOARD_VIEW_NATIONAL, MERA_PERMISSIONS.DASHBOARD_VIEW_DISTRICT]),
+      () => portalService.getNationalOperationsDashboard(auth),
+    ],
+    [
+      "tasks",
+      canAny(auth, [MERA_PERMISSIONS.TASKS_VIEW_ALL, MERA_PERMISSIONS.TASKS_VIEW_EXECUTIVE]),
+      () => taskService.listTasks({ limit: 75 }, auth),
+    ],
+    [
+      "myTasks",
+      canAny(auth, [MERA_PERMISSIONS.TASKS_VIEW_ASSIGNED, MERA_PERMISSIONS.TASKS_WORK]),
+      () => taskService.listMyTasks({ limit: 50 }, auth),
+    ],
+    [
+      "taskStats",
+      canAny(auth, [
+        MERA_PERMISSIONS.TASKS_STATS_VIEW,
+        MERA_PERMISSIONS.TASKS_VIEW_ALL,
+        MERA_PERMISSIONS.TASKS_VIEW_ASSIGNED,
+        MERA_PERMISSIONS.TASKS_VIEW_EXECUTIVE,
+      ]),
+      () => taskService.getTaskStatsOverview(auth),
+    ],
+    [
+      "assignableUsers",
+      canAny(auth, [MERA_PERMISSIONS.TASKS_ASSIGN, MERA_PERMISSIONS.TASKS_CREATE, MERA_PERMISSIONS.TASKS_MANAGE]),
+      () => taskService.listAssignableUsers(auth),
+    ],
+    [
+      "notifications",
+      canAny(auth, [MERA_PERMISSIONS.TASKS_VIEW_ASSIGNED, MERA_PERMISSIONS.TASKS_VIEW_ALL, MERA_PERMISSIONS.TASKS_VIEW_EXECUTIVE]),
+      () => taskService.listNotifications({ limit: 12 }, auth),
+    ],
+    [
+      "hoardingWatchlist",
+      canAny(auth, [MERA_PERMISSIONS.FLAGS_VIEW, MERA_PERMISSIONS.AVAILABILITY_AUDIT]),
+      () => listHoardingWatchlistService({}, auth),
+    ],
+    ["fuelDeliveryLogs", hasMeraPermission(auth, MERA_PERMISSIONS.DELIVERIES_VIEW), () => portalService.listFuelDeliveryLogs({}, auth)],
+    [
+      "availabilityReports",
+      canAny(auth, [MERA_PERMISSIONS.AVAILABILITY_VIEW, MERA_PERMISSIONS.AVAILABILITY_AUDIT]),
+      () => portalService.listAvailabilityReports({}, auth),
+    ],
+    ["complaints", hasMeraPermission(auth, MERA_PERMISSIONS.COMPLAINTS_VIEW), () => portalService.listComplaints({}, auth)],
+    ["flags", hasMeraPermission(auth, MERA_PERMISSIONS.FLAGS_VIEW), () => portalService.listFlags({}, auth)],
+    ["inspections", hasMeraPermission(auth, MERA_PERMISSIONS.INSPECTIONS_VIEW), () => portalService.listInspections({}, auth)],
+    ["enforcementActions", hasMeraPermission(auth, MERA_PERMISSIONS.ENFORCEMENT_VIEW), () => portalService.listEnforcementActions({}, auth)],
+    [
+      "profiles",
+      canAny(auth, [MERA_PERMISSIONS.STATIONS_VIEW, MERA_PERMISSIONS.STATIONS_VIEW_DISTRICT]),
+      () => portalService.listStationRegulatoryProfiles(auth),
+    ],
+    ["licenseRegistry", hasMeraPermission(auth, MERA_PERMISSIONS.LICENSES_VIEW), () => portalService.listLicenseRegistry({}, auth)],
+    [
+      "expiryAlerts",
+      canAny(auth, [MERA_PERMISSIONS.LICENSES_VIEW, MERA_PERMISSIONS.LICENSES_EXPIRE_REVIEW]),
+      () => portalService.getLicenseExpiryAlerts({}, auth),
+    ],
+    ["topComplaintStations", hasMeraPermission(auth, MERA_PERMISSIONS.REPORTS_VIEW), () => portalService.getTopComplaintStations(auth)],
+    ["districtShortages", hasMeraPermission(auth, MERA_PERMISSIONS.REPORTS_VIEW), () => portalService.getDistrictShortageSummaries(auth)],
+    ["repeatedOffenders", hasMeraPermission(auth, MERA_PERMISSIONS.REPORTS_VIEW), () => portalService.getRepeatedOffenders(auth)],
+    ["monthlyReports", hasMeraPermission(auth, MERA_PERMISSIONS.REPORTS_VIEW), () => portalService.getMonthlyRegulatoryReports(auth)],
+    ["users", hasMeraPermission(auth, MERA_PERMISSIONS.USERS_VIEW), () => portalService.listMeraUsers(auth)],
+    ["auditLogs", hasMeraPermission(auth, MERA_PERMISSIONS.AUDIT_VIEW), () => portalService.listMeraAuditLogs({}, auth)],
+  ]
+
+  const settled = await Promise.allSettled(
+    requests.map(([key, allowed, request]) => (allowed ? request() : Promise.resolve(snapshotDefaults[key]))),
+  )
+  const snapshot = { ...snapshotDefaults }
+  const errors = []
+
+  requests.forEach(([key, allowed], index) => {
+    const result = settled[index]
+    if (!allowed) {
+      snapshot[key] = snapshotDefaults[key]
+      return
+    }
+    if (result.status === "fulfilled") {
+      snapshot[key] = result.value
+    } else {
+      snapshot[key] = snapshotDefaults[key]
+      errors.push({ key, message: result.reason?.message || "request failed" })
+    }
+  })
+
+  return { ...snapshot, _errors: errors }
+}
+
+export async function snapshot(req, res) {
+  return ok(res, await buildSnapshot(req.meraAuth))
+}
 
 export async function listPublicStations(req, res) {
   return ok(res, await portalService.listPublicStations(req.query))
@@ -209,6 +356,19 @@ export async function sidebarStats(req, res) {
 
 export async function demandForecastSummary(req, res) {
   return ok(res, await portalService.getDemandForecastSummary(req.meraAuth))
+}
+
+export async function opsPredictions(req, res) {
+  return ok(res, await portalService.getMeraOpsPredictions(req.meraAuth, req.query || {}))
+}
+
+export async function nationalOperationsDashboard(req, res) {
+  return ok(
+    res,
+    await portalService.getNationalOperationsDashboard(req.meraAuth, {
+      availabilityInterval: req.query?.availabilityInterval,
+    })
+  )
 }
 
 export async function topComplaintStations(req, res) {

@@ -6,6 +6,7 @@ import { Input } from '../components/ui/input'
 import { ModalShell } from '../components/ModalShell'
 import { PortalTable } from '../components/PortalTable'
 import { SectionCard } from '../components/SectionCard'
+import { SectionKpiStrip } from '../components/SectionKpiStrip'
 import { MERA_PERMISSIONS } from '../lib/access'
 import { usePortal } from '../lib/portalContext'
 import { matchesSearch, normalizeDate, normalizeRows, renderPill } from '../lib/portalUtils'
@@ -39,6 +40,17 @@ export function EnforcementActions() {
   const canCreateFine = hasPermission(MERA_PERMISSIONS.ENFORCEMENT_CREATE_FINE)
   const canCreateSuspension = hasPermission(MERA_PERMISSIONS.ENFORCEMENT_CREATE_SUSPENSION)
   const canApprove = hasPermission(MERA_PERMISSIONS.ENFORCEMENT_APPROVE)
+  const openRows = rows.filter((row: any) => !['COMPLIED', 'CLOSED'].includes(String(row.actionStatus || '').toUpperCase()))
+  const escalatedRows = rows.filter((row: any) => String(row.actionStatus || '').toUpperCase() === 'ESCALATED')
+  const suspensionRows = rows.filter((row: any) => String(row.actionType || '').toUpperCase() === 'SUSPENSION')
+  const fineWarningRows = rows.filter((row: any) => ['FINE', 'WARNING'].includes(String(row.actionType || '').toUpperCase()))
+  const enforcementColumns = [
+    { key: 'publicId', label: 'Action' },
+    { key: 'station', label: 'Station', render: (row: any) => row.station?.name || '-' },
+    { key: 'actionType', label: 'Type', render: (row: any) => row.actionType || '-' },
+    { key: 'actionStatus', label: 'Status', render: (row: any) => row.actionStatus || '-' },
+    { key: 'issuedAt', label: 'Issued', render: (row: any) => normalizeDate(row.issuedAt) },
+  ]
 
   return (
     <div className="flex h-full flex-col gap-4 overflow-y-auto p-4">
@@ -66,6 +78,16 @@ export function EnforcementActions() {
           Export
         </Button>
       </Toolbar>
+
+      <SectionKpiStrip
+        columns={enforcementColumns}
+        items={[
+          { label: 'Open Actions', value: openRows.length, rows: openRows, tone: openRows.length ? 'warn' : 'good', accent: '#f59e0b' },
+          { label: 'Escalated', value: escalatedRows.length, rows: escalatedRows, tone: escalatedRows.length ? 'bad' : 'good', accent: '#dc2626' },
+          { label: 'Suspensions', value: suspensionRows.length, rows: suspensionRows, tone: suspensionRows.length ? 'bad' : 'neutral', accent: '#111827' },
+          { label: 'Fines / Warnings', value: fineWarningRows.length, rows: fineWarningRows, accent: '#2563eb' },
+        ]}
+      />
 
       <div className="grid min-h-0 flex-1 gap-4 xl:grid-cols-[1.8fr_0.9fr]">
         <SectionCard title="Enforcement Action Registry" subtitle="Issued legal actions, deadlines, statuses, and references">

@@ -47,6 +47,11 @@ export async function requireMeraAuth(req, res, next) {
     if (!activeSession?.public_id) {
       return unauthorized(res, "MERA session revoked or expired")
     }
+    prisma.$executeRaw`
+      UPDATE mera_auth_sessions
+      SET last_seen_at = CURRENT_TIMESTAMP(3)
+      WHERE public_id = ${activeSession.public_id}
+    `.catch(() => {})
 
     const access = await getMeraUserAccessById(Number(payload.uid))
     if (!access?.id) {

@@ -2,6 +2,7 @@ import bcrypt from "bcryptjs"
 import crypto from "crypto"
 import jwt from "jsonwebtoken"
 import { prisma } from "../../db/prisma.js"
+import { clearActiveSessionCacheForSessionPublicId, clearActiveSessionCacheForUser } from "../../middleware/requireAuth.js"
 import { formatDateTimeSqlInTimeZone, toUtcMysqlDateTime } from "../../utils/dateTime.js"
 import { generatePublicUserId } from "../../utils/generateUserId.js"
 import { badRequest, unauthorized } from "../../utils/http.js"
@@ -672,6 +673,7 @@ async function revokeSessionByHash(refreshTokenHash) {
     SET revoked_at = CURRENT_TIMESTAMP(3), updated_at = CURRENT_TIMESTAMP(3)
     WHERE id = ${session.id}
   `
+  clearActiveSessionCacheForSessionPublicId(session.public_id)
   return session
 }
 
@@ -1024,6 +1026,7 @@ export async function refresh({ refreshToken, req }) {
       SET revoked_at = CURRENT_TIMESTAMP(3), updated_at = CURRENT_TIMESTAMP(3)
       WHERE id = ${current.id}
     `
+    clearActiveSessionCacheForSessionPublicId(current.public_id)
     throw error
   }
 
@@ -1032,6 +1035,7 @@ export async function refresh({ refreshToken, req }) {
     SET revoked_at = CURRENT_TIMESTAMP(3), updated_at = CURRENT_TIMESTAMP(3)
     WHERE id = ${current.id}
   `
+  clearActiveSessionCacheForSessionPublicId(current.public_id)
 
   const nextRefreshToken = createRefreshToken()
   const nextHash = hashToken(nextRefreshToken)
@@ -1081,6 +1085,7 @@ export async function logout({ refreshToken, req }) {
   if (!revoked) {
     return { revoked: false }
   }
+  clearActiveSessionCacheForSessionPublicId(revoked.public_id)
 
   const meta = readClientMeta(req)
   await writeAuthAuditLogIfPossible({
@@ -1255,6 +1260,7 @@ export async function switchStation({ auth, stationPublicId, refreshToken, req }
     SET revoked_at = CURRENT_TIMESTAMP(3), updated_at = CURRENT_TIMESTAMP(3)
     WHERE id = ${currentSession.id}
   `
+  clearActiveSessionCacheForSessionPublicId(currentSession.public_id)
 
   const nextRefreshToken = createRefreshToken()
   const nextHash = hashToken(nextRefreshToken)
@@ -1382,6 +1388,7 @@ export async function logoutOthers({ auth, refreshToken, req }) {
   }
 
   const meta = readClientMeta(req)
+  clearActiveSessionCacheForUser(auth.userId)
   await writeAuthAuditLogIfPossible({
     stationId: auth.stationId,
     actionType: "AUTH_LOGOUT_OTHERS",
@@ -1448,6 +1455,7 @@ export async function changePassword({ auth, payload, refreshToken, req }) {
   }
 
   const meta = readClientMeta(req)
+  clearActiveSessionCacheForUser(auth.userId)
   await writeAuthAuditLogIfPossible({
     stationId: auth.stationId,
     actionType: "AUTH_PASSWORD_CHANGE",

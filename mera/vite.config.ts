@@ -1,36 +1,57 @@
-import { defineConfig } from 'vite'
+import { defineConfig, loadEnv } from "vite"
 import path from 'path'
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
 
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), "")
+  const devApiTarget = env.VITE_DEV_API_TARGET || "http://127.0.0.1:4000"
+  const allowedHosts = String(env.VITE_ALLOWED_HOSTS || "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean)
+  const useWideAllowedHosts = String(env.VITE_ALLOW_ALL_HOSTS || "true").toLowerCase() === "true"
 
-function figmaAssetResolver() {
   return {
-    name: 'figma-asset-resolver',
-    resolveId(id) {
-      if (id.startsWith('figma:asset/')) {
-        const filename = id.replace('figma:asset/', '')
-        return path.resolve(__dirname, 'src/assets', filename)
-      }
+    plugins: [react({ jsxRuntime: "automatic" }), tailwindcss()],
+    resolve: {
+      alias: {
+        "@": path.resolve(__dirname, "./src"),
+      },
     },
+    server: {
+      host: true,
+      port: 5178,
+      strictPort: true,
+      allowedHosts: useWideAllowedHosts
+        ? true
+        : [
+            ".trycloudflare.com",
+            ".ngrok-free.app",
+            ".ngrok.app",
+            ".loca.lt",
+            ".localtunnel.me",
+            ...allowedHosts,
+          ],
+      proxy: {
+        "/auth": {
+          target: devApiTarget,
+          changeOrigin: true,
+          secure: false,
+        },
+        "/api": {
+          target: devApiTarget,
+          changeOrigin: true,
+          secure: false,
+        },
+        "/ws": {
+          target: devApiTarget,
+          changeOrigin: true,
+          secure: false,
+          ws: true,
+        },
+      },
+    },
+    assetsInclude: ["**/*.svg", "**/*.csv"],
   }
-}
-
-export default defineConfig({
-  plugins: [
-    figmaAssetResolver(),
-    // The React and Tailwind plugins are both required for Make, even if
-    // Tailwind is not being actively used – do not remove them
-    react(),
-    tailwindcss(),
-  ],
-  resolve: {
-    alias: {
-      // Alias @ to the src directory
-      '@': path.resolve(__dirname, './src'),
-    },
-  },
-
-  // File types to support raw imports. Never add .css, .tsx, or .ts files to this.
-  assetsInclude: ['**/*.svg', '**/*.csv'],
 })

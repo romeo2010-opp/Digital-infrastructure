@@ -20,7 +20,7 @@ export function PortalTable({
             {columns.map((column) => (
               <TableHead
                 key={column.key}
-                className={`sticky top-0 z-20 h-11 border-b border-slate-200 bg-white px-4 text-xs font-medium text-slate-500 shadow-[0_1px_0_0_rgba(226,232,240,0.9)] ${column.className || ''}`}
+                className={`sticky top-0 z-20 h-11 border-b border-[var(--mera-panel-border)] bg-[var(--mera-panel)] px-4 text-xs font-medium text-[var(--mera-panel-text-muted)] shadow-[0_1px_0_0_var(--mera-panel-border)] ${column.className || ''}`}
               >
                 {column.label}
               </TableHead>
@@ -32,11 +32,11 @@ export function PortalTable({
             rows.map((row, index) => (
               <TableRow
                 key={row.id || row.publicId || row.public_id || row.licenseNumber || row.logRef || row.recordId || row.caseId || index}
-                className={onRowClick ? 'cursor-pointer hover:bg-slate-50/80' : ''}
+                className={onRowClick ? 'cursor-pointer hover:bg-[var(--mera-panel-muted)]' : ''}
                 onClick={onRowClick ? () => onRowClick(row) : undefined}
               >
                 {columns.map((column) => (
-                  <TableCell key={column.key} className="px-4 py-3 text-slate-700">
+                  <TableCell key={column.key} className="px-4 py-3 text-[var(--mera-panel-text-soft)]">
                     {column.render ? column.render(row, index) : String(row?.[column.key] ?? '-')}
                   </TableCell>
                 ))}
@@ -44,7 +44,7 @@ export function PortalTable({
             ))
           ) : (
             <TableRow>
-              <TableCell colSpan={columns.length} className="px-3 py-8 text-center text-sm text-slate-500">
+              <TableCell colSpan={columns.length} className="px-3 py-8 text-center text-sm text-[var(--mera-panel-text-muted)]">
                 {emptyMessage}
               </TableCell>
             </TableRow>

@@ -70,6 +70,7 @@ export default function StationInsightsPage() {
   const [pumpUtilization, setPumpUtilization] = useState(null)
   const [inventoryPrediction, setInventoryPrediction] = useState(null)
   const [queuePrediction, setQueuePrediction] = useState(null)
+  const [opsPrediction, setOpsPrediction] = useState(null)
   const [demandForecast, setDemandForecast] = useState(null)
   const [operationalAlerts, setOperationalAlerts] = useState(null)
 
@@ -87,19 +88,30 @@ export default function StationInsightsPage() {
         insightsApi.getPumpUtilization({ window: "6h" }),
         insightsApi.getInventoryPrediction(),
         insightsApi.getQueuePrediction(),
+        insightsApi.getOpsPrediction({ fuelType: "PETROL" }),
         insightsApi.getDemandForecast({ hours: 6 }),
         insightsApi.getAlerts(),
       ])
 
       if (cancelled) return
 
-      const [summaryResult, velocityResult, utilizationResult, inventoryResult, queueResult, forecastResult, alertsResult] = requests
+      const [
+        summaryResult,
+        velocityResult,
+        utilizationResult,
+        inventoryResult,
+        queueResult,
+        opsResult,
+        forecastResult,
+        alertsResult,
+      ] = requests
 
       if (summaryResult.status === "fulfilled") setSummary(summaryResult.value)
       if (velocityResult.status === "fulfilled") setSalesVelocity(velocityResult.value)
       if (utilizationResult.status === "fulfilled") setPumpUtilization(utilizationResult.value)
       if (inventoryResult.status === "fulfilled") setInventoryPrediction(inventoryResult.value)
       if (queueResult.status === "fulfilled") setQueuePrediction(queueResult.value)
+      if (opsResult.status === "fulfilled") setOpsPrediction(opsResult.value)
       if (forecastResult.status === "fulfilled") setDemandForecast(forecastResult.value)
       if (alertsResult.status === "fulfilled") setOperationalAlerts(alertsResult.value)
 
@@ -153,6 +165,7 @@ export default function StationInsightsPage() {
 
   const forecastRows = demandForecast?.rows || []
   const reorderRows = inventoryPrediction?.reorder?.rows || []
+  const ops = opsPrediction?.prediction || null
 
   async function handleDownloadInsights() {
     try {
@@ -332,6 +345,52 @@ export default function StationInsightsPage() {
               </tbody>
             </table>
           </div>
+        </section>
+
+        <section className="insights-panel">
+          <div className="insights-section-title-row">
+            <h3>ML Operations Forecast</h3>
+            {ops?.confidence ? (
+              <span className={`insights-badge ${String(ops.confidence).toUpperCase() === "LOW" ? "warning" : "info"}`}>{ops.confidence}</span>
+            ) : null}
+          </div>
+          <div className="insights-table-wrap">
+            <table className="insights-table">
+              <tbody>
+                <tr>
+                  <th>Queue in 30 Minutes</th>
+                  <td>{Number.isFinite(Number(ops?.queue_length_30m)) ? Number(ops.queue_length_30m).toLocaleString() : "N/A"}</td>
+                </tr>
+                <tr>
+                  <th>Estimated Wait</th>
+                  <td>{ops?.wait_time_range || formatMinutes(ops?.wait_time_minutes)}</td>
+                </tr>
+                <tr>
+                  <th>Stockout Risk</th>
+                  <td>
+                    {ops?.stockout_risk ? (
+                      <span className={`insights-badge ${severityClassName(ops.stockout_risk)}`}>{ops.stockout_risk}</span>
+                    ) : (
+                      "N/A"
+                    )}
+                  </td>
+                </tr>
+                <tr>
+                  <th>Congestion Level</th>
+                  <td>
+                    {ops?.congestion_level ? (
+                      <span className={`insights-badge ${severityClassName(ops.congestion_level)}`}>{ops.congestion_level}</span>
+                    ) : (
+                      "N/A"
+                    )}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p className="insights-recommendation">
+            {ops?.operational_recommendation || "ML operations forecast unavailable until the ML service is trained and running."}
+          </p>
         </section>
 
         <section className="insights-panel">

@@ -3,6 +3,10 @@ import crypto from "crypto"
 import { prisma } from "../db/prisma.js"
 import { getStationSubscriptionAccess, isStationStaffRole } from "../modules/auth/stationSubscriptionAccess.js"
 
+const DEFAULT_SESSION_CACHE_TTL_MS = Number(process.env.AUTH_SESSION_CACHE_TTL_MS || 3000)
+const MAX_SESSION_CACHE_ENTRIES = Number(process.env.AUTH_SESSION_CACHE_MAX_ENTRIES || 1000)
+const activeSessionCache = new Map()
+
 function unauthorized(res, message = "Unauthorized") {
   return res.status(401).json({
     ok: false,
@@ -14,7 +18,74 @@ function hashToken(token) {
   return crypto.createHash("sha256").update(token).digest("hex")
 }
 
+function resolveSessionCacheTtlMs() {
+  return Number.isFinite(DEFAULT_SESSION_CACHE_TTL_MS) && DEFAULT_SESSION_CACHE_TTL_MS > 0 ? DEFAULT_SESSION_CACHE_TTL_MS : 0
+}
+
+function resolveMaxSessionCacheEntries() {
+  return Number.isFinite(MAX_SESSION_CACHE_ENTRIES) && MAX_SESSION_CACHE_ENTRIES > 0
+    ? Math.floor(MAX_SESSION_CACHE_ENTRIES)
+    : 1000
+}
+
+function buildSessionCacheKey({ sessionPublicId, userId, stationId }) {
+  if (!sessionPublicId) return null
+  return [sessionPublicId, userId || "", stationId ?? ""].join("|")
+}
+
+function rememberActiveSession(cacheKey, session) {
+  const ttlMs = resolveSessionCacheTtlMs()
+  if (!cacheKey || ttlMs <= 0 || !session?.public_id) return
+
+  activeSessionCache.set(cacheKey, {
+    session,
+    expiresAt: Date.now() + ttlMs,
+  })
+
+  const maxEntries = resolveMaxSessionCacheEntries()
+  if (activeSessionCache.size <= maxEntries) return
+
+  const now = Date.now()
+  for (const [key, value] of activeSessionCache.entries()) {
+    if (value.expiresAt <= now || activeSessionCache.size > maxEntries) {
+      activeSessionCache.delete(key)
+    }
+    if (activeSessionCache.size <= maxEntries) break
+  }
+}
+
+export function clearActiveSessionCacheForSessionPublicId(sessionPublicId) {
+  const scopedSessionPublicId = String(sessionPublicId || "").trim()
+  if (!scopedSessionPublicId) return
+
+  const keyPrefix = `${scopedSessionPublicId}|`
+  for (const cacheKey of activeSessionCache.keys()) {
+    if (cacheKey.startsWith(keyPrefix)) {
+      activeSessionCache.delete(cacheKey)
+    }
+  }
+}
+
+export function clearActiveSessionCacheForUser(userId) {
+  const scopedUserId = String(userId || "").trim()
+  if (!scopedUserId) return
+
+  for (const cacheKey of activeSessionCache.keys()) {
+    const [, cachedUserId] = cacheKey.split("|")
+    if (cachedUserId === scopedUserId) {
+      activeSessionCache.delete(cacheKey)
+    }
+  }
+}
+
 async function getActiveSession({ sessionPublicId, refreshTokenHash, userId, stationId }) {
+  const cacheKey = buildSessionCacheKey({ sessionPublicId, refreshTokenHash, userId, stationId })
+  const ttlMs = resolveSessionCacheTtlMs()
+  const cached = cacheKey && ttlMs > 0 ? activeSessionCache.get(cacheKey) : null
+  if (cached?.expiresAt > Date.now()) return cached.session
+  if (cached) activeSessionCache.delete(cacheKey)
+
+  let activeSession = null
   if (sessionPublicId) {
     const rows = await prisma.$queryRaw`
       SELECT public_id
@@ -26,7 +97,9 @@ async function getActiveSession({ sessionPublicId, refreshTokenHash, userId, sta
         AND expires_at > CURRENT_TIMESTAMP(3)
       LIMIT 1
     `
-    return rows?.[0] || null
+    activeSession = rows?.[0] || null
+    rememberActiveSession(cacheKey, activeSession)
+    return activeSession
   }
 
   if (!refreshTokenHash) return null
@@ -40,7 +113,9 @@ async function getActiveSession({ sessionPublicId, refreshTokenHash, userId, sta
       AND expires_at > CURRENT_TIMESTAMP(3)
     LIMIT 1
   `
-  return rows?.[0] || null
+  activeSession = rows?.[0] || null
+  rememberActiveSession(cacheKey, activeSession)
+  return activeSession
 }
 
 export async function requireAuth(req, res, next) {

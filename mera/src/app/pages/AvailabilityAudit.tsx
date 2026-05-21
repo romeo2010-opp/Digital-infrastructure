@@ -6,6 +6,7 @@ import { Input } from '../components/ui/input'
 import { ModalShell } from '../components/ModalShell'
 import { PortalTable } from '../components/PortalTable'
 import { SectionCard } from '../components/SectionCard'
+import { SectionKpiStrip } from '../components/SectionKpiStrip'
 import { MERA_PERMISSIONS } from '../lib/access'
 import { usePortal } from '../lib/portalContext'
 import { matchesSearch, normalizeDate, normalizeRows, renderPill } from '../lib/portalUtils'
@@ -35,6 +36,16 @@ export function AvailabilityAudit() {
     .sort((a: any, b: any) => Number(b.mismatchTotal || 0) - Number(a.mismatchTotal || 0))
     .slice(0, 6)
   const canLog = hasPermission(MERA_PERMISSIONS.AVAILABILITY_LOG)
+  const conflictRows = rows.filter((row: any) => row.mismatchIndicator === 'CONFLICT' || Number(row.mismatchTotal || 0) > 0)
+  const dryRows = rows.filter((row: any) => !row.petrolAvailable || !row.dieselAvailable)
+  const suspiciousRows = suspicious
+  const availabilityColumns = [
+    { key: 'recordId', label: 'Record' },
+    { key: 'station', label: 'Station', render: (row: any) => row.station?.name || '-' },
+    { key: 'petrolAvailable', label: 'Petrol', render: (row: any) => row.petrolAvailable ? 'AVAILABLE' : 'DRY' },
+    { key: 'dieselAvailable', label: 'Diesel', render: (row: any) => row.dieselAvailable ? 'AVAILABLE' : 'DRY' },
+    { key: 'createdAt', label: 'Created', render: (row: any) => normalizeDate(row.createdAt) },
+  ]
 
   return (
     <div className="flex h-full flex-col gap-4 overflow-y-auto p-4">
@@ -59,6 +70,16 @@ export function AvailabilityAudit() {
           Export Declarations
         </Button>
       </Toolbar>
+
+      <SectionKpiStrip
+        columns={availabilityColumns}
+        items={[
+          { label: 'Total Reports', value: rows.length, rows, accent: '#2563eb' },
+          { label: 'Conflict Reports', value: conflictRows.length, rows: conflictRows, tone: conflictRows.length ? 'bad' : 'good', accent: '#dc2626' },
+          { label: 'Dry Stations', value: dryRows.length, rows: dryRows, tone: dryRows.length ? 'warn' : 'good', accent: '#f59e0b' },
+          { label: 'Suspicious Declarations', value: suspiciousRows.length, rows: suspiciousRows, tone: suspiciousRows.length ? 'warn' : 'neutral', accent: '#7c3aed' },
+        ]}
+      />
 
       <div className="grid min-h-0 flex-1 gap-4 xl:grid-cols-[1.8fr_0.9fr]">
         <SectionCard title="Station Declaration Audit Ledger" subtitle="Live station availability declarations and conflict detection">

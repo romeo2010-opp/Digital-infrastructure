@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+data/synthetic_queue_training.csv
+models/*.joblib
+models/metrics.json

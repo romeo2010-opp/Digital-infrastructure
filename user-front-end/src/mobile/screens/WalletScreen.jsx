@@ -208,10 +208,20 @@ function isPostedPaymentTransaction(transaction) {
   );
 }
 
+function getFuelTransactionPublicId(transaction) {
+  const directTransactionId = String(transaction?.transactionPublicId || "").trim();
+  if (directTransactionId) return directTransactionId;
+  const relatedEntityType = String(transaction?.relatedEntityType || "")
+    .trim()
+    .toUpperCase();
+  if (relatedEntityType !== "TRANSACTION") return "";
+  return String(transaction?.relatedEntityId || "").trim();
+}
+
 function canSubmitRefundForTransaction(transaction) {
   return (
     isPostedPaymentTransaction(transaction) &&
-    Boolean(String(transaction?.transactionPublicId || "").trim())
+    Boolean(getFuelTransactionPublicId(transaction))
   );
 }
 
@@ -439,6 +449,12 @@ function getReceiptDownloadConfig(transaction) {
     .trim()
     .toUpperCase();
   const relatedEntityId = String(transaction?.relatedEntityId || "").trim();
+  const transactionPublicId = getFuelTransactionPublicId(transaction);
+  if (relatedEntityType === "TRANSACTION") {
+    return transactionPublicId
+      ? { receiptType: "transaction", reference: transactionPublicId }
+      : null;
+  }
   if (!relatedEntityId) return null;
   if (relatedEntityType === "QUEUE") {
     return { receiptType: "queue", reference: relatedEntityId };
@@ -464,6 +480,11 @@ function paymentPurposeLabel(transaction) {
     return relatedEntityId
       ? `Reservation service · ${relatedEntityId}`
       : "Reservation service";
+  }
+  if (relatedEntityType === "TRANSACTION") {
+    return relatedEntityId
+      ? `Fuel transaction · ${relatedEntityId}`
+      : "Fuel transaction";
   }
   return (
     transaction?.description ||
@@ -919,9 +940,9 @@ export function WalletScreen({ onOpenSendCredit }) {
         return;
       }
 
-      const transactionPublicId = String(
-        refundModalTransaction?.transactionPublicId || "",
-      ).trim();
+      const transactionPublicId = getFuelTransactionPublicId(
+        refundModalTransaction,
+      );
       if (!transactionPublicId) {
         setRefundError(
           "This wallet transaction is missing a refundable transaction reference.",
@@ -1476,10 +1497,10 @@ export function WalletScreen({ onOpenSendCredit }) {
                     </span>
                   </div>
 
-                  {isPayment && !refundAvailable ? (
-                    <p className="wallet-transaction-note is-warning">
-                      This payment is not linked to a refundable transaction
-                      reference yet.
+                  {isPayment && !receiptConfig ? (
+                    <p className="wallet-transaction-note">
+                      Receipt is still syncing for this payment. Check again in
+                      a moment.
                     </p>
                   ) : null}
 
@@ -1972,6 +1993,7 @@ export function WalletScreen({ onOpenSendCredit }) {
                 <span>Transaction ID</span>
                 <strong>
                   {detailsModalTransaction.transactionPublicId ||
+                    getFuelTransactionPublicId(detailsModalTransaction) ||
                     "Pending link"}
                 </strong>
               </p>
@@ -2077,7 +2099,10 @@ export function WalletScreen({ onOpenSendCredit }) {
               </p>
               <p>
                 <span>Transaction</span>
-                <strong>{refundModalTransaction.transactionPublicId}</strong>
+                <strong>
+                  {getFuelTransactionPublicId(refundModalTransaction) ||
+                    "Pending link"}
+                </strong>
               </p>
             </div>
 

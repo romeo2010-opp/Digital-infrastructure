@@ -432,8 +432,8 @@ export const userQueueApi = {
   async downloadReceiptPdf({ receiptType, reference, signal } = {}) {
     const normalizedType = String(receiptType || '').trim().toLowerCase()
     const normalizedReference = String(reference || '').trim()
-    if (!['queue', 'reservation'].includes(normalizedType)) {
-      throw new Error('receiptType must be queue or reservation')
+    if (!['queue', 'reservation', 'transaction'].includes(normalizedType)) {
+      throw new Error('receiptType must be queue, reservation, or transaction')
     }
     if (!normalizedReference) {
       throw new Error('Receipt reference is required')

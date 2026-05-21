@@ -84,6 +84,7 @@ const attendantReadRole = requireRole(["MANAGER", "ATTENDANT", "VIEWER"])
 const attendantWriteRole = requireRole(["MANAGER", "ATTENDANT"])
 const ATTENDANT_SETTLEMENT_TRANSACTION_MAX_WAIT_MS = 10_000
 const ATTENDANT_SETTLEMENT_TRANSACTION_TIMEOUT_MS = 20_000
+const TERMINAL_PUMP_SESSION_DASHBOARD_LOOKBACK_MINUTES = 10
 const SCAN_AND_GO_QR_PREFIX = "smartlink:scan-go"
 
 router.use("/stations/:stationPublicId/attendant", requireStationScope)
@@ -1004,8 +1005,23 @@ async function listActivePumpSessionRows(stationId) {
     LEFT JOIN pump_nozzles pn ON pn.id = ps.nozzle_id
     LEFT JOIN fuel_types ft ON ft.id = pn.fuel_type_id
     WHERE ps.station_id = ${stationId}
-      AND ps.session_status IN ('CREATED', 'STARTED', 'DISPENSING')
-    ORDER BY ps.start_time DESC, ps.id DESC
+      AND (
+        ps.session_status IN ('CREATED', 'STARTED', 'DISPENSING')
+        OR (
+          ps.session_status IN ('COMPLETED', 'FAILED', 'CANCELLED')
+          AND COALESCE(ps.end_time, ps.updated_at, ps.created_at) >= DATE_SUB(CURRENT_TIMESTAMP(3), INTERVAL ${TERMINAL_PUMP_SESSION_DASHBOARD_LOOKBACK_MINUTES} MINUTE)
+        )
+      )
+    ORDER BY
+      CASE ps.session_status
+        WHEN 'DISPENSING' THEN 0
+        WHEN 'STARTED' THEN 1
+        WHEN 'CREATED' THEN 2
+        WHEN 'COMPLETED' THEN 3
+        ELSE 4
+      END,
+      COALESCE(ps.end_time, ps.start_time, ps.updated_at, ps.created_at) DESC,
+      ps.id DESC
     LIMIT 100
   `, "pump_sessions")
 }
@@ -1425,7 +1441,8 @@ function buildSyntheticPumpSessions({ pumps, orders, activePumpSessions, telemet
 
   for (const session of activePumpSessions || []) {
     const key = `${session.pump_public_id || ""}:${session.nozzle_public_id || ""}`
-    activeSessionKeys.add(key)
+    const normalizedSessionStatus = String(session.session_status || "").trim().toUpperCase()
+    const isTerminalSession = ["COMPLETED", "FAILED", "CANCELLED"].includes(normalizedSessionStatus)
     const telemetry = telemetryIndex.byNozzlePublicId.get(String(session.nozzle_public_id || "").trim()) || null
     const telemetryWithLitres =
       telemetryIndex.byNozzlePublicIdWithLitres.get(String(session.nozzle_public_id || "").trim())
@@ -1445,6 +1462,9 @@ function buildSyntheticPumpSessions({ pumps, orders, activePumpSessions, telemet
         && String(selectedPump.nozzlePublicId || "").trim() === (String(session.nozzle_public_id || "").trim() || "")
       )
     }) || null
+    if (!isTerminalSession || matchedOrder) {
+      activeSessionKeys.add(key)
+    }
     rows.push({
       id: `SESSION:${session.public_id}`,
       pumpSessionPublicId: String(session.public_id || "").trim() || null,
@@ -1461,10 +1481,17 @@ function buildSyntheticPumpSessions({ pumps, orders, activePumpSessions, telemet
             customerName: matchedOrder.customerName,
           }
         : null,
+      pumpSessionStatus: normalizedSessionStatus || null,
       status:
-        String(session.session_status || "").trim().toUpperCase() === "DISPENSING" || currentLiveLitres > 0
-          ? "dispensing"
-          : "reserved",
+        normalizedSessionStatus === "COMPLETED"
+          ? "completed"
+          : normalizedSessionStatus === "FAILED"
+            ? "failed"
+            : normalizedSessionStatus === "CANCELLED"
+              ? "cancelled"
+              : normalizedSessionStatus === "DISPENSING" || currentLiveLitres > 0
+                ? "dispensing"
+                : "reserved",
       currentLiveLitres: currentLiveLitres > 0 ? currentLiveLitres : null,
       elapsedTimeStartedAt: toIsoOrNull(session.start_time),
       telemetryStatus: deriveTelemetryStatus({
@@ -1505,6 +1532,7 @@ function buildSyntheticPumpSessions({ pumps, orders, activePumpSessions, telemet
         orderPublicId: order.orderPublicId,
         customerName: order.customerName,
       },
+      pumpSessionStatus: null,
       status: order.state === ATTENDANT_ORDER_STATES.DISPENSING ? "dispensing" : "reserved",
       currentLiveLitres: telemetryWithLitres?.litresValue ?? order.workflow?.lastManualEntry?.litres ?? null,
       elapsedTimeStartedAt:

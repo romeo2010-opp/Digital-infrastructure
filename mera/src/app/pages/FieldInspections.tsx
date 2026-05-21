@@ -1,11 +1,13 @@
 import { useMemo, useState } from 'react'
 import { Download, MapPin, Plus } from 'lucide-react'
+import { useNavigate } from 'react-router'
 import { Toolbar } from '../components/Toolbar'
 import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
 import { ModalShell } from '../components/ModalShell'
 import { PortalTable } from '../components/PortalTable'
 import { SectionCard } from '../components/SectionCard'
+import { SectionKpiStrip } from '../components/SectionKpiStrip'
 import { MERA_PERMISSIONS } from '../lib/access'
 import { usePortal } from '../lib/portalContext'
 import { normalizeDate, normalizeRows, renderPill } from '../lib/portalUtils'
@@ -14,6 +16,7 @@ const fieldClass = 'h-9 rounded-md border border-slate-200 bg-white px-3 text-sm
 
 export function FieldInspections() {
   const { data, runAction, api, token, hasPermission } = usePortal()
+  const navigate = useNavigate()
   const [typeFilter, setTypeFilter] = useState('')
   const [officerFilter, setOfficerFilter] = useState('')
   const [scheduleOpen, setScheduleOpen] = useState(false)
@@ -47,6 +50,17 @@ export function FieldInspections() {
   const canAssign = hasPermission(MERA_PERMISSIONS.INSPECTIONS_ASSIGN)
   const canCreate = hasPermission(MERA_PERMISSIONS.INSPECTIONS_CREATE)
   const canExport = hasPermission(MERA_PERMISSIONS.REPORTS_EXPORT)
+  const canCreateTask = hasPermission(MERA_PERMISSIONS.TASKS_CREATE) || hasPermission(MERA_PERMISSIONS.TASKS_ASSIGN) || hasPermission(MERA_PERMISSIONS.TASKS_MANAGE)
+  const completedRows = rows.filter((row: any) => ['COMPLETED', 'PASSED'].includes(String(row.inspectionStatus || '').toUpperCase()))
+  const failedRows = rows.filter((row: any) => ['FAILED', 'NON_COMPLIANT', 'ESCALATED'].includes(String(row.inspectionStatus || '').toUpperCase()) || row.illegalVendingDetected)
+  const scheduledRows = rows.filter((row: any) => ['OPEN', 'SCHEDULED', 'ASSIGNED'].includes(String(row.inspectionStatus || '').toUpperCase()))
+  const inspectionColumns = [
+    { key: 'publicId', label: 'Inspection' },
+    { key: 'station', label: 'Station', render: (row: any) => row.station?.name || '-' },
+    { key: 'officer', label: 'Officer', render: (row: any) => row.officer?.fullName || '-' },
+    { key: 'inspectionStatus', label: 'Status', render: (row: any) => row.inspectionStatus || '-' },
+    { key: 'createdAt', label: 'Created', render: (row: any) => normalizeDate(row.createdAt) },
+  ]
 
   return (
     <div className="flex h-full flex-col gap-4 overflow-y-auto p-4">
@@ -87,6 +101,16 @@ export function FieldInspections() {
         ) : null}
       </Toolbar>
 
+      <SectionKpiStrip
+        columns={inspectionColumns}
+        items={[
+          { label: 'Scheduled', value: scheduledRows.length, rows: scheduledRows, accent: '#2563eb' },
+          { label: 'Completed', value: completedRows.length, rows: completedRows, tone: 'good', accent: '#10b981' },
+          { label: 'Failed / Non-compliant', value: failedRows.length, rows: failedRows, tone: failedRows.length ? 'bad' : 'good', accent: '#dc2626' },
+          { label: 'Geotagged Evidence', value: evidenceRows.length, rows: evidenceRows, tone: evidenceRows.length ? 'good' : 'neutral', accent: '#7c3aed' },
+        ]}
+      />
+
       <div className="grid min-h-0 flex-1 gap-4">
         <SectionCard title="Field Inspection Log" subtitle="Inspection queue, assigned officers, and live outcomes">
           <PortalTable
@@ -103,7 +127,37 @@ export function FieldInspections() {
               { key: 'illegalVendingDetected', label: 'Illegal Vending', render: (row) => renderPill(row.illegalVendingDetected ? 'YES' : 'NO') },
               { key: 'inspectionStatus', label: 'Result', render: (row) => renderPill(row.inspectionStatus) },
               { key: 'createdAt', label: 'Created At', render: (row) => normalizeDate(row.createdAt) },
-              { key: 'action', label: 'Action', render: () => <span className="text-[11px] font-medium text-blue-700">Details</span> },
+              {
+                key: 'action',
+                label: 'Action',
+                render: (row) => (
+                  <div className="flex gap-2">
+                    <span className="text-[11px] font-medium text-blue-700">Details</span>
+                    {canCreateTask ? (
+                      <button
+                        type="button"
+                        className="text-[11px] font-medium text-blue-700"
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          const params = new URLSearchParams({
+                            linkedEntityType: 'INSPECTION',
+                            linkedEntityId: row.publicId,
+                            stationPublicId: row.station?.publicId || '',
+                            stationName: row.station?.name || '',
+                            district: row.station?.city || '',
+                            type: 'FIELD_VISIT',
+                            title: `Follow up inspection ${row.publicId}`,
+                            description: row.officerNotes || 'Follow up on field inspection findings.',
+                          })
+                          navigate(`/tasks/new?${params.toString()}`)
+                        }}
+                      >
+                        Create Task
+                      </button>
+                    ) : null}
+                  </div>
+                ),
+              },
             ]}
           />
           {selectedInspection ? (

@@ -1,314 +1,265 @@
+import { useState } from 'react'
 import {
   AlertTriangle,
   BarChart3,
-  CalendarDays,
-  CheckCircle2,
+  Bell,
+  ChevronLeft,
   ChevronRight,
-  Clock3,
-  Flag,
-  Grid2X2,
-  List,
+  ClipboardCheck,
+  Database,
+  FileBarChart,
+  Fuel,
+  Gavel,
+  Link,
+  LayoutDashboard,
+  Lock,
   MapPinned,
+  ScrollText,
   Settings,
+  ShieldCheck,
   Truck,
   Users,
+  WalletCards,
 } from 'lucide-react'
 import { useLocation, useNavigate } from 'react-router'
-import { useSidebarStats, type SidebarSituation } from '../hooks/useSidebarStats'
+import { useSidebarStats } from '../hooks/useSidebarStats'
 import { usePortal } from '../lib/portalContext'
 import { MERA_PERMISSIONS } from '../lib/access'
 
-const sidebarWidthClass = 'w-[236px] min-w-[236px] max-w-[236px]'
+const sidebarStorageKey = 'meraSidebarCollapsed'
 
-const sections = [
+const dashboardItem = {
+  label: 'National Dashboard',
+  path: '/dashboard',
+  icon: LayoutDashboard,
+  permissions: [MERA_PERMISSIONS.DASHBOARD_VIEW_NATIONAL, MERA_PERMISSIONS.DASHBOARD_VIEW_DISTRICT],
+}
+
+const groups = [
   {
-    label: 'Overview',
+    label: 'Markets',
+    icon: WalletCards,
     items: [
-      {
-        label: 'National Dashboard',
-        path: '/dashboard',
-        icon: Grid2X2,
-        permissions: [MERA_PERMISSIONS.DASHBOARD_VIEW_NATIONAL, MERA_PERMISSIONS.DASHBOARD_VIEW_DISTRICT],
-      },
-      {
-        label: 'National Heat Intelligence Map',
-        path: '/national-heat-intelligence-map',
-        icon: Clock3,
-        badgeKey: 'situation',
-        permissions: [MERA_PERMISSIONS.HEATMAP_VIEW],
-      },
+      { label: 'Fuel Map', path: '/national-heat-intelligence-map', icon: MapPinned, permissions: [MERA_PERMISSIONS.HEATMAP_VIEW] },
+      { label: 'Deliveries', path: '/fuel-deliveries', icon: Truck, permissions: [MERA_PERMISSIONS.DELIVERIES_VIEW] },
+      { label: 'Availability', path: '/availability-audit', icon: Fuel, permissions: [MERA_PERMISSIONS.AVAILABILITY_VIEW, MERA_PERMISSIONS.AVAILABILITY_AUDIT] },
+      { label: 'Market Watch', path: '/hoarding-watchlist', icon: Link, permissions: [MERA_PERMISSIONS.FLAGS_VIEW, MERA_PERMISSIONS.AVAILABILITY_AUDIT] },
+    ],
+  },
+  {
+    label: 'Tasks',
+    icon: ClipboardCheck,
+    items: [
+      { label: 'Task Operations', path: '/tasks', icon: ClipboardCheck, permissions: [MERA_PERMISSIONS.TASKS_VIEW_ALL, MERA_PERMISSIONS.TASKS_VIEW_EXECUTIVE] },
+      { label: 'My Tasks', path: '/tasks/my', icon: ClipboardCheck, permissions: [MERA_PERMISSIONS.TASKS_VIEW_ASSIGNED, MERA_PERMISSIONS.TASKS_WORK] },
+    ],
+  },
+  {
+    label: 'Cases',
+    icon: ShieldCheck,
+    items: [
+      { label: 'Complaints', path: '/complaints-center', icon: ShieldCheck, badgeKey: 'openComplaints', permissions: [MERA_PERMISSIONS.COMPLAINTS_VIEW] },
+      { label: 'Flags', path: '/compliance-flags', icon: AlertTriangle, badgeKey: 'activeFlags', permissions: [MERA_PERMISSIONS.FLAGS_VIEW] },
+      { label: 'Inspections', path: '/field-inspections', icon: ClipboardCheck, badgeKey: 'avgQueueWait', permissions: [MERA_PERMISSIONS.INSPECTIONS_VIEW] },
+      { label: 'Enforcement', path: '/enforcement-actions', icon: Gavel, permissions: [MERA_PERMISSIONS.ENFORCEMENT_VIEW] },
+    ],
+  },
+  {
+    label: 'Registry',
+    icon: Database,
+    items: [
+      { label: 'Stations', path: '/station-regulatory-profiles', icon: Lock, badgeKey: 'stationsTotal', permissions: [MERA_PERMISSIONS.STATIONS_VIEW, MERA_PERMISSIONS.STATIONS_VIEW_DISTRICT] },
+      { label: 'Licenses', path: '/license-registry', icon: FileBarChart, permissions: [MERA_PERMISSIONS.LICENSES_VIEW] },
     ],
   },
   {
     label: 'Intelligence',
+    icon: BarChart3,
     items: [
-      { label: 'Hoarding Watchlist', path: '/hoarding-watchlist', icon: MapPinned, permissions: [MERA_PERMISSIONS.FLAGS_VIEW, MERA_PERMISSIONS.AVAILABILITY_AUDIT] },
-      { label: 'Fuel Deliveries', path: '/fuel-deliveries', icon: Truck, permissions: [MERA_PERMISSIONS.DELIVERIES_VIEW] },
-      { label: 'Availability Audit', path: '/availability-audit', icon: List, badgeKey: 'avgQueueWait', permissions: [MERA_PERMISSIONS.AVAILABILITY_VIEW, MERA_PERMISSIONS.AVAILABILITY_AUDIT] },
-      { label: 'Station Regulatory Profiles', path: '/station-regulatory-profiles', icon: Grid2X2, badgeKey: 'stationsTotal', permissions: [MERA_PERMISSIONS.STATIONS_VIEW, MERA_PERMISSIONS.STATIONS_VIEW_DISTRICT] },
+      { label: 'Reports', path: '/reports-intelligence', icon: FileBarChart, permissions: [MERA_PERMISSIONS.REPORTS_VIEW] },
+      { label: 'Analytics', path: '/reports-intelligence', icon: BarChart3, permissions: [MERA_PERMISSIONS.REPORTS_VIEW] },
+      { label: 'Exports', path: '/reports-intelligence', icon: Database, permissions: [MERA_PERMISSIONS.REPORTS_VIEW] },
     ],
   },
   {
-    label: 'Compliance',
+    label: 'Control',
+    icon: Bell,
     items: [
-      { label: 'Complaints Center', path: '/complaints-center', icon: CheckCircle2, badgeKey: 'openComplaints', permissions: [MERA_PERMISSIONS.COMPLAINTS_VIEW] },
-      { label: 'Compliance Flags', path: '/compliance-flags', icon: Flag, badgeKey: 'activeFlags', permissions: [MERA_PERMISSIONS.FLAGS_VIEW] },
-      { label: 'Field Inspections', path: '/field-inspections', icon: CalendarDays, badgeKey: 'activeInspections', permissions: [MERA_PERMISSIONS.INSPECTIONS_VIEW] },
-      { label: 'Enforcement Actions', path: '/enforcement-actions', icon: AlertTriangle, badgeKey: 'pendingEnforcement', permissions: [MERA_PERMISSIONS.ENFORCEMENT_VIEW] },
-      { label: 'License Registry', path: '/license-registry', icon: CalendarDays, permissions: [MERA_PERMISSIONS.LICENSES_VIEW] },
-    ],
-  },
-  {
-    label: 'Analytics',
-    items: [
-      { label: 'Reports & Intelligence', path: '/reports-intelligence', icon: BarChart3, permissions: [MERA_PERMISSIONS.REPORTS_VIEW] },
-    ],
-  },
-  {
-    label: 'System',
-    items: [
-      { label: 'Settings', path: '/settings/preferences', icon: Settings },
-      { label: 'Audit Trail', path: '/audit-trail', icon: List, permissions: [MERA_PERMISSIONS.AUDIT_VIEW] },
-      { label: 'User Administration', path: '/user-administration', icon: Users, permissions: [MERA_PERMISSIONS.USERS_VIEW] },
+      { label: 'Alerts', path: '/compliance-flags', icon: Bell, badgeKey: 'activeFlags', permissions: [MERA_PERMISSIONS.FLAGS_VIEW] },
+      { label: 'Audit', path: '/audit-trail', icon: ScrollText, permissions: [MERA_PERMISSIONS.AUDIT_VIEW] },
+      { label: 'Access', path: '/user-administration', icon: Users, permissions: [MERA_PERMISSIONS.USERS_VIEW] },
     ],
   },
 ] as const
 
-function plusLogo() {
+function Badge({ value, collapsed }: { value: string; collapsed?: boolean }) {
   return (
-    <div className="flex size-8 items-center justify-center rounded-[6px] bg-[#0F6E56]">
-      <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-        <path d="M7 2.2V11.8M2.2 7H11.8" stroke="white" strokeWidth="1.8" strokeLinecap="round" />
-      </svg>
-    </div>
+    <span
+      className={
+        collapsed
+          ? 'absolute -right-1 -top-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-[#e24b4a] px-1 text-[8px] font-bold leading-none text-white'
+          : 'ml-auto inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-[#e24b4a] px-1.5 text-[10px] font-bold leading-none text-white'
+      }
+    >
+      {value}
+    </span>
   )
 }
 
-function situationPalette(situation: SidebarSituation) {
-  if (situation === 'NATIONAL_OUTAGE') {
-    return { bg: '#FCEBEB', border: '#E24B4A', label: '#9E2F2E', text: '#7D2121' }
-  }
-  if (situation === 'STABLE') {
-    return { bg: '#EAF3DE', border: '#1D9E75', label: '#3B6D11', text: '#2F5A0D' }
-  }
-  if (situation === 'PRICE_SPIKE' || situation === 'MONITORING') {
-    return { bg: '#E6F1FB', border: '#378ADD', label: '#185FA5', text: '#144B81' }
-  }
-  return { bg: '#FAEEDA', border: '#EF9F27', label: '#854F0B', text: '#633806' }
+function initialsFor(user: any) {
+  const name = user?.fullName || user?.full_name || user?.email || 'MERA Regulator'
+  return String(name)
+    .split(/[.@_\s-]+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0])
+    .join('')
+    .toUpperCase()
 }
 
-function syncColor(lastSync: Date | null, hasError: boolean) {
-  if (!lastSync || hasError) return '#E24B4A'
-  const ageSeconds = (Date.now() - lastSync.getTime()) / 1000
-  if (ageSeconds < 60) return '#1D9E75'
-  if (ageSeconds <= 120) return '#EF9F27'
-  return '#E24B4A'
+function displayNameFor(user: any) {
+  return user?.fullName || user?.full_name || user?.name || user?.email || 'MERA Officer'
 }
 
-function formatSync(lastSync: Date | null) {
-  if (!lastSync) return 'Offline'
-  return `Live · ${lastSync.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
-}
-
-function badgeStyles(kind: 'red' | 'amber' | 'blue' | 'green' | 'gray') {
-  if (kind === 'red') return { background: '#FCEBEB', color: '#A32D2D' }
-  if (kind === 'amber') return { background: '#FAEEDA', color: '#854F0B' }
-  if (kind === 'blue') return { background: '#E6F1FB', color: '#185FA5' }
-  if (kind === 'green') return { background: '#EAF3DE', color: '#3B6D11' }
-  return { background: 'var(--color-secondary)', color: 'var(--color-muted-foreground)' }
-}
-
-export function Sidebar({ user, theme = 'default' }: { user?: any; theme?: 'default' | 'light' }) {
+export function Sidebar({ user }: { user?: any; theme?: 'default' | 'light' }) {
   const location = useLocation()
   const navigate = useNavigate()
   const { hasAnyPermission } = usePortal()
-  const {
-    stationsOnline,
-    stationsTotal,
-    outOfStock,
-    lowStock,
-    avgQueueWait,
-    openComplaints,
-    activeFlags,
-    activeInspections,
-    pendingEnforcement,
-    nationalSituation,
-    situationDetail,
-    lastSync,
-    hasError,
-  } = useSidebarStats()
+  const stats = useSidebarStats()
+  const [collapsed, setCollapsed] = useState(() => {
+    if (typeof window === 'undefined') return false
+    return window.localStorage.getItem(sidebarStorageKey) === 'true'
+  })
+  const userInitials = initialsFor(user)
+  const displayName = displayNameFor(user)
+  const DashboardIcon = dashboardItem.icon
 
-  const situationColors = situationPalette(nationalSituation)
-  const syncTone = syncColor(lastSync, hasError)
-  const displayName = user?.fullName || user?.full_name || user?.email || 'MERA Regulator'
-  const displayRole = user?.role || 'Portal operator'
-  const initialsSource = user?.fullName || user?.full_name || user?.email || 'MR'
-  const initials = String(initialsSource)
-    .split(' ')
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part: string) => part[0])
-    .join('')
-    .toUpperCase()
-  const isLight = theme === 'light'
-  const panelSurface = isLight ? 'bg-white border border-slate-200' : 'bg-white/88'
-  const metricSurface = isLight ? 'border border-slate-200 bg-white' : 'border border-border/50 bg-white/68'
-  const footerSurface = isLight ? 'border-slate-200 bg-white' : 'border-border/60 bg-white/62'
-  const profileSurface = isLight ? 'border border-slate-200 bg-slate-50 hover:border-slate-300 hover:bg-white' : 'border border-transparent bg-white/52 hover:border-border/40 hover:bg-white/92'
+  const dashboardVisible = !dashboardItem.permissions || hasAnyPermission(dashboardItem.permissions)
+  const visibleGroups = groups
+    .map((group) => ({
+      ...group,
+      items: group.items.filter((item: any) => !item.permissions || hasAnyPermission(item.permissions)),
+    }))
+    .filter((group) => group.items.length > 0)
+
+  const badgeFor = (key?: string) => {
+    if (key === 'stationsTotal') return String(stats.stationsTotal || '')
+    if (key === 'avgQueueWait') return stats.avgQueueWait > 20 ? `${Math.round(stats.avgQueueWait)}m` : ''
+    if (key === 'openComplaints') return stats.openComplaints > 0 ? String(stats.openComplaints) : ''
+    if (key === 'activeFlags') return stats.activeFlags > 0 ? String(stats.activeFlags) : ''
+    return ''
+  }
+
+  const isActive = (path: string) => {
+    if (path === '/tasks') {
+      return location.pathname === '/tasks' || location.pathname === '/tasks/new' || /^\/tasks\/TASK-/i.test(location.pathname)
+    }
+    return location.pathname.startsWith(path)
+  }
+  const toggleCollapsed = () => {
+    setCollapsed((current) => {
+      const next = !current
+      try {
+        window.localStorage.setItem(sidebarStorageKey, String(next))
+      } catch {
+        // Local storage can be unavailable in private contexts.
+      }
+      return next
+    })
+  }
+  const navItemClass = (active: boolean) =>
+    `relative flex h-10 w-full items-center gap-2.5 rounded-[5px] text-left text-[13px] font-semibold transition ${
+      collapsed ? 'justify-center px-0' : 'px-3'
+    } max-md:justify-center max-md:px-0 ${
+      active ? 'bg-[#111827] text-white' : 'text-[#4b5563] hover:bg-[#f3f4f6] hover:text-[#111827]'
+    }`
+  const labelClass = `${collapsed ? 'hidden' : 'block'} min-w-0 truncate max-md:hidden`
 
   return (
-    <aside className={`flex h-screen ${sidebarWidthClass} flex-col text-foreground ${isLight ? 'border-r border-slate-200 bg-[#f8fafc]' : 'bg-[#edf3f1]'}`}>
-      <div className="shrink-0 px-3 pt-3">
-        <div className={`flex items-center gap-3 rounded-[6px] px-3 py-2.5 ${panelSurface}`}>
-          {plusLogo()}
-          <div className="min-w-0">
-            <div className="truncate text-[13px] font-semibold tracking-[-0.02em] leading-none text-foreground">MERA Portal</div>
-            <div className="mt-1 truncate text-[10px] font-medium tracking-[0.01em] leading-none text-muted-foreground">Fuel Intelligence & Compliance</div>
-          </div>
-        </div>
+    <aside
+      className={`z-20 flex h-full min-h-0 flex-col overflow-hidden border-r border-[#e2e8f0] bg-white font-['Inter',system-ui,-apple-system,sans-serif] text-[#6b7280] transition-[width,min-width,max-width] duration-200 ${
+        collapsed ? 'w-14 min-w-14 max-w-14' : 'w-[256px] min-w-[256px] max-w-[256px]'
+      } max-md:w-14 max-md:min-w-14 max-md:max-w-14`}
+    >
+      <nav className="min-h-0 flex-1 overflow-y-auto px-2 py-3 [scrollbar-width:thin] [scrollbar-color:#cbd5e0_transparent]">
+        {dashboardVisible ? (
+          <button
+            type="button"
+            onClick={() => navigate(dashboardItem.path)}
+            title={dashboardItem.label}
+            aria-label={dashboardItem.label}
+            className={`${navItemClass(isActive(dashboardItem.path))} mb-3`}
+          >
+            <DashboardIcon className="size-4 shrink-0" />
+            <span className={labelClass}>{dashboardItem.label}</span>
+          </button>
+        ) : null}
 
-        <div className={`mt-3 rounded-[6px] px-[10px] py-[8px] ${metricSurface}`}>
-          <div className="grid grid-cols-4 items-center text-center">
-            <div className="min-w-0 pr-2">
-              <div className="text-[9px] font-medium uppercase tracking-[0.08em] leading-none text-muted-foreground">Online</div>
-              <div className="mt-1 text-[13px] font-semibold tracking-[-0.02em] leading-none text-[#1D9E75]">{stationsOnline}</div>
-            </div>
-            <div className="min-w-0 border-l border-border/80 px-2">
-              <div className="text-[9px] font-medium uppercase tracking-[0.08em] leading-none text-muted-foreground">Dry</div>
-              <div className="mt-1 text-[13px] font-semibold tracking-[-0.02em] leading-none text-[#E24B4A]">{outOfStock}</div>
-            </div>
-            <div className="min-w-0 border-l border-border/80 px-2">
-              <div className="text-[9px] font-medium uppercase tracking-[0.08em] leading-none text-muted-foreground">Low</div>
-              <div className="mt-1 text-[13px] font-semibold tracking-[-0.02em] leading-none text-[#EF9F27]">{lowStock}</div>
-            </div>
-            <div className="min-w-0 border-l border-border/80 pl-2">
-              <div className="text-[9px] font-medium uppercase tracking-[0.08em] leading-none text-muted-foreground">Live</div>
-              <div className="mt-1 flex items-center justify-center gap-1">
-                <span className="size-[5px] animate-pulse rounded-full bg-[#1D9E75]" />
+        <div className="grid gap-3">
+          {visibleGroups.map((group) => (
+            <section key={group.label} className="min-w-0">
+              <div className={`${collapsed ? 'mx-auto h-px w-7 bg-[#e2e8f0]' : 'px-3 pb-1.5 text-[11px] font-bold uppercase tracking-[0.1em] text-[#9ca3af]'} max-md:mx-auto max-md:h-px max-md:w-7 max-md:bg-[#e2e8f0] max-md:px-0 max-md:pb-0`}>
+                <span className={`${collapsed ? 'hidden' : ''} max-md:hidden`}>{group.label}</span>
               </div>
-            </div>
-          </div>
+              <div className="grid gap-1">
+                {group.items.map((item) => {
+                  const Icon = item.icon
+                  const active = isActive(item.path)
+                  const badge = badgeFor((item as any).badgeKey)
+                  return (
+                    <button
+                      key={`${item.path}-${item.label}`}
+                      type="button"
+                      onClick={() => navigate(item.path)}
+                      title={item.label}
+                      aria-label={item.label}
+                      className={navItemClass(active)}
+                    >
+                      <Icon className="size-4 shrink-0" />
+                      <span className={labelClass}>{item.label}</span>
+                      {badge ? <Badge value={badge} collapsed={collapsed} /> : null}
+                    </button>
+                  )
+                })}
+              </div>
+            </section>
+          ))}
         </div>
-      </div>
-
-      <div
-        className="mx-3 my-2 shrink-0 rounded-[6px] px-[10px] py-[8px]"
-        style={{ backgroundColor: situationColors.bg, borderLeft: `3px solid ${situationColors.border}` }}
-      >
-        <div className="text-[9px] font-semibold uppercase tracking-[0.12em]" style={{ color: situationColors.label }}>
-          National Situation
-        </div>
-        <div className="mt-1 text-[11px] font-medium leading-4 tracking-[-0.01em]" style={{ color: situationColors.text }}>
-          {situationDetail}
-        </div>
-      </div>
-
-      <nav className="flex-1 overflow-y-auto overflow-x-hidden px-2 pb-3 [scrollbar-width:thin] [scrollbar-color:var(--color-border)_transparent] [&::-webkit-scrollbar]:w-[3px] [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-border">
-        {sections
-          .map((section) => ({
-            ...section,
-            items: section.items.filter((item: any) => !item.permissions || hasAnyPermission(item.permissions)),
-          }))
-          .filter((section) => section.items.length > 0)
-          .map((section) => (
-          <div key={section.label}>
-            <div className="px-2.5 pb-1 pt-3 text-[9px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/85">{section.label}</div>
-            <div>
-              {section.items.map((item) => {
-                const Icon = item.icon
-                const isActive = location.pathname.startsWith(item.path)
-
-                let badgeText = ''
-                let badgeKind: 'red' | 'amber' | 'blue' | 'green' | 'gray' = 'gray'
-
-                if (item.badgeKey === 'situation') {
-                  badgeText = nationalSituation.replaceAll('_', ' ')
-                  badgeKind =
-                    nationalSituation === 'NATIONAL_OUTAGE'
-                      ? 'red'
-                      : nationalSituation === 'REGIONAL_SHORTAGE'
-                        ? 'amber'
-                        : nationalSituation === 'STABLE'
-                          ? 'green'
-                          : 'blue'
-                }
-                if (item.badgeKey === 'stationsTotal') {
-                  badgeText = String(stationsTotal)
-                }
-                if (item.badgeKey === 'avgQueueWait') {
-                  badgeText = `${Math.round(avgQueueWait)}m`
-                  badgeKind = avgQueueWait > 15 ? 'amber' : 'gray'
-                }
-                if (item.badgeKey === 'openComplaints') {
-                  badgeText = String(openComplaints)
-                  badgeKind = openComplaints > 0 ? 'red' : 'gray'
-                }
-                if (item.badgeKey === 'activeFlags') {
-                  badgeText = String(activeFlags)
-                  badgeKind = activeFlags > 0 ? 'red' : 'gray'
-                }
-                if (item.badgeKey === 'activeInspections') {
-                  badgeText = String(activeInspections)
-                  badgeKind = 'blue'
-                }
-                if (item.badgeKey === 'pendingEnforcement') {
-                  badgeText = String(pendingEnforcement)
-                  badgeKind = pendingEnforcement > 0 ? 'amber' : 'gray'
-                }
-
-                return (
-                  <button
-                    key={item.path}
-                    type="button"
-                    onClick={() => navigate(item.path)}
-                    className="flex w-full items-center gap-2 rounded-[6px] px-3 py-[8px] text-left transition-colors duration-150"
-                    style={{
-                      backgroundColor: isActive ? (isLight ? '#f8fafc' : '#dff2ea') : isLight ? '#ffffff' : 'rgba(255,255,255,0.62)',
-                      color: isActive ? (isLight ? '#0f172a' : '#0F6E56') : 'var(--color-muted-foreground)',
-                      borderLeft: `2px solid ${isActive ? (isLight ? '#cbd5e1' : '#1D9E75') : 'transparent'}`,
-                    }}
-                    onMouseEnter={(event) => {
-                      if (!isActive) event.currentTarget.style.backgroundColor = isLight ? '#f8fafc' : 'rgba(255,255,255,0.92)'
-                    }}
-                    onMouseLeave={(event) => {
-                      if (!isActive) event.currentTarget.style.backgroundColor = isLight ? '#ffffff' : 'rgba(255,255,255,0.62)'
-                    }}
-                  >
-                    <Icon size={13} strokeWidth={2} style={{ opacity: isActive ? 1 : 0.7, flexShrink: 0 }} />
-                    <span className="min-w-0 flex-1 truncate text-[12px] leading-none tracking-[-0.01em]" style={{ fontWeight: isActive ? 600 : 500 }}>
-                      {item.label}
-                    </span>
-                    {badgeText ? (
-                      <span
-                        className="shrink-0 rounded-[3px] px-[5px] py-[1px] text-[9px] font-semibold uppercase tracking-[0.06em] leading-none"
-                        style={badgeStyles(badgeKind)}
-                      >
-                        {badgeText}
-                      </span>
-                    ) : null}
-                  </button>
-                )
-              })}
-            </div>
-          </div>
-        ))}
       </nav>
 
-      <div className={`shrink-0 border-t px-3 py-3 ${footerSurface}`}>
-        <div className="flex items-center justify-between text-[10px]">
-          <span className="font-medium uppercase tracking-[0.08em] text-muted-foreground">Portal sync</span>
-          <span className="font-semibold tracking-[-0.01em]" style={{ color: syncTone }}>{formatSync(lastSync)}</span>
-        </div>
-
-        <button type="button" className={`mt-3 flex w-full items-center gap-3 rounded-[6px] px-2 py-2 text-left transition-colors duration-150 ${profileSurface}`}>
-          <div className="flex size-9 items-center justify-center rounded-full bg-[#0F6E56] text-[11px] font-medium text-white">
-            {initials || 'MR'}
-          </div>
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-[12px] font-semibold tracking-[-0.02em] leading-none text-foreground">{displayName}</div>
-            <div className="mt-1 truncate text-[10px] font-medium tracking-[0.01em] leading-none text-muted-foreground">{displayRole}</div>
-          </div>
-          <ChevronRight size={12} className="shrink-0 text-muted-foreground" />
+      <div className="grid shrink-0 gap-2 border-t border-[#e2e8f0] px-2 py-3">
+        <button
+          type="button"
+          onClick={toggleCollapsed}
+          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          className={`relative flex h-10 w-full items-center gap-2.5 rounded-[5px] text-left text-[13px] font-semibold text-[#6b7280] transition hover:bg-[#f3f4f6] hover:text-[#111827] ${
+            collapsed ? 'justify-center px-0' : 'px-3'
+          } max-md:hidden`}
+        >
+          {collapsed ? <ChevronRight className="size-4 shrink-0" /> : <ChevronLeft className="size-4 shrink-0" />}
+          <span className={labelClass}>{collapsed ? 'Expand' : 'Collapse'}</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => navigate('/settings/preferences')}
+          title="Settings"
+          aria-label="Settings"
+          className={navItemClass(isActive('/settings'))}
+        >
+          <Settings className="size-4" />
+          <span className={labelClass}>Settings</span>
+        </button>
+        <button
+          type="button"
+          className={`flex h-11 items-center gap-2 rounded-[5px] text-left transition hover:bg-[#f3f4f6] ${collapsed ? 'justify-center px-0' : 'px-2'} max-md:justify-center max-md:px-0`}
+          title={displayName}
+        >
+          <span className="grid size-8 shrink-0 place-items-center rounded-full bg-[#111827] text-[11px] font-bold text-white">{userInitials || 'MR'}</span>
+          <span className={`${collapsed ? 'hidden' : 'min-w-0 flex-1'} max-md:hidden`}>
+            <span className="block truncate text-[13px] font-semibold text-[#111827]">{displayName}</span>
+            <span className="mt-0.5 block text-[11px] font-medium text-[#9ca3af]">Administrator</span>
+          </span>
         </button>
       </div>
     </aside>

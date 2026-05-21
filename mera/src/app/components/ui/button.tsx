@@ -9,15 +9,15 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: "bg-blue-700 text-white shadow-[0_6px_14px_-10px_rgba(29,78,216,0.55)] hover:bg-blue-800",
+        default: "border border-[var(--mera-button-border)] bg-[var(--mera-button-bg)] text-[var(--mera-button-text)] shadow-[0_6px_14px_-10px_rgba(0,0,0,0.45)] hover:border-[#1f2937] hover:bg-[#1f2937]",
         destructive:
           "bg-destructive text-white hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 dark:bg-destructive/60",
         outline:
-          "border border-slate-200 bg-white text-slate-700 shadow-[0_1px_2px_rgba(15,23,42,0.04)] hover:bg-slate-50 hover:text-slate-900 dark:bg-input/30 dark:border-input dark:hover:bg-input/50",
+          "border border-[var(--mera-panel-border)] bg-[var(--mera-panel)] text-[var(--mera-panel-text-soft)] shadow-[0_1px_2px_rgba(15,23,42,0.04)] hover:bg-[var(--mera-panel-muted)] hover:text-[var(--mera-panel-text)] dark:bg-input/30 dark:border-input dark:hover:bg-input/50",
         secondary:
-          "bg-slate-100 text-slate-800 hover:bg-slate-200",
+          "bg-[var(--mera-panel-muted)] text-[var(--mera-panel-text)] hover:opacity-90",
         ghost:
-          "hover:bg-slate-100 hover:text-slate-900 dark:hover:bg-accent/50",
+          "hover:bg-[var(--mera-panel-muted)] hover:text-[var(--mera-panel-text)] dark:hover:bg-accent/50",
         link: "text-primary underline-offset-4 hover:underline",
       },
       size: {

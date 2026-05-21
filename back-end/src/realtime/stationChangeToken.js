@@ -1,5 +1,9 @@
 import { prisma } from "../db/prisma.js"
 
+const DEFAULT_CACHE_TTL_MS = Number(process.env.STATION_CHANGE_TOKEN_CACHE_TTL_MS || 1000)
+const tokenCacheByStationId = new Map()
+const tokenPromiseByStationId = new Map()
+
 function normalizeTokenPart(value) {
   if (value === null || value === undefined) return "0"
   if (typeof value === "bigint") return value.toString()
@@ -10,7 +14,16 @@ function normalizeTokenPart(value) {
   return String(value)
 }
 
-export async function getStationChangeToken(stationId) {
+function normalizeStationId(stationId) {
+  const normalized = Number(stationId)
+  return Number.isFinite(normalized) && normalized > 0 ? normalized : null
+}
+
+function resolveCacheTtlMs() {
+  return Number.isFinite(DEFAULT_CACHE_TTL_MS) && DEFAULT_CACHE_TTL_MS > 0 ? DEFAULT_CACHE_TTL_MS : 0
+}
+
+async function loadStationChangeToken(stationId) {
   const rows = await prisma.$queryRaw`
     SELECT
       COALESCE((SELECT UNIX_TIMESTAMP(updated_at) FROM stations WHERE id = ${stationId} LIMIT 1), 0) AS station_updated_at,
@@ -64,3 +77,34 @@ export async function getStationChangeToken(stationId) {
     .join("|")
 }
 
+export async function getStationChangeToken(stationId, { force = false } = {}) {
+  const normalizedStationId = normalizeStationId(stationId)
+  if (!normalizedStationId) return ""
+
+  const cacheTtlMs = resolveCacheTtlMs()
+  const now = Date.now()
+  const cached = tokenCacheByStationId.get(normalizedStationId)
+  if (!force && cacheTtlMs > 0 && cached && cached.expiresAt > now) {
+    return cached.token
+  }
+
+  const existingPromise = tokenPromiseByStationId.get(normalizedStationId)
+  if (!force && existingPromise) return existingPromise
+
+  const promise = loadStationChangeToken(normalizedStationId)
+    .then((token) => {
+      if (cacheTtlMs > 0) {
+        tokenCacheByStationId.set(normalizedStationId, {
+          token,
+          expiresAt: Date.now() + cacheTtlMs,
+        })
+      }
+      return token
+    })
+    .finally(() => {
+      tokenPromiseByStationId.delete(normalizedStationId)
+    })
+
+  tokenPromiseByStationId.set(normalizedStationId, promise)
+  return promise
+}

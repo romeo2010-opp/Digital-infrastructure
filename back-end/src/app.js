@@ -36,6 +36,7 @@ import { requireInternalAuth } from "./modules/internal/middleware.js"
 import { meraProtectedRouter, meraPublicRouter } from "./modules/mera/routes.js"
 
 export const app = express()
+app.set("trust proxy", 1)
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const serveFrontend = String(process.env.SERVE_FRONTEND || "false").toLowerCase() === "true"

@@ -28,6 +28,12 @@ export function subscribeStationChanges(stationId, listener) {
   }
 }
 
+export function listStationChangeListenerStationIds() {
+  return [...listenersByStation.keys()]
+    .map((stationId) => Number(stationId))
+    .filter((stationId) => Number.isFinite(stationId) && stationId > 0)
+}
+
 export function publishStationChange({ stationId, actionType, payload = {} }) {
   const key = toStationKey(stationId)
   if (!key) return
@@ -51,4 +57,3 @@ export function publishStationChange({ stationId, actionType, payload = {} }) {
     }
   }
 }
-

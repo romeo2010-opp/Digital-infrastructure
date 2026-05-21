@@ -1,7 +1,8 @@
-import { useMemo } from 'react'
 import { AlertTriangle, MapPinned, ShieldAlert } from 'lucide-react'
 import { SectionCard } from '../components/SectionCard'
 import { PortalTable } from '../components/PortalTable'
+import { MeraFuelHeatmap } from '../components/MeraFuelHeatmap'
+import { SectionKpiStrip } from '../components/SectionKpiStrip'
 import { usePortal } from '../lib/portalContext'
 import { normalizeDate, normalizeRows, renderPill } from '../lib/portalUtils'
 
@@ -10,39 +11,88 @@ export function SituationMonitor() {
 
   const heatmapRows = normalizeRows(data.heatmap)
   const watchlistRows = normalizeRows(data.hoardingWatchlist?.items)
+  const rootOpsRows = normalizeRows(data.opsPredictions?.items)
+  const nationalOpsRows = normalizeRows(data.nationalOperations?.opsPredictions?.items)
+  const forecastOpsRows = normalizeRows(data.demandForecastSummary?.opsPredictions?.items)
+  const opsPredictionRows = rootOpsRows.length ? rootOpsRows : nationalOpsRows.length ? nationalOpsRows : forecastOpsRows
   const districtRows = normalizeRows(data.districtShortages)
     .slice()
     .sort((a: any, b: any) => Number(b.shortage_stations || 0) - Number(a.shortage_stations || 0))
     .slice(0, 8)
 
-  const totals = useMemo(() => {
-    const dry = heatmapRows.filter((row: any) => String(row.availability_status || '').toUpperCase() === 'DRY').length
-    const limited = heatmapRows.filter((row: any) => String(row.availability_status || '').toUpperCase() === 'LIMITED').length
-    const available = heatmapRows.filter((row: any) => String(row.availability_status || '').toUpperCase() === 'AVAILABLE').length
-    const critical = watchlistRows.filter((row: any) => String(row.escalationStatus || '').toUpperCase() === 'CRITICAL').length
-    return { dry, limited, available, critical }
-  }, [heatmapRows, watchlistRows])
-
   const liveAlerts = watchlistRows
     .filter((row: any) => ['CRITICAL', 'HIGH'].includes(String(row.escalationStatus || '').toUpperCase()))
     .slice(0, 6)
+  const shortageDistrictRows = districtRows.filter((row: any) => Number(row.shortage_stations || 0) > 0)
+  const highSeverityAlertRows = watchlistRows.filter((row: any) => ['CRITICAL', 'HIGH'].includes(String(row.escalationStatus || '').toUpperCase()))
+  const dryDeclarationRows = heatmapRows.filter((row: any) => String(row.availability_status || '').toUpperCase() === 'DRY')
+  const criticalOpsRows = opsPredictionRows.filter((row: any) => {
+    const prediction = row.prediction || {}
+    return (
+      String(prediction.congestion_level || '').toUpperCase() === 'CRITICAL' ||
+      String(prediction.stockout_risk || '').toUpperCase() === 'CRITICAL'
+    )
+  })
+  const recentSignalRows = heatmapRows.slice(0, 25)
+  const districtColumns = [
+    { key: 'district', label: 'District' },
+    { key: 'shortage_stations', label: 'Dry / Limited' },
+    { key: 'total_stations', label: 'Stations' },
+  ]
+  const alertColumns = [
+    { key: 'stationName', label: 'Station' },
+    { key: 'district', label: 'District' },
+    { key: 'riskScore', label: 'Risk Score' },
+    { key: 'escalationStatus', label: 'Escalation', render: (row: any) => row.escalationStatus || '-' },
+  ]
+  const signalColumns = [
+    { key: 'name', label: 'Station' },
+    { key: 'city', label: 'District' },
+    { key: 'availability_status', label: 'Availability', render: (row: any) => row.availability_status || '-' },
+    { key: 'petrol_status', label: 'Petrol', render: (row: any) => row.petrol_status || '-' },
+    { key: 'diesel_status', label: 'Diesel', render: (row: any) => row.diesel_status || '-' },
+  ]
+  const opsColumns = [
+    { key: 'stationName', label: 'Station' },
+    { key: 'district', label: 'District' },
+    { key: 'fuelType', label: 'Fuel' },
+    { key: 'congestion', label: 'Congestion', render: (row: any) => row.prediction?.congestion_level || '-' },
+    { key: 'stockoutRisk', label: 'Stockout', render: (row: any) => row.prediction?.stockout_risk || '-' },
+  ]
+  const situationAlerts = [
+    ...criticalOpsRows.slice(0, 3).map((row: any) => ({
+      key: `ml-${row.stationPublicId}-${row.fuelType}`,
+      stationName: row.stationName,
+      district: row.district,
+      status: row.prediction?.congestion_level || row.prediction?.stockout_risk || 'CRITICAL',
+      detail: row.prediction?.mera_summary || 'Operational pressure is elevated and requires review.',
+      timestamp: row.generatedAt,
+      source: 'ML operations forecast',
+    })),
+    ...liveAlerts.map((row: any) => ({
+      key: `watch-${row.stationPublicId}-${row.riskScore}`,
+      stationName: row.stationName,
+      district: row.district,
+      status: row.escalationStatus,
+      detail: `Risk score ${row.riskScore} • ${row.currentDeclaredAvailability || 'Unknown status'}`,
+      timestamp: row.lastDeliveryLogged,
+      source: 'Regulatory watchlist',
+    })),
+  ].slice(0, 6)
 
   return (
     <div className="flex h-full flex-col gap-4 overflow-y-auto p-4">
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        {[
-          ['Stations Available', totals.available, 'Reported live across the network'],
-          ['Dry Stations', totals.dry, 'Confirmed out-of-stock locations'],
-          ['Limited Supply', totals.limited, 'Stations under constrained supply'],
-          ['Critical Alerts', totals.critical, 'Sites requiring regulator attention'],
-        ].map(([label, value, note]) => (
-          <SectionCard key={String(label)} title={String(label)} subtitle={String(note)}>
-            <div className="px-5 py-5">
-              <div className="text-[2.15rem] font-semibold tracking-[-0.04em] text-slate-900">{value}</div>
-            </div>
-          </SectionCard>
-        ))}
-      </div>
+      <SectionKpiStrip
+        items={[
+          { label: 'Shortage Districts', value: shortageDistrictRows.length, rows: shortageDistrictRows, columns: districtColumns, tone: shortageDistrictRows.length ? 'warn' : 'good', accent: '#f59e0b' },
+          { label: 'High-severity Alerts', value: highSeverityAlertRows.length, rows: highSeverityAlertRows, columns: alertColumns, tone: highSeverityAlertRows.length ? 'bad' : 'good', accent: '#dc2626' },
+          { label: 'ML Critical Ops', value: criticalOpsRows.length, rows: criticalOpsRows, columns: opsColumns, tone: criticalOpsRows.length ? 'bad' : 'good', accent: '#0f766e' },
+          { label: 'Dry Declarations', value: dryDeclarationRows.length, rows: dryDeclarationRows, columns: signalColumns, tone: dryDeclarationRows.length ? 'bad' : 'good', accent: '#111827' },
+          { label: 'Recent Signals', value: recentSignalRows.length, rows: recentSignalRows, columns: signalColumns, accent: '#2563eb' },
+        ]}
+      />
+
+      <MeraFuelHeatmap rows={heatmapRows} title="Fuel Availability Map" className="h-[560px]" />
 
       <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
         <SectionCard title="Regional Situation Table" subtitle="District-level pressure signals ranked by live shortage load">
@@ -68,9 +118,9 @@ export function SituationMonitor() {
 
         <SectionCard title="Situation Alerts" subtitle="High-severity watchlist and oversight prompts">
           <div className="space-y-3 px-4 py-4">
-            {liveAlerts.length ? (
-              liveAlerts.map((row: any) => (
-                <div key={`${row.stationPublicId}-${row.riskScore}`} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+            {situationAlerts.length ? (
+              situationAlerts.map((row: any) => (
+                <div key={row.key} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex items-start gap-3">
                       <div className="mt-0.5 flex size-8 items-center justify-center rounded-full bg-red-50 text-red-600">
@@ -81,12 +131,12 @@ export function SituationMonitor() {
                         <div className="mt-1 text-xs text-slate-500">{row.district || 'Unknown district'}</div>
                       </div>
                     </div>
-                    {renderPill(row.escalationStatus)}
+                    {renderPill(row.status)}
                   </div>
                   <div className="mt-3 text-xs text-slate-600">
-                    Risk score {row.riskScore} • {row.currentDeclaredAvailability || 'Unknown status'}
+                    {row.detail}
                   </div>
-                  <div className="mt-2 text-[11px] text-slate-400">{normalizeDate(row.lastDeliveryLogged)}</div>
+                  <div className="mt-2 text-[11px] text-slate-400">{row.source} • {normalizeDate(row.timestamp)}</div>
                 </div>
               ))
             ) : (

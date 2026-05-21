@@ -40,6 +40,7 @@ export interface QueueItem {
   selectedNozzleNumber?: string | null
   pumpSessionPublicId?: string | null
   pumpSessionReference?: string | null
+  pumpSessionStatus?: string | null
   completedTransactionPublicId?: string | null
   completedReceiptVerificationRef?: string | null
   completedPaymentReference?: string | null
@@ -120,7 +121,8 @@ interface AttendantPumpSessionSnapshot {
   pumpPublicId?: string | null
   pumpNumber?: number | null
   nozzlePublicId?: string | null
-  status: "dispensing" | "reserved"
+  status: "dispensing" | "reserved" | "completed" | "failed" | "cancelled"
+  pumpSessionStatus?: string | null
   currentLiveLitres?: number | null
   linkedOrder?: {
     orderType?: string | null
@@ -152,6 +154,7 @@ export interface ActiveSession {
   backendOrderPublicId?: string | null
   pumpSessionPublicId?: string | null
   pumpSessionReference?: string | null
+  pumpSessionStatus?: string | null
   fuelOrderPublicId?: string | null
   completedTransactionPublicId?: string | null
   completedReceiptVerificationRef?: string | null
@@ -487,6 +490,7 @@ function mapQueueItems(queueSnapshot: Record<string, any>, attendantDashboard?: 
       selectedNozzleNumber: String(order?.selectedPump?.nozzleNumber || "").trim() || null,
       pumpSessionPublicId: String(order?.workflow?.pumpSession?.publicId || "").trim() || null,
       pumpSessionReference: String(order?.workflow?.pumpSession?.sessionReference || "").trim() || null,
+      pumpSessionStatus: String(order?.workflow?.pumpSession?.status || "").trim().toUpperCase() || null,
       completedTransactionPublicId: String(order?.transaction?.publicId || "").trim() || null,
       completedReceiptVerificationRef:
         String(order?.transaction?.receiptVerificationRef || "").trim() || null,
@@ -602,22 +606,37 @@ function mapHybridPilotQueue(kioskData: Record<string, any>) {
 
 function mapAttendantPumpSessions(attendantDashboard: Record<string, any> | null | undefined): AttendantPumpSessionSnapshot[] {
   const rows = Array.isArray(attendantDashboard?.activePumpSessions) ? attendantDashboard.activePumpSessions : []
-  return rows.map((item: Record<string, any>) => ({
-    id: String(item?.id || ""),
-    pumpSessionPublicId: String(item?.pumpSessionPublicId || "").trim() || null,
-    pumpSessionReference: String(item?.pumpSessionReference || "").trim() || null,
-    pumpPublicId: String(item?.pumpPublicId || "").trim() || null,
-    pumpNumber: Number(item?.pumpNumber || 0) || null,
-    nozzlePublicId: String(item?.nozzlePublicId || "").trim() || null,
-    status: String(item?.status || "").trim().toLowerCase() === "dispensing" ? "dispensing" : "reserved",
-    currentLiveLitres: Number(item?.currentLiveLitres || 0) || 0,
-    linkedOrder: item?.linkedOrder
-      ? {
-          orderType: String(item.linkedOrder.orderType || "").trim() || null,
-          orderPublicId: String(item.linkedOrder.orderPublicId || "").trim() || null,
-        }
-      : null,
-  }))
+  return rows.map((item: Record<string, any>) => {
+    const rawStatus = String(item?.status || "").trim().toLowerCase()
+    const status =
+      rawStatus === "completed"
+        ? "completed"
+        : rawStatus === "failed"
+          ? "failed"
+          : rawStatus === "cancelled"
+            ? "cancelled"
+            : rawStatus === "dispensing"
+              ? "dispensing"
+              : "reserved"
+
+    return {
+      id: String(item?.id || ""),
+      pumpSessionPublicId: String(item?.pumpSessionPublicId || "").trim() || null,
+      pumpSessionReference: String(item?.pumpSessionReference || "").trim() || null,
+      pumpPublicId: String(item?.pumpPublicId || "").trim() || null,
+      pumpNumber: Number(item?.pumpNumber || 0) || null,
+      nozzlePublicId: String(item?.nozzlePublicId || "").trim() || null,
+      status,
+      pumpSessionStatus: String(item?.pumpSessionStatus || "").trim().toUpperCase() || null,
+      currentLiveLitres: Number(item?.currentLiveLitres || 0) || 0,
+      linkedOrder: item?.linkedOrder
+        ? {
+            orderType: String(item.linkedOrder.orderType || "").trim() || null,
+            orderPublicId: String(item.linkedOrder.orderPublicId || "").trim() || null,
+          }
+        : null,
+    }
+  })
 }
 
 function findTelemetryPumpSessionForLiveSession(
@@ -680,7 +699,7 @@ function applyTelemetryToActiveSession(
     session.kind === "queue_draft" && session.status === "dispensing"
       ? telemetrySessions.find((item) => {
           const currentLiveLitres = Number(item.currentLiveLitres || 0) || 0
-          if (item.status !== "dispensing" || currentLiveLitres <= 0) return false
+          if (!["dispensing", "completed"].includes(item.status) || currentLiveLitres <= 0) return false
           return (
             (item.nozzlePublicId && item.nozzlePublicId === session.assignedNozzlePublicId)
             || (item.pumpPublicId && item.pumpPublicId === session.assignedPumpPublicId)
@@ -702,6 +721,12 @@ function applyTelemetryToActiveSession(
   if (!telemetrySession) return session
 
   const currentLiveLitres = Number(telemetrySession.currentLiveLitres || 0) || 0
+  const pumpSessionStatus =
+    telemetrySession.pumpSessionStatus
+    || (telemetrySession.status === "completed" ? "COMPLETED" : null)
+    || (telemetrySession.status === "failed" ? "FAILED" : null)
+    || (telemetrySession.status === "cancelled" ? "CANCELLED" : null)
+
   return {
     ...session,
     status:
@@ -710,6 +735,7 @@ function applyTelemetryToActiveSession(
         : telemetrySession.status === "dispensing"
           ? "dispensing"
           : session.status,
+    pumpSessionStatus: pumpSessionStatus || session.pumpSessionStatus || null,
     litresDispensed: currentLiveLitres > 0 ? currentLiveLitres : session.litresDispensed,
   }
 }
@@ -736,6 +762,7 @@ function mapActiveSessionFromLiveSession(livePumpSession: LivePumpSession, fuelO
     litresDispensed: Number(livePumpSession.dispensedLitres || 0) || 0,
     pumpSessionPublicId: livePumpSession.publicId,
     pumpSessionReference: livePumpSession.sessionReference || null,
+    pumpSessionStatus: livePumpSession.status || null,
     fuelOrderPublicId: livePumpSession.fuelOrderPublicId || null,
   }
 }
@@ -798,6 +825,7 @@ function buildQueueDraft(
     backendOrderPublicId: queueItem.backendOrderPublicId || null,
     pumpSessionPublicId: queueItem.pumpSessionPublicId || null,
     pumpSessionReference: queueItem.pumpSessionReference || null,
+    pumpSessionStatus: queueItem.pumpSessionStatus || null,
     completedTransactionPublicId: queueItem.completedTransactionPublicId || null,
     completedReceiptVerificationRef: queueItem.completedReceiptVerificationRef || null,
     completedPaymentReference: queueItem.completedPaymentReference || null,
@@ -850,6 +878,10 @@ function refreshQueueDraftFromQueueItem(
       session.status === "dispensing" || session.status === "completed"
         ? session.litresDispensed
         : refreshedDraft.litresDispensed,
+    pumpSessionStatus:
+      session.status === "dispensing" || session.status === "completed"
+        ? session.pumpSessionStatus || refreshedDraft.pumpSessionStatus || null
+        : refreshedDraft.pumpSessionStatus || null,
   }
 }
 

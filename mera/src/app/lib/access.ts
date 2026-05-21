@@ -46,6 +46,15 @@ export const MERA_PERMISSIONS = {
   STATIONS_VIEW_DISTRICT: 'STATIONS_VIEW_DISTRICT',
   STATIONS_UPDATE_REGULATORY_PROFILE: 'STATIONS_UPDATE_REGULATORY_PROFILE',
   AUDIT_VIEW: 'AUDIT_VIEW',
+  TASKS_VIEW_ASSIGNED: 'TASKS_VIEW_ASSIGNED',
+  TASKS_VIEW_ALL: 'TASKS_VIEW_ALL',
+  TASKS_VIEW_EXECUTIVE: 'TASKS_VIEW_EXECUTIVE',
+  TASKS_CREATE: 'TASKS_CREATE',
+  TASKS_ASSIGN: 'TASKS_ASSIGN',
+  TASKS_MANAGE: 'TASKS_MANAGE',
+  TASKS_WORK: 'TASKS_WORK',
+  TASKS_ADD_EVIDENCE: 'TASKS_ADD_EVIDENCE',
+  TASKS_STATS_VIEW: 'TASKS_STATS_VIEW',
 } as const
 
 export type MeraPermission = (typeof MERA_PERMISSIONS)[keyof typeof MERA_PERMISSIONS]
@@ -71,6 +80,51 @@ export const routePermissions = [
   {
     path: '/dashboard',
     permissions: [MERA_PERMISSIONS.DASHBOARD_VIEW_NATIONAL, MERA_PERMISSIONS.DASHBOARD_VIEW_DISTRICT],
+  },
+  {
+    path: '/tasks/my',
+    permissions: [MERA_PERMISSIONS.TASKS_VIEW_ASSIGNED, MERA_PERMISSIONS.TASKS_WORK],
+  },
+  {
+    path: '/tasks/new',
+    permissions: [MERA_PERMISSIONS.TASKS_CREATE, MERA_PERMISSIONS.TASKS_ASSIGN, MERA_PERMISSIONS.TASKS_MANAGE],
+  },
+  {
+    path: '/tasks',
+    permissions: [
+      MERA_PERMISSIONS.TASKS_VIEW_ALL,
+      MERA_PERMISSIONS.TASKS_VIEW_ASSIGNED,
+      MERA_PERMISSIONS.TASKS_VIEW_EXECUTIVE,
+      MERA_PERMISSIONS.TASKS_WORK,
+    ],
+  },
+  {
+    path: '/licences',
+    permissions: [MERA_PERMISSIONS.LICENSES_VIEW],
+  },
+  {
+    path: '/licenses',
+    permissions: [MERA_PERMISSIONS.LICENSES_VIEW],
+  },
+  {
+    path: '/stations',
+    permissions: [MERA_PERMISSIONS.STATIONS_VIEW, MERA_PERMISSIONS.STATIONS_VIEW_DISTRICT],
+  },
+  {
+    path: '/station-managers',
+    permissions: [MERA_PERMISSIONS.STATIONS_VIEW, MERA_PERMISSIONS.STATIONS_VIEW_DISTRICT],
+  },
+  {
+    path: '/cases',
+    permissions: [MERA_PERMISSIONS.FLAGS_VIEW, MERA_PERMISSIONS.ENFORCEMENT_VIEW],
+  },
+  {
+    path: '/complaints',
+    permissions: [MERA_PERMISSIONS.COMPLAINTS_VIEW],
+  },
+  {
+    path: '/users',
+    permissions: [MERA_PERMISSIONS.USERS_VIEW],
   },
   {
     path: '/national-heat-intelligence-map',

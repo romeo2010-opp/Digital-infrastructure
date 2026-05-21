@@ -60,9 +60,23 @@ function multerErrorAdapter(error, _req, _res, next) {
 export const complaintMediaUpload = [baseUpload.single("media"), multerErrorAdapter]
 export const inspectionEvidenceUpload = [baseUpload.single("evidence"), multerErrorAdapter]
 
-export function buildUploadedFileUrl(file) {
+function resolveUploadBaseUrl(req) {
+  const configured = String(process.env.MERA_PUBLIC_UPLOAD_BASE_URL || process.env.PUBLIC_API_BASE_URL || "").trim()
+  if (configured) return configured.replace(/\/+$/, "")
+  if (!req) return ""
+
+  const forwardedProto = String(req.headers?.["x-forwarded-proto"] || "").split(",")[0].trim()
+  const forwardedHost = String(req.headers?.["x-forwarded-host"] || "").split(",")[0].trim()
+  const protocol = forwardedProto || req.protocol || "http"
+  const host = forwardedHost || req.get?.("host") || req.headers?.host || ""
+  return host ? `${protocol}://${host}` : ""
+}
+
+export function buildUploadedFileUrl(file, req = null) {
   if (!file?.filename) return null
-  return `/uploads/mera/${file.filename}`
+  const path = `/uploads/mera/${file.filename}`
+  const baseUrl = resolveUploadBaseUrl(req)
+  return baseUrl ? `${baseUrl}${path}` : path
 }
 
 export function inferUploadedFileType(file) {

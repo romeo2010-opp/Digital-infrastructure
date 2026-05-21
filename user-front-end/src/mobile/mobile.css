@@ -1471,6 +1471,7 @@ body[data-user-theme='dark'] .details-sheet {
 body[data-user-theme='dark'] .details-station-main h2,
 body[data-user-theme='dark'] .details-block h3,
 body[data-user-theme='dark'] .details-fuel-name,
+body[data-user-theme='dark'] .details-ops-item strong,
 body[data-user-theme='dark'] .details-price-item strong,
 body[data-user-theme='dark'] .details-offer-head strong,
 body[data-user-theme='dark'] .details-offer-price-row strong,
@@ -1486,6 +1487,8 @@ body[data-user-theme='dark'] .details-go-button {
 body[data-user-theme='dark'] .details-rating-number,
 body[data-user-theme='dark'] .details-review-text,
 body[data-user-theme='dark'] .details-section-note,
+body[data-user-theme='dark'] .details-ops-item span,
+body[data-user-theme='dark'] .details-ops-note,
 body[data-user-theme='dark'] .details-price-item span,
 body[data-user-theme='dark'] .details-offer-kicker,
 body[data-user-theme='dark'] .details-offer-price-row span,
@@ -1497,6 +1500,7 @@ body[data-user-theme='dark'] .details-hours-item span {
 }
 
 body[data-user-theme='dark'] .details-fuel-grid,
+body[data-user-theme='dark'] .details-ops-grid,
 body[data-user-theme='dark'] .details-price-grid,
 body[data-user-theme='dark'] .details-hours-grid,
 body[data-user-theme='dark'] .details-facilities {
@@ -1504,6 +1508,7 @@ body[data-user-theme='dark'] .details-facilities {
 }
 
 body[data-user-theme='dark'] .details-fuel-item,
+body[data-user-theme='dark'] .details-ops-item,
 body[data-user-theme='dark'] .details-hours-item + .details-hours-item,
 body[data-user-theme='dark'] .details-facility-item,
 body[data-user-theme='dark'] .details-price-item {
@@ -1511,9 +1516,11 @@ body[data-user-theme='dark'] .details-price-item {
 }
 
 body[data-user-theme='dark'] .details-fuel-grid,
+body[data-user-theme='dark'] .details-ops-grid,
 body[data-user-theme='dark'] .details-hours-grid,
 body[data-user-theme='dark'] .details-facilities,
 body[data-user-theme='dark'] .details-fuel-item,
+body[data-user-theme='dark'] .details-ops-item,
 body[data-user-theme='dark'] .details-price-item,
 body[data-user-theme='dark'] .details-hours-item,
 body[data-user-theme='dark'] .details-facility-item {
@@ -2935,6 +2942,57 @@ body[data-user-theme='dark'] .app-airdrop-copy {
 .details-fuel-status.unavailable {
   background: #fdecee;
   color: #b2262e;
+}
+
+.details-ops-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  border: 1px solid #ecefef;
+  border-radius: 14px;
+  overflow: hidden;
+  background: #ffffff;
+}
+
+.details-ops-item {
+  min-width: 0;
+  padding: 11px 10px;
+  border-right: 1px solid #ecefef;
+  border-bottom: 1px solid #ecefef;
+}
+
+.details-ops-item:nth-child(2n) {
+  border-right: none;
+}
+
+.details-ops-item:nth-child(n + 3) {
+  border-bottom: none;
+}
+
+.details-ops-item span {
+  display: block;
+  color: #8f969c;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.details-ops-item strong {
+  display: block;
+  margin-top: 5px;
+  color: #30373b;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.details-ops-item .details-fuel-status {
+  display: inline-flex;
+  margin-top: 6px;
+}
+
+.details-ops-note {
+  margin: 10px 0 0;
+  color: #57656f;
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .details-price-grid {

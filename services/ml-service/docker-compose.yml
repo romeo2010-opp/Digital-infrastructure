@@ -1,0 +1,10 @@
+services:
+  smartlink-ml-service:
+    build: .
+    ports:
+      - "8001:8001"
+    environment:
+      MODEL_PATH: /app/models/smartlink_ops_models.joblib
+    volumes:
+      - ./models:/app/models
+      - ./data:/app/data

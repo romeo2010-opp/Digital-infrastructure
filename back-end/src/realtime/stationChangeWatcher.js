@@ -1,10 +1,19 @@
-import { prisma } from "../db/prisma.js"
 import { getStationChangeToken } from "./stationChangeToken.js"
-import { publishStationChange } from "./stationChangesHub.js"
+import { listStationChangeListenerStationIds, publishStationChange } from "./stationChangesHub.js"
 
 const DEFAULT_INTERVAL_MS = Number(process.env.STATION_CHANGE_WATCH_INTERVAL_MS || 2000)
 
+function isWatcherEnabled() {
+  return String(process.env.STATION_CHANGE_WATCHER_ENABLED || "true").trim().toLowerCase() !== "false"
+}
+
 export function startStationChangeWatcher() {
+  if (!isWatcherEnabled()) {
+    // eslint-disable-next-line no-console
+    console.info("[realtime] station change watcher disabled")
+    return () => {}
+  }
+
   const tokenByStationId = new Map()
   let running = false
   let stopped = false
@@ -13,17 +22,10 @@ export function startStationChangeWatcher() {
     if (running || stopped) return
     running = true
     try {
-      const stations = await prisma.$queryRaw`
-        SELECT id
-        FROM stations
-        WHERE is_active = 1
-      `
-
+      const subscribedStationIds = listStationChangeListenerStationIds()
       const seenStationIds = new Set()
 
-      for (const station of stations || []) {
-        const stationId = Number(station?.id)
-        if (!Number.isFinite(stationId) || stationId <= 0) continue
+      for (const stationId of subscribedStationIds) {
         seenStationIds.add(stationId)
 
         const nextToken = await getStationChangeToken(stationId)
@@ -65,4 +67,3 @@ export function startStationChangeWatcher() {
     clearInterval(intervalId)
   }
 }
-

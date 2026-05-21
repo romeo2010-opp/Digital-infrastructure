@@ -1,5 +1,6 @@
 import { Activity, ArrowRight, TrendingUp } from 'lucide-react'
 import { SectionCard } from '../components/SectionCard'
+import { SectionKpiStrip } from '../components/SectionKpiStrip'
 import { PortalTable } from '../components/PortalTable'
 import { usePortal } from '../lib/portalContext'
 import { normalizeDate, normalizeRows, renderPill } from '../lib/portalUtils'
@@ -14,16 +15,60 @@ function formatLitres(value: number) {
   return `${Math.round(value).toLocaleString()} L`
 }
 
+function formatMinutes(value: number) {
+  if (!Number.isFinite(value)) return '-'
+  return `${Math.max(0, Math.round(value))} min`
+}
+
 export function DemandForecasting() {
   const { data } = usePortal()
 
   const forecastPayload = data.demandForecastSummary || {}
   const forecastRows = normalizeRows(forecastPayload.rows)
+  const forecastOpsRows = normalizeRows(forecastPayload.opsPredictions?.items)
+  const rootOpsRows = normalizeRows(data.opsPredictions?.items)
+  const nationalOpsRows = normalizeRows(data.nationalOperations?.opsPredictions?.items)
+  const opsPredictionRows = forecastOpsRows.length ? forecastOpsRows : rootOpsRows.length ? rootOpsRows : nationalOpsRows
   const summary = forecastPayload.summary || {}
   const topDistrict = forecastRows[0] || null
+  const criticalDistrictRows = forecastRows.filter((row: any) => String(row.outlook || '').toUpperCase() === 'CRITICAL' || Number(row.pressureScore || 0) >= 70)
+  const outagePressureRows = forecastRows.filter((row: any) => Number(row.shortageStations || 0) > 0 || Number(row.outOfStockStations || 0) > 0 || Number(row.partialOutageStations || 0) > 0)
+  const lowCoverageRows = forecastRows.filter((row: any) => row.coverageHours !== null && row.coverageHours !== undefined && Number(row.coverageHours) <= 6)
+  const criticalOpsRows = opsPredictionRows.filter((row: any) => {
+    const prediction = row.prediction || {}
+    return (
+      String(prediction.congestion_level || '').toUpperCase() === 'CRITICAL' ||
+      String(prediction.stockout_risk || '').toUpperCase() === 'CRITICAL'
+    )
+  })
+  const forecastColumns = [
+    { key: 'district', label: 'District' },
+    { key: 'projectedDemandLitres', label: '6h Demand', render: (row: any) => formatLitres(Number(row.projectedDemandLitres || 0)) },
+    { key: 'coverageHours', label: 'Coverage', render: (row: any) => row.coverageHours === null || row.coverageHours === undefined ? '-' : `${Number(row.coverageHours).toFixed(1)}h` },
+    { key: 'pressureScore', label: 'Pressure', render: (row: any) => `${row.pressureScore}%` },
+    { key: 'outlook', label: 'Outlook', render: (row: any) => row.outlook || '-' },
+  ]
+  const opsPredictionColumns = [
+    { key: 'stationName', label: 'Station' },
+    { key: 'district', label: 'District' },
+    { key: 'fuelType', label: 'Fuel' },
+    { key: 'congestion', label: 'Congestion', render: (row: any) => row.prediction?.congestion_level || '-' },
+    { key: 'stockoutRisk', label: 'Stockout', render: (row: any) => row.prediction?.stockout_risk || '-' },
+  ]
 
   return (
     <div className="flex h-full flex-col gap-4 overflow-y-auto p-4">
+      <SectionKpiStrip
+        columns={forecastColumns}
+        items={[
+          { label: 'Critical Districts', value: criticalDistrictRows.length, rows: criticalDistrictRows, tone: criticalDistrictRows.length ? 'bad' : 'good', accent: '#dc2626' },
+          { label: 'Projected Demand', value: formatLitres(Number(summary.totalProjectedDemandLitres || 0)), rows: forecastRows, helper: 'next 6 hours', accent: '#2563eb' },
+          { label: 'Outage Pressure', value: outagePressureRows.length, rows: outagePressureRows, tone: outagePressureRows.length ? 'warn' : 'good', accent: '#f59e0b' },
+          { label: 'Low Coverage', value: lowCoverageRows.length, rows: lowCoverageRows, tone: lowCoverageRows.length ? 'bad' : 'good', accent: '#7c3aed' },
+          { label: 'ML Critical Ops', value: criticalOpsRows.length, rows: criticalOpsRows, columns: opsPredictionColumns, tone: criticalOpsRows.length ? 'bad' : 'good', accent: '#0f766e' },
+        ]}
+      />
+
       <div className="grid gap-4 xl:grid-cols-[0.95fr_1.05fr]">
         <SectionCard title="Demand Outlook Summary" subtitle="Smart forecast model derived from live inventory, transactions, queues, complaints, flags, and recent deliveries">
           <div className="grid gap-3 px-5 py-5 md:grid-cols-3">
@@ -77,6 +122,22 @@ export function DemandForecasting() {
           </div>
         </SectionCard>
       </div>
+
+      <SectionCard title="ML Station Operations Forecast" subtitle="FastAPI model predictions for queue pressure, wait time, stockout risk, and congestion">
+        <PortalTable
+          rows={opsPredictionRows}
+          columns={[
+            { key: 'stationName', label: 'Station', render: (row) => row.stationName || '-' },
+            { key: 'district', label: 'District', render: (row) => row.district || '-' },
+            { key: 'fuelType', label: 'Fuel', render: (row) => row.fuelType || '-' },
+            { key: 'queue', label: 'Queue 30m', render: (row) => Number(row.prediction?.queue_length_30m || 0).toLocaleString() },
+            { key: 'wait', label: 'Wait', render: (row) => row.prediction?.wait_time_range || formatMinutes(Number(row.prediction?.wait_time_minutes)) },
+            { key: 'stockoutRisk', label: 'Stockout', render: (row) => renderPill(row.prediction?.stockout_risk || '-') },
+            { key: 'congestion', label: 'Congestion', render: (row) => renderPill(row.prediction?.congestion_level || '-') },
+            { key: 'summary', label: 'MERA Summary', render: (row) => row.prediction?.mera_summary || '-' },
+          ]}
+        />
+      </SectionCard>
 
       <div className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
         <SectionCard title="District Demand Forecast Register" subtitle="Pressure-ranked districts with projected demand, coverage, outage load, and response guidance">

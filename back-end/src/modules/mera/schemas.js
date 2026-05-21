@@ -9,9 +9,44 @@ const complaintTypes = [
   "OTHER",
 ]
 
+const taskTypes = [
+  "CASE_REVIEW",
+  "COMPLAINT_REVIEW",
+  "STATION_INSPECTION",
+  "HOARDING_INVESTIGATION",
+  "PRICE_VIOLATION_REVIEW",
+  "QUEUE_DISORDER_REVIEW",
+  "TELEMETRY_MISMATCH_REVIEW",
+  "FIELD_VISIT",
+  "MANUAL_TASK",
+]
+
+const taskPriorities = ["LOW", "MEDIUM", "HIGH", "CRITICAL"]
+
+const taskStatuses = [
+  "ASSIGNED",
+  "ACKNOWLEDGED",
+  "IN_PROGRESS",
+  "NEEDS_MORE_INFO",
+  "ESCALATED",
+  "COMPLETED",
+  "REJECTED",
+  "CANCELLED",
+]
+
 export const meraLoginSchema = z.object({
   email: z.string().trim().email(),
   password: z.string().min(8).max(120),
+})
+
+export const meraLoginCodeVerifySchema = z.object({
+  challengeId: z.string().trim().min(1).max(64),
+  code: z.string().trim().regex(/^\d{6}$/, "Login code must be 6 digits"),
+  trustDevice: z.coerce.boolean().optional().default(false),
+})
+
+export const meraLoginCodeResendSchema = z.object({
+  challengeId: z.string().trim().min(1).max(64),
 })
 
 export const verifyRoleQuerySchema = z.object({
@@ -21,6 +56,26 @@ export const verifyRoleQuerySchema = z.object({
 export const publicStationsQuerySchema = z.object({
   query: z.string().trim().max(120).optional(),
   limit: z.coerce.number().int().min(1).max(100).optional(),
+})
+
+export const searchQuerySchema = z.object({
+  q: z.string().trim().min(1).max(100),
+  limit: z.coerce.number().int().min(1).max(12).optional(),
+})
+
+export const fullSearchQuerySchema = z.object({
+  q: z.string().trim().min(1).max(100),
+  page: z.coerce.number().int().min(1).max(500).optional(),
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+  type: z.string().trim().max(64).optional(),
+  status: z.string().trim().max(64).optional(),
+  district: z.string().trim().max(80).optional(),
+  from: z.string().trim().max(40).optional(),
+  to: z.string().trim().max(40).optional(),
+})
+
+export const caseIdParamSchema = z.object({
+  caseId: z.string().trim().min(3).max(96),
 })
 
 export const createComplaintSchema = z.object({
@@ -224,6 +279,86 @@ export const meraUserStatusSchema = z.object({
   accountStatus: z.enum(["ACTIVE", "INVITED", "SUSPENDED", "DISABLED"]),
 })
 
+export const taskNumberParamSchema = z.object({
+  taskNumber: z.string().trim().min(8).max(32),
+})
+
+export const taskListQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).max(500).optional(),
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+  status: z.string().trim().max(64).optional(),
+  priority: z.string().trim().max(32).optional(),
+  type: z.string().trim().max(64).optional(),
+  district: z.string().trim().max(80).optional(),
+  stationId: z.string().trim().max(96).optional(),
+  stationPublicId: z.string().trim().max(96).optional(),
+  assignedTo: z.string().trim().max(96).optional(),
+  assignedToUserPublicId: z.string().trim().max(96).optional(),
+  overdue: z.string().trim().max(8).optional(),
+  search: z.string().trim().max(160).optional(),
+  from: z.string().trim().max(40).optional(),
+  to: z.string().trim().max(40).optional(),
+  linkedEntityType: z.string().trim().max(64).optional(),
+  linkedEntityId: z.string().trim().max(96).optional(),
+})
+
+const taskCreateBaseSchema = z.object({
+  title: z.string().trim().min(3).max(180),
+  description: z.string().trim().min(10).max(8000),
+  type: z.enum(taskTypes),
+  category: z.string().trim().max(96).optional().nullable(),
+  priority: z.enum(taskPriorities),
+  assignedToUserPublicId: z.string().trim().min(1).max(96).optional(),
+  assignedToUserId: z.string().trim().min(1).max(96).optional(),
+  dueAt: z.string().trim().max(40).optional().nullable(),
+  district: z.string().trim().max(80).optional().nullable(),
+  stationPublicId: z.string().trim().max(96).optional().nullable(),
+  stationId: z.string().trim().max(96).optional().nullable(),
+  stationName: z.string().trim().max(160).optional().nullable(),
+  linkedEntityType: z.string().trim().max(64).optional().nullable(),
+  linkedEntityId: z.string().trim().max(96).optional().nullable(),
+  evidenceSummary: z.string().trim().max(8000).optional().nullable(),
+})
+
+export const taskCreateSchema = taskCreateBaseSchema.refine((value) => value.assignedToUserPublicId || value.assignedToUserId, {
+  message: "assignedToUserPublicId is required",
+  path: ["assignedToUserPublicId"],
+})
+
+export const taskUpdateSchema = taskCreateBaseSchema
+  .partial()
+  .refine((value) => Object.keys(value).length > 0, {
+    message: "At least one task field is required",
+    path: ["title"],
+  })
+
+export const taskStatusSchema = z.object({
+  status: z.enum(taskStatuses),
+  reason: z.string().trim().max(4000).optional().nullable(),
+})
+
+export const taskNoteSchema = z.object({
+  note: z.string().trim().min(1).max(8000),
+  visibility: z.enum(["INTERNAL", "SUPERVISOR_ONLY"]).optional(),
+})
+
+export const taskEvidenceSchema = z.object({
+  evidenceType: z.string().trim().max(64).optional().nullable(),
+  title: z.string().trim().max(180).optional().nullable(),
+  description: z.string().trim().max(4000).optional().nullable(),
+  fileUrl: z.string().trim().max(1000).optional().nullable(),
+  linkedExistingEvidenceId: z.string().trim().max(96).optional().nullable(),
+})
+
+export const taskEscalateSchema = z.object({
+  reason: z.string().trim().min(1).max(4000),
+  note: z.string().trim().max(4000).optional().nullable(),
+})
+
+export const taskCompleteSchema = z.object({
+  completionNotes: z.string().trim().min(1).max(8000),
+})
+
 export const meraProfilePatchSchema = z
   .object({
     fullName: z.string().trim().min(3).max(120).optional(),
@@ -237,7 +372,7 @@ export const meraProfilePatchSchema = z
 
 export const meraPreferencesPatchSchema = z
   .object({
-    appearance: z.enum(["light", "system", "dark"]).optional(),
+    appearance: z.enum(["light", "system", "dark", "black-white"]).optional(),
     density: z.enum(["comfortable", "compact"]).optional(),
     landingPage: z.enum(["dashboard", "complaints", "hoarding", "audit"]).optional(),
     compactTables: z.coerce.boolean().optional(),

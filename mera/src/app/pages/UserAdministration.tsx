@@ -6,6 +6,7 @@ import { Input } from '../components/ui/input'
 import { ModalShell } from '../components/ModalShell'
 import { PortalTable } from '../components/PortalTable'
 import { SectionCard } from '../components/SectionCard'
+import { SectionKpiStrip } from '../components/SectionKpiStrip'
 import { MERA_PERMISSIONS } from '../lib/access'
 import { usePortal } from '../lib/portalContext'
 import { matchesSearch, normalizeDate, normalizeRows, renderPill } from '../lib/portalUtils'
@@ -50,6 +51,17 @@ export function UserAdministration() {
     () => normalizeRows(data.auditLogs?.items).filter((row: any) => row.actor_public_id === selectedUser?.public_id).slice(0, 8),
     [data.auditLogs, selectedUser],
   )
+  const activeUserRows = rows.filter((row: any) => String(row.account_status || '').toUpperCase() === 'ACTIVE')
+  const districtScopedRows = rows.filter((row: any) => Boolean(row.district_scope))
+  const adminSupervisorRows = rows.filter((row: any) => /ADMIN|SUPERVISOR/.test(String(row.role_code || row.role_display_name || '').toUpperCase()))
+  const inactiveUserRows = rows.filter((row: any) => !['ACTIVE', 'INVITED'].includes(String(row.account_status || '').toUpperCase()))
+  const userColumns = [
+    { key: 'full_name', label: 'Officer' },
+    { key: 'email', label: 'Email' },
+    { key: 'role_display_name', label: 'Role', render: (row: any) => row.role_display_name || row.role_code || '-' },
+    { key: 'district_scope', label: 'District', render: (row: any) => row.district_scope || 'National' },
+    { key: 'account_status', label: 'Status', render: (row: any) => row.account_status || '-' },
+  ]
 
   return (
     <div className="flex h-full flex-col gap-4 overflow-y-auto p-4">
@@ -89,6 +101,16 @@ export function UserAdministration() {
           Export
         </Button>
       </Toolbar>
+
+      <SectionKpiStrip
+        columns={userColumns}
+        items={[
+          { label: 'Active Users', value: activeUserRows.length, rows: activeUserRows, tone: 'good', accent: '#10b981' },
+          { label: 'District-scoped Users', value: districtScopedRows.length, rows: districtScopedRows, accent: '#2563eb' },
+          { label: 'Admins / Supervisors', value: adminSupervisorRows.length, rows: adminSupervisorRows, tone: adminSupervisorRows.length ? 'warn' : 'neutral', accent: '#f59e0b' },
+          { label: 'Inactive Users', value: inactiveUserRows.length, rows: inactiveUserRows, tone: inactiveUserRows.length ? 'bad' : 'good', accent: '#dc2626' },
+        ]}
+      />
 
       <div className="grid min-h-0 flex-1 gap-4 xl:grid-cols-[1.7fr_1fr]">
         <SectionCard title="MERA Officer Registry" subtitle="User accounts, districts, case ownership, and access control">

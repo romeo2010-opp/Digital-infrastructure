@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { useNavigate } from 'react-router'
 import { Download, ExternalLink, FileImage, Plus, RefreshCw } from 'lucide-react'
 import { Toolbar } from '../components/Toolbar'
 import { Button } from '../components/ui/button'
@@ -6,6 +7,7 @@ import { Input } from '../components/ui/input'
 import { ModalShell } from '../components/ModalShell'
 import { PortalTable } from '../components/PortalTable'
 import { SectionCard } from '../components/SectionCard'
+import { SectionKpiStrip } from '../components/SectionKpiStrip'
 import { resolvePortalAssetUrl } from '../lib/portalApi'
 import { MERA_PERMISSIONS } from '../lib/access'
 import { usePortal } from '../lib/portalContext'
@@ -91,6 +93,7 @@ function renderEvidencePreview(mediaUrl: string) {
 
 export function ComplaintsCenter() {
   const { data, runAction, api, token, hasPermission } = usePortal()
+  const navigate = useNavigate()
   const [complaintType, setComplaintType] = useState('')
   const [officerFilter, setOfficerFilter] = useState('')
   const [unresolvedOnly, setUnresolvedOnly] = useState(false)
@@ -126,6 +129,16 @@ export function ComplaintsCenter() {
   const canTriage = hasPermission(MERA_PERMISSIONS.COMPLAINTS_TRIAGE)
   const canEscalate = hasPermission(MERA_PERMISSIONS.COMPLAINTS_ESCALATE)
   const canClose = hasPermission(MERA_PERMISSIONS.COMPLAINTS_CLOSE)
+  const canCreateTask = hasPermission(MERA_PERMISSIONS.TASKS_CREATE) || hasPermission(MERA_PERMISSIONS.TASKS_ASSIGN) || hasPermission(MERA_PERMISSIONS.TASKS_MANAGE)
+  const openRows = rows.filter((row: any) => !['RESOLVED', 'DISMISSED', 'CLOSED'].includes(String(row.complaintStatus || '').toUpperCase()))
+  const investigationRows = rows.filter((row: any) => ['ESCALATED', 'UNDER_INVESTIGATION', 'ASSIGNED'].includes(String(row.complaintStatus || '').toUpperCase()))
+  const complaintColumns = [
+    { key: 'publicId', label: 'Complaint' },
+    { key: 'station', label: 'Station', render: (row: any) => row.station?.name || '-' },
+    { key: 'complaintType', label: 'Type', render: (row: any) => row.complaintType || '-' },
+    { key: 'complaintStatus', label: 'Status', render: (row: any) => row.complaintStatus || '-' },
+    { key: 'createdAt', label: 'Submitted', render: (row: any) => normalizeDate(row.createdAt) },
+  ]
 
   return (
     <div className="flex h-full flex-col gap-4 overflow-y-auto p-4">
@@ -163,14 +176,22 @@ export function ComplaintsCenter() {
         </Button>
       </Toolbar>
 
+      <SectionKpiStrip
+        columns={complaintColumns}
+        items={[
+          { label: 'Total Complaints', value: rows.length, rows, accent: '#2563eb' },
+          { label: 'Open Complaints', value: openRows.length, rows: openRows, tone: openRows.length ? 'warn' : 'good', accent: '#f59e0b' },
+          { label: 'Under Investigation', value: investigationRows.length, rows: investigationRows, tone: investigationRows.length ? 'bad' : 'neutral', accent: '#dc2626' },
+          { label: 'With Evidence', value: evidenceQueue.length, rows: evidenceQueue, tone: evidenceQueue.length ? 'good' : 'neutral', accent: '#10b981' },
+        ]}
+      />
+
       <div className="grid min-h-0 flex-1 gap-4">
         <SectionCard title="Complaint Registry" subtitle="Live complaints from the public complaint app and MERA case intake">
           <PortalTable
             rows={rows}
             onRowClick={(row) => {
-              setSelectedComplaint(row)
-              setAssignOfficerPublicId(row.assignedOfficer?.publicId || '')
-              setStatusValue(row.complaintStatus || 'UNDER_INVESTIGATION')
+              navigate(`/complaints/${row.publicId}`)
             }}
             columns={[
               { key: 'publicId', label: 'Complaint ID' },
@@ -216,14 +237,36 @@ export function ComplaintsCenter() {
                         Update
                       </button>
                     ) : null}
+                    {canCreateTask ? (
+                      <button
+                        type="button"
+                        className="text-[11px] font-medium text-blue-700"
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          const params = new URLSearchParams({
+                            linkedEntityType: 'COMPLAINT',
+                            linkedEntityId: row.publicId,
+                            type: 'COMPLAINT_REVIEW',
+                            priority: ['HOARDING', 'REFUSAL_TO_SELL', 'OVERPRICING'].includes(row.complaintType) ? 'HIGH' : 'MEDIUM',
+                            title: `Review complaint ${row.publicId}`,
+                            description: row.description || row.complaintDescription || 'Complaint review assignment.',
+                          })
+                          if (row.station?.publicId) params.set('stationPublicId', row.station.publicId)
+                          if (row.station?.name) params.set('stationName', row.station.name)
+                          if (row.station?.city) params.set('district', row.station.city)
+                          navigate(`/tasks/new?${params.toString()}`)
+                        }}
+                      >
+                        Assign Review Task
+                      </button>
+                    ) : null}
                     {row.mediaUrl ? (
                       <button
                         type="button"
                         className="text-[11px] font-medium text-blue-700"
                         onClick={(event) => {
                           event.stopPropagation()
-                          setSelectedComplaint(row)
-                          setEvidenceOpen(true)
+                          navigate(`/documents/complaint-media/${row.publicId}`)
                         }}
                       >
                         Evidence
@@ -252,8 +295,7 @@ export function ComplaintsCenter() {
                     type="button"
                     className="mt-2 inline-block text-blue-700 underline"
                     onClick={() => {
-                      setSelectedComplaint(item)
-                      setEvidenceOpen(true)
+                      navigate(`/documents/complaint-media/${item.publicId}`)
                     }}
                   >
                     Review Media

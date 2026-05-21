@@ -6,6 +6,7 @@ import { Input } from '../components/ui/input'
 import { ModalShell } from '../components/ModalShell'
 import { PortalTable } from '../components/PortalTable'
 import { SectionCard } from '../components/SectionCard'
+import { SectionKpiStrip } from '../components/SectionKpiStrip'
 import { MERA_PERMISSIONS } from '../lib/access'
 import { usePortal } from '../lib/portalContext'
 import { matchesSearch, normalizeDate, normalizeRows, renderPill } from '../lib/portalUtils'
@@ -44,6 +45,17 @@ export function LicenseRegistry() {
   const alerts = normalizeRows(data.expiryAlerts).slice(0, 8)
   const canCreate = hasPermission(MERA_PERMISSIONS.LICENSES_CREATE)
   const canUpdate = hasPermission(MERA_PERMISSIONS.LICENSES_UPDATE)
+  const activeRows = rows.filter((row: any) => String(row.licenseStatus || '').toUpperCase() === 'ACTIVE')
+  const pendingRows = rows.filter((row: any) => String(row.licenseStatus || '').toUpperCase() === 'PENDING_RENEWAL')
+  const expiredRows = rows.filter((row: any) => String(row.licenseStatus || '').toUpperCase() === 'EXPIRED')
+  const restrictedRows = rows.filter((row: any) => ['REVOKED', 'SUSPENDED'].includes(String(row.licenseStatus || '').toUpperCase()))
+  const licenseColumns = [
+    { key: 'licenseNumber', label: 'License' },
+    { key: 'station', label: 'Station', render: (row: any) => row.station?.name || '-' },
+    { key: 'district', label: 'District', render: (row: any) => row.station?.city || '-' },
+    { key: 'licenseStatus', label: 'Status', render: (row: any) => row.licenseStatus || '-' },
+    { key: 'expiryDate', label: 'Expiry', render: (row: any) => normalizeDate(row.expiryDate) },
+  ]
 
   return (
     <div className="flex h-full flex-col gap-4 overflow-y-auto p-4">
@@ -71,6 +83,16 @@ export function LicenseRegistry() {
           Export
         </Button>
       </Toolbar>
+
+      <SectionKpiStrip
+        columns={licenseColumns}
+        items={[
+          { label: 'Active Licenses', value: activeRows.length, rows: activeRows, tone: 'good', accent: '#10b981' },
+          { label: 'Pending Renewal', value: pendingRows.length, rows: pendingRows, tone: pendingRows.length ? 'warn' : 'neutral', accent: '#f59e0b' },
+          { label: 'Expired', value: expiredRows.length, rows: expiredRows, tone: expiredRows.length ? 'bad' : 'good', accent: '#dc2626' },
+          { label: 'Revoked / Suspended', value: restrictedRows.length, rows: restrictedRows, tone: restrictedRows.length ? 'bad' : 'neutral', accent: '#111827' },
+        ]}
+      />
 
       <div className="grid min-h-0 flex-1 gap-4 xl:grid-cols-[1.8fr_0.9fr]">
         <SectionCard title="Petroleum Station License Registry" subtitle="National license, renewal, and compliance register">

@@ -1,189 +1,181 @@
 import { useMemo, useState } from 'react'
-import * as Tabs from '@radix-ui/react-tabs'
-import { Search } from 'lucide-react'
+import { Plus, Search } from 'lucide-react'
+import { useNavigate } from 'react-router'
 import { Input } from '../components/ui/input'
 import { SectionCard } from '../components/SectionCard'
+import { PortalTable } from '../components/PortalTable'
+import { KpiDrilldownCard, KpiDrilldownDrawer, type DrilldownConfig } from '../components/KpiDrilldown'
+import { KpiSkeletonStrip, PanelSkeleton, TableSkeleton } from '../components/LiveDataSkeleton'
+import { MERA_PERMISSIONS } from '../lib/access'
 import { usePortal } from '../lib/portalContext'
 import { normalizeDate, normalizeRows, renderPill } from '../lib/portalUtils'
 
-export function StationProfiles() {
-  const { data, selectedProfile, selectedProfileEnforcement, openProfile } = usePortal()
-  const [search, setSearch] = useState('')
+const stationColumns = [
+  { key: 'name', label: 'Station' },
+  { key: 'operator', label: 'Operator', render: (row: any) => row.operator_name || row.operatorName || row.owner || '-' },
+  { key: 'city', label: 'District', render: (row: any) => row.city || '-' },
+  { key: 'license_status', label: 'License', render: (row: any) => renderPill(row.license_status || 'UNLICENSED') },
+  { key: 'open_flags', label: 'Open Flags', render: (row: any) => row.open_flags || 0 },
+]
 
+function licenseStatus(station: any) {
+  return String(station.license_status || station.licenseStatus || 'UNLICENSED').toUpperCase()
+}
+
+export function StationProfiles() {
+  const { data, selectedProfile, selectedProfileEnforcement, openProfile, hasPermission, liveDataLoading } = usePortal()
+  const navigate = useNavigate()
+  const [search, setSearch] = useState('')
+  const [status, setStatus] = useState('')
+  const [drilldown, setDrilldown] = useState<DrilldownConfig | null>(null)
+  const canCreateTask = hasPermission(MERA_PERMISSIONS.TASKS_CREATE) || hasPermission(MERA_PERMISSIONS.TASKS_ASSIGN) || hasPermission(MERA_PERMISSIONS.TASKS_MANAGE)
+
+  const allStations = useMemo(() => normalizeRows(data.profiles), [data.profiles])
   const stations = useMemo(
     () =>
-      normalizeRows(data.profiles).filter((station: any) =>
-        JSON.stringify(station).toLowerCase().includes(search.trim().toLowerCase()),
-      ),
-    [data.profiles, search],
+      allStations.filter((station: any) => {
+        if (status && licenseStatus(station) !== status) return false
+        return JSON.stringify(station).toLowerCase().includes(search.trim().toLowerCase())
+      }),
+    [allStations, search, status],
   )
+  const isInitialLoading = liveDataLoading && !allStations.length
+  const activeRows = stations.filter((station: any) => ['ACTIVE', 'VALID'].includes(licenseStatus(station)))
+  const expiredRows = stations.filter((station: any) => ['EXPIRED', 'REVOKED', 'SUSPENDED', 'UNLICENSED'].includes(licenseStatus(station)))
+  const renewalRows = stations.filter((station: any) => ['PENDING', 'PENDING_RENEWAL'].includes(licenseStatus(station)))
+  const flaggedRows = stations.filter((station: any) => Number(station.open_flags || station.openFlags || 0) > 0)
+  const linkedTasks = useMemo(() => {
+    const stationPublicId = selectedProfile?.station?.public_id
+    if (!stationPublicId) return []
+    return [...normalizeRows(data.tasks?.items), ...normalizeRows(data.myTasks?.items)]
+      .filter((task: any, index, array) => {
+        const matchesStation = task.stationPublicId === stationPublicId || task.stationId === stationPublicId || (task.linkedEntityType === 'STATION' && task.linkedEntityId === stationPublicId)
+        return matchesStation && array.findIndex((item: any) => item.taskNumber === task.taskNumber) === index
+      })
+      .slice(0, 20)
+  }, [data.myTasks, data.tasks, selectedProfile?.station?.public_id])
 
-  const renderList = (items: any[], render: (item: any, index: number) => React.ReactNode) => {
-    if (!items.length) {
-      return <div className="px-4 py-6 text-xs text-slate-500">No records available.</div>
-    }
-    return <div className="divide-y divide-slate-200">{items.map(render)}</div>
+  const createTask = () => {
+    const station = selectedProfile?.station
+    if (!station) return
+    const params = new URLSearchParams({
+      linkedEntityType: 'STATION',
+      linkedEntityId: station.public_id || '',
+      stationPublicId: station.public_id || '',
+      stationName: station.name || '',
+      district: station.city || '',
+      type: 'STATION_INSPECTION',
+      title: `Compliance task for ${station.name || 'station'}`,
+      description: `Create a compliance follow-up task for ${station.name || 'this station'}.`,
+    })
+    navigate(`/tasks/new?${params.toString()}`)
   }
 
   return (
-    <div className="flex h-full overflow-hidden bg-white">
-      <aside className="w-72 border-r border-slate-200 bg-white">
-        <div className="border-b border-slate-200 p-4">
-          <div className="flex items-center gap-2">
-            <Search className="size-4 text-slate-400" />
-            <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search station..." />
+    <div className="flex h-full flex-col gap-3 overflow-y-auto bg-[#f4f5f7] p-4 text-[#111827]">
+      {isInitialLoading ? (
+        <>
+          <KpiSkeletonStrip count={4} />
+          <div className="grid min-h-0 flex-1 gap-4 xl:grid-cols-[1fr_340px]">
+            <TableSkeleton rows={8} columns={5} />
+            <PanelSkeleton />
           </div>
-        </div>
-        <div className="overflow-y-auto p-2">
-          {stations.map((station: any) => {
-            const active = selectedProfile?.station?.public_id === station.public_id
-            return (
-              <button
-                key={station.public_id}
-                type="button"
-                onClick={() => openProfile(station.public_id)}
-                className={`mb-1 w-full rounded-lg border px-3 py-2.5 text-left text-xs transition-colors ${
-                  active ? 'border-slate-200 bg-slate-50 text-slate-900' : 'border-transparent bg-white text-slate-700 hover:border-slate-200 hover:bg-slate-50'
-                }`}
-              >
-                <div className="font-medium">{station.name}</div>
-                <div className="mt-1 text-slate-500">{station.city || 'No district'}</div>
-                <div className="mt-2 flex gap-2">
-                  {renderPill(station.license_status || 'UNLICENSED')}
-                  {renderPill(`${station.open_flags || 0} OPEN FLAGS`)}
-                </div>
-              </button>
-            )
-          })}
-        </div>
-      </aside>
+        </>
+      ) : (
+        <>
+          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+            <KpiDrilldownCard label="Registered Stations" value={stations.length.toLocaleString()} delta={`${stations.length} rows`} helper="current registry" accent="#7c3aed" onClick={() => setDrilldown({ title: 'Registered stations', value: stations.length.toLocaleString(), rows: stations, columns: stationColumns })} />
+            <KpiDrilldownCard label="Active Licenses" value={activeRows.length.toLocaleString()} delta="active" helper="valid license status" tone="good" accent="#10b981" onClick={() => setDrilldown({ title: 'Active licenses', value: activeRows.length.toLocaleString(), rows: activeRows, columns: stationColumns })} />
+            <KpiDrilldownCard label="Expired / Revoked" value={expiredRows.length.toLocaleString()} delta="review" helper="non-active status" tone={expiredRows.length ? 'bad' : 'good'} accent="#dc2626" onClick={() => setDrilldown({ title: 'Expired, revoked, suspended, or unlicensed', value: expiredRows.length.toLocaleString(), rows: expiredRows, columns: stationColumns })} />
+            <KpiDrilldownCard label="Renewals Pending" value={renewalRows.length.toLocaleString()} delta={`${flaggedRows.length} flagged`} helper="pending queue" tone="warn" accent="#f59e0b" onClick={() => setDrilldown({ title: 'Renewals pending', value: renewalRows.length.toLocaleString(), rows: renewalRows, columns: stationColumns })} />
+          </div>
 
-      <div className="min-w-0 flex-1 overflow-y-auto bg-white p-4">
-        {selectedProfile ? (
-          <>
-            <SectionCard title="Station Dossier" subtitle="Licensing, complaints, inspections, declarations, and enforcement history">
-              <div className="grid gap-4 px-4 py-3 text-xs md:grid-cols-4">
-                <div>
-                  <div className="uppercase tracking-[0.08em] text-slate-500">Station</div>
-                  <div className="mt-1 font-medium text-slate-900">{selectedProfile.station?.name}</div>
-                </div>
-                <div>
-                  <div className="uppercase tracking-[0.08em] text-slate-500">District</div>
-                  <div className="mt-1 text-slate-700">{selectedProfile.station?.city || '-'}</div>
-                </div>
-                <div>
-                  <div className="uppercase tracking-[0.08em] text-slate-500">Address</div>
-                  <div className="mt-1 text-slate-700">{selectedProfile.station?.address || '-'}</div>
-                </div>
-                <div>
-                  <div className="uppercase tracking-[0.08em] text-slate-500">Open Enforcement Cases</div>
-                  <div className="mt-1 text-slate-700">{normalizeRows(selectedProfileEnforcement?.items).length}</div>
-                </div>
+          <div className="rounded-[6px] border border-[#e2e8f0] bg-white px-3 py-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex min-w-[280px] flex-1 items-center gap-2">
+                <Search className="size-4 text-[#9ca3af]" />
+                <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search stations, operators, licenses..." />
               </div>
+              <select value={status} onChange={(event) => setStatus(event.target.value)} className="h-9 rounded-[5px] border border-[#e2e8f0] bg-white px-3 text-[12px] font-semibold text-[#374151]">
+                <option value="">All Statuses</option>
+                <option value="ACTIVE">Active</option>
+                <option value="PENDING_RENEWAL">Pending Renewal</option>
+                <option value="EXPIRED">Expired</option>
+                <option value="REVOKED">Revoked</option>
+                <option value="SUSPENDED">Suspended</option>
+                <option value="UNLICENSED">Unlicensed</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="grid min-h-0 flex-1 gap-4 xl:grid-cols-[1fr_360px]">
+            <SectionCard title="Station Registry" subtitle={`${stations.length.toLocaleString()} stations`}>
+              <PortalTable
+                rows={stations}
+                onRowClick={(station) => openProfile(station.public_id)}
+                columns={[
+                  { key: 'index', label: '#', render: (_row, index) => index + 1 },
+                  ...stationColumns,
+                ]}
+              />
             </SectionCard>
 
-            <Tabs.Root defaultValue="license" className="mt-4 rounded-xl border border-slate-200 bg-white">
-              <Tabs.List className="flex flex-wrap gap-2 border-b border-slate-200 px-4 py-3">
-                {['license', 'complaints', 'inspections', 'deliveries', 'declarations', 'enforcement', 'risk'].map((tab) => (
-                  <Tabs.Trigger
-                    key={tab}
-                    value={tab}
-                    className="rounded-md border border-transparent px-3 py-1 text-xs font-medium capitalize text-slate-600 data-[state=active]:border-slate-200 data-[state=active]:bg-slate-100 data-[state=active]:text-slate-900"
-                  >
-                    {tab === 'risk' ? 'Risk Score History' : tab}
-                  </Tabs.Trigger>
-                ))}
-              </Tabs.List>
-
-              <Tabs.Content value="license">
-                {renderList(normalizeRows(selectedProfile.licenses), (item: any) => (
-                  <div key={`${item.id}-${item.license_number}`} className="grid gap-3 px-4 py-3 text-xs md:grid-cols-5">
-                    <div className="font-medium text-slate-900">{item.license_number}</div>
-                    <div>{normalizeDate(item.issue_date)}</div>
-                    <div>{normalizeDate(item.expiry_date)}</div>
-                    <div>{renderPill(item.license_status)}</div>
-                    <div className="text-slate-600">{item.compliance_conditions || 'No conditions logged.'}</div>
+            <SectionCard
+              title={selectedProfile?.station?.name || 'Station Detail'}
+              subtitle={selectedProfile?.station?.public_id || 'Select a station row to open its profile'}
+              actions={canCreateTask && selectedProfile ? (
+                <button type="button" onClick={createTask} className="inline-flex h-8 items-center gap-2 rounded-[4px] bg-[#111827] px-3 text-[11px] font-semibold text-white hover:bg-[#1f2937]">
+                  <Plus className="size-3.5" />
+                  Task
+                </button>
+              ) : null}
+            >
+              {selectedProfile ? (
+                <div className="min-h-0 overflow-y-auto">
+                  <div className="grid gap-3 border-b border-[#f1f5f9] px-4 py-3 text-xs">
+                    <div className="grid grid-cols-2 gap-3">
+                      <div><div className="text-[#9ca3af]">District</div><div className="mt-1 font-semibold text-[#111827]">{selectedProfile.station?.city || '-'}</div></div>
+                      <div><div className="text-[#9ca3af]">Address</div><div className="mt-1 font-semibold text-[#111827]">{selectedProfile.station?.address || '-'}</div></div>
+                      <div><div className="text-[#9ca3af]">Licenses</div><div className="mt-1 font-semibold text-[#111827]">{normalizeRows(selectedProfile.licenses).length}</div></div>
+                      <div><div className="text-[#9ca3af]">Enforcement</div><div className="mt-1 font-semibold text-[#111827]">{normalizeRows(selectedProfileEnforcement?.items).length}</div></div>
+                    </div>
                   </div>
-                ))}
-              </Tabs.Content>
-
-              <Tabs.Content value="complaints">
-                {renderList(normalizeRows(selectedProfile.complaints), (item: any, index: number) => (
-                  <div key={`${item.created_at}-${index}`} className="grid gap-3 px-4 py-3 text-xs md:grid-cols-4">
-                    <div>{renderPill(item.complaint_type)}</div>
-                    <div>{renderPill(item.complaint_status)}</div>
-                    <div>{normalizeDate(item.created_at)}</div>
-                    <div className="text-slate-600">Case reference: CMP-{String(index + 1).padStart(4, '0')}</div>
+                  <div className="border-b border-[#f1f5f9] px-4 py-3">
+                    <div className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#9ca3af]">Tank Status</div>
+                    <div className="mt-2 grid gap-2">
+                      {normalizeRows(selectedProfile.tanks).length ? normalizeRows(selectedProfile.tanks).map((tank: any, index: number) => (
+                        <div key={`${tank.fuel_type || tank.fuel}-${index}`} className="grid grid-cols-[72px_minmax(0,1fr)_42px] items-center gap-2 text-[11px]">
+                          <span className="truncate font-semibold text-[#374151]">{tank.fuel_type || tank.fuel || 'Fuel'}</span>
+                          <span className="h-1.5 overflow-hidden rounded-full bg-[#f1f5f9]"><span className="block h-full rounded-full bg-[#7c3aed]" style={{ width: `${Number(tank.percent || tank.pct || 0)}%` }} /></span>
+                          <span className="text-right font-bold text-[#111827]">{Number(tank.percent || tank.pct || 0)}%</span>
+                        </div>
+                      )) : <div className="text-[12px] text-[#9ca3af]">No tank status available.</div>}
+                    </div>
                   </div>
-                ))}
-              </Tabs.Content>
-
-              <Tabs.Content value="inspections">
-                {renderList(normalizeRows(selectedProfile.inspections), (item: any) => (
-                  <div key={item.public_id} className="grid gap-3 px-4 py-3 text-xs md:grid-cols-5">
-                    <div className="font-medium text-slate-900">{item.public_id}</div>
-                    <div>{renderPill(item.inspection_type)}</div>
-                    <div>{renderPill(item.inspection_status)}</div>
-                    <div>{item.officer_name}</div>
-                    <div>{normalizeDate(item.created_at)}</div>
+                  <div className="px-4 py-3">
+                    <div className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#9ca3af]">Linked Tasks</div>
+                    <div className="mt-2 divide-y divide-[#f9fafb]">
+                      {linkedTasks.length ? linkedTasks.map((task: any) => (
+                        <button key={task.taskNumber} type="button" onClick={() => navigate(`/tasks/${task.taskNumber}`)} className="grid w-full gap-1 py-2 text-left text-[11px] hover:bg-[#f9fafb]">
+                          <span className="font-semibold text-[#111827]">{task.taskNumber}</span>
+                          <span className="truncate text-[#6b7280]">{task.title}</span>
+                          <span>{renderPill(task.status)}</span>
+                        </button>
+                      )) : <div className="text-[12px] text-[#9ca3af]">No linked task activity.</div>}
+                    </div>
                   </div>
-                ))}
-              </Tabs.Content>
-
-              <Tabs.Content value="deliveries">
-                {renderList(normalizeRows(selectedProfile.deliveries), (item: any, index: number) => (
-                  <div key={`${item.id}-${index}`} className="grid gap-3 px-4 py-3 text-xs md:grid-cols-5">
-                    <div className="font-medium text-slate-900">DLV-{item.id}</div>
-                    <div>{renderPill(item.fuel_type)}</div>
-                    <div>{item.estimated_volume ? `${item.estimated_volume} L` : '-'}</div>
-                    <div>{item.reported_by || '-'}</div>
-                    <div>{normalizeDate(item.delivery_time)}</div>
-                  </div>
-                ))}
-              </Tabs.Content>
-
-              <Tabs.Content value="declarations">
-                {renderList(normalizeRows(selectedProfile.declarations), (item: any, index: number) => (
-                  <div key={`${item.id}-${index}`} className="grid gap-3 px-4 py-3 text-xs md:grid-cols-5">
-                    <div className="font-medium text-slate-900">SAR-{item.id}</div>
-                    <div>{renderPill(item.petrol_available ? 'PETROL AVAILABLE' : 'PETROL DRY')}</div>
-                    <div>{renderPill(item.diesel_available ? 'DIESEL AVAILABLE' : 'DIESEL DRY')}</div>
-                    <div>Pumps active: {item.active_pumps ?? '-'}</div>
-                    <div>{normalizeDate(item.created_at)}</div>
-                  </div>
-                ))}
-              </Tabs.Content>
-
-              <Tabs.Content value="enforcement">
-                {renderList(normalizeRows(selectedProfileEnforcement?.items), (item: any) => (
-                  <div key={item.public_id} className="grid gap-3 px-4 py-3 text-xs md:grid-cols-5">
-                    <div className="font-medium text-slate-900">{item.public_id}</div>
-                    <div>{renderPill(item.action_type)}</div>
-                    <div>{renderPill(item.action_status)}</div>
-                    <div>{item.actor_name || '-'}</div>
-                    <div>{normalizeDate(item.issued_at)}</div>
-                  </div>
-                ))}
-              </Tabs.Content>
-
-              <Tabs.Content value="risk">
-                {renderList(normalizeRows(selectedProfile.riskHistory), (item: any) => (
-                  <div key={`${item.id}-${item.last_calculated_at}`} className="grid gap-3 px-4 py-3 text-xs md:grid-cols-4">
-                    <div className="font-medium text-slate-900">Score {item.risk_score}</div>
-                    <div>{renderPill(item.escalation_status)}</div>
-                    <div>{normalizeDate(item.last_calculated_at)}</div>
-                    <div className="text-slate-600">{item.generated_factors_json || 'No factor JSON recorded.'}</div>
-                  </div>
-                ))}
-              </Tabs.Content>
-            </Tabs.Root>
-          </>
-        ) : (
-          <div className="flex h-full items-center justify-center rounded-md border border-dashed border-slate-200 bg-slate-50 text-sm text-slate-500">
-            Select a station from the directory to open its regulatory dossier.
+                </div>
+              ) : (
+                <div className="flex min-h-[300px] items-center justify-center px-5 text-center text-[12px] font-semibold text-[#9ca3af]">
+                  Select a station from the registry to view profile, tank status, license details, and linked tasks.
+                </div>
+              )}
+            </SectionCard>
           </div>
-        )}
-      </div>
+        </>
+      )}
+
+      <KpiDrilldownDrawer open={Boolean(drilldown)} onOpenChange={(open) => !open && setDrilldown(null)} drilldown={drilldown} />
     </div>
   )
 }

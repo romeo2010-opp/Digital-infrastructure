@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Bell, CheckCircle2, Lock, Palette, Save, Shield, UserCircle2 } from 'lucide-react'
+import { Bell, CheckCircle2, Laptop, Lock, LogOut, Palette, RefreshCw, Save, Shield, UserCircle2 } from 'lucide-react'
 import { Button } from '../components/ui/button'
 import { Checkbox } from '../components/ui/checkbox'
 import { Input } from '../components/ui/input'
@@ -26,7 +26,7 @@ function isSeriousAuditLog(row: any) {
 }
 
 export function SettingsCenter({ section }: { section: SettingsSection }) {
-  const { data, user, token, api, runAction } = usePortal()
+  const { data, user, token, api, runAction, preferences, updatePreferences, preferencesLoading, actionLoading } = usePortal()
   const [savedMessage, setSavedMessage] = useState('')
   const [settings, setSettings] = useState({
     appearance: 'system',
@@ -53,7 +53,9 @@ export function SettingsCenter({ section }: { section: SettingsSection }) {
     confirmPassword: '',
   })
   const [passwordMessage, setPasswordMessage] = useState('')
-  const [loadingPreferences, setLoadingPreferences] = useState(false)
+  const [sessions, setSessions] = useState<any[]>([])
+  const [sessionsLoading, setSessionsLoading] = useState(false)
+  const [sessionsMessage, setSessionsMessage] = useState('')
 
   const seriousLogs = useMemo(
     () => normalizeRows(data.auditLogs?.items).filter((row: any) => isSeriousAuditLog(row)).slice(0, 12),
@@ -76,38 +78,39 @@ export function SettingsCenter({ section }: { section: SettingsSection }) {
   }, [savedMessage])
 
   useEffect(() => {
+    if (!preferences) return
+    setSettings({
+      appearance: preferences.appearance || 'system',
+      density: preferences.density || 'comfortable',
+      landingPage: preferences.landingPage || 'dashboard',
+      compactTables: Boolean(preferences.compactTables),
+      shortageAlerts: Boolean(preferences.shortageAlerts),
+      complaintsAlerts: Boolean(preferences.complaintsAlerts),
+      dailyDigest: Boolean(preferences.dailyDigest),
+      browserNotifications: Boolean(preferences.browserNotifications),
+      sessionTimeout: String(preferences.sessionTimeout || '30'),
+      requireStepUp: Boolean(preferences.requireStepUp),
+      trustedDevice: Boolean(preferences.trustedDevice),
+    })
+  }, [preferences])
+
+  const loadSessions = async () => {
     if (!token) return
-    let cancelled = false
-    const loadPreferences = async () => {
-      setLoadingPreferences(true)
-      try {
-        const payload = await api.getMyPreferences(token)
-        if (!cancelled && payload) {
-          setSettings({
-            appearance: payload.appearance || 'system',
-            density: payload.density || 'comfortable',
-            landingPage: payload.landingPage || 'dashboard',
-            compactTables: Boolean(payload.compactTables),
-            shortageAlerts: Boolean(payload.shortageAlerts),
-            complaintsAlerts: Boolean(payload.complaintsAlerts),
-            dailyDigest: Boolean(payload.dailyDigest),
-            browserNotifications: Boolean(payload.browserNotifications),
-            sessionTimeout: String(payload.sessionTimeout || '30'),
-            requireStepUp: Boolean(payload.requireStepUp),
-            trustedDevice: Boolean(payload.trustedDevice),
-          })
-        }
-      } catch {
-        // leave defaults in place if preferences are not yet available
-      } finally {
-        if (!cancelled) setLoadingPreferences(false)
-      }
+    setSessionsLoading(true)
+    setSessionsMessage('')
+    try {
+      const payload = await api.listSessions(token)
+      setSessions(normalizeRows(payload?.items || payload))
+    } catch (err: any) {
+      setSessionsMessage(err?.message || 'Unable to load active sessions.')
+    } finally {
+      setSessionsLoading(false)
     }
-    loadPreferences()
-    return () => {
-      cancelled = true
-    }
-  }, [api, token])
+  }
+
+  useEffect(() => {
+    if (section === 'security' && token) loadSessions()
+  }, [section, token])
 
   const saveSettings = (message: string) => {
     setSavedMessage(message)
@@ -116,34 +119,39 @@ export function SettingsCenter({ section }: { section: SettingsSection }) {
   const renderPreferences = () => (
     <SectionCard title="Appearance & Workspace" subtitle="Adjust how the portal looks and behaves for this device">
       <div className="grid gap-6 px-5 py-5 lg:grid-cols-2">
-        <div className="space-y-5 rounded-[1rem] bg-[#f4f6fb] p-5">
+        <div className="space-y-5 rounded-[1rem] bg-[var(--mera-panel-muted)] p-5">
           <div className="flex items-center gap-3">
-            <div className="rounded-xl bg-white p-2.5 text-slate-700">
+            <div className="rounded-xl bg-[var(--mera-panel)] p-2.5 text-[var(--mera-panel-text-soft)]">
               <Palette className="size-4" />
             </div>
-            <h2 className="text-lg font-semibold text-slate-900">Appearance</h2>
+            <h2 className="text-lg font-semibold text-[var(--mera-panel-text)]">Appearance</h2>
           </div>
 
           <div className="space-y-3">
-            <label className="block text-sm font-semibold text-slate-700">Theme</label>
-            <div className="grid gap-2 sm:grid-cols-3">
-              {['light', 'system', 'dark'].map((value) => (
+            <label className="block text-sm font-semibold text-[var(--mera-panel-text-soft)]">Theme</label>
+            <div className="grid gap-2 sm:grid-cols-4">
+              {[
+                ['light', 'Light'],
+                ['system', 'System'],
+                ['dark', 'Dark'],
+                ['black-white', 'Black/White'],
+              ].map(([value, label]) => (
                 <button
                   key={value}
                   type="button"
                   onClick={() => setSettings((current: any) => ({ ...current, appearance: value }))}
                   className={`rounded-[15px] border px-4 py-3 text-sm font-semibold capitalize transition-colors ${
-                    settings.appearance === value ? 'border-slate-200 bg-white text-slate-900' : 'border-transparent bg-white/70 text-slate-500 hover:bg-white'
+                    settings.appearance === value ? 'border-[var(--mera-panel-border)] bg-[var(--mera-panel)] text-[var(--mera-panel-text)]' : 'border-transparent bg-[rgb(255_255_255/0.7)] text-[var(--mera-panel-text-muted)] hover:bg-[var(--mera-panel)]'
                   }`}
                 >
-                  {value}
+                  {label}
                 </button>
               ))}
             </div>
           </div>
 
           <div className="space-y-3">
-            <label className="block text-sm font-semibold text-slate-700">Display density</label>
+            <label className="block text-sm font-semibold text-[var(--mera-panel-text-soft)]">Display density</label>
             <div className="grid gap-2 sm:grid-cols-2">
               {['comfortable', 'compact'].map((value) => (
                 <button
@@ -151,7 +159,7 @@ export function SettingsCenter({ section }: { section: SettingsSection }) {
                   type="button"
                   onClick={() => setSettings((current: any) => ({ ...current, density: value }))}
                   className={`rounded-[15px] border px-4 py-3 text-sm font-semibold capitalize transition-colors ${
-                    settings.density === value ? 'border-slate-200 bg-white text-slate-900' : 'border-transparent bg-white/70 text-slate-500 hover:bg-white'
+                    settings.density === value ? 'border-[var(--mera-panel-border)] bg-[var(--mera-panel)] text-[var(--mera-panel-text)]' : 'border-transparent bg-[rgb(255_255_255/0.7)] text-[var(--mera-panel-text-muted)] hover:bg-[var(--mera-panel)]'
                   }`}
                 >
                   {value}
@@ -161,15 +169,15 @@ export function SettingsCenter({ section }: { section: SettingsSection }) {
           </div>
         </div>
 
-        <div className="space-y-5 rounded-[1rem] bg-[#f4f6fb] p-5">
-          <h2 className="text-lg font-semibold text-slate-900">Workspace behavior</h2>
+        <div className="space-y-5 rounded-[1rem] bg-[var(--mera-panel-muted)] p-5">
+          <h2 className="text-lg font-semibold text-[var(--mera-panel-text)]">Workspace behavior</h2>
 
           <div>
-            <label className="mb-2 block text-sm font-semibold text-slate-700">Default landing page</label>
+            <label className="mb-2 block text-sm font-semibold text-[var(--mera-panel-text-soft)]">Default landing page</label>
             <select
               value={settings.landingPage}
               onChange={(event) => setSettings((current: any) => ({ ...current, landingPage: event.target.value }))}
-              className="h-11 w-full rounded-[15px] border border-slate-200 bg-white px-4 text-sm text-slate-700"
+              className="h-11 w-full rounded-[15px] border border-[var(--mera-panel-border)] bg-[var(--mera-panel)] px-4 text-sm text-[var(--mera-panel-text-soft)]"
             >
               <option value="dashboard">Dashboard</option>
               <option value="complaints">Complaints Center</option>
@@ -178,10 +186,10 @@ export function SettingsCenter({ section }: { section: SettingsSection }) {
             </select>
           </div>
 
-          <div className="flex items-center justify-between rounded-[15px] bg-white px-4 py-3">
+          <div className="flex items-center justify-between rounded-[15px] bg-[var(--mera-panel)] px-4 py-3">
             <div>
-              <div className="text-sm font-semibold text-slate-800">Compact tables</div>
-              <div className="text-sm text-slate-500">Reduce row height across dashboards and reports.</div>
+              <div className="text-sm font-semibold text-[var(--mera-panel-text)]">Compact tables</div>
+              <div className="text-sm text-[var(--mera-panel-text-muted)]">Reduce row height across dashboards and reports.</div>
             </div>
             <Switch
               checked={settings.compactTables}
@@ -191,14 +199,14 @@ export function SettingsCenter({ section }: { section: SettingsSection }) {
         </div>
       </div>
 
-      <div className="border-t border-slate-100 px-5 py-4">
+      <div className="border-t border-[var(--mera-panel-border-soft)] px-5 py-4">
         <Button
           type="button"
           onClick={async () => {
-            await runAction(() => api.updateMyPreferences(token, settings))
+            await updatePreferences(settings)
             saveSettings('Appearance preferences saved')
           }}
-          disabled={loadingPreferences}
+          disabled={preferencesLoading || actionLoading}
         >
           <Save className="size-4" />
           Save preferences
@@ -216,10 +224,10 @@ export function SettingsCenter({ section }: { section: SettingsSection }) {
           ['dailyDigest', 'Daily digest', 'Send a daily summary of enforcement, supply, and complaint activity.'],
           ['browserNotifications', 'Browser notifications', 'Allow local desktop notifications on this device.'],
         ].map(([key, title, description]) => (
-          <div key={key} className="flex items-center justify-between rounded-[15px] bg-[#f4f6fb] px-4 py-4">
+          <div key={key} className="flex items-center justify-between rounded-[15px] bg-[var(--mera-panel-muted)] px-4 py-4">
             <div>
-              <div className="text-sm font-semibold text-slate-800">{title}</div>
-              <div className="text-sm text-slate-500">{description}</div>
+              <div className="text-sm font-semibold text-[var(--mera-panel-text)]">{title}</div>
+              <div className="text-sm text-[var(--mera-panel-text-muted)]">{description}</div>
             </div>
             <Switch
               checked={Boolean((settings as any)[key])}
@@ -229,14 +237,14 @@ export function SettingsCenter({ section }: { section: SettingsSection }) {
         ))}
       </div>
 
-      <div className="border-t border-slate-100 px-5 py-4">
+      <div className="border-t border-[var(--mera-panel-border-soft)] px-5 py-4">
         <Button
           type="button"
           onClick={async () => {
-            await runAction(() => api.updateMyPreferences(token, settings))
+            await updatePreferences(settings)
             saveSettings('Notification settings saved')
           }}
-          disabled={loadingPreferences}
+          disabled={preferencesLoading || actionLoading}
         >
           <Save className="size-4" />
           Save notifications
@@ -269,6 +277,7 @@ export function SettingsCenter({ section }: { section: SettingsSection }) {
                 currentPassword: passwordForm.currentPassword,
                 newPassword: passwordForm.newPassword,
               }),
+              'Updating password...',
             )
             setPasswordMessage('Password updated successfully.')
             setPasswordForm({ currentPassword: '', newPassword: '', confirmPassword: '' })
@@ -296,7 +305,7 @@ export function SettingsCenter({ section }: { section: SettingsSection }) {
             className="h-11 rounded-[15px]"
           />
           {passwordMessage ? <p className="text-sm text-slate-600">{passwordMessage}</p> : null}
-          <Button type="submit">
+          <Button type="submit" disabled={actionLoading}>
             <Lock className="size-4" />
             Update password
           </Button>
@@ -306,11 +315,11 @@ export function SettingsCenter({ section }: { section: SettingsSection }) {
       <SectionCard title="Session Controls" subtitle="Controls that affect access verification on this device">
         <div className="grid gap-4 px-5 py-5">
           <div>
-            <label className="mb-2 block text-sm font-semibold text-slate-700">Session timeout</label>
+            <label className="mb-2 block text-sm font-semibold text-[var(--mera-panel-text-soft)]">Session timeout</label>
             <select
               value={settings.sessionTimeout}
               onChange={(event) => setSettings((current: any) => ({ ...current, sessionTimeout: event.target.value }))}
-              className="h-11 w-full rounded-[15px] border border-slate-200 bg-white px-4 text-sm text-slate-700"
+              className="h-11 w-full rounded-[15px] border border-[var(--mera-panel-border)] bg-[var(--mera-panel)] px-4 text-sm text-[var(--mera-panel-text-soft)]"
             >
               <option value="15">15 minutes</option>
               <option value="30">30 minutes</option>
@@ -318,10 +327,10 @@ export function SettingsCenter({ section }: { section: SettingsSection }) {
             </select>
           </div>
 
-          <div className="flex items-center justify-between rounded-[15px] bg-[#f4f6fb] px-4 py-4">
+          <div className="flex items-center justify-between rounded-[15px] bg-[var(--mera-panel-muted)] px-4 py-4">
             <div>
-              <div className="text-sm font-semibold text-slate-800">Step-up verification</div>
-              <div className="text-sm text-slate-500">Require extra verification for sensitive actions.</div>
+              <div className="text-sm font-semibold text-[var(--mera-panel-text)]">Step-up verification</div>
+              <div className="text-sm text-[var(--mera-panel-text-muted)]">Require extra verification for sensitive actions.</div>
             </div>
             <Switch
               checked={settings.requireStepUp}
@@ -329,10 +338,10 @@ export function SettingsCenter({ section }: { section: SettingsSection }) {
             />
           </div>
 
-          <div className="flex items-center justify-between rounded-[15px] bg-[#f4f6fb] px-4 py-4">
+          <div className="flex items-center justify-between rounded-[15px] bg-[var(--mera-panel-muted)] px-4 py-4">
             <div>
-              <div className="text-sm font-semibold text-slate-800">Trust this device</div>
-              <div className="text-sm text-slate-500">Reduce repeated prompts on this workstation.</div>
+              <div className="text-sm font-semibold text-[var(--mera-panel-text)]">Trust this device</div>
+              <div className="text-sm text-[var(--mera-panel-text-muted)]">Reduce repeated prompts on this workstation.</div>
             </div>
             <Switch
               checked={settings.trustedDevice}
@@ -341,17 +350,96 @@ export function SettingsCenter({ section }: { section: SettingsSection }) {
           </div>
         </div>
 
-        <div className="border-t border-slate-100 px-5 py-4">
+        <div className="border-t border-[var(--mera-panel-border-soft)] px-5 py-4">
           <Button
             type="button"
             onClick={async () => {
-              await runAction(() => api.updateMyPreferences(token, settings))
+              await updatePreferences(settings)
               saveSettings('Security preferences saved')
             }}
+            disabled={preferencesLoading || actionLoading}
           >
             <Shield className="size-4" />
             Save security
           </Button>
+        </div>
+      </SectionCard>
+
+      <SectionCard title="Active Sessions" subtitle="Review signed-in devices and immediately revoke access where needed" className="lg:col-span-2">
+        <div className="grid gap-4 px-5 py-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="text-sm text-[var(--mera-panel-text-muted)]">
+              {sessionsLoading ? 'Loading sessions...' : `${sessions.length} active ${sessions.length === 1 ? 'session' : 'sessions'}`}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" variant="outline" size="sm" onClick={loadSessions} disabled={sessionsLoading || actionLoading}>
+                <RefreshCw className="size-4" />
+                Refresh
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                className="bg-red-700 hover:bg-red-800"
+                disabled={sessionsLoading || actionLoading || !sessions.some((item) => !item.current)}
+                onClick={async () => {
+                  await runAction(() => api.revokeOtherSessions(token), 'Signing out other devices...')
+                  await loadSessions()
+                  setSessionsMessage('Other devices signed out.')
+                }}
+              >
+                <LogOut className="size-4" />
+                Sign out other devices
+              </Button>
+            </div>
+          </div>
+
+          {sessionsMessage ? <div className="rounded-[8px] bg-slate-50 px-3 py-2 text-sm text-slate-600">{sessionsMessage}</div> : null}
+
+          {sessionsLoading ? (
+            <div className="grid gap-3">
+              {[0, 1, 2].map((item) => (
+                <div key={item} className="animate-pulse rounded-[8px] border border-slate-200 bg-white p-4">
+                  <div className="h-4 w-2/3 rounded bg-slate-200" />
+                  <div className="mt-3 h-3 w-1/2 rounded bg-slate-100" />
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="grid gap-3">
+              {sessions.map((session) => (
+                <div key={session.publicId} className="grid gap-3 rounded-[8px] border border-slate-200 bg-white p-4 md:grid-cols-[minmax(0,1fr)_auto]">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Laptop className="size-4 text-slate-500" />
+                      <div className="truncate text-sm font-semibold text-slate-900">{session.userAgent || 'Unknown device'}</div>
+                      {session.current ? <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">Current device</span> : null}
+                    </div>
+                    <div className="mt-2 grid gap-1 text-xs text-slate-500 sm:grid-cols-2">
+                      <span>IP: {session.ipAddress || '-'}</span>
+                      <span>Last seen: {normalizeDate(session.lastSeenAt)}</span>
+                      <span>Created: {normalizeDate(session.createdAt)}</span>
+                      <span>Expires: {normalizeDate(session.expiresAt)}</span>
+                    </div>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="self-start border-red-200 text-red-700 hover:bg-red-50"
+                    disabled={session.current || actionLoading || sessionsLoading}
+                    onClick={async () => {
+                      await runAction(() => api.revokeSession(token, session.publicId), 'Revoking session...')
+                      await loadSessions()
+                      setSessionsMessage('Session revoked.')
+                    }}
+                  >
+                    Revoke
+                  </Button>
+                </div>
+              ))}
+              {!sessions.length ? <div className="rounded-[8px] border border-dashed border-slate-200 p-6 text-center text-sm text-slate-500">No active sessions found.</div> : null}
+            </div>
+          )}
         </div>
       </SectionCard>
     </div>
@@ -369,6 +457,7 @@ export function SettingsCenter({ section }: { section: SettingsSection }) {
               email: profileForm.email,
               phone: profileForm.phone || null,
             }),
+            'Saving profile...',
           )
           saveSettings('Profile details saved')
         }}
@@ -402,12 +491,12 @@ export function SettingsCenter({ section }: { section: SettingsSection }) {
           className="h-11 rounded-[15px]"
         />
 
-        <label className="flex items-center gap-3 rounded-[15px] bg-[#f4f6fb] px-4 py-4 text-sm text-slate-700">
+        <label className="flex items-center gap-3 rounded-[15px] bg-[var(--mera-panel-muted)] px-4 py-4 text-sm text-[var(--mera-panel-text-soft)]">
           <Checkbox checked />
           Show my name in audit and enforcement records
         </label>
 
-        <Button type="submit" className="w-fit">
+        <Button type="submit" className="w-fit" disabled={actionLoading}>
           <UserCircle2 className="size-4" />
           Save profile
         </Button>

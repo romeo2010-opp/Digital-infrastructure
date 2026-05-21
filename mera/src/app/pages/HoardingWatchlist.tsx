@@ -6,6 +6,7 @@ import { Input } from '../components/ui/input'
 import { SectionCard } from '../components/SectionCard'
 import { PortalTable } from '../components/PortalTable'
 import { ModalShell } from '../components/ModalShell'
+import { SectionKpiStrip } from '../components/SectionKpiStrip'
 import { MERA_PERMISSIONS } from '../lib/access'
 import { usePortal } from '../lib/portalContext'
 import { matchesSearch, normalizeDate, normalizeRows, renderPill } from '../lib/portalUtils'
@@ -33,6 +34,17 @@ export function HoardingWatchlist() {
   const canCreateWarning = hasPermission(MERA_PERMISSIONS.ENFORCEMENT_CREATE_WARNING)
   const canCreateFine = hasPermission(MERA_PERMISSIONS.ENFORCEMENT_CREATE_FINE)
   const canCreateSuspension = hasPermission(MERA_PERMISSIONS.ENFORCEMENT_CREATE_SUSPENSION)
+  const highRiskRows = rows.filter((row: any) => String(row.escalationStatus || '').toUpperCase() === 'HIGH')
+  const criticalRiskRows = rows.filter((row: any) => String(row.escalationStatus || '').toUpperCase() === 'CRITICAL')
+  const complaint24hRows = rows.filter((row: any) => Number(row.complaints24h || 0) > 0)
+  const openEnforcementRows = rows.filter((row: any) => !['CLOSED', 'RESOLVED', 'COMPLIED', 'CLEAR'].includes(String(row.escalationStatus || '').toUpperCase()))
+  const watchlistColumns = [
+    { key: 'stationName', label: 'Station' },
+    { key: 'district', label: 'District' },
+    { key: 'riskScore', label: 'Risk Score' },
+    { key: 'complaints24h', label: '24h Complaints' },
+    { key: 'escalationStatus', label: 'Escalation', render: (row: any) => row.escalationStatus || '-' },
+  ]
 
   const selectRow = async (row: any) => {
     setSelectedRow(row)
@@ -67,6 +79,16 @@ export function HoardingWatchlist() {
           Export Watchlist
         </Button>
       </Toolbar>
+
+      <SectionKpiStrip
+        columns={watchlistColumns}
+        items={[
+          { label: 'High Risk', value: highRiskRows.length, rows: highRiskRows, tone: highRiskRows.length ? 'warn' : 'neutral', accent: '#f59e0b' },
+          { label: 'Critical Risk', value: criticalRiskRows.length, rows: criticalRiskRows, tone: criticalRiskRows.length ? 'bad' : 'good', accent: '#dc2626' },
+          { label: '24h Complaints', value: complaint24hRows.length, rows: complaint24hRows, tone: complaint24hRows.length ? 'warn' : 'neutral', accent: '#7c3aed' },
+          { label: 'Open Enforcement', value: openEnforcementRows.length, rows: openEnforcementRows, tone: openEnforcementRows.length ? 'warn' : 'good', accent: '#2563eb' },
+        ]}
+      />
 
       <div className="grid min-h-0 flex-1 gap-4 xl:grid-cols-[1.7fr_1fr]">
         <SectionCard

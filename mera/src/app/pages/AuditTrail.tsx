@@ -5,6 +5,7 @@ import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
 import { PortalTable } from '../components/PortalTable'
 import { SectionCard } from '../components/SectionCard'
+import { SectionKpiStrip } from '../components/SectionKpiStrip'
 import { usePortal } from '../lib/portalContext'
 import { matchesSearch, normalizeDate, normalizeRows, renderPill } from '../lib/portalUtils'
 
@@ -42,6 +43,16 @@ export function AuditTrail() {
       return matchesSearch(row, search)
     })
   }, [actionType, officer, search, seriousLogs])
+  const escalationRows = rows.filter((row: any) => /ESCALAT|ENFORC|WARNING|FINE|CLOSURE/i.test(`${row.action_type || ''} ${row.action_description || ''}`))
+  const resolvedRows = rows.filter((row: any) => /RESOLVE|CLOSE|COMPLIED|DISMISS/i.test(`${row.action_type || ''} ${row.action_description || ''}`))
+  const adminSystemRows = rows.filter((row: any) => /ADMIN|SUPERVISOR/i.test(String(row.actor_role || '')) || !row.actor_name)
+  const auditColumns = [
+    { key: 'id', label: 'Log', render: (row: any) => `LOG-${row.id}` },
+    { key: 'actor_name', label: 'Actor', render: (row: any) => row.actor_name || 'System' },
+    { key: 'actor_role', label: 'Role', render: (row: any) => row.actor_role || '-' },
+    { key: 'action_type', label: 'Action', render: (row: any) => row.action_type || '-' },
+    { key: 'created_at', label: 'Timestamp', render: (row: any) => normalizeDate(row.created_at) },
+  ]
 
   return (
     <div className="flex h-full flex-col gap-4 overflow-y-auto p-4">
@@ -72,6 +83,16 @@ export function AuditTrail() {
           Export
         </Button>
       </Toolbar>
+
+      <SectionKpiStrip
+        columns={auditColumns}
+        items={[
+          { label: 'Serious Incidents', value: rows.length, rows, tone: rows.length ? 'warn' : 'good', accent: '#f59e0b' },
+          { label: 'Escalations', value: escalationRows.length, rows: escalationRows, tone: escalationRows.length ? 'bad' : 'good', accent: '#dc2626' },
+          { label: 'Resolved Actions', value: resolvedRows.length, rows: resolvedRows, tone: 'good', accent: '#10b981' },
+          { label: 'Admin / System Actions', value: adminSystemRows.length, rows: adminSystemRows, accent: '#2563eb' },
+        ]}
+      />
 
       <SectionCard title="Recent Regulatory Incidents" subtitle="Recent incidents filtered to material enforcement, escalation, and oversight activity">
         <PortalTable

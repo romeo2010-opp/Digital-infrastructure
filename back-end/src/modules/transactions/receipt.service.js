@@ -368,6 +368,7 @@ async function loadReceiptWalletAmount(row) {
       AND lt.transaction_type IN ('PAYMENT', 'RESERVATION_PAYMENT', 'QUEUE_FEE')
       AND (
         (${String(row?.public_id || "")} <> '' AND lt.external_reference = ${String(row?.public_id || "")})
+        OR (${String(row?.public_id || "")} <> '' AND lt.related_entity_type = 'TRANSACTION' AND lt.related_entity_id = ${String(row?.public_id || "")})
         OR (${String(row?.fuel_order_public_id || "")} <> '' AND lt.related_entity_type = 'FUEL_ORDER' AND lt.related_entity_id = ${String(row?.fuel_order_public_id || "")})
         OR (${String(row?.reservation_public_id || "")} <> '' AND lt.related_entity_type = 'RESERVATION' AND lt.related_entity_id = ${String(row?.reservation_public_id || "")})
         OR (${String(row?.queue_public_id || "")} <> '' AND lt.related_entity_type = 'QUEUE' AND lt.related_entity_id = ${String(row?.queue_public_id || "")})
@@ -515,8 +516,10 @@ export async function getUserTransactionReceiptPayloadByLink({ userId, receiptTy
       LIMIT 1
     `
     row = rows?.[0] || null
+  } else if (scopedReceiptType === "transaction") {
+    row = await loadTransactionRowByPublicId(scopedReference, { userId })
   } else {
-    throw badRequest("receiptType must be queue or reservation.")
+    throw badRequest("receiptType must be queue, reservation, or transaction.")
   }
 
   if (!row?.id) {

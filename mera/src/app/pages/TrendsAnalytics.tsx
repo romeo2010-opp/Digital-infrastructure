@@ -1,13 +1,8 @@
-import { BarChart3, Clock3, ShieldAlert } from 'lucide-react'
 import { SectionCard } from '../components/SectionCard'
+import { SectionKpiStrip } from '../components/SectionKpiStrip'
 import { PortalTable } from '../components/PortalTable'
 import { usePortal } from '../lib/portalContext'
 import { normalizeRows, renderPill } from '../lib/portalUtils'
-
-function average(numbers: number[]) {
-  if (!numbers.length) return 0
-  return Math.round(numbers.reduce((sum, value) => sum + value, 0) / numbers.length)
-}
 
 export function TrendsAnalytics() {
   const { data } = usePortal()
@@ -16,7 +11,6 @@ export function TrendsAnalytics() {
   const complaintRows = normalizeRows(data.complaints?.items)
   const enforcementRows = normalizeRows(data.enforcementActions?.items)
   const watchlistRows = normalizeRows(data.hoardingWatchlist?.items)
-  const inspectionRows = normalizeRows(data.inspections?.items)
 
   const monthlyTrendRows = monthlyRows
     .slice()
@@ -36,30 +30,40 @@ export function TrendsAnalytics() {
             : 'Stable',
     }))
 
-  const unresolvedComplaints = complaintRows.filter((row: any) => !['RESOLVED', 'DISMISSED', 'CLOSED'].includes(String(row.complaintStatus || '').toUpperCase())).length
-  const activeInvestigations = enforcementRows.filter((row: any) => ['PENDING', 'OPEN', 'IN_PROGRESS'].includes(String(row.actionStatus || row.status || '').toUpperCase())).length
-  const highRiskStations = watchlistRows.filter((row: any) => ['CRITICAL', 'HIGH'].includes(String(row.escalationStatus || '').toUpperCase())).length
-  const avgInspectionQueue = average(inspectionRows.map((row: any) => Number(row.queueLength || 0)).filter((value) => Number.isFinite(value)))
+  const unresolvedComplaintRows = complaintRows.filter((row: any) => !['RESOLVED', 'DISMISSED', 'CLOSED'].includes(String(row.complaintStatus || '').toUpperCase()))
+  const activeInvestigationRows = enforcementRows.filter((row: any) => ['PENDING', 'OPEN', 'IN_PROGRESS'].includes(String(row.actionStatus || row.status || '').toUpperCase()))
+  const highRiskStationRows = watchlistRows.filter((row: any) => ['CRITICAL', 'HIGH'].includes(String(row.escalationStatus || '').toUpperCase()))
+  const repeatOffenderRows = watchlistRows.filter((row: any) => Number(row.complaints24h || 0) >= 2 || Number(row.inspectionFailures || 0) >= 2 || Number(row.riskScore || 0) >= 75)
+  const trendColumns = [
+    { key: 'month', label: 'Month' },
+    { key: 'complaints', label: 'Complaints' },
+    { key: 'flags', label: 'Flags' },
+    { key: 'inspections', label: 'Inspections' },
+    { key: 'actions', label: 'Enforcement' },
+  ]
+  const complaintColumns = [
+    { key: 'publicId', label: 'Complaint' },
+    { key: 'station', label: 'Station', render: (row: any) => row.station?.name || '-' },
+    { key: 'complaintStatus', label: 'Status', render: (row: any) => row.complaintStatus || '-' },
+    { key: 'complaintType', label: 'Type', render: (row: any) => row.complaintType || '-' },
+  ]
+  const stationRiskColumns = [
+    { key: 'stationName', label: 'Station' },
+    { key: 'district', label: 'District' },
+    { key: 'riskScore', label: 'Risk Score' },
+    { key: 'escalationStatus', label: 'Escalation', render: (row: any) => row.escalationStatus || '-' },
+  ]
 
   return (
     <div className="flex h-full flex-col gap-4 overflow-y-auto p-4">
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        {[
-          ['Open complaints', unresolvedComplaints, 'Current unresolved case pressure', Clock3],
-          ['Active investigations', activeInvestigations, 'Pending enforcement workflows', ShieldAlert],
-          ['High risk stations', highRiskStations, 'Critical or high watchlist sites', BarChart3],
-          ['Avg inspection queue', avgInspectionQueue, 'Mean queued cases per inspection record', Clock3],
-        ].map(([label, value, note, Icon]) => (
-          <SectionCard key={String(label)} title={String(label)} subtitle={String(note)}>
-            <div className="flex items-center justify-between px-5 py-5">
-              <div className="text-[2rem] font-semibold tracking-[-0.04em] text-slate-900">{value}</div>
-              <div className="flex size-10 items-center justify-center rounded-full bg-slate-100 text-slate-600">
-                <Icon className="size-4" />
-              </div>
-            </div>
-          </SectionCard>
-        ))}
-      </div>
+      <SectionKpiStrip
+        items={[
+          { label: 'Monthly Reports', value: monthlyTrendRows.length, rows: monthlyTrendRows, columns: trendColumns, accent: '#2563eb' },
+          { label: 'Shortage Trend', value: highRiskStationRows.length, rows: highRiskStationRows, columns: stationRiskColumns, tone: highRiskStationRows.length ? 'warn' : 'good', accent: '#f59e0b' },
+          { label: 'Complaint Trend', value: unresolvedComplaintRows.length, rows: unresolvedComplaintRows, columns: complaintColumns, tone: unresolvedComplaintRows.length ? 'warn' : 'good', accent: '#7c3aed' },
+          { label: 'Repeat Offenders', value: repeatOffenderRows.length, rows: repeatOffenderRows, columns: stationRiskColumns, tone: repeatOffenderRows.length ? 'bad' : 'good', accent: '#dc2626' },
+        ]}
+      />
 
       <div className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
         <SectionCard title="Monthly Trend Ledger" subtitle="Cross-module trend records surfaced from the monthly MERA reporting feed">
@@ -79,9 +83,9 @@ export function TrendsAnalytics() {
         <SectionCard title="Analyst Notes" subtitle="Fast interpretation of the current trend picture">
           <div className="space-y-3 px-5 py-5">
             {[
-              ['Complaint pressure', `${unresolvedComplaints} unresolved complaints are still active across the national queue.`],
-              ['Enforcement posture', `${activeInvestigations} actions are awaiting follow-through or closure.`],
-              ['Risk concentration', `${highRiskStations} stations remain in high-severity anomaly review.`],
+              ['Complaint pressure', `${unresolvedComplaintRows.length} unresolved complaints are still active across the national queue.`],
+              ['Enforcement posture', `${activeInvestigationRows.length} actions are awaiting follow-through or closure.`],
+              ['Risk concentration', `${highRiskStationRows.length} stations remain in high-severity anomaly review.`],
             ].map(([title, body]) => (
               <div key={String(title)} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
                 <div className="text-sm font-semibold text-slate-900">{title}</div>

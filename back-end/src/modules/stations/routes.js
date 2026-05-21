@@ -9,11 +9,15 @@ import { resolveStationOrThrow } from "../common/db.js"
 import { getStationChangeToken } from "../../realtime/stationChangeToken.js"
 import { computeStationFuelStatuses } from "./fuelStatus.js"
 import { hasStationPlanFeature, STATION_PLAN_FEATURES } from "../subscriptions/planCatalog.js"
+import { getSmartlinkOpsPrediction } from "../reports/mlOpsPrediction.service.js"
 
 const router = Router()
 const changeWaitQuerySchema = z.object({
   since: z.string().max(4096).optional(),
   timeoutMs: z.coerce.number().int().min(2000).max(60000).optional(),
+})
+const userOpsPredictionQuerySchema = z.object({
+  fuelType: z.enum(["PETROL", "DIESEL"]).default("PETROL"),
 })
 
 const LOCATION_DEFAULTS = {
@@ -428,6 +432,20 @@ router.get(
       statuses,
       updatedAt: new Date().toISOString(),
     })
+  })
+)
+
+router.get(
+  "/user/stations/:stationPublicId/ops-prediction",
+  asyncHandler(async (req, res) => {
+    const stationPublicId = String(req.params.stationPublicId || "").trim()
+    const station = await resolveStationOrThrow(stationPublicId)
+    const query = userOpsPredictionQuerySchema.parse(req.query || {})
+    const data = await getSmartlinkOpsPrediction({
+      station,
+      fuelType: query.fuelType,
+    })
+    return ok(res, data)
   })
 )
 

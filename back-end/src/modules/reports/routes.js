@@ -24,6 +24,7 @@ import {
   getInsightsSalesVelocity,
   getInsightsSummary,
 } from "./stationInsights.service.js"
+import { getSmartlinkOpsPrediction } from "./mlOpsPrediction.service.js"
 
 const router = Router()
 
@@ -55,6 +56,10 @@ const insightsVelocityQuerySchema = z.object({
 
 const insightsForecastQuerySchema = z.object({
   hours: z.coerce.number().int().min(1).max(24).optional(),
+})
+
+const opsPredictionQuerySchema = z.object({
+  fuelType: z.enum(["PETROL", "DIESEL"]).default("PETROL"),
 })
 
 const deliverySchema = z.object({
@@ -1105,6 +1110,22 @@ router.get(
     const station = await resolveStationOrThrow(req.params.stationPublicId)
     const data = await getInsightsQueuePrediction({
       stationId: station.id,
+    })
+    return ok(res, data)
+  })
+)
+
+router.get(
+  "/stations/:stationPublicId/insights/ops-prediction",
+  requireStationScope,
+  requireStationPlanFeature(STATION_PLAN_FEATURES.INSIGHTS),
+  requireRole(["MANAGER", "ATTENDANT", "VIEWER"]),
+  asyncHandler(async (req, res) => {
+    const station = await resolveStationOrThrow(req.params.stationPublicId)
+    const query = opsPredictionQuerySchema.parse(req.query || {})
+    const data = await getSmartlinkOpsPrediction({
+      station,
+      fuelType: query.fuelType,
     })
     return ok(res, data)
   })

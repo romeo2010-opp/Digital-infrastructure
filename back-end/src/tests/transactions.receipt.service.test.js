@@ -1,6 +1,7 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import { buildReceiptPayload, getUserTransactionReceiptPayloadByLink } from "../modules/transactions/receipt.service.js"
+import { getUserWalletTransactions } from "../modules/common/wallets.js"
 import { prisma } from "../db/prisma.js"
 
 test("receipt payload includes immutable pricing, discount, cashback, and verification fields", () => {
@@ -103,6 +104,91 @@ test("receipt payload prefers physical dispensed litres and posted wallet amount
   assert.equal(payload.baseSubtotal, 115000)
   assert.equal(payload.finalAmountPaid, 115000)
   assert.equal(payload.effectivePricePerLitre, 4600)
+})
+
+test("linked user receipt supports direct transaction references", async () => {
+  const originalQueryRaw = prisma.$queryRaw
+  let transactionQuerySeen = false
+  let directWalletLinkSeen = false
+
+  prisma.$queryRaw = async (strings, ...values) => {
+    const queryText = Array.isArray(strings) ? strings.join("?") : String(strings || "")
+
+    if (queryText.includes("FROM transactions t") && queryText.includes("WHERE t.public_id =")) {
+      transactionQuerySeen = true
+      return [
+        {
+          id: 77,
+          public_id: "01TXSCANGO0000000000000001",
+          payment_reference: "WPM-SCAN-GO-001",
+          station_name: "SmartLink Limbe",
+          station_city: "Blantyre",
+          station_address: "Limbe",
+          station_location: "Limbe, Blantyre",
+          pump_number: 2,
+          nozzle_number: "3",
+          nozzle_side: "A",
+          fuel_code: "PETROL",
+          litres: "12.000",
+          base_price_per_litre: "5100.0000",
+          subtotal: "61200.00",
+          total_direct_discount: "0.00",
+          cashback_total: "0.00",
+          final_amount_paid: "61200.00",
+          effective_price_per_litre: "5100.0000",
+          receipt_verification_ref: "RCPT-SCAN-GO-001",
+          payment_method: "SMARTPAY",
+          cashback_status: "NONE",
+          cashback_destination: "NONE",
+          pricing_snapshot_json: JSON.stringify({}),
+          occurred_at: "2026-05-20T17:51:32.000Z",
+        },
+      ]
+    }
+
+    if (queryText.includes("FROM ledger_transactions lt")) {
+      directWalletLinkSeen = queryText.includes("lt.related_entity_type = 'TRANSACTION'")
+      return [
+        {
+          net_amount: "61200.00",
+          gross_amount: "61200.00",
+        },
+      ]
+    }
+
+    if (queryText.includes("FROM pump_sessions ps") && queryText.includes("WHERE ps.transaction_id =")) {
+      return [
+        {
+          dispensed_litres: "12.000",
+        },
+      ]
+    }
+
+    if (queryText.includes("FROM promotion_redemptions pr")) {
+      return []
+    }
+
+    throw new Error(`Unexpected query in test: ${queryText} :: ${JSON.stringify(values)}`)
+  }
+
+  try {
+    const payload = await getUserTransactionReceiptPayloadByLink({
+      userId: 12,
+      receiptType: "transaction",
+      reference: "01TXSCANGO0000000000000001",
+    })
+
+    assert.equal(transactionQuerySeen, true)
+    assert.equal(directWalletLinkSeen, true)
+    assert.equal(payload?.transactionId, "01TXSCANGO0000000000000001")
+    assert.equal(payload?.reference, "WPM-SCAN-GO-001")
+    assert.equal(payload?.finalAmountPaid, 61200)
+    assert.equal(payload?.litres, 12)
+    assert.equal(payload?.paymentMethod, "SMARTPAY")
+    assert.equal(payload?.verificationReference, "RCPT-SCAN-GO-001")
+  } finally {
+    prisma.$queryRaw = originalQueryRaw
+  }
 })
 
 test("linked user receipt falls back to service transaction metadata when direct reservation link is unavailable", async () => {
@@ -448,4 +534,118 @@ test("receipt payload falls back to '-' for promotion details when campaign meta
   assert.equal(payload.discountLines[0].label, "-")
   assert.equal(payload.discountLines[0].promotionKind, "-")
   assert.equal(payload.discountLines[0].promotionValueLabel, "-")
+})
+
+test("wallet transaction history resolves direct TRANSACTION links", async () => {
+  const originalQueryRaw = prisma.$queryRaw
+  const originalExecuteRaw = prisma.$executeRaw
+  const originalTransaction = prisma.$transaction
+  let transactionJoinSeen = false
+
+  prisma.$executeRaw = async () => 1
+  prisma.$transaction = async (callback) => callback(prisma)
+  prisma.$queryRaw = async (strings, ...values) => {
+    const queryText = Array.isArray(strings) ? strings.join("?") : String(strings || "")
+
+    if (queryText.includes("SELECT id, user_id, wallet_number, wallet_public_id") && queryText.includes("FROM wallets") && queryText.includes("LIMIT 1") && !queryText.includes("WHERE user_id")) {
+      return []
+    }
+
+    if (queryText.includes("LEFT JOIN transactions tx")) {
+      transactionJoinSeen = queryText.includes("tx_match.public_id = lt.related_entity_id")
+      return [
+        {
+          id: 91,
+          transaction_reference: "WPM-SCAN-GO-001",
+          external_reference: null,
+          transaction_public_id: "01TXSCANGO0000000000000001",
+          transaction_occurred_at: "2026-05-20T17:51:32.000Z",
+          parent_transaction_id: null,
+          transaction_type: "PAYMENT",
+          transaction_status: "POSTED",
+          currency_code: "MWK",
+          gross_amount: "61200.00",
+          net_amount: "61200.00",
+          fee_amount: "0.00",
+          description: "Scan & Go payment for transaction 01TXSCANGO0000000000000001.",
+          related_entity_type: "TRANSACTION",
+          related_entity_id: "01TXSCANGO0000000000000001",
+          metadata_json: JSON.stringify({ source: "SCAN_AND_GO" }),
+          created_at: "2026-05-20T17:51:33.000Z",
+          posted_at: "2026-05-20T17:51:33.000Z",
+          failed_at: null,
+          reversed_at: null,
+          wallet_credit_amount: "0.00",
+          wallet_debit_amount: "61200.00",
+        },
+      ]
+    }
+
+    if (
+      queryText.includes("FROM wallet_balances") ||
+      (queryText.includes("FROM ledger_accounts") && !queryText.includes("WHERE wallet_id")) ||
+      (queryText.includes("FROM ledger_transactions") && !queryText.includes("SELECT COUNT(*)") && !queryText.includes("LEFT JOIN transactions tx")) ||
+      queryText.includes("FROM ledger_entries") ||
+      queryText.includes("FROM wallet_reservation_holds") ||
+      queryText.includes("FROM wallet_audit_logs") ||
+      queryText.includes("FROM wallet_station_locks")
+    ) {
+      return []
+    }
+
+    if (queryText.includes("FROM users") && queryText.includes("FOR UPDATE")) {
+      return [{ id: 12, is_active: 1 }]
+    }
+
+    if (queryText.includes("FROM wallets") && queryText.includes("WHERE user_id")) {
+      return [
+        {
+          id: 31,
+          user_id: 12,
+          wallet_number: "WL-00031",
+          wallet_public_id: "WALLET-00031",
+          currency_code: "MWK",
+          status: "ACTIVE",
+          is_primary: 1,
+          created_at: "2026-05-20T10:00:00.000Z",
+          updated_at: "2026-05-20T10:00:00.000Z",
+        },
+      ]
+    }
+
+    if (queryText.includes("FROM ledger_accounts") && queryText.includes("WHERE wallet_id")) {
+      return [
+        {
+          id: 410,
+          wallet_id: 31,
+          account_code: "WALLET:31:MWK",
+          account_name: "Customer wallet WL-00031",
+          currency_code: "MWK",
+          status: "ACTIVE",
+        },
+      ]
+    }
+
+    if (queryText.includes("SELECT COUNT(*) AS total_count")) {
+      return [{ total_count: 1 }]
+    }
+
+    throw new Error(`Unexpected query in wallet transaction test: ${queryText} :: ${JSON.stringify(values)}`)
+  }
+
+  try {
+    const result = await getUserWalletTransactions(12, {
+      transactionType: "PAYMENT",
+    })
+
+    assert.equal(transactionJoinSeen, true)
+    assert.equal(result.items.length, 1)
+    assert.equal(result.items[0].transactionPublicId, "01TXSCANGO0000000000000001")
+    assert.equal(result.items[0].relatedEntityType, "TRANSACTION")
+    assert.equal(result.items[0].relatedEntityId, "01TXSCANGO0000000000000001")
+  } finally {
+    prisma.$queryRaw = originalQueryRaw
+    prisma.$executeRaw = originalExecuteRaw
+    prisma.$transaction = originalTransaction
+  }
 })

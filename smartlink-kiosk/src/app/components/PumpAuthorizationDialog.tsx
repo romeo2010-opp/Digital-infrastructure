@@ -69,6 +69,30 @@ function formatCurrency(amount: number) {
   return `MWK ${Math.round(amount).toLocaleString()}`;
 }
 
+function normalizeCompletionPaymentMethod(summary: CompletionSummary | null) {
+  return String(summary?.transaction?.paymentMethod || "").trim().toUpperCase();
+}
+
+function resolveScanAndGoCode(summary: CompletionSummary | null) {
+  return String(
+    summary?.scanAndGo?.code ||
+      summary?.transaction?.receiptVerificationRef ||
+      summary?.transaction?.publicId ||
+      "",
+  ).trim();
+}
+
+function isStationSettledPaymentMethod(paymentMethod: string) {
+  return ["CASH", "MOBILE_MONEY", "CARD"].includes(paymentMethod);
+}
+
+function isCompletionAwaitingScanAndGo(summary: CompletionSummary | null) {
+  if (!summary?.transaction || summary.transaction.isPaid === true) return false;
+  const paymentMethod = normalizeCompletionPaymentMethod(summary);
+  if (isStationSettledPaymentMethod(paymentMethod)) return false;
+  return Boolean(resolveScanAndGoCode(summary));
+}
+
 function buildFallbackCompletionSummary(session: ActiveSession): CompletionSummary | null {
   const transactionPublicId = String(session.completedTransactionPublicId || "").trim();
   const receiptVerificationRef = String(
@@ -255,19 +279,9 @@ export function PumpAuthorizationDialog() {
     if (!isOpen || screen !== "complete" || !session) return;
 
     const fallbackSummary = completionSummary || buildFallbackCompletionSummary(session);
-    const paymentMethod = String(
-      fallbackSummary?.transaction?.paymentMethod || "",
-    )
-      .trim()
-      .toUpperCase();
-    const code = String(
-      fallbackSummary?.scanAndGo?.code ||
-        fallbackSummary?.transaction?.receiptVerificationRef ||
-        fallbackSummary?.transaction?.publicId ||
-        "",
-    ).trim();
+    const code = resolveScanAndGoCode(fallbackSummary);
 
-    if (paymentMethod !== "SMARTPAY" || !code || fallbackSummary?.transaction?.isPaid) {
+    if (!isCompletionAwaitingScanAndGo(fallbackSummary)) {
       return;
     }
 
@@ -331,6 +345,10 @@ export function PumpAuthorizationDialog() {
   const requiresPaymentMethodSelection =
     session.kind === "queue_draft" && session.queueUserType === "walkin";
   const sessionCompletionKey = `${session.customerId}:${session.pumpSessionPublicId || session.backendOrderPublicId || "draft"}`;
+  const sessionPumpSessionStatus = String(session.pumpSessionStatus || "")
+    .trim()
+    .toUpperCase();
+  const pumpSessionCompleted = sessionPumpSessionStatus === "COMPLETED";
   const assignedPump =
     pumps.find(
       (pump) => pump.publicId && pump.publicId === session.assignedPumpPublicId,
@@ -380,8 +398,11 @@ export function PumpAuthorizationDialog() {
     String(unlockPump?.qrPayload || "").trim() || null;
   const effectiveCompletionSummary =
     completionSummary || buildFallbackCompletionSummary(session);
+  const scanAndGoPaymentMethod = normalizeCompletionPaymentMethod(effectiveCompletionSummary);
+  const scanAndGoCode = resolveScanAndGoCode(effectiveCompletionSummary);
+  const scanAndGoPendingPayment = isCompletionAwaitingScanAndGo(effectiveCompletionSummary);
   const shouldShowScanAndGoSection =
-    effectiveCompletionSummary?.transaction?.paymentMethod === "SMARTPAY";
+    scanAndGoPendingPayment || scanAndGoPaymentMethod === "SMARTPAY";
   const hasCompletionScanAndGoDetails = Boolean(
     effectiveCompletionSummary?.transaction?.publicId ||
       effectiveCompletionSummary?.transaction?.receiptVerificationRef ||
@@ -389,6 +410,12 @@ export function PumpAuthorizationDialog() {
       effectiveCompletionSummary?.scanAndGo?.code ||
       effectiveCompletionSummary?.scanAndGo?.qrPayload ||
       effectiveCompletionSummary?.scanAndGo?.qrImageDataUrl,
+  );
+  const shouldShowCompletionRefs = Boolean(
+    effectiveCompletionSummary?.transaction?.publicId ||
+      effectiveCompletionSummary?.transaction?.receiptVerificationRef ||
+      effectiveCompletionSummary?.transaction?.paymentReference ||
+      scanAndGoCode,
   );
 
   useEffect(() => {
@@ -501,15 +528,14 @@ export function PumpAuthorizationDialog() {
   };
 
   const copyFallbackCode = async () => {
-    const code = String(effectiveCompletionSummary?.scanAndGo?.code || "").trim();
-    if (!code) {
+    if (!scanAndGoCode) {
       toast.error(
         "No Scan & Go fallback code is available for this transaction.",
       );
       return;
     }
     try {
-      await navigator.clipboard.writeText(code);
+      await navigator.clipboard.writeText(scanAndGoCode);
       toast.success("Fallback code copied.");
     } catch {
       toast.error("Could not copy the fallback code on this device.");
@@ -556,7 +582,8 @@ export function PumpAuthorizationDialog() {
       return;
     }
 
-    if (isSubmitting || progressPercent < 100 || liveLitres <= 0) return;
+    if (isSubmitting || liveLitres <= 0) return;
+    if (!pumpSessionCompleted && progressPercent < 100) return;
     if (autoFinalizeTriggeredRef.current === sessionCompletionKey) return;
 
     autoFinalizeTriggeredRef.current = sessionCompletionKey;
@@ -569,6 +596,7 @@ export function PumpAuthorizationDialog() {
   }, [
     isSubmitting,
     liveLitres,
+    pumpSessionCompleted,
     progressPercent,
     requiresPaymentMethodSelection,
     screen,
@@ -714,7 +742,7 @@ export function PumpAuthorizationDialog() {
         </button>
       </DialogTrigger>
       <DialogContent
-        className={`w-[calc(100vw-2rem)] max-w-xl border shadow-[0_24px_60px_rgba(15,23,42,0.22)] sm:w-full ${
+        className={`max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] ${screen === "complete" ? "max-w-5xl" : "max-w-xl"} overflow-y-auto border shadow-[0_24px_60px_rgba(15,23,42,0.22)] sm:w-full ${
           isNightTheme
             ? "border-[#213243] bg-[#0b1621] text-[#ecf3fb]"
             : "border-[#d7dee7] bg-[#f8fafc] text-[#0f172a]"
@@ -1174,22 +1202,22 @@ export function PumpAuthorizationDialog() {
                 {
                   key: "CASH" as const,
                   title: "Cash",
-                  detail: "Complete without Scan & Go",
+                  detail: "Record station cash payment",
                 },
                 {
                   key: "MOBILE_MONEY" as const,
                   title: "Mobile Money",
-                  detail: "Complete without Scan & Go",
+                  detail: "Record station mobile payment",
                 },
                 {
                   key: "CARD" as const,
                   title: "Card",
-                  detail: "Complete without Scan & Go",
+                  detail: "Record card payment",
                 },
                 {
                   key: "OTHER" as const,
                   title: "Other",
-                  detail: "Complete without Scan & Go",
+                  detail: "Show Scan & Go if unpaid",
                 },
               ].map((option) => (
                 <button
@@ -1220,12 +1248,12 @@ export function PumpAuthorizationDialog() {
         ) : null}
 
         {screen === "complete" ? (
-          <div className="px-2 py-2">
+          <div className="px-1 py-1 sm:px-2 sm:py-2">
             <div className="flex flex-col items-center text-center">
               <div
-                className={`mb-4 flex h-16 w-16 items-center justify-center rounded-full ${isNightTheme ? "bg-[#13271b]" : "bg-[#ecf9f0]"}`}
+                className={`mb-3 flex h-14 w-14 items-center justify-center rounded-full ${isNightTheme ? "bg-[#13271b]" : "bg-[#ecf9f0]"}`}
               >
-                <Check className="h-8 w-8 text-[#16a34a]" />
+                <Check className="h-7 w-7 text-[#16a34a]" />
               </div>
               <div
                 className={`text-lg font-semibold ${isNightTheme ? "text-[#ecf3fb]" : "text-[#0f172a]"}`}
@@ -1245,7 +1273,7 @@ export function PumpAuthorizationDialog() {
             </div>
 
             <div
-              className={`mt-5 rounded-[16px] border px-4 py-4 text-center ${
+              className={`mt-4 rounded-[16px] border px-4 py-3 text-center ${
                 isNightTheme
                   ? "border-[#294057] bg-[#122233] text-[#d7e5f2]"
                   : "border-[#d4e1e8] bg-[#eef4f8] text-[#35516d]"
@@ -1261,165 +1289,248 @@ export function PumpAuthorizationDialog() {
             </div>
 
             <div
-              className={`mt-5 rounded-[18px] border px-4 py-4 ${
-                isNightTheme
-                  ? "border-[#213243] bg-[#111d2a]"
-                  : "border-[#e2e8f0] bg-white"
+              className={`mt-4 grid gap-5 ${
+                shouldShowScanAndGoSection
+                  ? "lg:grid-cols-[minmax(0,1fr)_minmax(300px,320px)]"
+                  : ""
               }`}
             >
-              <ReceiptRow
-                label="Driver"
-                value={
-                  effectiveCompletionSummary?.customerName || session.customerName
-                }
-                isNightTheme={isNightTheme}
-              />
-              <ReceiptRow
-                label="Fuel Type"
-                value={String(
-                  effectiveCompletionSummary?.fuelType || selectedFuel,
-                ).toUpperCase()}
-                isNightTheme={isNightTheme}
-              />
-              <ReceiptRow
-                label="Litres Dispensed"
-                value={`${Number(effectiveCompletionSummary?.litres || liveLitres).toFixed(2)} L`}
-                isNightTheme={isNightTheme}
-              />
-              <ReceiptRow
-                label="Pump"
-                value={
-                  effectiveCompletionSummary?.pump?.pumpNumber
-                    ? `Pump ${effectiveCompletionSummary.pump.pumpNumber}${effectiveCompletionSummary?.pump?.nozzleNumber ? ` · Nozzle ${effectiveCompletionSummary.pump.nozzleNumber}` : ""}`
-                    : hasAssignedPump
-                      ? `Pump ${session.assignedPump}${session.assignedNozzleLabel ? ` · Nozzle ${session.assignedNozzleLabel}` : ""}`
-                      : "Not assigned"
-                }
-                isNightTheme={isNightTheme}
-              />
-              <ReceiptRow
-                label="Time"
-                value={receiptTime || "--:--"}
-                isNightTheme={isNightTheme}
-              />
-              <ReceiptRow
-                label="Total Charged"
-                value={formatCurrency(
-                  Math.round(
-                    Number(
-                      effectiveCompletionSummary?.amountMwk ||
-                        liveLitres * target.pricePerLitre,
-                    ),
-                  ),
-                )}
-                isNightTheme={isNightTheme}
-                total
-              />
-            </div>
-
-            {screen === "complete" &&
-            session.kind === "queue_draft" &&
-            shouldShowScanAndGoSection ? (
               <div
-                className={`mt-5 rounded-[18px] border px-4 py-4 ${
+                className={`min-w-0 rounded-[22px] border p-5 ${
                   isNightTheme
-                    ? "border-[#294057] bg-[#122233]"
-                    : "border-[#d4e1e8] bg-[#eef4f8]"
+                    ? "border-[#213243] bg-[#111d2a]"
+                    : "border-[#e2e8f0] bg-white"
                 }`}
               >
-                <div
-                  className={`text-sm font-semibold uppercase tracking-[0.12em] ${isNightTheme ? "text-[#9fb6cb]" : "text-[#35516d]"}`}
-                >
-                  Scan &amp; Go
-                </div>
-                <div
-                  className={`mt-2 text-sm ${isNightTheme ? "text-[#c8d7e5]" : "text-[#35516d]"}`}
-                >
-                  {effectiveCompletionSummary?.transaction?.isPaid
-                    ? "This transaction is already paid. Use the refs below for verification."
-                    : hasCompletionScanAndGoDetails
-                      ? "Ask the customer to scan this QR code in the user app or enter the fallback code on the Scan & Go screen."
-                      : "Transaction details are still syncing. If the QR code or refs do not appear shortly, refresh kiosk data before serving the next driver."}
-                </div>
-
-                <div className="mt-4 flex justify-center">
-                  {effectiveCompletionSummary?.scanAndGo?.qrImageDataUrl ? (
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0">
                     <div
-                      className={`rounded-[24px] border p-4 ${isNightTheme ? "border-[#213243] bg-[#0f1b28]" : "border-[#d7dee7] bg-white"}`}
+                      className={`text-[0.72rem] font-semibold uppercase tracking-[0.14em] ${isNightTheme ? "text-[#8ea1b5]" : "text-[#64748b]"}`}
                     >
-                      <img
-                        src={effectiveCompletionSummary.scanAndGo.qrImageDataUrl}
-                        alt="Scan and Go transaction QR code"
-                        className="h-[210px] w-[210px] rounded-[18px] bg-white p-3"
-                      />
+                      Receipt Details
                     </div>
-                  ) : (
                     <div
-                      className={`flex h-[210px] w-[210px] flex-col items-center justify-center rounded-[24px] border border-dashed ${isNightTheme ? "border-[#294057] bg-[#0f1b28] text-[#8ea1b5]" : "border-[#cbd5e1] bg-white text-[#64748b]"}`}
+                      className={`mt-1 text-base font-semibold ${isNightTheme ? "text-[#ecf3fb]" : "text-[#0f172a]"}`}
                     >
-                      <QrCode className="h-12 w-12" />
-                      <div className="mt-3 max-w-[150px] text-sm leading-relaxed">
-                        QR code unavailable. Use the fallback code below.
-                      </div>
+                      {effectiveCompletionSummary?.customerName ||
+                        session.customerName}
                     </div>
-                  )}
-                </div>
-
-                <div
-                  className={`mt-4 space-y-2 text-sm ${isNightTheme ? "text-[#d7e5f2]" : "text-[#16324f]"}`}
-                >
-                  <ReceiptRow
-                    label="Fallback Code"
-                    value={effectiveCompletionSummary?.scanAndGo?.code || "Unavailable"}
-                    isNightTheme={isNightTheme}
-                  />
-                  <ReceiptRow
-                    label="Transaction ID"
-                    value={
-                      effectiveCompletionSummary?.transaction?.publicId || "Unavailable"
-                    }
-                    isNightTheme={isNightTheme}
-                  />
-                  <ReceiptRow
-                    label="Receipt Ref"
-                    value={
-                      effectiveCompletionSummary?.transaction?.receiptVerificationRef ||
-                      "Pending"
-                    }
-                    isNightTheme={isNightTheme}
-                  />
-                  <ReceiptRow
-                    label="Payment Ref"
-                    value={
-                      effectiveCompletionSummary?.transaction?.paymentReference ||
-                      "Pending"
-                    }
-                    isNightTheme={isNightTheme}
-                  />
-                </div>
-
-                {!effectiveCompletionSummary?.transaction?.isPaid &&
-                Boolean(effectiveCompletionSummary?.scanAndGo?.code) ? (
-                  <button
-                    type="button"
-                    onClick={() => void copyFallbackCode()}
-                    className={`mt-4 w-full rounded-[14px] border px-5 py-4 text-base font-semibold transition ${
-                      isNightTheme
-                        ? "border-[#35516d] bg-[#0f1b28] text-[#d7e5f2] hover:bg-[#162434]"
-                        : "border-[#cbd5e1] bg-white text-[#16324f] hover:bg-[#f8fafc]"
+                  </div>
+                  <span
+                    className={`rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.12em] ${
+                      effectiveCompletionSummary?.transaction?.isPaid
+                        ? isNightTheme
+                          ? "border-[#214033] bg-[#11241b] text-[#9bd0ae]"
+                          : "border-[#d5e9dc] bg-[#ecfdf3] text-[#217346]"
+                        : isNightTheme
+                          ? "border-[#5b4733] bg-[#21180f] text-[#e9c7a3]"
+                          : "border-[#edd8c3] bg-[#fff7ed] text-[#8b5e3c]"
                     }`}
                   >
-                    Copy Fallback Code
-                  </button>
+                    {effectiveCompletionSummary?.transaction?.isPaid
+                      ? "Paid"
+                      : shouldShowScanAndGoSection
+                        ? "Unpaid"
+                        : "Recorded"}
+                  </span>
+                </div>
+
+                <div className="mt-3">
+                  <ReceiptRow
+                    label="Fuel Type"
+                    value={String(
+                      effectiveCompletionSummary?.fuelType || selectedFuel,
+                    ).toUpperCase()}
+                    isNightTheme={isNightTheme}
+                  />
+                  <ReceiptRow
+                    label="Litres Dispensed"
+                    value={`${Number(effectiveCompletionSummary?.litres || liveLitres).toFixed(2)} L`}
+                    isNightTheme={isNightTheme}
+                  />
+                  <ReceiptRow
+                    label="Pump"
+                    value={
+                      effectiveCompletionSummary?.pump?.pumpNumber
+                        ? `Pump ${effectiveCompletionSummary.pump.pumpNumber}${effectiveCompletionSummary?.pump?.nozzleNumber ? ` · Nozzle ${effectiveCompletionSummary.pump.nozzleNumber}` : ""}`
+                        : hasAssignedPump
+                          ? `Pump ${session.assignedPump}${session.assignedNozzleLabel ? ` · Nozzle ${session.assignedNozzleLabel}` : ""}`
+                          : "Not assigned"
+                    }
+                    isNightTheme={isNightTheme}
+                  />
+                  <ReceiptRow
+                    label="Time"
+                    value={receiptTime || "--:--"}
+                    isNightTheme={isNightTheme}
+                  />
+                  <ReceiptRow
+                    label="Total Charged"
+                    value={formatCurrency(
+                      Math.round(
+                        Number(
+                          effectiveCompletionSummary?.amountMwk ||
+                            liveLitres * target.pricePerLitre,
+                        ),
+                      ),
+                    )}
+                    isNightTheme={isNightTheme}
+                    total
+                  />
+                </div>
+
+                {shouldShowCompletionRefs ? (
+                  <div
+                    className={`mt-4 rounded-[18px] border p-4 text-sm ${
+                      isNightTheme
+                        ? "border-[#294057] bg-[#0f1b28]"
+                        : "border-[#e2e8f0] bg-[#f8fafc]"
+                    }`}
+                  >
+                    <div
+                      className={`mb-1 text-[0.7rem] font-semibold uppercase tracking-[0.14em] ${isNightTheme ? "text-[#8ea1b5]" : "text-[#64748b]"}`}
+                    >
+                      Transaction Refs
+                    </div>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      <ReferenceDetail
+                        label="Receipt Ref"
+                        value={
+                          effectiveCompletionSummary?.transaction
+                            ?.receiptVerificationRef || "Pending"
+                        }
+                        isNightTheme={isNightTheme}
+                      />
+                      <ReferenceDetail
+                        label="Transaction ID"
+                        value={
+                          effectiveCompletionSummary?.transaction?.publicId ||
+                          "Unavailable"
+                        }
+                        isNightTheme={isNightTheme}
+                      />
+                      <ReferenceDetail
+                        label="Payment Ref"
+                        value={
+                          effectiveCompletionSummary?.transaction
+                            ?.paymentReference || "Pending"
+                        }
+                        isNightTheme={isNightTheme}
+                      />
+                      <ReferenceDetail
+                        label="Fallback Code"
+                        value={scanAndGoCode || "Unavailable"}
+                        isNightTheme={isNightTheme}
+                      />
+                    </div>
+                  </div>
                 ) : null}
               </div>
-            ) : null}
+
+              {shouldShowScanAndGoSection ? (
+                <div
+                  className={`mx-auto flex aspect-square w-full max-w-[320px] min-w-0 flex-col rounded-[22px] border p-4 lg:mx-0 lg:max-w-none ${
+                    isNightTheme
+                      ? "border-[#294057] bg-[#122233]"
+                      : "border-[#d4e1e8] bg-[#eef4f8]"
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div
+                        className={`text-sm font-semibold uppercase tracking-[0.12em] ${isNightTheme ? "text-[#9fb6cb]" : "text-[#35516d]"}`}
+                      >
+                        Scan &amp; Go
+                      </div>
+                      <div
+                        className={`mt-1 text-xs leading-relaxed ${isNightTheme ? "text-[#c8d7e5]" : "text-[#35516d]"}`}
+                      >
+                        {effectiveCompletionSummary?.transaction?.isPaid
+                          ? "Recorded for verification."
+                          : hasCompletionScanAndGoDetails
+                            ? "Customer scans here."
+                            : "Details syncing."}
+                      </div>
+                    </div>
+                    <span
+                      className={`shrink-0 rounded-full border px-2.5 py-1 text-[0.68rem] font-semibold uppercase tracking-[0.12em] ${
+                        effectiveCompletionSummary?.transaction?.isPaid
+                          ? isNightTheme
+                            ? "border-[#214033] bg-[#11241b] text-[#9bd0ae]"
+                            : "border-[#d5e9dc] bg-white text-[#217346]"
+                          : isNightTheme
+                            ? "border-[#5b4733] bg-[#21180f] text-[#e9c7a3]"
+                            : "border-[#edd8c3] bg-white text-[#8b5e3c]"
+                      }`}
+                    >
+                      {effectiveCompletionSummary?.transaction?.isPaid
+                        ? "Paid"
+                        : "Unpaid"}
+                    </span>
+                  </div>
+
+                  <div className="mt-3 flex flex-1 items-center justify-center">
+                    {effectiveCompletionSummary?.scanAndGo?.qrImageDataUrl ? (
+                      <div
+                        className={`rounded-[18px] border p-2.5 ${isNightTheme ? "border-[#213243] bg-[#0f1b28]" : "border-[#d7dee7] bg-white"}`}
+                      >
+                        <img
+                          src={
+                            effectiveCompletionSummary.scanAndGo.qrImageDataUrl
+                          }
+                          alt="Scan and Go transaction QR code"
+                          className="h-[132px] w-[132px] rounded-[12px] bg-white p-2"
+                        />
+                      </div>
+                    ) : (
+                      <div
+                        className={`flex h-[148px] w-[148px] flex-col items-center justify-center rounded-[18px] border border-dashed ${isNightTheme ? "border-[#294057] bg-[#0f1b28] text-[#8ea1b5]" : "border-[#cbd5e1] bg-white text-[#64748b]"}`}
+                      >
+                        <QrCode className="h-9 w-9" />
+                        <div className="mt-2 max-w-[120px] text-center text-xs leading-relaxed">
+                          Use fallback code.
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  <div
+                    className={`rounded-[14px] border px-3 py-2 text-center text-xs leading-relaxed ${
+                      isNightTheme
+                        ? "border-[#294057] bg-[#0f1b28] text-[#9fb6cb]"
+                        : "border-[#d7dee7] bg-white text-[#35516d]"
+                    }`}
+                  >
+                    <div className="font-semibold uppercase tracking-[0.1em]">
+                      Fallback Code
+                    </div>
+                    <div className="mt-1 break-all font-semibold">
+                      {scanAndGoCode || "Unavailable"}
+                    </div>
+                  </div>
+
+                  {scanAndGoPendingPayment && scanAndGoCode ? (
+                    <button
+                      type="button"
+                      onClick={() => void copyFallbackCode()}
+                      className={`mt-3 rounded-[14px] border px-4 py-2.5 text-sm font-semibold transition ${
+                        isNightTheme
+                          ? "border-[#35516d] bg-[#0f1b28] text-[#d7e5f2] hover:bg-[#162434]"
+                          : "border-[#cbd5e1] bg-white text-[#16324f] hover:bg-[#f8fafc]"
+                      }`}
+                    >
+                      Copy code
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
 
             <button
               type="button"
               onClick={() => void handleNextDriver()}
               disabled={isSubmitting}
-              className={`mt-6 w-full rounded-[14px] px-5 py-4 text-base font-semibold text-white transition ${
+              className={`mt-4 w-full rounded-[14px] px-5 py-3.5 text-base font-semibold text-white transition ${
                 isNightTheme
                   ? "bg-[#35516d] hover:bg-[#3f6486]"
                   : "bg-[#16324f] hover:bg-[#10273e]"
@@ -1478,18 +1589,53 @@ function ReceiptRow({
 }) {
   return (
     <div
-      className={`flex items-center justify-between gap-4 border-b py-2 last:border-b-0 ${
+      className={`flex min-w-0 items-center justify-between gap-4 border-b py-2 last:border-b-0 ${
         isNightTheme ? "border-[#1d2d3d]" : "border-[#e2e8f0]"
       }`}
     >
-      <span className={isNightTheme ? "text-[#8ea1b5]" : "text-[#64748b]"}>
+      <span className={`shrink-0 ${isNightTheme ? "text-[#8ea1b5]" : "text-[#64748b]"}`}>
         {label}
       </span>
       <span
-        className={`font-semibold ${total ? (isNightTheme ? "text-[#c8d7e5]" : "text-[#35516d]") : isNightTheme ? "text-[#ecf3fb]" : "text-[#0f172a]"}`}
+        className={`min-w-0 break-all text-right font-semibold ${total ? (isNightTheme ? "text-[#c8d7e5]" : "text-[#35516d]") : isNightTheme ? "text-[#ecf3fb]" : "text-[#0f172a]"}`}
       >
         {value}
       </span>
+    </div>
+  );
+}
+
+function ReferenceDetail({
+  label,
+  value,
+  isNightTheme,
+}: {
+  label: string;
+  value: string;
+  isNightTheme: boolean;
+}) {
+  return (
+    <div
+      className={`min-w-0 rounded-[14px] border px-3 py-2.5 ${
+        isNightTheme
+          ? "border-[#213243] bg-[#111d2a]"
+          : "border-[#e2e8f0] bg-white"
+      }`}
+    >
+      <div
+        className={`text-[0.68rem] font-semibold uppercase tracking-[0.12em] ${
+          isNightTheme ? "text-[#8ea1b5]" : "text-[#64748b]"
+        }`}
+      >
+        {label}
+      </div>
+      <div
+        className={`mt-1 min-w-0 break-all text-sm font-semibold leading-relaxed ${
+          isNightTheme ? "text-[#ecf3fb]" : "text-[#0f172a]"
+        }`}
+      >
+        {value}
+      </div>
     </div>
   );
 }

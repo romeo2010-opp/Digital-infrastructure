@@ -210,6 +210,22 @@ function formatMoney(value, currencyCode = "MWK") {
   })}`;
 }
 
+function formatOpsMinutes(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return "N/A";
+  return `${Math.max(0, Math.round(numeric))} min`;
+}
+
+function opsSeverityStatus(value) {
+  const normalized = String(value || "")
+    .trim()
+    .toUpperCase();
+  if (normalized === "CRITICAL" || normalized === "HIGH") return "unavailable";
+  if (normalized === "MEDIUM") return "low";
+  if (normalized === "LOW") return "available";
+  return "in-use";
+}
+
 function countdownLabel(value, nowTick) {
   if (!value) return "Offer inactive";
   const diffMs = new Date(value).getTime() - nowTick;
@@ -268,6 +284,8 @@ export function StationDetailsScreen({
   const [fuelStatusResolved, setFuelStatusResolved] = useState(false);
   const [promotionPreview, setPromotionPreview] = useState(null);
   const [promotionPreviewLoading, setPromotionPreviewLoading] = useState(false);
+  const [opsPrediction, setOpsPrediction] = useState(null);
+  const [opsPredictionLoading, setOpsPredictionLoading] = useState(false);
   const [promoNowTick, setPromoNowTick] = useState(() => Date.now());
   const [showIdentifierModal, setShowIdentifierModal] = useState(false);
   const [isJoiningQueue, setIsJoiningQueue] = useState(false);
@@ -478,6 +496,41 @@ export function StationDetailsScreen({
     };
   }, [stationPublicId]);
 
+  useEffect(() => {
+    if (!stationPublicId || !stationsApi.isApiMode()) {
+      setOpsPrediction(station?.opsPrediction || null);
+      setOpsPredictionLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    const controller = new AbortController();
+    setOpsPredictionLoading(true);
+
+    stationsApi
+      .getStationOpsPrediction(stationPublicId, {
+        fuelTypeCode: selectedFuelType,
+        signal: controller.signal,
+      })
+      .then((payload) => {
+        if (cancelled) return;
+        setOpsPrediction(payload || null);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setOpsPrediction(null);
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setOpsPredictionLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [selectedFuelType, station?.opsPrediction, stationPublicId]);
+
   const selectedPreviewLitres = useMemo(() => {
     const custom = Number(customFuelLiters);
     if (Number.isFinite(custom) && custom > 0) return custom;
@@ -674,6 +727,11 @@ export function StationDetailsScreen({
   const promoPricePerLitreValue = hasDirectPromoDiscount
     ? promoPricing?.effectivePricePerLitre
     : (promoPricing?.directPricePerLitre ?? basePricePerLitre);
+  const opsForecast = opsPrediction?.prediction || null;
+  const opsQueueLength = Number(opsForecast?.queue_length_30m);
+  const opsQueueLabel = Number.isFinite(opsQueueLength) ? Math.max(0, Math.round(opsQueueLength)).toLocaleString() : "N/A";
+  const opsWaitLabel = opsForecast?.wait_time_range || formatOpsMinutes(opsForecast?.wait_time_minutes);
+  const opsStockoutLabel = formatOpsMinutes(opsForecast?.stockout_minutes);
 
   const openReservationModal = () => {
     if (!reservationPlanEnabled) return;
@@ -906,6 +964,42 @@ export function StationDetailsScreen({
             </div>
           ) : (
             <p className="details-section-note">Fuel status unavailable.</p>
+          )}
+        </section>
+
+        <section className="details-block">
+          <div className="details-section-head">
+            <h3>Operations Forecast</h3>
+            {opsPredictionLoading ? (
+              <small className="details-section-note">Updating…</small>
+            ) : null}
+          </div>
+          {opsForecast ? (
+            <>
+              <div className="details-ops-grid">
+                <div className="details-ops-item">
+                  <span>Queue in 30m</span>
+                  <strong>{opsQueueLabel}</strong>
+                </div>
+                <div className="details-ops-item">
+                  <span>Wait</span>
+                  <strong>{opsWaitLabel}</strong>
+                </div>
+                <div className="details-ops-item">
+                  <span>Stockout</span>
+                  <strong>{opsStockoutLabel}</strong>
+                </div>
+                <div className="details-ops-item">
+                  <span>Congestion</span>
+                  <strong className={`details-fuel-status ${opsSeverityStatus(opsForecast.congestion_level)}`}>
+                    {opsForecast.congestion_level || "N/A"}
+                  </strong>
+                </div>
+              </div>
+              <p className="details-ops-note">{opsForecast.station_manager_summary || opsForecast.operational_recommendation}</p>
+            </>
+          ) : (
+            <p className="details-section-note">Forecast unavailable.</p>
           )}
         </section>
 

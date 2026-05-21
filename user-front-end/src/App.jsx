@@ -34,7 +34,10 @@ import {
   unsubscribePushSubscription,
 } from "./mobile/pushNotifications";
 import { DesktopApp } from "./desktop/DesktopApp";
-import { LandingPage } from "./pages/Landing/LandingPage";
+import {
+  PublicMarketingSite,
+  isPublicMarketingPath,
+} from "./public/PublicMarketingSite";
 import {
   clearStoredActiveQueueJoinId,
   clearStoredAuthSession,
@@ -2037,8 +2040,7 @@ function App() {
   const isMobile = useMobileViewport(768);
   const [theme, setTheme] = useState(() => getStoredThemePreference());
   const normalizedPath = String(pathname || "").trim();
-  const isPublicEntryRoute =
-    normalizedPath === "/" || normalizedPath === "/landing";
+  const isPublicEntryRoute = isPublicMarketingPath(normalizedPath);
   const handleThemeChange = useCallback((nextTheme) => {
     const normalizedTheme = nextTheme === "dark" ? "dark" : "light";
     setStoredThemePreference(normalizedTheme);
@@ -2074,12 +2076,11 @@ function App() {
 
   if (isPublicEntryRoute) {
     const loginPath = isMobile ? "/m/login" : "/d/login";
-    const mapPath = isMobile ? "/m/home" : "/d/stations";
     content = (
-      <LandingPage
-        onOpenMap={() => navigate(mapPath)}
-        onLogin={() => navigate(loginPath)}
-        onSignUp={() => navigate(loginPath)}
+      <PublicMarketingSite
+        currentPath={normalizedPath}
+        onNavigate={navigate}
+        loginPath={loginPath}
       />
     );
   } else if (isMobile) {

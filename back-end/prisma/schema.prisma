@@ -305,6 +305,7 @@ model stations {
   inspections            inspections[]
   queue_entries          queue_entries[]
   report_notes           report_notes[]
+  regulator_tasks        regulator_tasks[]
   station_status_logs    station_status_logs[]
   station_queue_settings station_queue_settings?
   station_staff          station_staff[]
@@ -535,8 +536,17 @@ model mera_users {
   fuel_price_reports    fuel_price_reports[]
   inspections           inspections[]
   mera_auth_sessions    mera_auth_sessions[]
+  mera_login_challenges mera_login_challenges[]
+  mera_notifications     mera_notifications[]
+  mera_trusted_devices  mera_trusted_devices[]
   mera_user_preferences mera_user_preferences?
   public_complaints     public_complaints[]       @relation("public_complaints_officer")
+  regulator_tasks_assigned_by regulator_tasks[]   @relation("regulator_tasks_assigned_by")
+  regulator_tasks_assigned_to regulator_tasks[]   @relation("regulator_tasks_assigned_to")
+  regulator_task_activity_logs regulator_task_activity_logs[]
+  regulator_task_evidence regulator_task_evidence[]
+  regulator_task_notes regulator_task_notes[]
+  regulator_task_watchers regulator_task_watchers[]
   station_status_logs   station_status_logs[]
   mera_roles            mera_roles                @relation(fields: [role_id], references: [id], onUpdate: Restrict, map: "fk_mera_users_role")
 
@@ -577,6 +587,43 @@ model mera_auth_sessions {
   mera_users         mera_users @relation(fields: [mera_user_id], references: [id], onUpdate: Restrict, map: "fk_mera_auth_sessions_user")
 
   @@index([mera_user_id, expires_at], map: "idx_mera_auth_sessions_user_expiry")
+}
+
+model mera_login_challenges {
+  id                  BigInt     @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id           String     @unique(map: "public_id") @db.Char(26)
+  mera_user_id        BigInt     @db.UnsignedBigInt
+  code_hash           String     @db.Char(64)
+  attempt_count       Int        @default(0) @db.UnsignedTinyInt
+  resend_count        Int        @default(0) @db.UnsignedTinyInt
+  user_agent          String?    @db.VarChar(255)
+  ip_address          String?    @db.VarChar(64)
+  expires_at          DateTime   @db.Timestamp(3)
+  resend_available_at DateTime   @db.Timestamp(3)
+  consumed_at         DateTime?  @db.Timestamp(3)
+  created_at          DateTime   @default(now()) @db.Timestamp(3)
+  updated_at          DateTime   @default(now()) @db.Timestamp(3)
+  mera_users          mera_users @relation(fields: [mera_user_id], references: [id], onUpdate: Restrict, map: "fk_mera_login_challenges_user")
+
+  @@index([mera_user_id, expires_at], map: "idx_mera_login_challenges_user_expiry")
+  @@index([expires_at], map: "idx_mera_login_challenges_expiry")
+}
+
+model mera_trusted_devices {
+  id             BigInt     @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id      String     @unique(map: "public_id") @db.Char(26)
+  mera_user_id   BigInt     @db.UnsignedBigInt
+  token_hash     String     @unique(map: "token_hash") @db.Char(64)
+  user_agent     String?    @db.VarChar(255)
+  ip_address     String?    @db.VarChar(64)
+  last_used_at   DateTime?  @db.Timestamp(3)
+  expires_at     DateTime   @db.Timestamp(3)
+  revoked_at     DateTime?  @db.Timestamp(3)
+  created_at     DateTime   @default(now()) @db.Timestamp(3)
+  updated_at     DateTime   @default(now()) @db.Timestamp(3)
+  mera_users     mera_users @relation(fields: [mera_user_id], references: [id], onUpdate: Restrict, map: "fk_mera_trusted_devices_user")
+
+  @@index([mera_user_id, expires_at], map: "idx_mera_trusted_devices_user_expiry")
 }
 
 model fuel_station_licenses {
@@ -721,6 +768,131 @@ model fuel_price_reports {
   stations       stations    @relation(fields: [station_id], references: [id], onUpdate: Restrict, map: "fk_fuel_price_reports_station")
 
   @@index([station_id, created_at], map: "idx_fuel_price_reports_station_time")
+}
+
+model regulator_tasks {
+  id                           BigInt                         @id @default(autoincrement()) @db.UnsignedBigInt
+  task_number                  String?                        @unique(map: "task_number") @db.VarChar(32)
+  title                        String                         @db.VarChar(180)
+  description                  String                         @db.Text
+  type                         regulator_tasks_type
+  category                     String?                        @db.VarChar(96)
+  priority                     regulator_tasks_priority       @default(MEDIUM)
+  status                       regulator_tasks_status         @default(ASSIGNED)
+  district                     String?                        @db.VarChar(80)
+  station_id                   BigInt?                        @db.UnsignedBigInt
+  station_name                 String?                        @db.VarChar(160)
+  linked_entity_type           String?                        @db.VarChar(64)
+  linked_entity_id             String?                        @db.VarChar(96)
+  evidence_summary             String?                        @db.Text
+  assigned_to_user_id          BigInt                         @db.UnsignedBigInt
+  assigned_by_user_id          BigInt                         @db.UnsignedBigInt
+  due_at                       DateTime?                      @db.Timestamp(3)
+  acknowledged_at              DateTime?                      @db.Timestamp(3)
+  started_at                   DateTime?                      @db.Timestamp(3)
+  completed_at                 DateTime?                      @db.Timestamp(3)
+  cancelled_at                 DateTime?                      @db.Timestamp(3)
+  escalated_at                 DateTime?                      @db.Timestamp(3)
+  completion_notes             String?                        @db.Text
+  created_at                   DateTime                       @default(now()) @db.Timestamp(3)
+  updated_at                   DateTime                       @default(now()) @db.Timestamp(3)
+  deleted_at                   DateTime?                      @db.Timestamp(3)
+  regulator_task_activity_logs regulator_task_activity_logs[]
+  regulator_task_evidence      regulator_task_evidence[]
+  regulator_task_notes         regulator_task_notes[]
+  regulator_task_watchers      regulator_task_watchers[]
+  assigned_by                  mera_users                     @relation("regulator_tasks_assigned_by", fields: [assigned_by_user_id], references: [id], onUpdate: Restrict, map: "fk_regulator_tasks_assigned_by")
+  assigned_to                  mera_users                     @relation("regulator_tasks_assigned_to", fields: [assigned_to_user_id], references: [id], onUpdate: Restrict, map: "fk_regulator_tasks_assigned_to")
+  stations                     stations?                      @relation(fields: [station_id], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "fk_regulator_tasks_station")
+
+  @@index([assigned_by_user_id], map: "idx_regulator_tasks_assigned_by")
+  @@index([assigned_to_user_id], map: "idx_regulator_tasks_assigned_to")
+  @@index([created_at], map: "idx_regulator_tasks_created_at")
+  @@index([district], map: "idx_regulator_tasks_district")
+  @@index([due_at], map: "idx_regulator_tasks_due_at")
+  @@index([linked_entity_type, linked_entity_id], map: "idx_regulator_tasks_linked_entity")
+  @@index([priority], map: "idx_regulator_tasks_priority")
+  @@index([station_id], map: "idx_regulator_tasks_station")
+  @@index([status], map: "idx_regulator_tasks_status")
+}
+
+model regulator_task_notes {
+  id             BigInt                         @id @default(autoincrement()) @db.UnsignedBigInt
+  task_id        BigInt                         @db.UnsignedBigInt
+  author_user_id BigInt                         @db.UnsignedBigInt
+  note           String                         @db.Text
+  visibility     regulator_task_notes_visibility @default(INTERNAL)
+  created_at     DateTime                       @default(now()) @db.Timestamp(3)
+  updated_at     DateTime                       @default(now()) @db.Timestamp(3)
+  mera_users     mera_users                     @relation(fields: [author_user_id], references: [id], onUpdate: Restrict, map: "fk_regulator_task_notes_author")
+  regulator_tasks regulator_tasks               @relation(fields: [task_id], references: [id], onDelete: Cascade, onUpdate: Restrict, map: "fk_regulator_task_notes_task")
+
+  @@index([author_user_id], map: "idx_regulator_task_notes_author")
+  @@index([task_id, created_at], map: "idx_regulator_task_notes_task_time")
+}
+
+model regulator_task_activity_logs {
+  id             BigInt          @id @default(autoincrement()) @db.UnsignedBigInt
+  task_id        BigInt          @db.UnsignedBigInt
+  actor_user_id  BigInt?         @db.UnsignedBigInt
+  action         String          @db.VarChar(96)
+  old_value      String?         @db.VarChar(255)
+  new_value      String?         @db.VarChar(255)
+  metadata_json  Json?
+  created_at     DateTime        @default(now()) @db.Timestamp(3)
+  mera_users     mera_users?     @relation(fields: [actor_user_id], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "fk_regulator_task_activity_actor")
+  regulator_tasks regulator_tasks @relation(fields: [task_id], references: [id], onDelete: Cascade, onUpdate: Restrict, map: "fk_regulator_task_activity_task")
+
+  @@index([action, created_at], map: "idx_regulator_task_activity_action_time")
+  @@index([actor_user_id], map: "idx_regulator_task_activity_actor")
+  @@index([task_id, created_at], map: "idx_regulator_task_activity_task_time")
+}
+
+model regulator_task_evidence {
+  id                          BigInt          @id @default(autoincrement()) @db.UnsignedBigInt
+  task_id                     BigInt          @db.UnsignedBigInt
+  uploaded_by_user_id         BigInt          @db.UnsignedBigInt
+  evidence_type               String          @db.VarChar(64)
+  title                       String          @db.VarChar(180)
+  description                 String?         @db.Text
+  file_url                    String?         @db.VarChar(1000)
+  linked_existing_evidence_id String?         @db.VarChar(96)
+  created_at                  DateTime        @default(now()) @db.Timestamp(3)
+  mera_users                  mera_users      @relation(fields: [uploaded_by_user_id], references: [id], onUpdate: Restrict, map: "fk_regulator_task_evidence_uploader")
+  regulator_tasks             regulator_tasks @relation(fields: [task_id], references: [id], onDelete: Cascade, onUpdate: Restrict, map: "fk_regulator_task_evidence_task")
+
+  @@index([task_id, created_at], map: "idx_regulator_task_evidence_task_time")
+  @@index([uploaded_by_user_id], map: "idx_regulator_task_evidence_uploader")
+}
+
+model regulator_task_watchers {
+  id              BigInt          @id @default(autoincrement()) @db.UnsignedBigInt
+  task_id         BigInt          @db.UnsignedBigInt
+  user_id         BigInt          @db.UnsignedBigInt
+  created_at      DateTime        @default(now()) @db.Timestamp(3)
+  mera_users      mera_users      @relation(fields: [user_id], references: [id], onUpdate: Restrict, map: "fk_regulator_task_watchers_user")
+  regulator_tasks regulator_tasks @relation(fields: [task_id], references: [id], onDelete: Cascade, onUpdate: Restrict, map: "fk_regulator_task_watchers_task")
+
+  @@unique([task_id, user_id], map: "uq_regulator_task_watchers_task_user")
+  @@index([user_id], map: "idx_regulator_task_watchers_user")
+}
+
+model mera_notifications {
+  id                 BigInt                  @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id          String                  @unique(map: "public_id") @db.Char(26)
+  user_id            BigInt                  @db.UnsignedBigInt
+  type               mera_notifications_type
+  title              String                  @db.VarChar(180)
+  message            String                  @db.Text
+  linked_entity_type String?                 @db.VarChar(64)
+  linked_entity_id   String?                 @db.VarChar(96)
+  read_at            DateTime?               @db.Timestamp(3)
+  created_at         DateTime                @default(now()) @db.Timestamp(3)
+  mera_users         mera_users              @relation(fields: [user_id], references: [id], onUpdate: Restrict, map: "fk_mera_notifications_user")
+
+  @@index([linked_entity_type, linked_entity_id], map: "idx_mera_notifications_linked_entity")
+  @@index([type, created_at], map: "idx_mera_notifications_type_time")
+  @@index([user_id, read_at, created_at], map: "idx_mera_notifications_user_read_time")
 }
 
 model audit_logs_mera {
@@ -920,6 +1092,50 @@ enum promotion_cashback_destination {
 enum demand_anomaly_events_severity {
   WARNING
   CRITICAL
+}
+
+enum regulator_tasks_type {
+  CASE_REVIEW
+  COMPLAINT_REVIEW
+  STATION_INSPECTION
+  HOARDING_INVESTIGATION
+  PRICE_VIOLATION_REVIEW
+  QUEUE_DISORDER_REVIEW
+  TELEMETRY_MISMATCH_REVIEW
+  FIELD_VISIT
+  MANUAL_TASK
+}
+
+enum regulator_tasks_priority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum regulator_tasks_status {
+  ASSIGNED
+  ACKNOWLEDGED
+  IN_PROGRESS
+  NEEDS_MORE_INFO
+  ESCALATED
+  COMPLETED
+  REJECTED
+  CANCELLED
+}
+
+enum regulator_task_notes_visibility {
+  INTERNAL
+  SUPERVISOR_ONLY
+}
+
+enum mera_notifications_type {
+  TASK_ASSIGNED
+  TASK_REASSIGNED
+  TASK_DUE_SOON
+  TASK_OVERDUE
+  TASK_ESCALATED
+  TASK_COMPLETED
 }
 
 enum mera_users_account_status {

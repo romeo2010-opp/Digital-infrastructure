@@ -2,6 +2,7 @@ import bcrypt from "bcryptjs"
 import { prisma } from "../../../db/prisma.js"
 import { badRequest, notFound } from "../../../utils/http.js"
 import { createPublicId } from "../../common/db.js"
+import { getSmartlinkOpsPrediction } from "../../reports/mlOpsPrediction.service.js"
 import { MERA_ROLE_SET } from "../permissions.js"
 import { logMeraAudit } from "./audit.service.js"
 
@@ -32,6 +33,31 @@ function normalizePublicId(value, label) {
 
 function clampNumber(value, min, max) {
   return Math.min(Math.max(value, min), max)
+}
+
+function normalizeOpsLimit(value, fallback = 6) {
+  return clamp(toInteger(value, fallback), 1, 12)
+}
+
+function normalizeOpsState(value) {
+  return String(value || "").trim().toUpperCase()
+}
+
+function normalizeOpsFuelType(value) {
+  const scoped = String(value || "").trim().toUpperCase()
+  if (scoped === "PETROL" || scoped === "DIESEL") return scoped
+  return ""
+}
+
+function pickMeraOpsFuelType(row, requestedFuelType) {
+  const requested = normalizeOpsFuelType(requestedFuelType)
+  if (requested) return requested
+
+  const petrolState = normalizeOpsState(row?.petrol_status)
+  const dieselState = normalizeOpsState(row?.diesel_status)
+  const pressureStates = new Set(["DRY", "OUT_OF_STOCK", "LIMITED", "LOW"])
+  if (pressureStates.has(dieselState) && !pressureStates.has(petrolState)) return "DIESEL"
+  return "PETROL"
 }
 
 function normalizeRole(value) {
@@ -143,30 +169,98 @@ async function resolveComplaintByPublicId(complaintPublicId) {
   return complaint
 }
 
-async function getLatestInventoryByStationRows() {
-  const rows = await prisma.$queryRaw`
+async function getLatestInventoryByStationRows(db = prisma) {
+  const rows = await db.$queryRaw`
     SELECT
-      s.id AS station_id,
-      COALESCE(NULLIF(s.city, ''), 'Unknown') AS district,
-      s.fuel_level,
-      ft.code AS fuel_code,
-      SUM(COALESCE(latest_reading.litres, 0)) AS remaining_litres
-    FROM stations s
-    LEFT JOIN tanks t ON t.station_id = s.id AND t.is_active = 1
-    LEFT JOIN fuel_types ft ON ft.id = t.fuel_type_id
-    LEFT JOIN (
-      SELECT ir.tank_id, ir.litres
-      FROM inventory_readings ir
-      INNER JOIN (
-        SELECT tank_id, MAX(reading_time) AS max_reading_time
-        FROM inventory_readings
-        GROUP BY tank_id
-      ) latest_per_tank
-        ON latest_per_tank.tank_id = ir.tank_id
-       AND latest_per_tank.max_reading_time = ir.reading_time
-    ) latest_reading ON latest_reading.tank_id = t.id
-    WHERE s.is_active = 1
-    GROUP BY s.id, COALESCE(NULLIF(s.city, ''), 'Unknown'), s.fuel_level, ft.code
+      tank_live.station_id,
+      tank_live.district,
+      tank_live.fuel_level,
+      tank_live.station_availability_status,
+      tank_live.fuel_code,
+      SUM(
+        CASE
+          WHEN tank_live.baseline_time IS NULL THEN 0
+          ELSE GREATEST(0, tank_live.baseline_litres + tank_live.delivered_litres - tank_live.recorded_litres)
+        END
+      ) AS remaining_litres,
+      SUM(COALESCE(tank_live.capacity_litres, 0)) AS capacity_litres,
+      SUM(COALESCE(tank_live.delivered_litres, 0)) AS delivered_litres_since_baseline,
+      MAX(tank_live.latest_delivery_time) AS latest_delivery_time,
+      SUM(CASE WHEN tank_live.baseline_time IS NULL THEN 0 ELSE 1 END) AS known_tank_count,
+      COUNT(tank_live.tank_id) AS tank_count
+    FROM (
+      SELECT
+        s.id AS station_id,
+        COALESCE(NULLIF(s.city, ''), 'Unknown') AS district,
+        s.fuel_level,
+        s.availability_status AS station_availability_status,
+        t.id AS tank_id,
+        ft.code AS fuel_code,
+        COALESCE(t.capacity_litres, 0) AS capacity_litres,
+        COALESCE(opening.opening_litres, fallback_opening.fallback_opening_litres) AS baseline_litres,
+        COALESCE(opening.opening_time, fallback_opening.fallback_opening_time) AS baseline_time,
+        COALESCE((
+          SELECT SUM(fd.litres)
+          FROM fuel_deliveries fd
+          WHERE fd.tank_id = t.id
+            AND fd.delivered_time >= COALESCE(opening.opening_time, fallback_opening.fallback_opening_time)
+            AND fd.delivered_time <= CURRENT_TIMESTAMP(3)
+        ), 0) AS delivered_litres,
+        (
+          SELECT MAX(fd.delivered_time)
+          FROM fuel_deliveries fd
+          WHERE fd.tank_id = t.id
+            AND fd.delivered_time >= COALESCE(opening.opening_time, fallback_opening.fallback_opening_time)
+            AND fd.delivered_time <= CURRENT_TIMESTAMP(3)
+        ) AS latest_delivery_time,
+        COALESCE((
+          SELECT SUM(tx.litres)
+          FROM transactions tx
+          LEFT JOIN pump_nozzles pn ON pn.id = tx.nozzle_id
+          LEFT JOIN pumps p ON p.id = tx.pump_id
+          WHERE tx.station_id = s.id
+            AND COALESCE(pn.tank_id, p.tank_id) = t.id
+            AND tx.occurred_at >= COALESCE(opening.opening_time, fallback_opening.fallback_opening_time)
+            AND tx.occurred_at <= CURRENT_TIMESTAMP(3)
+            AND tx.status NOT IN ('CANCELLED', 'REVERSED')
+            AND tx.settlement_impact_status <> 'REVERSED'
+        ), 0) AS recorded_litres
+      FROM stations s
+      LEFT JOIN tanks t ON t.station_id = s.id AND t.is_active = 1
+      LEFT JOIN fuel_types ft ON ft.id = t.fuel_type_id
+      LEFT JOIN (
+        SELECT ir.tank_id, ir.litres AS opening_litres, ir.reading_time AS opening_time
+        FROM inventory_readings ir
+        INNER JOIN (
+          SELECT tank_id, MIN(reading_time) AS reading_time
+          FROM inventory_readings
+          WHERE reading_type = 'OPENING'
+            AND reading_time >= CURRENT_DATE()
+            AND reading_time < DATE_ADD(CURRENT_DATE(), INTERVAL 1 DAY)
+          GROUP BY tank_id
+        ) first_opening
+          ON first_opening.tank_id = ir.tank_id
+         AND first_opening.reading_time = ir.reading_time
+        WHERE ir.reading_type = 'OPENING'
+      ) opening ON opening.tank_id = t.id
+      LEFT JOIN (
+        SELECT ir.tank_id, ir.litres AS fallback_opening_litres, ir.reading_time AS fallback_opening_time
+        FROM inventory_readings ir
+        INNER JOIN (
+          SELECT tank_id, MAX(reading_time) AS reading_time
+          FROM inventory_readings
+          WHERE reading_type = 'CLOSING'
+            AND reading_time < CURRENT_DATE()
+          GROUP BY tank_id
+        ) previous_closing
+          ON previous_closing.tank_id = ir.tank_id
+         AND previous_closing.reading_time = ir.reading_time
+        WHERE ir.reading_type = 'CLOSING'
+      ) fallback_opening ON fallback_opening.tank_id = t.id
+      WHERE s.is_active = 1
+        AND s.deleted_at IS NULL
+    ) tank_live
+    GROUP BY tank_live.station_id, tank_live.district, tank_live.fuel_level, tank_live.station_availability_status, tank_live.fuel_code
   `
   return Array.isArray(rows) ? rows : []
 }
@@ -183,25 +277,53 @@ function buildInventorySnapshot(rows) {
         stationId,
         district: String(row?.district || 'Unknown'),
         fuelLevel: String(row?.fuel_level || 'MEDIUM').toUpperCase(),
+        stationAvailabilityStatus: String(row?.station_availability_status || '').toUpperCase(),
         fuelRemaining: {},
+        fuelCapacity: {},
+        fuelKnown: {},
+        fuelTankCount: {},
+        fuelDeliveredSinceBaseline: {},
+        fuelLatestDeliveryTime: {},
         totalRemainingLitres: 0,
+        totalCapacityLitres: 0,
+        deliveredLitresSinceBaseline: 0,
+        latestDeliveryTime: null,
       })
     }
 
     const station = stations.get(stationId)
     const fuelCode = String(row?.fuel_code || '').trim().toUpperCase()
     const remainingLitres = Number(row?.remaining_litres || 0)
+    const capacityLitres = Number(row?.capacity_litres || 0)
+    const deliveredLitresSinceBaseline = Number(row?.delivered_litres_since_baseline || 0)
+    const latestDeliveryTime = row?.latest_delivery_time || null
+    const knownTankCount = Number(row?.known_tank_count || 0)
+    const tankCount = Number(row?.tank_count || 0)
 
     if (fuelCode) {
       station.fuelRemaining[fuelCode] = remainingLitres
+      station.fuelCapacity[fuelCode] = capacityLitres
+      station.fuelKnown[fuelCode] = knownTankCount > 0
+      station.fuelTankCount[fuelCode] = tankCount
+      station.fuelDeliveredSinceBaseline[fuelCode] = deliveredLitresSinceBaseline
+      station.fuelLatestDeliveryTime[fuelCode] = latestDeliveryTime
     }
     station.totalRemainingLitres += remainingLitres
+    station.totalCapacityLitres += capacityLitres
+    station.deliveredLitresSinceBaseline += deliveredLitresSinceBaseline
+    if (latestDeliveryTime) {
+      const latestDate = new Date(latestDeliveryTime)
+      const currentLatestDate = station.latestDeliveryTime ? new Date(station.latestDeliveryTime) : null
+      if (!currentLatestDate || latestDate.getTime() > currentLatestDate.getTime()) {
+        station.latestDeliveryTime = latestDeliveryTime
+      }
+    }
   }
 
   const stationList = Array.from(stations.values()).map((station) => {
-    const positiveFuels = Object.entries(station.fuelRemaining).filter(([, litres]) => Number(litres) > 0)
-    const knownFuels = Object.keys(station.fuelRemaining)
-    const outOfStock = knownFuels.length > 0 ? positiveFuels.length === 0 : station.totalRemainingLitres <= 0
+    const knownFuels = Object.keys(station.fuelKnown).filter((fuelCode) => station.fuelKnown[fuelCode])
+    const positiveFuels = knownFuels.filter((fuelCode) => Number(station.fuelRemaining[fuelCode] || 0) > 0)
+    const outOfStock = knownFuels.length > 0 && positiveFuels.length === 0
     const partialOutage = knownFuels.length > 1 && positiveFuels.length > 0 && positiveFuels.length < knownFuels.length
 
     return {
@@ -215,6 +337,383 @@ function buildInventorySnapshot(rows) {
     stations: stationList,
     byStationId: new Map(stationList.map((station) => [station.stationId, station])),
   }
+}
+
+function fuelStatusFromInventory(station, fuelCode) {
+  const remainingLitres = Number(station?.fuelRemaining?.[fuelCode] || 0)
+  const capacityLitres = Number(station?.fuelCapacity?.[fuelCode] || 0)
+  const fuelLevel = String(station?.fuelLevel || "").toUpperCase()
+
+  if (!station?.fuelKnown?.[fuelCode]) return "UNKNOWN"
+  if (remainingLitres <= 0) return "DRY"
+  if (fuelLevel === "LOW") return "LIMITED"
+  if (capacityLitres > 0 && remainingLitres / capacityLitres <= 0.15) return "LIMITED"
+  if (remainingLitres <= 120) return "LIMITED"
+  return "AVAILABLE"
+}
+
+function fuelHasDeliveryEvidence(station, fuelCode, fuelStatus) {
+  if (!["AVAILABLE", "LIMITED"].includes(normalizeStationState(fuelStatus))) return false
+  return Number(station?.fuelDeliveredSinceBaseline?.[fuelCode] || 0) > 0
+}
+
+function stationHasDeliveryVerifiedFuel(station) {
+  return Object.keys(station?.fuelKnown || {}).some((fuelCode) => (
+    station.fuelKnown[fuelCode] && fuelHasDeliveryEvidence(station, fuelCode, fuelStatusFromInventory(station, fuelCode))
+  ))
+}
+
+function deriveStationStatusFromInventory(station) {
+  const petrolStatus = fuelStatusFromInventory(station, "PETROL")
+  const dieselStatus = fuelStatusFromInventory(station, "DIESEL")
+  const statuses = Object.keys(station?.fuelKnown || {}).map((fuelCode) => fuelStatusFromInventory(station, fuelCode))
+  const knownStatuses = statuses.filter((status) => status !== "UNKNOWN")
+
+  let availabilityStatus = "UNKNOWN"
+  if (knownStatuses.length > 0) {
+    availabilityStatus = knownStatuses.every((status) => status === "DRY")
+      ? "DRY"
+      : knownStatuses.some((status) => status === "DRY" || status === "LIMITED")
+        ? "LIMITED"
+        : "AVAILABLE"
+  } else if (normalizeStationState(station?.stationAvailabilityStatus) === "AVAILABLE") {
+    availabilityStatus = "AVAILABLE"
+  }
+
+  return {
+    availabilityStatus,
+    petrolStatus: availabilityStatus === "AVAILABLE" && petrolStatus === "UNKNOWN" ? "AVAILABLE" : petrolStatus,
+    dieselStatus: availabilityStatus === "AVAILABLE" && dieselStatus === "UNKNOWN" ? "AVAILABLE" : dieselStatus,
+  }
+}
+
+function stationHasKnownInventory(station) {
+  return Object.values(station?.fuelKnown || {}).some(Boolean)
+}
+
+function statusFromManualCurrentRow(current, station) {
+  if (stationHasKnownInventory(station)) return null
+
+  const source = String(current?.reported_source || "").trim().toUpperCase()
+  if (!["MERA_INSPECTION", "STATION", "USER"].includes(source)) return null
+
+  const allowed = new Set(["AVAILABLE", "LIMITED", "DRY", "UNKNOWN"])
+  const availabilityStatus = normalizeStationState(current?.availability_status)
+  const petrolStatus = normalizeStationState(current?.petrol_status)
+  const dieselStatus = normalizeStationState(current?.diesel_status)
+  if (!allowed.has(availabilityStatus)) return null
+
+  return {
+    availabilityStatus,
+    petrolStatus: allowed.has(petrolStatus) ? petrolStatus : availabilityStatus,
+    dieselStatus: allowed.has(dieselStatus) ? dieselStatus : availabilityStatus,
+  }
+}
+
+function statusLogDiffers(row, nextStatus) {
+  return (
+    normalizeStationState(row?.availability_status) !== nextStatus.availabilityStatus ||
+    normalizeStationState(row?.petrol_status) !== nextStatus.petrolStatus ||
+    normalizeStationState(row?.diesel_status) !== nextStatus.dieselStatus
+  )
+}
+
+function currentStatusPayloadForStation(station, nextStatus, now) {
+  return {
+    stationId: Number(station.stationId),
+    availabilityStatus: nextStatus.availabilityStatus,
+    petrolStatus: nextStatus.petrolStatus,
+    dieselStatus: nextStatus.dieselStatus,
+    petrolLiveLitres: station.fuelKnown?.PETROL ? Number(station.fuelRemaining?.PETROL || 0) : null,
+    dieselLiveLitres: station.fuelKnown?.DIESEL ? Number(station.fuelRemaining?.DIESEL || 0) : null,
+    totalLiveLitres: Number(station.totalRemainingLitres || 0),
+    totalCapacityLitres: Number(station.totalCapacityLitres || 0),
+    knownFuelCount: Object.values(station.fuelKnown || {}).filter(Boolean).length,
+    tankCount: Object.values(station.fuelTankCount || {}).reduce((sum, value) => sum + Number(value || 0), 0),
+    deliveryVerified: stationHasDeliveryVerifiedFuel(station),
+    petrolDeliveryVerified: fuelHasDeliveryEvidence(station, "PETROL", nextStatus.petrolStatus),
+    dieselDeliveryVerified: fuelHasDeliveryEvidence(station, "DIESEL", nextStatus.dieselStatus),
+    deliveredLitresSinceBaseline: Number(station.deliveredLitresSinceBaseline || 0),
+    petrolDeliveredLitresSinceBaseline: station.fuelKnown?.PETROL ? Number(station.fuelDeliveredSinceBaseline?.PETROL || 0) : null,
+    dieselDeliveredLitresSinceBaseline: station.fuelKnown?.DIESEL ? Number(station.fuelDeliveredSinceBaseline?.DIESEL || 0) : null,
+    latestDeliveryTime: station.latestDeliveryTime || null,
+    lastDerivedAt: now,
+  }
+}
+
+function bucketStartFor(date, bucketMinutes) {
+  const bucketMs = bucketMinutes * 60 * 1000
+  return new Date(Math.floor(date.getTime() / bucketMs) * bucketMs)
+}
+
+function aggregateStatusRowsForRollups(statusRows) {
+  const groups = new Map()
+
+  const touch = (districtKey, districtLabel) => {
+    if (!groups.has(districtKey)) {
+      groups.set(districtKey, {
+        districtKey,
+        districtLabel,
+        availableCount: 0,
+        limitedCount: 0,
+        dryCount: 0,
+        unknownCount: 0,
+        totalStations: 0,
+        stationsWithFuel: 0,
+        deliveryVerifiedStationsWithFuel: 0,
+      })
+    }
+    return groups.get(districtKey)
+  }
+
+  for (const row of statusRows) {
+    const district = String(row.district || "Unknown").trim() || "Unknown"
+    for (const group of [touch("__NATIONAL__", null), touch(district, district)]) {
+      const availability = normalizeStationState(row.availabilityStatus)
+      group.totalStations += 1
+      if (availability === "AVAILABLE") group.availableCount += 1
+      else if (availability === "LIMITED") group.limitedCount += 1
+      else if (availability === "DRY" || availability === "OUT_OF_STOCK") group.dryCount += 1
+      else group.unknownCount += 1
+      if (isFuelAvailableState({
+        availability_status: row.availabilityStatus,
+        petrol_status: row.petrolStatus,
+        diesel_status: row.dieselStatus,
+      })) {
+        group.stationsWithFuel += 1
+        if (row.deliveryVerified) group.deliveryVerifiedStationsWithFuel += 1
+      }
+    }
+  }
+
+  return [...groups.values()]
+}
+
+async function writeStationStatusRollups(statusRows, now, db = prisma) {
+  const bucketMinutesList = [1, 5, 30, 120, 1440]
+  const groups = aggregateStatusRowsForRollups(statusRows)
+  let upserted = 0
+
+  for (const bucketMinutes of bucketMinutesList) {
+    const bucketStart = bucketStartFor(now, bucketMinutes)
+    for (const group of groups) {
+      await db.$executeRaw`
+        INSERT INTO station_status_rollups (
+          bucket_start,
+          bucket_minutes,
+          district_key,
+          district_label,
+          available_count,
+          limited_count,
+          dry_count,
+          unknown_count,
+          total_stations,
+          stations_with_fuel,
+          delivery_verified_stations_with_fuel
+        )
+        VALUES (
+          ${bucketStart},
+          ${bucketMinutes},
+          ${group.districtKey},
+          ${group.districtLabel},
+          ${group.availableCount},
+          ${group.limitedCount},
+          ${group.dryCount},
+          ${group.unknownCount},
+          ${group.totalStations},
+          ${group.stationsWithFuel},
+          ${group.deliveryVerifiedStationsWithFuel}
+        )
+        ON DUPLICATE KEY UPDATE
+          district_label = VALUES(district_label),
+          available_count = VALUES(available_count),
+          limited_count = VALUES(limited_count),
+          dry_count = VALUES(dry_count),
+          unknown_count = VALUES(unknown_count),
+          total_stations = VALUES(total_stations),
+          stations_with_fuel = VALUES(stations_with_fuel),
+          delivery_verified_stations_with_fuel = VALUES(delivery_verified_stations_with_fuel),
+          updated_at = CURRENT_TIMESTAMP(3)
+      `
+      upserted += 1
+    }
+  }
+
+  return upserted
+}
+
+async function pruneGeneratedStationStatusLogs(retentionDays, db = prisma) {
+  const normalizedRetentionDays = Math.max(1, Number(retentionDays || 90))
+  await db.$executeRaw`
+    DELETE status_log
+    FROM station_status_logs status_log
+    WHERE status_log.reported_source = 'SYSTEM'
+      AND status_log.created_at < DATE_SUB(CURRENT_TIMESTAMP(3), INTERVAL ${normalizedRetentionDays} DAY)
+      AND EXISTS (
+        SELECT 1
+        FROM station_status_rollups rollup
+        WHERE rollup.bucket_minutes = 1440
+          AND DATE(rollup.bucket_start) = DATE(status_log.created_at)
+      )
+  `
+}
+
+export async function syncInventoryDerivedStationStatusLogs({ heartbeatMinutes = 60, retentionDays = 90, db = prisma } = {}) {
+  const inventoryRows = await getLatestInventoryByStationRows(db)
+  const inventorySnapshot = buildInventorySnapshot(inventoryRows)
+  const stations = inventorySnapshot.stations
+
+  if (!stations.length) return { inserted: 0, scanned: 0, currentStatuses: 0, rollups: 0 }
+
+  const clockRows = await db.$queryRaw`
+    SELECT CURRENT_TIMESTAMP(3) AS database_now
+  `
+  const currentRows = await db.$queryRaw`
+    SELECT
+      station_id,
+      availability_status,
+      petrol_status,
+      diesel_status,
+      reported_source,
+      last_logged_at
+    FROM station_current_status
+  `
+  const latestRows = await db.$queryRaw`
+    SELECT
+      status_log.station_id,
+      status_log.availability_status,
+      status_log.petrol_status,
+      status_log.diesel_status,
+      status_log.created_at
+    FROM station_status_logs AS status_log
+    INNER JOIN (
+      SELECT station_id, MAX(created_at) AS latest_created_at
+      FROM station_status_logs
+      GROUP BY station_id
+    ) AS latest
+      ON latest.station_id = status_log.station_id
+     AND latest.latest_created_at = status_log.created_at
+  `
+
+  const now = clockRows?.[0]?.database_now ? new Date(clockRows[0].database_now) : new Date()
+  const heartbeatMs = Math.max(1, Number(heartbeatMinutes || 60)) * 60 * 1000
+  const currentByStation = new Map(normalizeRows(currentRows).map((row) => [Number(row.station_id), row]))
+  const latestByStation = new Map(normalizeRows(latestRows).map((row) => [Number(row.station_id), row]))
+  const statusRowsForRollups = []
+  let inserted = 0
+  let upsertedCurrent = 0
+
+  for (const station of stations) {
+    const latest = latestByStation.get(Number(station.stationId))
+    const current = currentByStation.get(Number(station.stationId))
+    const nextStatus = statusFromManualCurrentRow(current, station) || deriveStationStatusFromInventory(station)
+    const lastLoggedAt = latest?.created_at ? new Date(latest.created_at) : current?.last_logged_at ? new Date(current.last_logged_at) : null
+    const heartbeatDue = !lastLoggedAt || now.getTime() - lastLoggedAt.getTime() >= heartbeatMs
+    const shouldLog = !latest || statusLogDiffers(latest, nextStatus) || heartbeatDue
+    const currentPayload = currentStatusPayloadForStation(station, nextStatus, now)
+    const nextLastLoggedAt = shouldLog ? now : lastLoggedAt
+
+    statusRowsForRollups.push({
+      district: station.district,
+      availabilityStatus: nextStatus.availabilityStatus,
+      petrolStatus: nextStatus.petrolStatus,
+      dieselStatus: nextStatus.dieselStatus,
+      deliveryVerified: currentPayload.deliveryVerified,
+    })
+
+    await db.$executeRaw`
+      INSERT INTO station_current_status (
+        station_id,
+        availability_status,
+        diesel_status,
+        petrol_status,
+        petrol_live_litres,
+        diesel_live_litres,
+        total_live_litres,
+        total_capacity_litres,
+        known_fuel_count,
+        tank_count,
+        delivery_verified,
+        petrol_delivery_verified,
+        diesel_delivery_verified,
+        delivered_litres_since_baseline,
+        petrol_delivered_litres_since_baseline,
+        diesel_delivered_litres_since_baseline,
+        latest_delivery_time,
+        last_derived_at,
+        last_logged_at
+      )
+      VALUES (
+        ${currentPayload.stationId},
+        ${currentPayload.availabilityStatus},
+        ${currentPayload.dieselStatus},
+        ${currentPayload.petrolStatus},
+        ${currentPayload.petrolLiveLitres},
+        ${currentPayload.dieselLiveLitres},
+        ${currentPayload.totalLiveLitres},
+        ${currentPayload.totalCapacityLitres},
+        ${currentPayload.knownFuelCount},
+        ${currentPayload.tankCount},
+        ${currentPayload.deliveryVerified},
+        ${currentPayload.petrolDeliveryVerified},
+        ${currentPayload.dieselDeliveryVerified},
+        ${currentPayload.deliveredLitresSinceBaseline},
+        ${currentPayload.petrolDeliveredLitresSinceBaseline},
+        ${currentPayload.dieselDeliveredLitresSinceBaseline},
+        ${currentPayload.latestDeliveryTime},
+        ${currentPayload.lastDerivedAt},
+        ${nextLastLoggedAt}
+      )
+      ON DUPLICATE KEY UPDATE
+        availability_status = VALUES(availability_status),
+        diesel_status = VALUES(diesel_status),
+        petrol_status = VALUES(petrol_status),
+        petrol_live_litres = VALUES(petrol_live_litres),
+        diesel_live_litres = VALUES(diesel_live_litres),
+        total_live_litres = VALUES(total_live_litres),
+        total_capacity_litres = VALUES(total_capacity_litres),
+        known_fuel_count = VALUES(known_fuel_count),
+        tank_count = VALUES(tank_count),
+        delivery_verified = VALUES(delivery_verified),
+        petrol_delivery_verified = VALUES(petrol_delivery_verified),
+        diesel_delivery_verified = VALUES(diesel_delivery_verified),
+        delivered_litres_since_baseline = VALUES(delivered_litres_since_baseline),
+        petrol_delivered_litres_since_baseline = VALUES(petrol_delivered_litres_since_baseline),
+        diesel_delivered_litres_since_baseline = VALUES(diesel_delivered_litres_since_baseline),
+        latest_delivery_time = VALUES(latest_delivery_time),
+        last_derived_at = VALUES(last_derived_at),
+        last_logged_at = VALUES(last_logged_at),
+        updated_at = CURRENT_TIMESTAMP(3)
+    `
+    upsertedCurrent += 1
+
+    if (!shouldLog) continue
+
+    await db.$executeRaw`
+      INSERT INTO station_status_logs (
+        station_id,
+        reported_source,
+        availability_status,
+        diesel_status,
+        petrol_status,
+        updated_by
+      )
+      VALUES (
+        ${station.stationId},
+        'SYSTEM',
+        ${nextStatus.availabilityStatus},
+        ${nextStatus.dieselStatus},
+        ${nextStatus.petrolStatus},
+        NULL
+      )
+    `
+    inserted += 1
+  }
+
+  const rollups = await writeStationStatusRollups(statusRowsForRollups, now, db)
+  await pruneGeneratedStationStatusLogs(retentionDays, db)
+
+  return { inserted, scanned: stations.length, currentStatuses: upsertedCurrent, rollups }
 }
 
 async function resolveInspectionByPublicId(inspectionPublicId) {
@@ -1335,7 +1834,7 @@ export async function createFuelPriceReport(payload, actor) {
 
 export async function getDashboardOverview(auth = null) {
   const scopedDistrict = districtFilterValue(auth)
-  const [stationsRows, inventoryRows, complaintsRows, flagsRows, actionsRows] = await Promise.all([
+  const [stationsRows, inventoryRows, currentStatusRows, complaintsRows, flagsRows, actionsRows] = await Promise.all([
     prisma.$queryRaw`
       SELECT
         COUNT(*) AS totalStations,
@@ -1346,32 +1845,22 @@ export async function getDashboardOverview(auth = null) {
       WHERE is_active = 1
         AND (${scopedDistrict === ""} = TRUE OR city = ${scopedDistrict})
     `,
+    getLatestInventoryByStationRows(),
     prisma.$queryRaw`
       SELECT
-        t.station_id,
-        ft.code AS fuel_code,
-        SUM(COALESCE(latest_reading.litres, 0)) AS remaining_litres
-      FROM tanks t
-      INNER JOIN fuel_types ft ON ft.id = t.fuel_type_id
-      LEFT JOIN (
-        SELECT ir.tank_id, ir.litres
-        FROM inventory_readings ir
-        INNER JOIN (
-          SELECT tank_id, MAX(reading_time) AS max_reading_time
-          FROM inventory_readings
-          GROUP BY tank_id
-        ) latest_per_tank
-          ON latest_per_tank.tank_id = ir.tank_id
-         AND latest_per_tank.max_reading_time = ir.reading_time
-      ) latest_reading ON latest_reading.tank_id = t.id
-      WHERE t.is_active = 1
+        scs.station_id,
+        scs.availability_status,
+        scs.petrol_status,
+        scs.diesel_status
+      FROM station_current_status scs
+      INNER JOIN stations s ON s.id = scs.station_id
+      WHERE s.is_active = 1
         AND (${scopedDistrict === ""} = TRUE OR EXISTS (
           SELECT 1
-          FROM stations s
-          WHERE s.id = t.station_id
-            AND s.city = ${scopedDistrict}
+          FROM stations scoped_station
+          WHERE scoped_station.id = scs.station_id
+            AND scoped_station.city = ${scopedDistrict}
         ))
-      GROUP BY t.station_id, ft.code
     `,
     prisma.$queryRaw`
       SELECT
@@ -1402,25 +1891,49 @@ export async function getDashboardOverview(auth = null) {
     `,
   ])
 
-  const inventorySummaryRows = Array.isArray(inventoryRows) ? inventoryRows : []
+  const inventorySummaryRows = normalizeRows(inventoryRows).filter((row) => (
+    scopedDistrict === "" || String(row?.district || "").toLowerCase() === scopedDistrict.toLowerCase()
+  ))
   const stationsTotal = Number(stationsRows?.[0]?.totalStations || 0)
   const inventorySnapshot = buildInventorySnapshot(inventorySummaryRows)
+  const currentStatuses = normalizeRows(currentStatusRows)
   const fuelAvailabilityBuckets = {
     PETROL: new Set(),
     DIESEL: new Set(),
     KEROSENE: new Set(),
   }
 
-  inventorySnapshot.stations.forEach((station) => {
-    Object.entries(fuelAvailabilityBuckets).forEach(([fuelCode, bucket]) => {
-      if (Number(station.fuelRemaining[fuelCode] || 0) > 0) {
-        bucket.add(station.stationId)
+  let outOfStockStations = 0
+  let partialOutageStations = 0
+  let liveLowStockStations = 0
+
+  if (currentStatuses.length) {
+    currentStatuses.forEach((row) => {
+      const stationId = Number(row.station_id)
+      const availability = normalizeStationState(row.availability_status)
+      const petrol = normalizeStationState(row.petrol_status)
+      const diesel = normalizeStationState(row.diesel_status)
+      if (["AVAILABLE", "LIMITED"].includes(petrol)) fuelAvailabilityBuckets.PETROL.add(stationId)
+      if (["AVAILABLE", "LIMITED"].includes(diesel)) fuelAvailabilityBuckets.DIESEL.add(stationId)
+      if (availability === "DRY") outOfStockStations += 1
+      if (availability === "LIMITED") liveLowStockStations += 1
+      if ([petrol, diesel].includes("DRY") && [petrol, diesel].some((status) => ["AVAILABLE", "LIMITED"].includes(status))) {
+        partialOutageStations += 1
       }
     })
-  })
-
-  const outOfStockStations = inventorySnapshot.stations.filter((station) => station.outOfStock).length
-  const partialOutageStations = inventorySnapshot.stations.filter((station) => station.partialOutage).length
+  } else {
+    inventorySnapshot.stations.forEach((station) => {
+      const nextStatus = deriveStationStatusFromInventory(station)
+      Object.entries(fuelAvailabilityBuckets).forEach(([fuelCode, bucket]) => {
+        if (["AVAILABLE", "LIMITED"].includes(fuelStatusFromInventory(station, fuelCode))) {
+          bucket.add(station.stationId)
+        }
+      })
+      if (nextStatus.availabilityStatus === "DRY") outOfStockStations += 1
+      if (nextStatus.availabilityStatus === "LIMITED") liveLowStockStations += 1
+      if (station.partialOutage) partialOutageStations += 1
+    })
+  }
 
   const fuelAvailabilityByType = [
     { label: "Petrol", code: "PETROL", value: fuelAvailabilityBuckets.PETROL.size, total: stationsTotal },
@@ -1431,7 +1944,7 @@ export async function getDashboardOverview(auth = null) {
 
   return {
     totalStations: stationsTotal,
-    lowStockStations: Number(stationsRows?.[0]?.lowStockStations || 0),
+    lowStockStations: liveLowStockStations,
     mediumStockStations: Number(stationsRows?.[0]?.mediumStockStations || 0),
     highStockStations: Number(stationsRows?.[0]?.highStockStations || 0),
     outOfStockStations,
@@ -1446,8 +1959,107 @@ export async function getDashboardOverview(auth = null) {
   }
 }
 
+export async function getMeraOpsPredictions(auth = null, options = {}) {
+  const scopedDistrict = districtFilterValue(auth)
+  const limit = normalizeOpsLimit(options?.limit, 6)
+  const requestedFuelType = normalizeOpsFuelType(options?.fuelType)
+  const rows = await prisma.$queryRaw`
+    SELECT
+      s.id,
+      s.public_id,
+      s.name,
+      COALESCE(NULLIF(s.city, ''), 'Unknown') AS district,
+      s.city,
+      s.timezone,
+      s.fuel_level,
+      s.availability_status,
+      COALESCE(scs.petrol_status, status_log.petrol_status, 'UNKNOWN') AS petrol_status,
+      COALESCE(scs.diesel_status, status_log.diesel_status, 'UNKNOWN') AS diesel_status,
+      COALESCE(active_queue.active_count, 0) AS active_queue_count
+    FROM stations s
+    LEFT JOIN station_current_status scs ON scs.station_id = s.id
+    LEFT JOIN station_status_logs status_log
+      ON status_log.id = (
+        SELECT latest_status_log.id
+        FROM station_status_logs latest_status_log
+        WHERE latest_status_log.station_id = s.id
+        ORDER BY latest_status_log.created_at DESC
+        LIMIT 1
+      )
+    LEFT JOIN (
+      SELECT station_id, COUNT(*) AS active_count
+      FROM queue_entries
+      WHERE status IN ('WAITING', 'CALLED', 'LATE')
+      GROUP BY station_id
+    ) active_queue ON active_queue.station_id = s.id
+    WHERE s.is_active = 1
+      AND s.deleted_at IS NULL
+      AND (${scopedDistrict === ""} = TRUE OR s.city = ${scopedDistrict})
+    ORDER BY
+      active_queue_count DESC,
+      FIELD(UPPER(COALESCE(scs.availability_status, s.availability_status, 'UNKNOWN')), 'DRY', 'OUT_OF_STOCK', 'LIMITED', 'LOW', 'UNKNOWN', 'AVAILABLE') ASC,
+      s.name ASC
+    LIMIT ${limit}
+  `
+
+  const stationRows = normalizeRows(rows)
+  const settled = await Promise.all(
+    stationRows.map(async (row) => {
+      const fuelType = pickMeraOpsFuelType(row, requestedFuelType)
+      try {
+        const data = await getSmartlinkOpsPrediction({
+          station: {
+            id: Number(row.id),
+            public_id: row.public_id,
+            name: row.name,
+            city: row.city || row.district,
+            timezone: row.timezone || "Africa/Blantyre",
+          },
+          fuelType,
+        })
+
+        return {
+          stationPublicId: data.stationPublicId || row.public_id,
+          stationName: row.name || "Unknown station",
+          district: row.district || row.city || "Unknown",
+          fuelType: data.fuelType || fuelType,
+          generatedAt: data.generatedAt,
+          inputSummary: {
+            currentQueueLength: data.featurePayload?.current_queue_length ?? null,
+            activePumps: data.featurePayload?.active_pumps ?? null,
+            activeNozzles: data.featurePayload?.active_nozzles ?? null,
+            stockLitres: data.featurePayload?.stock_litres ?? null,
+            nearbyShortageIndex: data.featurePayload?.nearby_shortage_index ?? null,
+          },
+          prediction: data.prediction,
+        }
+      } catch (error) {
+        return {
+          error: {
+            stationPublicId: row.public_id,
+            stationName: row.name || "Unknown station",
+            district: row.district || row.city || "Unknown",
+            fuelType,
+            message: error?.message || "ML prediction unavailable",
+          },
+        }
+      }
+    })
+  )
+
+  const items = settled.filter((item) => item && !item.error)
+  const errors = settled.filter((item) => item?.error).map((item) => item.error)
+
+  return {
+    generatedAt: new Date().toISOString(),
+    modelAvailable: items.length > 0,
+    items,
+    errors,
+  }
+}
+
 export async function getDemandForecastSummary(auth = null) {
-  const [overview, inventoryRows, districtShortagesRows, transactionRows, queueRows, complaintRows, deliveryRows, flagRows] = await Promise.all([
+  const [overview, inventoryRows, districtShortagesRows, transactionRows, queueRows, complaintRows, deliveryRows, flagRows, opsPredictions] = await Promise.all([
     getDashboardOverview(auth),
     getLatestInventoryByStationRows(),
     getDistrictShortageSummaries(auth),
@@ -1498,6 +2110,12 @@ export async function getDemandForecastSummary(auth = null) {
       WHERE cf.resolved_status IN ('OPEN', 'UNDER_REVIEW')
       GROUP BY COALESCE(NULLIF(s.city, ''), 'Unknown')
     `,
+    getMeraOpsPredictions(auth, { limit: 6 }).catch((error) => ({
+      generatedAt: new Date().toISOString(),
+      modelAvailable: false,
+      items: [],
+      errors: [{ message: error?.message || "ML predictions unavailable" }],
+    })),
   ])
 
   const inventorySnapshot = buildInventorySnapshot(inventoryRows)
@@ -1621,6 +2239,7 @@ export async function getDemandForecastSummary(auth = null) {
     generatedAt: new Date().toISOString(),
     summary,
     rows: forecastRows,
+    opsPredictions,
   }
 }
 
@@ -1645,6 +2264,342 @@ function isOutOfStockHeatmapRow(row) {
 
 function isLiveReportingHeatmapRow(row) {
   return !["", "UNKNOWN", "OFFLINE"].includes(normalizeStationState(row?.availability_status))
+}
+
+function heatmapSeverity(row) {
+  const availability = normalizeStationState(row?.availability_status)
+  const petrol = normalizeStationState(row?.petrol_status)
+  const diesel = normalizeStationState(row?.diesel_status)
+
+  if (availability === "DRY" || availability === "OUT_OF_STOCK") {
+    return { level: "critical", score: 95 }
+  }
+  if (petrol === "DRY" && diesel === "DRY") {
+    return { level: "critical", score: 90 }
+  }
+  if (availability === "LIMITED") {
+    return { level: "high", score: 70 }
+  }
+  if (petrol === "LOW" || diesel === "LOW" || petrol === "DRY" || diesel === "DRY") {
+    return { level: "low", score: 48 }
+  }
+  if (availability === "UNKNOWN" || availability === "OFFLINE" || availability === "") {
+    return { level: "no_data", score: 12 }
+  }
+  return { level: "normal", score: 18 }
+}
+
+function normalizeDashboardNumber(value, fallback = 0) {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : fallback
+}
+
+function buildSparkline(seed, current, previous = current, length = 18) {
+  const normalizedCurrent = Math.max(0, normalizeDashboardNumber(current, 0))
+  const normalizedPrevious = Math.max(0, normalizeDashboardNumber(previous, normalizedCurrent))
+  const baseline = Math.max(normalizedCurrent, normalizedPrevious, 1)
+  const swing = Math.abs(normalizedCurrent - normalizedPrevious)
+
+  return Array.from({ length }, (_value, index) => {
+    const progress = index / Math.max(1, length - 1)
+    const wave = Math.sin((index + 1) * 0.82 + seed) * Math.max(baseline * 0.055, swing * 0.18, 1)
+    const value = normalizedPrevious + (normalizedCurrent - normalizedPrevious) * progress + wave
+    if (index === length - 1) return Math.max(0, Math.round(normalizedCurrent))
+    return Math.max(0, Math.round(value))
+  })
+}
+
+function trendDirection(current, previous) {
+  const currentValue = normalizeDashboardNumber(current, 0)
+  const previousValue = normalizeDashboardNumber(previous, currentValue)
+  if (currentValue > previousValue) return "up"
+  if (currentValue < previousValue) return "down"
+  return "flat"
+}
+
+function normalizeTrendRows(rows, valueKey, labelKey = "label") {
+  return normalizeRows(rows).map((row) => ({
+    label: String(row?.[labelKey] || ""),
+    value: normalizeDashboardNumber(row?.[valueKey], 0),
+  }))
+}
+
+const AVAILABILITY_INTERVALS = {
+  "15m": { minutes: 15, bucketMinutes: 1 },
+  "1h": { minutes: 60, bucketMinutes: 5 },
+  "6h": { minutes: 360, bucketMinutes: 30 },
+  "24h": { minutes: 1440, bucketMinutes: 120 },
+  "7d": { minutes: 10080, bucketMinutes: 1440 },
+  "today": { bucketMinutes: 30 },
+}
+// MySQL returns CAT-local dashboard timestamps to Prisma as UTC Date objects.
+// Formatting them in UTC preserves the actual local clock shown by the database.
+const MERA_DASHBOARD_TIME_ZONE = "UTC"
+
+function normalizeAvailabilityInterval(value) {
+  const normalized = String(value || "1h").trim().toLowerCase()
+  return AVAILABILITY_INTERVALS[normalized] ? normalized : "1h"
+}
+
+function getZonedDateParts(date, timeZone = MERA_DASHBOARD_TIME_ZONE) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).formatToParts(date)
+  const mapped = Object.fromEntries(parts.map((part) => [part.type, part.value]))
+  const hour = Number(mapped.hour || 0)
+
+  return {
+    year: Number(mapped.year),
+    month: Number(mapped.month),
+    day: Number(mapped.day),
+    hour: hour === 24 ? 0 : hour,
+    minute: Number(mapped.minute || 0),
+    second: Number(mapped.second || 0),
+  }
+}
+
+function getTimeZoneOffsetMs(date, timeZone = MERA_DASHBOARD_TIME_ZONE) {
+  const parts = getZonedDateParts(date, timeZone)
+  const zonedAsUtc = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second)
+  return zonedAsUtc - date.getTime()
+}
+
+function startOfDayInDashboardTimeZone(date, timeZone = MERA_DASHBOARD_TIME_ZONE) {
+  const parts = getZonedDateParts(date, timeZone)
+  const zonedMidnightAsUtc = Date.UTC(parts.year, parts.month - 1, parts.day, 0, 0, 0, 0)
+  const offset = getTimeZoneOffsetMs(new Date(zonedMidnightAsUtc), timeZone)
+  return new Date(zonedMidnightAsUtc - offset)
+}
+
+function getAvailabilityIntervalConfig(interval, now) {
+  const config = AVAILABILITY_INTERVALS[interval] || AVAILABILITY_INTERVALS["1h"]
+  if (interval === "today") {
+    const start = startOfDayInDashboardTimeZone(now)
+    const minutes = Math.max(1, Math.ceil((now.getTime() - start.getTime()) / 60000))
+    return { ...config, minutes, start }
+  }
+
+  return {
+    ...config,
+    start: new Date(now.getTime() - config.minutes * 60 * 1000),
+  }
+}
+
+function isFuelAvailableState(row) {
+  const availability = normalizeStationState(row?.availability_status)
+  const petrol = normalizeStationState(row?.petrol_status)
+  const diesel = normalizeStationState(row?.diesel_status)
+  return (
+    ["AVAILABLE", "LIMITED"].includes(availability) ||
+    ["AVAILABLE", "LIMITED"].includes(petrol) ||
+    ["AVAILABLE", "LIMITED"].includes(diesel)
+  )
+}
+
+function formatAvailabilityBucketLabel(date, interval) {
+  if (interval === "7d") {
+    return date.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: MERA_DASHBOARD_TIME_ZONE })
+  }
+  return date.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: MERA_DASHBOARD_TIME_ZONE })
+}
+
+function floorDateToBucket(date, bucketMs) {
+  return new Date(Math.floor(date.getTime() / bucketMs) * bucketMs)
+}
+
+function buildAvailabilityBuckets({ start, now, interval, bucketMinutes }) {
+  const bucketMs = bucketMinutes * 60 * 1000
+  const buckets = []
+  let bucketTime = floorDateToBucket(start, bucketMs)
+  const endTime = floorDateToBucket(now, bucketMs)
+
+  while (bucketTime.getTime() <= endTime.getTime() && buckets.length < 500) {
+    buckets.push(bucketTime)
+    bucketTime = new Date(bucketTime.getTime() + bucketMs)
+  }
+
+  if (!buckets.length) {
+    buckets.push(endTime)
+  }
+  if (now.getTime() - buckets[buckets.length - 1].getTime() > Math.min(60000, bucketMs / 4)) {
+    buckets.push(now)
+  }
+
+  return buckets.map((bucketDate) => ({
+    timestamp: bucketDate.toISOString(),
+    label: formatAvailabilityBucketLabel(bucketDate, interval),
+    bucketTime: bucketDate,
+    stationsWithFuel: 0,
+    totalStations: 0,
+  }))
+}
+
+async function getRollupFuelAvailabilityHistory({ auth = null, interval, config, now, start, buckets }) {
+  const scopedDistrict = districtFilterValue(auth)
+  const districtKey = scopedDistrict || "__NATIONAL__"
+  const rollupLookbackStart = new Date(start.getTime() - config.bucketMinutes * 2 * 60 * 1000)
+  const rows = await prisma.$queryRaw`
+    SELECT
+      bucket_start,
+      stations_with_fuel,
+      delivery_verified_stations_with_fuel,
+      total_stations
+    FROM station_status_rollups
+    WHERE bucket_minutes = ${config.bucketMinutes}
+      AND district_key = ${districtKey}
+      AND bucket_start >= ${rollupLookbackStart}
+      AND bucket_start <= ${now}
+    ORDER BY bucket_start ASC
+  `
+  const rollups = normalizeRows(rows)
+  if (!rollups.length) return null
+  const firstBucketTime = buckets[0]?.bucketTime?.getTime?.()
+  const hasBaselineRollup = Number.isFinite(firstBucketTime)
+    ? rollups.some((row) => new Date(row.bucket_start).getTime() <= firstBucketTime)
+    : true
+  if (!hasBaselineRollup) return null
+
+  let rollupIndex = 0
+  let currentRollup = null
+
+  return {
+    interval,
+    generatedAt: now.toISOString(),
+    source: "rollup",
+    points: buckets.map((bucket) => {
+      while (
+        rollupIndex < rollups.length &&
+        new Date(rollups[rollupIndex].bucket_start).getTime() <= bucket.bucketTime.getTime()
+      ) {
+        currentRollup = rollups[rollupIndex]
+        rollupIndex += 1
+      }
+
+      return {
+        timestamp: bucket.timestamp,
+        label: bucket.label,
+        stationsWithFuel: normalizeDashboardNumber(currentRollup?.stations_with_fuel, 0),
+        deliveryVerifiedStationsWithFuel: normalizeDashboardNumber(currentRollup?.delivery_verified_stations_with_fuel, 0),
+        totalStations: normalizeDashboardNumber(currentRollup?.total_stations, 0),
+      }
+    }),
+  }
+}
+
+async function getFuelAvailabilityHistory(auth = null, intervalValue = "1h") {
+  const interval = normalizeAvailabilityInterval(intervalValue)
+  const scopedDistrict = districtFilterValue(auth)
+  const databaseClockRows = await prisma.$queryRaw`
+    SELECT CURRENT_TIMESTAMP(3) AS database_now
+  `
+  const now = databaseClockRows?.[0]?.database_now ? new Date(databaseClockRows[0].database_now) : new Date()
+  const config = getAvailabilityIntervalConfig(interval, now)
+  const start = config.start
+  const buckets = buildAvailabilityBuckets({ start, now, interval, bucketMinutes: config.bucketMinutes })
+
+  const rollupHistory = await getRollupFuelAvailabilityHistory({ auth, interval, config, now, start, buckets })
+  if (rollupHistory) return rollupHistory
+
+  const [stationRows, initialStatusRows, statusRows] = await Promise.all([
+    prisma.$queryRaw`
+      SELECT
+        s.id,
+        s.created_at,
+        COALESCE(scs.delivery_verified, 0) AS delivery_verified
+      FROM stations s
+      LEFT JOIN station_current_status scs ON scs.station_id = s.id
+      WHERE s.is_active = 1
+        AND s.deleted_at IS NULL
+        AND (${scopedDistrict === ""} = TRUE OR s.city = ${scopedDistrict})
+      ORDER BY s.id ASC
+    `,
+    prisma.$queryRaw`
+      SELECT
+        status_log.station_id,
+        status_log.availability_status,
+        status_log.petrol_status,
+        status_log.diesel_status,
+        status_log.created_at
+      FROM station_status_logs AS status_log
+      INNER JOIN stations AS station ON station.id = status_log.station_id
+      INNER JOIN (
+        SELECT station_id, MAX(created_at) AS latest_created_at
+        FROM station_status_logs
+        WHERE created_at < ${start}
+        GROUP BY station_id
+      ) AS latest
+        ON latest.station_id = status_log.station_id
+       AND latest.latest_created_at = status_log.created_at
+      WHERE station.is_active = 1
+        AND station.deleted_at IS NULL
+        AND (${scopedDistrict === ""} = TRUE OR station.city = ${scopedDistrict})
+      ORDER BY status_log.created_at ASC
+    `,
+    prisma.$queryRaw`
+      SELECT
+        status_log.station_id,
+        status_log.availability_status,
+        status_log.petrol_status,
+        status_log.diesel_status,
+        status_log.created_at
+      FROM station_status_logs AS status_log
+      INNER JOIN stations AS station ON station.id = status_log.station_id
+      WHERE status_log.created_at >= ${start}
+        AND status_log.created_at <= ${now}
+        AND station.is_active = 1
+        AND station.deleted_at IS NULL
+        AND (${scopedDistrict === ""} = TRUE OR station.city = ${scopedDistrict})
+      ORDER BY status_log.created_at ASC
+    `,
+  ])
+
+  const stations = normalizeRows(stationRows).map((row) => ({
+    id: Number(row.id),
+    createdAt: row.created_at ? new Date(row.created_at) : start,
+    deliveryVerified: Boolean(row.delivery_verified),
+  }))
+  const stationState = new Map()
+  normalizeRows(initialStatusRows).forEach((row) => {
+    stationState.set(Number(row.station_id), row)
+  })
+
+  const inWindowRows = normalizeRows(statusRows)
+  let statusIndex = 0
+
+  return {
+    interval,
+    generatedAt: now.toISOString(),
+    points: buckets.map((bucket) => {
+      while (
+        statusIndex < inWindowRows.length &&
+        new Date(inWindowRows[statusIndex].created_at).getTime() <= bucket.bucketTime.getTime()
+      ) {
+        stationState.set(Number(inWindowRows[statusIndex].station_id), inWindowRows[statusIndex])
+        statusIndex += 1
+      }
+
+      const activeStations = stations.filter((station) => station.createdAt.getTime() <= bucket.bucketTime.getTime())
+      const stationsWithFuel = activeStations.filter((station) => isFuelAvailableState(stationState.get(station.id))).length
+      const deliveryVerifiedStationsWithFuel = activeStations.filter((station) => (
+        station.deliveryVerified && isFuelAvailableState(stationState.get(station.id))
+      )).length
+
+      return {
+        timestamp: bucket.timestamp,
+        label: bucket.label,
+        stationsWithFuel,
+        deliveryVerifiedStationsWithFuel,
+        totalStations: activeStations.length,
+      }
+    }),
+  }
 }
 
 export async function getSidebarStats(auth = null) {
@@ -1735,6 +2690,368 @@ export async function getSidebarStats(auth = null) {
   }
 }
 
+export async function getNationalOperationsDashboard(auth = null, options = {}) {
+  const scopedDistrict = districtFilterValue(auth)
+  const availabilityInterval = normalizeAvailabilityInterval(options?.availabilityInterval)
+  const [
+    overview,
+    sidebarStats,
+    heatmapRows,
+    demandForecast,
+    queueRows,
+    queueTrendRows,
+    demandIndexRows,
+    fuelAvailabilityHistory,
+    previousStationRows,
+    previousStatusRows,
+    previousCriticalFlagRows,
+    complaintRows,
+    flagRows,
+    inspectionRows,
+    deliveryRows,
+    auditRows,
+  ] = await Promise.all([
+    getDashboardOverview(auth),
+    getSidebarStats(auth),
+    getShortageHeatmapData(auth),
+    getDemandForecastSummary(auth).catch(() => ({ rows: [], summary: null })),
+    prisma.$queryRaw`
+      SELECT
+        s.public_id,
+        s.name,
+        COALESCE(NULLIF(s.city, ''), 'Unknown') AS district,
+        COUNT(qe.id) AS queue_count,
+        AVG(TIMESTAMPDIFF(MINUTE, qe.joined_at, CURRENT_TIMESTAMP(3))) AS avg_wait_minutes
+      FROM queue_entries qe
+      INNER JOIN stations s ON s.id = qe.station_id
+      WHERE qe.status IN ('WAITING', 'CALLED', 'LATE')
+        AND (${scopedDistrict === ""} = TRUE OR s.city = ${scopedDistrict})
+      GROUP BY s.id, s.public_id, s.name, COALESCE(NULLIF(s.city, ''), 'Unknown')
+      ORDER BY avg_wait_minutes DESC, queue_count DESC, s.name ASC
+      LIMIT 6
+    `,
+    prisma.$queryRaw`
+      SELECT
+        DATE_FORMAT(joined_at, '%H:00') AS hour_label,
+        AVG(TIMESTAMPDIFF(MINUTE, joined_at, COALESCE(served_at, called_at, CURRENT_TIMESTAMP(3)))) AS avg_wait_minutes
+      FROM queue_entries
+      WHERE joined_at >= DATE_SUB(CURRENT_TIMESTAMP(3), INTERVAL 24 HOUR)
+        AND (${scopedDistrict === ""} = TRUE OR EXISTS (
+          SELECT 1 FROM stations s WHERE s.id = queue_entries.station_id AND s.city = ${scopedDistrict}
+        ))
+      GROUP BY DATE_FORMAT(joined_at, '%H:00')
+      ORDER BY MIN(joined_at) ASC
+    `,
+    prisma.$queryRaw`
+      SELECT
+        DATE_FORMAT(tx.occurred_at, '%b %e') AS day_label,
+        ft.code AS fuel_code,
+        SUM(tx.litres) AS litres
+      FROM transactions tx
+      INNER JOIN fuel_types ft ON ft.id = tx.fuel_type_id
+      INNER JOIN stations s ON s.id = tx.station_id
+      WHERE tx.occurred_at >= DATE_SUB(CURRENT_TIMESTAMP(3), INTERVAL 7 DAY)
+        AND (${scopedDistrict === ""} = TRUE OR s.city = ${scopedDistrict})
+      GROUP BY DATE(tx.occurred_at), DATE_FORMAT(tx.occurred_at, '%b %e'), ft.code
+      ORDER BY DATE(tx.occurred_at) ASC
+    `,
+    getFuelAvailabilityHistory(auth, availabilityInterval),
+    prisma.$queryRaw`
+      SELECT COUNT(*) AS total_before
+      FROM stations s
+      WHERE s.is_active = 1
+        AND s.created_at <= DATE_SUB(CURRENT_TIMESTAMP(3), INTERVAL 7 DAY)
+        AND (${scopedDistrict === ""} = TRUE OR s.city = ${scopedDistrict})
+    `,
+    prisma.$queryRaw`
+      SELECT
+        s.public_id,
+        s.name,
+        s.city,
+        COALESCE((
+          SELECT status_log.availability_status
+          FROM station_status_logs status_log
+          WHERE status_log.station_id = s.id
+            AND status_log.created_at <= DATE_SUB(CURRENT_TIMESTAMP(3), INTERVAL 24 HOUR)
+          ORDER BY status_log.created_at DESC
+          LIMIT 1
+        ), 'UNKNOWN') AS availability_status,
+        COALESCE((
+          SELECT status_log.petrol_status
+          FROM station_status_logs status_log
+          WHERE status_log.station_id = s.id
+            AND status_log.created_at <= DATE_SUB(CURRENT_TIMESTAMP(3), INTERVAL 24 HOUR)
+          ORDER BY status_log.created_at DESC
+          LIMIT 1
+        ), 'UNKNOWN') AS petrol_status,
+        COALESCE((
+          SELECT status_log.diesel_status
+          FROM station_status_logs status_log
+          WHERE status_log.station_id = s.id
+            AND status_log.created_at <= DATE_SUB(CURRENT_TIMESTAMP(3), INTERVAL 24 HOUR)
+          ORDER BY status_log.created_at DESC
+          LIMIT 1
+        ), 'UNKNOWN') AS diesel_status
+      FROM stations s
+      WHERE s.is_active = 1
+        AND (${scopedDistrict === ""} = TRUE OR s.city = ${scopedDistrict})
+      ORDER BY s.name ASC
+    `,
+    prisma.$queryRaw`
+      SELECT COUNT(*) AS total
+      FROM compliance_flags cf
+      INNER JOIN stations s ON s.id = cf.station_id
+      WHERE cf.resolved_status IN ('OPEN', 'UNDER_REVIEW')
+        AND cf.severity = 'CRITICAL'
+        AND cf.created_at <= DATE_SUB(CURRENT_TIMESTAMP(3), INTERVAL 24 HOUR)
+        AND (${scopedDistrict === ""} = TRUE OR s.city = ${scopedDistrict})
+    `,
+    prisma.$queryRaw`
+      SELECT
+        pc.public_id,
+        pc.complaint_type,
+        pc.complaint_status,
+        pc.created_at,
+        s.name AS station_name,
+        COALESCE(NULLIF(s.city, ''), 'Unknown') AS district
+      FROM public_complaints pc
+      INNER JOIN stations s ON s.id = pc.station_id
+      WHERE pc.complaint_status IN ('NEW', 'TRIAGED', 'ASSIGNED', 'UNDER_INVESTIGATION', 'ESCALATED')
+        AND (${scopedDistrict === ""} = TRUE OR s.city = ${scopedDistrict})
+      ORDER BY pc.created_at DESC
+      LIMIT 8
+    `,
+    prisma.$queryRaw`
+      SELECT
+        cf.public_id,
+        cf.flag_type,
+        cf.severity,
+        cf.created_at,
+        s.name AS station_name,
+        COALESCE(NULLIF(s.city, ''), 'Unknown') AS district
+      FROM compliance_flags cf
+      INNER JOIN stations s ON s.id = cf.station_id
+      WHERE cf.resolved_status IN ('OPEN', 'UNDER_REVIEW')
+        AND (${scopedDistrict === ""} = TRUE OR s.city = ${scopedDistrict})
+      ORDER BY FIELD(cf.severity, 'CRITICAL', 'HIGH', 'MEDIUM', 'LOW'), cf.created_at DESC
+      LIMIT 8
+    `,
+    prisma.$queryRaw`
+      SELECT
+        inspection_status,
+        COUNT(*) AS total
+      FROM inspections
+      WHERE (${scopedDistrict === ""} = TRUE OR EXISTS (
+        SELECT 1 FROM stations s WHERE s.id = inspections.station_id AND s.city = ${scopedDistrict}
+      ))
+      GROUP BY inspection_status
+    `,
+    prisma.$queryRaw`
+      SELECT
+        fd.delivered_time,
+        fd.litres,
+        s.name AS station_name,
+        COALESCE(NULLIF(s.city, ''), 'Unknown') AS district
+      FROM fuel_deliveries fd
+      INNER JOIN stations s ON s.id = fd.station_id
+      WHERE (${scopedDistrict === ""} = TRUE OR s.city = ${scopedDistrict})
+      ORDER BY fd.delivered_time DESC
+      LIMIT 8
+    `,
+    prisma.$queryRaw`
+      SELECT action_type, action_description, created_at
+      FROM audit_logs_mera
+      ORDER BY created_at DESC
+      LIMIT 8
+    `.catch(() => []),
+  ])
+
+  const heatmap = normalizeRows(heatmapRows).map((row) => {
+    const severity = heatmapSeverity(row)
+    return {
+      ...row,
+      latitude: row?.latitude === null || row?.latitude === undefined ? null : normalizeDashboardNumber(row.latitude, null),
+      longitude: row?.longitude === null || row?.longitude === undefined ? null : normalizeDashboardNumber(row.longitude, null),
+      severity: severity.level,
+      severityScore: severity.score,
+    }
+  })
+
+  const stationsTotal = normalizeDashboardNumber(sidebarStats?.stationsTotal || overview?.totalStations, 0)
+  const stationsOnline = normalizeDashboardNumber(sidebarStats?.stationsOnline, 0)
+  const outOfStock = normalizeDashboardNumber(sidebarStats?.outOfStock || overview?.outOfStockStations, 0)
+  const lowStock = normalizeDashboardNumber(sidebarStats?.lowStock || overview?.lowStockStations, 0)
+  const avgQueueWait = normalizeDashboardNumber(sidebarStats?.avgQueueWait, 0)
+  const criticalHeatmap = heatmap.filter((row) => row.severity === "critical")
+  const criticalFlags = normalizeRows(flagRows).filter((row) => String(row?.severity || "").toUpperCase() === "CRITICAL")
+  const previousHeatmap = normalizeRows(previousStatusRows).map((row) => ({
+    ...row,
+    severity: heatmapSeverity(row).level,
+  }))
+  const previousStationsTotal = normalizeDashboardNumber(previousStationRows?.[0]?.total_before, stationsTotal)
+  const previousStationsOnline = previousHeatmap.filter((row) => isLiveReportingHeatmapRow(row)).length
+  const previousOutOfStock = previousHeatmap.filter((row) => row.severity === "critical").length
+  const previousLowStock = previousHeatmap.filter((row) => row.severity === "low" || row.severity === "high").length
+  const previousCriticalAlerts = previousOutOfStock + normalizeDashboardNumber(previousCriticalFlagRows?.[0]?.total, criticalFlags.length)
+  const queueSparklineValues = normalizeRows(queueTrendRows).map((row) => Math.round(normalizeDashboardNumber(row.avg_wait_minutes, 0)))
+  const previousAvgQueueWait =
+    queueSparklineValues.length > 1
+      ? queueSparklineValues[0]
+      : avgQueueWait
+
+  const mlOpsItems = normalizeRows(demandForecast?.opsPredictions?.items)
+  const criticalMlOps = mlOpsItems.filter((row) => {
+    const prediction = row?.prediction || {}
+    return (
+      String(prediction.congestion_level || "").toUpperCase() === "CRITICAL" ||
+      String(prediction.stockout_risk || "").toUpperCase() === "CRITICAL" ||
+      Number(prediction.wait_time_minutes || 0) >= 60
+    )
+  })
+  const criticalAlerts = criticalHeatmap.length + criticalFlags.length + criticalMlOps.length
+  const topQueues = normalizeRows(queueRows).map((row) => ({
+    station: row.name || "Unknown station",
+    district: row.district || "Unknown",
+    queue: normalizeDashboardNumber(row.queue_count, 0),
+    avgWaitMinutes: Math.round(normalizeDashboardNumber(row.avg_wait_minutes, 0)),
+  }))
+
+  const liveAlerts = [
+    ...criticalHeatmap.slice(0, 3).map((row) => ({
+      severity: "critical",
+      title: `${row.city || "Unknown"} — Critical Shortage`,
+      description: `${row.name || "Station"} is reporting ${String(row.availability_status || "critical").toLowerCase()} fuel availability`,
+      timestamp: row.latest_status_at || row.updated_at || row.created_at || null,
+    })),
+    ...topQueues.filter((row) => row.avgWaitMinutes >= 25).slice(0, 2).map((row) => ({
+      severity: "warning",
+      title: `${row.district} — Long Queues`,
+      description: `${row.station} average wait is ${row.avgWaitMinutes} minutes`,
+      timestamp: null,
+    })),
+    ...criticalMlOps.slice(0, 2).map((row) => ({
+      severity: "critical",
+      title: `${row.district || "Station"} — ML Operations Pressure`,
+      description: row.prediction?.mera_summary || `${row.stationName || "Station"} has elevated predicted queue or stockout pressure`,
+      timestamp: row.generatedAt || null,
+    })),
+    ...normalizeRows(flagRows).slice(0, 3).map((row) => ({
+      severity: String(row.severity || "").toUpperCase() === "CRITICAL" ? "critical" : "warning",
+      title: `${row.district || "Station"} — ${String(row.flag_type || "Compliance flag").replaceAll("_", " ")}`,
+      description: `${row.station_name || "Station"} requires compliance review`,
+      timestamp: row.created_at || null,
+    })),
+    ...normalizeRows(complaintRows).slice(0, 2).map((row) => ({
+      severity: "info",
+      title: `${row.district || "Station"} — Complaint Received`,
+      description: `${row.station_name || "Station"}: ${String(row.complaint_type || "Complaint").replaceAll("_", " ")}`,
+      timestamp: row.created_at || null,
+    })),
+  ].slice(0, 6)
+
+  const inspectionTotal = normalizeRows(inspectionRows).reduce((sum, row) => sum + normalizeDashboardNumber(row.total, 0), 0)
+  const compliant = normalizeRows(inspectionRows)
+    .filter((row) => ["PASSED", "CLOSED"].includes(String(row.inspection_status || "").toUpperCase()))
+    .reduce((sum, row) => sum + normalizeDashboardNumber(row.total, 0), 0)
+  const violations = normalizeRows(inspectionRows)
+    .filter((row) => ["FAILED", "ESCALATED"].includes(String(row.inspection_status || "").toUpperCase()))
+    .reduce((sum, row) => sum + normalizeDashboardNumber(row.total, 0), 0)
+  const warnings = Math.max(0, inspectionTotal - compliant - violations)
+
+  const demandByDay = new Map()
+  for (const row of normalizeRows(demandIndexRows)) {
+    const label = String(row.day_label || "")
+    if (!demandByDay.has(label)) demandByDay.set(label, { label, petrol: 0, diesel: 0, kerosene: 0 })
+    const item = demandByDay.get(label)
+    const fuel = String(row.fuel_code || "").toUpperCase()
+    if (fuel === "PETROL") item.petrol += normalizeDashboardNumber(row.litres, 0)
+    else if (fuel === "DIESEL") item.diesel += normalizeDashboardNumber(row.litres, 0)
+    else item.kerosene += normalizeDashboardNumber(row.litres, 0)
+  }
+
+  const recentActivity = [
+    ...normalizeRows(deliveryRows).map((row) => ({
+      tone: "success",
+      text: `Fuel delivery received: ${row.station_name || "Station"} ${Math.round(normalizeDashboardNumber(row.litres, 0)).toLocaleString()}L`,
+      timestamp: row.delivered_time || null,
+    })),
+    ...normalizeRows(complaintRows).map((row) => ({
+      tone: "warning",
+      text: `Complaint submitted: ${row.district || row.station_name || "Station"}`,
+      timestamp: row.created_at || null,
+    })),
+    ...normalizeRows(auditRows).map((row) => ({
+      tone: "info",
+      text: row.action_description || row.action_type || "MERA portal activity",
+      timestamp: row.created_at || null,
+    })),
+  ]
+    .sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime())
+    .slice(0, 10)
+
+  return {
+    generatedAt: new Date().toISOString(),
+    kpis: {
+      totalStations: {
+        value: stationsTotal,
+        subtitle: "Across Malawi",
+        trendDirection: trendDirection(stationsTotal, previousStationsTotal),
+        sparkline: buildSparkline(1, stationsTotal, previousStationsTotal),
+      },
+      stationsOnline: {
+        value: stationsOnline,
+        percent: stationsTotal ? Math.round((stationsOnline / stationsTotal) * 100) : 0,
+        subtitle: "Live & reporting",
+        trendDirection: trendDirection(stationsOnline, previousStationsOnline),
+        sparkline: buildSparkline(2, stationsOnline, previousStationsOnline),
+      },
+      outOfStock: {
+        value: outOfStock,
+        percent: stationsTotal ? Math.round((outOfStock / stationsTotal) * 1000) / 10 : 0,
+        subtitle: "Stations",
+        trendDirection: trendDirection(outOfStock, previousOutOfStock),
+        sparkline: buildSparkline(3, outOfStock, previousOutOfStock),
+      },
+      lowStock: {
+        value: lowStock,
+        percent: stationsTotal ? Math.round((lowStock / stationsTotal) * 1000) / 10 : 0,
+        subtitle: "Stations",
+        trendDirection: trendDirection(lowStock, previousLowStock),
+        sparkline: buildSparkline(4, lowStock, previousLowStock),
+      },
+      avgQueueTime: {
+        value: avgQueueWait,
+        subtitle: "National average",
+        trendDirection: trendDirection(avgQueueWait, previousAvgQueueWait),
+        sparkline: queueSparklineValues.length > 1 ? queueSparklineValues : buildSparkline(5, avgQueueWait, previousAvgQueueWait),
+      },
+      criticalAlerts: {
+        value: criticalAlerts,
+        subtitle: "Active alerts",
+        trendDirection: trendDirection(criticalAlerts, previousCriticalAlerts),
+        sparkline: buildSparkline(6, criticalAlerts, previousCriticalAlerts),
+      },
+    },
+    heatmap,
+    liveAlerts,
+    topQueues,
+    fuelAvailability: overview?.fuelAvailabilityByType || [],
+    fuelAvailabilityHistory,
+    queueTrend: normalizeTrendRows(queueTrendRows, "avg_wait_minutes", "hour_label"),
+    fuelDemandIndex: Array.from(demandByDay.values()),
+    complianceSummary: {
+      inspections: inspectionTotal,
+      compliant,
+      warnings,
+      violations,
+    },
+    recentActivity,
+    demandForecast,
+    opsPredictions: demandForecast?.opsPredictions || { generatedAt: new Date().toISOString(), modelAvailable: false, items: [], errors: [] },
+    lastSync: sidebarStats?.lastSync || new Date().toISOString(),
+  }
+}
+
 export async function getFlaggedStations(auth = null) {
   const scopedDistrict = districtFilterValue(auth)
   const rows = await prisma.$queryRaw`
@@ -1761,31 +3078,42 @@ export async function getShortageHeatmapData(auth = null) {
       s.public_id,
       s.name,
       s.city,
-      COALESCE((
+      s.latitude,
+      s.longitude,
+      COALESCE(scs.availability_status, (
         SELECT status_log.availability_status
         FROM station_status_logs status_log
         WHERE status_log.station_id = s.id
         ORDER BY status_log.created_at DESC
         LIMIT 1
       ), 'UNKNOWN') AS availability_status,
-      COALESCE((
+      COALESCE(scs.petrol_status, (
         SELECT status_log.petrol_status
         FROM station_status_logs status_log
         WHERE status_log.station_id = s.id
         ORDER BY status_log.created_at DESC
         LIMIT 1
       ), 'UNKNOWN') AS petrol_status,
-      COALESCE((
+      COALESCE(scs.diesel_status, (
         SELECT status_log.diesel_status
         FROM station_status_logs status_log
         WHERE status_log.station_id = s.id
         ORDER BY status_log.created_at DESC
         LIMIT 1
       ), 'UNKNOWN') AS diesel_status,
+      COALESCE(scs.last_derived_at, (
+        SELECT status_log.created_at
+        FROM station_status_logs status_log
+        WHERE status_log.station_id = s.id
+        ORDER BY status_log.created_at DESC
+        LIMIT 1
+      )) AS latest_status_at,
       s.created_at,
       s.updated_at
     FROM stations s
+    LEFT JOIN station_current_status scs ON scs.station_id = s.id
     WHERE s.is_active = 1
+      AND s.deleted_at IS NULL
       AND (${scopedDistrict === ""} = TRUE OR s.city = ${scopedDistrict})
     ORDER BY s.name ASC
   `
@@ -1881,7 +3209,7 @@ export async function getDistrictShortageSummaries(auth = null) {
       COUNT(*) AS total_stations,
       SUM(
         CASE
-          WHEN COALESCE((
+          WHEN COALESCE(scs.availability_status, (
             SELECT status_log.availability_status
             FROM station_status_logs status_log
             WHERE status_log.station_id = s.id
@@ -1893,6 +3221,7 @@ export async function getDistrictShortageSummaries(auth = null) {
         END
       ) AS shortage_stations
     FROM stations s
+    LEFT JOIN station_current_status scs ON scs.station_id = s.id
     WHERE s.is_active = 1
       AND (${scopedDistrict === ""} = TRUE OR s.city = ${scopedDistrict})
     GROUP BY COALESCE(NULLIF(s.city, ''), 'Unknown')

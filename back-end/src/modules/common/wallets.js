@@ -1099,6 +1099,10 @@ export async function getUserWalletTransactions(
             AND qe.id IS NOT NULL
             AND tx_match.queue_entry_id = qe.id
           )
+          OR (
+            lt.related_entity_type = 'TRANSACTION'
+            AND tx_match.public_id = lt.related_entity_id
+          )
         ORDER BY COALESCE(
           tx_match.occurred_at,
           tx_match.dispensed_at,

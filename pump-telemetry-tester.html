@@ -1,1285 +1,559 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Pump Telemetry Tester</title>
+    <title>MERA | Smartlink National Fuel Command Center</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Inter Font -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
     <style>
-      :root {
-        color-scheme: light;
-        --bg: #f3f6fb;
-        --panel: #ffffff;
-        --panel-alt: #f8fafc;
-        --line: #d7e0ea;
-        --text: #112033;
-        --muted: #5b6b80;
-        --accent: #0f766e;
-        --accent-strong: #115e59;
-        --danger: #b42318;
-        --success: #067647;
-        --shadow: 0 18px 50px rgba(17, 32, 51, 0.08);
-      }
-
-      * {
-        box-sizing: border-box;
-      }
-
       body {
-        margin: 0;
-        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
-        background:
-          radial-gradient(circle at top left, rgba(15, 118, 110, 0.08), transparent 28%),
-          linear-gradient(180deg, #eef3f8 0%, var(--bg) 100%);
-        color: var(--text);
-      }
-
-      .page {
-        max-width: 1320px;
-        margin: 0 auto;
-        padding: 32px 20px 64px;
-      }
-
-      .hero {
-        background: linear-gradient(135deg, #12354a 0%, #115e59 100%);
-        color: #fff;
-        border-radius: 24px;
-        padding: 28px;
-        box-shadow: var(--shadow);
-        margin-bottom: 24px;
-      }
-
-      .hero h1 {
-        margin: 0 0 10px;
-        font-size: clamp(1.9rem, 2.8vw, 2.8rem);
-      }
-
-      .hero p {
-        margin: 0;
-        max-width: 860px;
-        color: rgba(255, 255, 255, 0.88);
-        line-height: 1.55;
-      }
-
-      .grid {
-        display: grid;
-        gap: 20px;
-      }
-
-      .grid.config {
-        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-        margin-bottom: 24px;
-      }
-
-      .grid.endpoints {
-        grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
-      }
-
-      .card {
-        background: var(--panel);
-        border: 1px solid var(--line);
-        border-radius: 20px;
-        box-shadow: var(--shadow);
-        overflow: hidden;
-      }
-
-      .card-header {
-        padding: 18px 20px 12px;
-        border-bottom: 1px solid rgba(215, 224, 234, 0.75);
-      }
-
-      .card-header h2,
-      .card-header h3 {
-        margin: 0 0 6px;
-        font-size: 1.1rem;
-      }
-
-      .card-header p {
-        margin: 0;
-        color: var(--muted);
-        line-height: 1.45;
-      }
-
-      .card-body {
-        padding: 18px 20px 20px;
-      }
-
-      .section-title {
-        margin: 0 0 10px;
-        font-size: 0.9rem;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-        color: var(--muted);
-      }
-
-      .api-list {
-        margin: 0;
-        padding-left: 18px;
-        color: var(--text);
-      }
-
-      .api-list li + li {
-        margin-top: 8px;
-      }
-
-      .method {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        min-width: 54px;
-        padding: 4px 10px;
-        margin-right: 10px;
-        border-radius: 999px;
-        font-size: 0.75rem;
-        font-weight: 700;
-        letter-spacing: 0.04em;
-      }
-
-      .method.get {
-        background: rgba(6, 118, 71, 0.12);
-        color: var(--success);
-      }
-
-      .method.post {
-        background: rgba(15, 118, 110, 0.12);
-        color: var(--accent-strong);
-      }
-
-      label {
-        display: block;
-        margin-bottom: 12px;
-        font-size: 0.9rem;
-        font-weight: 600;
-      }
-
-      label span {
-        display: block;
-        margin-bottom: 6px;
-      }
-
-      input,
-      select,
-      textarea,
-      button {
-        font: inherit;
-      }
-
-      input,
-      select,
-      textarea {
-        width: 100%;
-        border: 1px solid var(--line);
-        border-radius: 12px;
-        padding: 11px 12px;
-        background: #fff;
-        color: var(--text);
-      }
-
-      textarea {
-        min-height: 110px;
-        resize: vertical;
-      }
-
-      .row {
-        display: grid;
-        gap: 12px;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-      }
-
-      .actions {
-        display: flex;
-        gap: 10px;
-        flex-wrap: wrap;
-        margin-top: 16px;
-      }
-
-      button {
-        border: 0;
-        border-radius: 12px;
-        padding: 11px 16px;
-        cursor: pointer;
-        transition: transform 140ms ease, opacity 140ms ease, background 140ms ease;
-      }
-
-      button:hover {
-        transform: translateY(-1px);
-      }
-
-      button:disabled {
-        opacity: 0.65;
-        cursor: wait;
-        transform: none;
-      }
-
-      .primary {
-        background: var(--accent);
-        color: #fff;
-      }
-
-      .secondary {
-        background: #e8eef5;
-        color: var(--text);
-      }
-
-      .result {
-        margin-top: 16px;
-        border: 1px solid var(--line);
-        border-radius: 16px;
-        overflow: hidden;
-        background: var(--panel-alt);
-      }
-
-      .result-head {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        gap: 12px;
-        padding: 12px 14px;
-        border-bottom: 1px solid var(--line);
-      }
-
-      .result-meta {
-        display: flex;
-        gap: 8px;
-        align-items: center;
-        flex-wrap: wrap;
-      }
-
-      .badge {
-        display: inline-flex;
-        align-items: center;
-        border-radius: 999px;
-        padding: 4px 10px;
-        font-size: 0.76rem;
-        font-weight: 700;
-      }
-
-      .badge.ok {
-        color: var(--success);
-        background: rgba(6, 118, 71, 0.12);
-      }
-
-      .badge.error {
-        color: var(--danger);
-        background: rgba(180, 35, 24, 0.12);
-      }
-
-      pre {
-        margin: 0;
-        padding: 14px;
-        overflow: auto;
-        white-space: pre-wrap;
-        word-break: break-word;
-        font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
-        font-size: 0.84rem;
-        line-height: 1.45;
-      }
-
-      .hint {
-        margin-top: 10px;
-        color: var(--muted);
-        font-size: 0.84rem;
-        line-height: 1.45;
-      }
-
-      .muted {
-        color: var(--muted);
-      }
-
-      @media (max-width: 860px) {
-        .row {
-          grid-template-columns: 1fr;
-        }
-
-        .page {
-          padding: 20px 14px 40px;
-        }
-
-        .hero,
-        .card-header,
-        .card-body {
-          padding-left: 16px;
-          padding-right: 16px;
-        }
+        font-family: "Inter", sans-serif;
       }
     </style>
   </head>
-  <body>
-    <main class="page">
-      <section class="hero">
-        <h1>Pump Telemetry Tester</h1>
-        <p>
-          This file is standalone and lives in the repo root so you can test the SmartLink
-          pump monitoring and telemetry APIs directly from the browser. Station-side
-          endpoints use the station bearer token, while internal telemetry endpoints use
-          the internal bearer token.
-        </p>
-      </section>
-
-      <section class="grid config">
-        <article class="card">
-          <div class="card-header">
-            <h2>Connection</h2>
-            <p>Saved in your browser via local storage.</p>
+  <body class="bg-[#0B0F19] text-[#F3F4F6] min-h-screen flex">
+    <!-- SIDEBAR -->
+    <aside
+      class="w-64 border-r border-[#1E293B] bg-[#0F172A] flex flex-col justify-between p-4"
+    >
+      <div>
+        <!-- Logo Section -->
+        <div
+          class="flex items-center gap-3 px-2 py-4 border-b border-[#1E293B] mb-6"
+        >
+          <div
+            class="bg-amber-500 text-slate-950 p-2 rounded-lg font-bold tracking-wider text-xs"
+          >
+            MERA
           </div>
-          <div class="card-body">
-            <label>
-              <span>Base URL</span>
-              <input id="baseUrl" type="text" placeholder="http://localhost:4000" />
-            </label>
-            <label>
-              <span>Station Bearer Token</span>
-              <textarea id="stationToken" placeholder="Paste station JWT for /api/monitoring and /api/dev/monitoring/simulate"></textarea>
-            </label>
-            <div class="result" id="result-stationLogin" style="margin-top: 0; margin-bottom: 12px;">
-              <div class="result-head">
-                <div class="result-meta">
-                  <span class="badge ok">Helper</span>
-                  <span class="muted">POST /auth/login</span>
-                </div>
-              </div>
-              <pre>Use the station login form to fetch and fill the station bearer token automatically.</pre>
-            </div>
-            <label>
-              <span>Internal Bearer Token</span>
-              <textarea id="internalToken" placeholder="Paste internal JWT for /api/internal telemetry endpoints"></textarea>
-            </label>
-            <div class="result" id="result-internalLogin" style="margin-top: 0;">
-              <div class="result-head">
-                <div class="result-meta">
-                  <span class="badge ok">Helper</span>
-                  <span class="muted">POST /api/internal/auth/login</span>
-                </div>
-              </div>
-              <pre>Use the internal login form to fetch and fill the bearer token automatically.</pre>
-            </div>
-            <label>
-              <span>Optional stationPublicId query</span>
-              <input id="stationPublicId" type="text" placeholder="Only needed for API-key bypass cases" />
-            </label>
-            <div class="actions">
-              <button class="primary" id="saveConfigButton" type="button">Save Settings</button>
-              <button class="secondary" id="clearConfigButton" type="button">Clear Saved Settings</button>
-            </div>
-            <p class="hint">
-              Backend default in this repo is <strong>http://localhost:4000</strong> unless
-              you changed <code>PORT</code>.
+          <div>
+            <h1 class="text-sm font-bold tracking-tight text-white">
+              SMARTLINK
+            </h1>
+            <p
+              class="text-[10px] text-slate-400 font-medium tracking-widest uppercase"
+            >
+              National Network
             </p>
           </div>
-        </article>
+        </div>
 
-        <article class="card">
-          <div class="card-header">
-            <h2>Available APIs</h2>
-            <p>These are the telemetry-related routes present in the repository.</p>
+        <!-- Navigation Links -->
+        <nav class="space-y-1">
+          <a
+            href="#"
+            class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-xs font-semibold bg-[#1E293B] text-amber-400 transition-all"
+          >
+            <i data-lucide="layout-dashboard" class="w-4 h-4"></i> National
+            Overview
+          </a>
+          <a
+            href="#"
+            class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-xs font-medium text-slate-400 hover:bg-[#1E293B]/50 hover:text-white transition-all"
+          >
+            <i data-lucide="fuel" class="w-4 h-4"></i> Station Analytics
+          </a>
+          <a
+            href="#"
+            class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-xs font-medium text-slate-400 hover:bg-[#1E293B]/50 hover:text-white transition-all"
+          >
+            <i data-lucide="alert-triangle" class="w-4 h-4"></i> Hoarding Alerts
+            <span
+              class="ml-auto bg-rose-500/20 text-rose-400 px-1.5 py-0.5 rounded text-[10px] font-bold"
+              >3</span
+            >
+          </a>
+          <a
+            href="#"
+            class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-xs font-medium text-slate-400 hover:bg-[#1E293B]/50 hover:text-white transition-all"
+          >
+            <i data-lucide="users" class="w-4 h-4"></i> Digital Queues
+          </a>
+          <a
+            href="#"
+            class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-xs font-medium text-slate-400 hover:bg-[#1E293B]/50 hover:text-white transition-all"
+          >
+            <i data-lucide="wallet" class="w-4 h-4"></i> Gateway Ledger
+          </a>
+        </nav>
+      </div>
+
+      <!-- User Profile Footer -->
+      <div class="border-t border-[#1E293B] pt-4 flex items-center gap-3 px-2">
+        <div
+          class="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center font-bold text-xs text-white"
+        >
+          M
+        </div>
+        <div>
+          <p class="text-xs font-semibold text-white">Technical Director</p>
+          <p class="text-[10px] text-slate-500">MERA Headquarters</p>
+        </div>
+        <i
+          data-lucide="log-out"
+          class="w-4 h-4 text-slate-500 ml-auto cursor-pointer hover:text-rose-400 transition-all"
+        ></i>
+      </div>
+    </aside>
+
+    <!-- MAIN CONTENT AREA -->
+    <main class="flex-1 flex flex-col min-w-0">
+      <!-- HEADER -->
+      <header
+        class="h-16 border-b border-[#1E293B] bg-[#0F172A]/50 backdrop-blur flex items-center justify-between px-8 z-10"
+      >
+        <div class="flex items-center gap-4">
+          <span
+            class="flex items-center gap-1.5 bg-emerald-500/10 text-emerald-400 px-2.5 py-1 rounded-full text-[11px] font-semibold tracking-wide border border-emerald-500/20"
+          >
+            <span
+              class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"
+            ></span>
+            SYSTEM LIVE
+          </span>
+          <p class="text-xs text-slate-400 font-medium">
+            Last full network sync: <span class="text-slate-200">Just now</span>
+          </p>
+        </div>
+        <div class="flex items-center gap-4">
+          <button
+            class="relative p-2 text-slate-400 hover:text-white transition-all bg-[#0F172A] border border-[#1E293B] rounded-lg"
+          >
+            <i data-lucide="bell" class="w-4 h-4"></i>
+            <span
+              class="absolute top-1 right-1 w-2 h-2 rounded-full bg-amber-500"
+            ></span>
+          </button>
+          <div class="text-right">
+            <p class="text-xs font-semibold text-white">
+              Malawi Network Summary
+            </p>
+            <p class="text-[10px] text-slate-500">Blantyre, Lilongwe, Mzuzu</p>
           </div>
-          <div class="card-body">
-            <p class="section-title">Station Login Helper</p>
-            <form data-endpoint-form="stationLogin" style="margin-bottom: 18px;">
-              <div class="row">
-                <label>
-                  <span>Station Email</span>
-                  <input id="stationEmail" name="email" type="email" placeholder="staff@example.com" />
-                </label>
-                <label>
-                  <span>Station Phone</span>
-                  <input id="stationPhone" name="phone" type="text" placeholder="+265..." />
-                </label>
-              </div>
-              <label>
-                <span>Station Password</span>
-                <input id="stationPassword" name="password" type="password" placeholder="Your station password" />
-              </label>
-              <div class="actions" style="margin-top: 4px;">
-                <button class="primary" type="submit">Login And Fill Station Token</button>
-              </div>
-            </form>
-            <p class="section-title">Internal Login Helper</p>
-            <form data-endpoint-form="internalLogin" style="margin-bottom: 18px;">
-              <div class="row">
-                <label>
-                  <span>Internal Email</span>
-                  <input id="internalEmail" name="email" type="email" placeholder="staff@example.com" />
-                </label>
-                <label>
-                  <span>Internal Password</span>
-                  <input id="internalPassword" name="password" type="password" placeholder="Your internal password" />
-                </label>
-              </div>
-              <div class="actions" style="margin-top: 4px;">
-                <button class="primary" type="submit">Login And Fill Token</button>
-              </div>
-            </form>
-            <p class="section-title">Station Monitoring</p>
-            <ul class="api-list">
-              <li><span class="method get">GET</span><code>/api/monitoring/pumps/:pumpId</code></li>
-              <li><span class="method get">GET</span><code>/api/monitoring/pumps/:pumpId/nozzles</code></li>
-              <li><span class="method post">POST</span><code>/api/monitoring/telemetry/events</code></li>
-              <li><span class="method post">POST</span><code>/api/dev/monitoring/simulate</code></li>
-            </ul>
-            <p class="section-title" style="margin-top: 18px;">Internal Telemetry</p>
-            <ul class="api-list">
-              <li><span class="method get">GET</span><code>/api/internal/transactions/:transactionPublicId/pump-session</code></li>
-              <li><span class="method get">GET</span><code>/api/internal/transactions/:transactionPublicId/telemetry</code></li>
-              <li><span class="method get">GET</span><code>/api/internal/pump-sessions/:sessionReference/telemetry</code></li>
-            </ul>
-            <p class="section-title" style="margin-top: 18px;">Public Verification</p>
-            <ul class="api-list">
-              <li><span class="method get">GET</span><code>/verify/receipts/:reference</code></li>
-            </ul>
-            <p class="hint">
-              Notes: monitoring reads require a station role such as
-              <code>MANAGER</code>, <code>ATTENDANT</code>, or <code>VIEWER</code>.
-              Telemetry event ingest and simulation require <code>MANAGER</code> or
-              <code>ATTENDANT</code>. Internal telemetry endpoints require an internal token
-              with support, finance, or risk view permission. Receipt verification is public
-              and can return JSON or HTML depending on the <code>Accept</code> header.
+        </div>
+      </header>
+
+      <!-- DASHBOARD CONTAINER -->
+      <div
+        class="flex-1 p-8 overflow-y-auto space-y-6 max-w-[1600px] w-full mx-auto"
+      >
+        <!-- HEADER APP TITLE -->
+        <div class="flex justify-between items-end">
+          <div>
+            <h2 class="text-xl font-bold tracking-tight text-white">
+              National Fuel Intelligence Matrix
+            </h2>
+            <p class="text-xs text-slate-400 mt-1">
+              Real-time supply verification and automated forecourt asset
+              tracking.
             </p>
           </div>
-        </article>
-      </section>
-
-      <section class="grid endpoints">
-        <article class="card">
-          <div class="card-header">
-            <h3>Get Pump Snapshot</h3>
-            <p>Returns the current monitoring snapshot for a specific pump.</p>
+          <div class="flex gap-2">
+            <button
+              class="flex items-center gap-2 bg-[#1E293B] border border-[#334155] text-slate-200 px-3 py-1.5 rounded-lg text-xs font-semibold hover:bg-slate-800 transition-all"
+            >
+              <i data-lucide="download" class="w-3.5 h-3.5"></i> Export Audit
+              Logs
+            </button>
+            <button
+              class="flex items-center gap-2 bg-amber-500 text-slate-950 px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-amber-400 transition-all shadow-lg shadow-amber-500/10"
+            >
+              <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i> Trigger
+              Re-balance
+            </button>
           </div>
-          <div class="card-body">
-            <form data-endpoint-form="pumpSnapshot">
-              <label>
-                <span>Pump ID</span>
-                <input name="pumpId" type="text" placeholder="pump_public_id" required />
-              </label>
-              <div class="actions">
-                <button class="primary" type="submit">Send Request</button>
-              </div>
-            </form>
-            <div class="result" id="result-pumpSnapshot">
-              <div class="result-head">
-                <div class="result-meta">
-                  <span class="badge ok">Ready</span>
-                  <span class="muted">GET /api/monitoring/pumps/:pumpId</span>
-                </div>
-              </div>
-              <pre>Waiting for request...</pre>
+        </div>
+
+        <!-- STATS CARDS GRID -->
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <!-- CARD 1 -->
+          <div
+            class="bg-[#0F172A] border border-[#1E293B] p-5 rounded-xl flex items-center justify-between"
+          >
+            <div>
+              <p
+                class="text-[10px] font-bold text-slate-500 tracking-wider uppercase"
+              >
+                National Petrol Reserves
+              </p>
+              <h3 class="text-xl font-bold text-white mt-1">
+                4.2M
+                <span class="text-xs text-slate-400 font-medium">Litres</span>
+              </h3>
+              <p
+                class="text-[11px] text-emerald-400 font-medium mt-1.5 flex items-center gap-1"
+              >
+                <i data-lucide="arrow-up-right" class="w-3 h-3"></i> +12 Days of
+                Cover
+              </p>
+            </div>
+            <div
+              class="p-3 bg-amber-500/10 text-amber-400 rounded-xl border border-amber-500/10"
+            >
+              <i data-lucide="droplet" class="w-5 h-5"></i>
             </div>
           </div>
-        </article>
-
-        <article class="card">
-          <div class="card-header">
-            <h3>Get Pump Nozzles</h3>
-            <p>Returns the monitored nozzle list for a specific pump.</p>
-          </div>
-          <div class="card-body">
-            <form data-endpoint-form="pumpNozzles">
-              <label>
-                <span>Pump ID</span>
-                <input name="pumpId" type="text" placeholder="pump_public_id" required />
-              </label>
-              <div class="actions">
-                <button class="primary" type="submit">Send Request</button>
-              </div>
-            </form>
-            <div class="result" id="result-pumpNozzles">
-              <div class="result-head">
-                <div class="result-meta">
-                  <span class="badge ok">Ready</span>
-                  <span class="muted">GET /api/monitoring/pumps/:pumpId/nozzles</span>
-                </div>
-              </div>
-              <pre>Waiting for request...</pre>
+          <!-- CARD 2 -->
+          <div
+            class="bg-[#0F172A] border border-[#1E293B] p-5 rounded-xl flex items-center justify-between"
+          >
+            <div>
+              <p
+                class="text-[10px] font-bold text-slate-500 tracking-wider uppercase"
+              >
+                Active Queues Countrywide
+              </p>
+              <h3 class="text-xl font-bold text-white mt-1">
+                1,842
+                <span class="text-xs text-slate-400 font-medium">Drivers</span>
+              </h3>
+              <p
+                class="text-[11px] text-rose-400 font-medium mt-1.5 flex items-center gap-1"
+              >
+                <i data-lucide="arrow-up-right" class="w-3 h-3"></i> Forecourt
+                surge (Lilongwe)
+              </p>
+            </div>
+            <div
+              class="p-3 bg-blue-500/10 text-blue-400 rounded-xl border border-blue-500/10"
+            >
+              <i data-lucide="git-pull-request" class="w-5 h-5"></i>
             </div>
           </div>
-        </article>
-
-        <article class="card">
-          <div class="card-header">
-            <h3>Simulate Monitoring Update</h3>
-            <p>Dev-only helper for pushing a pump/nozzle telemetry state change.</p>
-          </div>
-          <div class="card-body">
-            <form data-endpoint-form="simulateMonitoring">
-              <div class="row">
-                <label>
-                  <span>Pump ID</span>
-                  <input name="pumpId" type="text" placeholder="pump_public_id" required />
-                </label>
-                <label>
-                  <span>Nozzle ID</span>
-                  <input name="nozzleId" type="text" placeholder="nozzle_public_id" required />
-                </label>
-              </div>
-              <div class="row">
-                <label>
-                  <span>Status</span>
-                  <select name="status">
-                    <option value="DISPENSING">DISPENSING</option>
-                    <option value="IDLE">IDLE</option>
-                    <option value="OFFLINE">OFFLINE</option>
-                  </select>
-                </label>
-                <label>
-                  <span>Litres</span>
-                  <input name="litres" type="number" min="0" step="0.01" placeholder="Optional" />
-                </label>
-              </div>
-              <div class="actions">
-                <button class="primary" type="submit">Send Request</button>
-              </div>
-            </form>
-            <div class="result" id="result-simulateMonitoring">
-              <div class="result-head">
-                <div class="result-meta">
-                  <span class="badge ok">Ready</span>
-                  <span class="muted">POST /api/dev/monitoring/simulate</span>
-                </div>
-              </div>
-              <pre>Waiting for request...</pre>
+          <!-- CARD 3 -->
+          <div
+            class="bg-[#0F172A] border border-[#1E293B] p-5 rounded-xl flex items-center justify-between"
+          >
+            <div>
+              <p
+                class="text-[10px] font-bold text-slate-500 tracking-wider uppercase"
+              >
+                Total Gateway Liquidity
+              </p>
+              <h3 class="text-xl font-bold text-white mt-1">MWK 412.8M</h3>
+              <p
+                class="text-[11px] text-emerald-400 font-medium mt-1.5 flex items-center gap-1"
+              >
+                <i data-lucide="check" class="w-3 h-3"></i> PayChangu Rails
+                Stable
+              </p>
+            </div>
+            <div
+              class="p-3 bg-emerald-500/10 text-emerald-400 rounded-xl border border-emerald-500/10"
+            >
+              <i data-lucide="wallet" class="w-5 h-5"></i>
             </div>
           </div>
-        </article>
-
-        <article class="card">
-          <div class="card-header">
-            <h3>Ingest Hardware Telemetry Event</h3>
-            <p>Writes a pump telemetry evidence event the same way internal refund/support flows read it.</p>
-          </div>
-          <div class="card-body">
-            <form data-endpoint-form="telemetryIngest">
-              <div class="row">
-                <label>
-                  <span>Pump ID</span>
-                  <input name="pumpId" type="text" placeholder="pump_public_id" required />
-                </label>
-                <label>
-                  <span>Nozzle ID</span>
-                  <input name="nozzleId" type="text" placeholder="nozzle_public_id" required />
-                </label>
-              </div>
-              <div class="row">
-                <label>
-                  <span>Event Type</span>
-                  <input name="eventType" type="text" value="DISPENSING_STARTED" required />
-                </label>
-                <label>
-                  <span>Severity</span>
-                  <select name="severity">
-                    <option value="INFO">INFO</option>
-                    <option value="LOW">LOW</option>
-                    <option value="MEDIUM">MEDIUM</option>
-                    <option value="HIGH">HIGH</option>
-                    <option value="CRITICAL">CRITICAL</option>
-                  </select>
-                </label>
-              </div>
-              <div class="row">
-                <label>
-                  <span>Transaction Public ID</span>
-                  <input name="transactionPublicId" type="text" placeholder="Optional TXN-..." />
-                </label>
-                <label>
-                  <span>Session Reference</span>
-                  <input name="sessionReference" type="text" placeholder="Optional PS-..." />
-                </label>
-              </div>
-              <div class="row">
-                <label>
-                  <span>Telemetry Correlation ID</span>
-                  <input name="telemetryCorrelationId" type="text" placeholder="Optional TEL-..." />
-                </label>
-                <label>
-                  <span>Event ID</span>
-                  <input name="eventId" type="text" placeholder="Optional hardware event ID" />
-                </label>
-              </div>
-              <div class="row">
-                <label>
-                  <span>Litres Value</span>
-                  <input name="litresValue" type="number" min="0" step="0.001" placeholder="Optional" />
-                </label>
-                <label>
-                  <span>Flow Rate</span>
-                  <input name="flowRate" type="number" min="0" step="0.001" placeholder="Optional" />
-                </label>
-              </div>
-              <div class="row">
-                <label>
-                  <span>Raw Error Code</span>
-                  <input name="rawErrorCode" type="text" placeholder="Optional FLOW_TIMEOUT" />
-                </label>
-                <label>
-                  <span>Source Type</span>
-                  <input name="sourceType" type="text" value="PUMP_CONTROLLER" />
-                </label>
-              </div>
-              <label>
-                <span>Message</span>
-                <input name="message" type="text" placeholder="Optional custom event message" />
-              </label>
-              <label>
-                <span>Happened At</span>
-                <input name="happenedAt" type="datetime-local" />
-              </label>
-              <label>
-                <span>Payload JSON</span>
-                <textarea name="payload">{}</textarea>
-              </label>
-              <div class="actions">
-                <button class="primary" type="submit">Send Request</button>
-              </div>
-            </form>
-            <p class="hint">
-              Useful evidence event types include <code>NOZZLE_LIFTED</code>,
-              <code>DISPENSING_STARTED</code>, <code>FLOW_READING</code>,
-              <code>DISPENSING_STOPPED</code>, <code>ERROR</code>, and <code>TIMEOUT</code>.
-            </p>
-            <div class="result" id="result-telemetryIngest">
-              <div class="result-head">
-                <div class="result-meta">
-                  <span class="badge ok">Ready</span>
-                  <span class="muted">POST /api/monitoring/telemetry/events</span>
-                </div>
-              </div>
-              <pre>Waiting for request...</pre>
+          <!-- CARD 4 -->
+          <div
+            class="bg-[#0F172A] border border-[#1E293B] p-5 rounded-xl flex items-center justify-between"
+          >
+            <div>
+              <p
+                class="text-[10px] font-bold text-slate-500 tracking-wider uppercase"
+              >
+                Online Network Nodes
+              </p>
+              <h3 class="text-xl font-bold text-white mt-1">384 / 390</h3>
+              <p
+                class="text-[11px] text-amber-400 font-medium mt-1.5 flex items-center gap-1"
+              >
+                <i data-lucide="wifi-off" class="w-3 h-3"></i> 6 Nodes using
+                local buffer
+              </p>
+            </div>
+            <div
+              class="p-3 bg-purple-500/10 text-purple-400 rounded-xl border border-purple-500/10"
+            >
+              <i data-lucide="radio" class="w-5 h-5"></i>
             </div>
           </div>
-        </article>
+        </div>
 
-        <article class="card">
-          <div class="card-header">
-            <h3>Get Pump Session By Transaction</h3>
-            <p>Looks up the linked pump session using a transaction public ID.</p>
-          </div>
-          <div class="card-body">
-            <form data-endpoint-form="pumpSessionByTransaction">
-              <label>
-                <span>Transaction Public ID</span>
-                <input name="transactionPublicId" type="text" placeholder="txn_public_id" required />
-              </label>
-              <div class="actions">
-                <button class="primary" type="submit">Send Request</button>
-              </div>
-            </form>
-            <div class="result" id="result-pumpSessionByTransaction">
-              <div class="result-head">
-                <div class="result-meta">
-                  <span class="badge ok">Ready</span>
-                  <span class="muted">GET /api/internal/transactions/:transactionPublicId/pump-session</span>
+        <!-- LOWER MATRIX SECTION -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <!-- LIVE SHORTAGE HEATMAP MOCK -->
+          <div
+            class="bg-[#0F172A] border border-[#1E293B] p-6 rounded-xl lg:col-span-2 space-y-4"
+          >
+            <div
+              class="flex justify-between items-center border-b border-[#1E293B] pb-3"
+            >
+              <h4
+                class="text-xs font-bold text-white tracking-wide uppercase flex items-center gap-2"
+              >
+                <i data-lucide="map" class="w-4 h-4 text-amber-400"></i> Region
+                Supply Distribution Map
+              </h4>
+              <span class="text-[11px] font-semibold text-slate-400"
+                >Live Metric Analytics</span
+              >
+            </div>
+            <!-- Visualization representation box -->
+            <div
+              class="h-64 rounded-lg bg-[#0B0F19] border border-[#1E293B] relative overflow-hidden flex flex-col justify-between p-4"
+            >
+              <div class="space-y-3 z-10 w-full">
+                <div>
+                  <div
+                    class="flex justify-between text-[11px] font-medium mb-1"
+                  >
+                    <span class="text-slate-300"
+                      >Southern Region (Blantyre Hub)</span
+                    >
+                    <span class="text-emerald-400 font-bold">78% Optimal</span>
+                  </div>
+                  <div
+                    class="w-full bg-[#1E293B] h-2 rounded-full overflow-hidden"
+                  >
+                    <div
+                      class="bg-emerald-500 h-full rounded-full"
+                      style="width: 78%"
+                    ></div>
+                  </div>
+                </div>
+                <div>
+                  <div
+                    class="flex justify-between text-[11px] font-medium mb-1"
+                  >
+                    <span class="text-slate-300"
+                      >Central Region (Lilongwe Hub)</span
+                    >
+                    <span class="text-amber-400 font-bold"
+                      >42% Low Inventory Cluster</span
+                    >
+                  </div>
+                  <div
+                    class="w-full bg-[#1E293B] h-2 rounded-full overflow-hidden"
+                  >
+                    <div
+                      class="bg-amber-500 h-full rounded-full"
+                      style="width: 42%"
+                    ></div>
+                  </div>
+                </div>
+                <div>
+                  <div
+                    class="flex justify-between text-[11px] font-medium mb-1"
+                  >
+                    <span class="text-slate-300"
+                      >Northern Region (Mzuzu Hub)</span
+                    >
+                    <span class="text-rose-500 font-bold"
+                      >19% Critical Supply Action Required</span
+                    >
+                  </div>
+                  <div
+                    class="w-full bg-[#1E293B] h-2 rounded-full overflow-hidden"
+                  >
+                    <div
+                      class="bg-rose-500 h-full rounded-full"
+                      style="width: 19%"
+                    ></div>
+                  </div>
                 </div>
               </div>
-              <pre>Waiting for request...</pre>
+              <p
+                class="text-[10px] text-slate-500 border-t border-[#1E293B] pt-2 italic"
+              >
+                ATG probes feeding dynamic telemetry array through secure REST
+                endpoints.
+              </p>
             </div>
           </div>
-        </article>
 
-        <article class="card">
-          <div class="card-header">
-            <h3>Get Telemetry By Transaction</h3>
-            <p>Returns the telemetry timeline for the session linked to a transaction.</p>
-          </div>
-          <div class="card-body">
-            <form data-endpoint-form="telemetryByTransaction">
-              <label>
-                <span>Transaction Public ID</span>
-                <input name="transactionPublicId" type="text" placeholder="txn_public_id" required />
-              </label>
-              <div class="actions">
-                <button class="primary" type="submit">Send Request</button>
-              </div>
-            </form>
-            <div class="result" id="result-telemetryByTransaction">
-              <div class="result-head">
-                <div class="result-meta">
-                  <span class="badge ok">Ready</span>
-                  <span class="muted">GET /api/internal/transactions/:transactionPublicId/telemetry</span>
+          <!-- CRITICAL HOARDING ALERTS LIST -->
+          <div
+            class="bg-[#0F172A] border border-[#1E293B] p-6 rounded-xl space-y-4"
+          >
+            <div
+              class="flex justify-between items-center border-b border-[#1E293B] pb-3"
+            >
+              <h4
+                class="text-xs font-bold text-white tracking-wide uppercase flex items-center gap-2"
+              >
+                <i data-lucide="shield-alert" class="w-4 h-4 text-rose-500"></i>
+                AI Enforcement Anomalies
+              </h4>
+              <span
+                class="text-[10px] bg-rose-500/20 text-rose-400 font-bold px-2 py-0.5 rounded"
+                >High Risk</span
+              >
+            </div>
+
+            <div class="space-y-3">
+              <!-- ALERT ITEM 1 -->
+              <div
+                class="p-3 bg-[#0B0F19] border border-rose-500/20 rounded-lg flex gap-3 items-start"
+              >
+                <i
+                  data-lucide="shield-alert"
+                  class="w-4 h-4 text-rose-400 shrink-0 mt-0.5"
+                ></i>
+                <div class="space-y-1">
+                  <h5 class="text-xs font-bold text-white">
+                    TotalEnergies - Area 18
+                  </h5>
+                  <p class="text-[11px] text-slate-400">
+                    ATG reports 14,200L stock, but terminal has processed zero
+                    queue events for 120 minutes.
+                  </p>
+                  <div class="flex gap-2 pt-1">
+                    <button
+                      class="bg-rose-500 text-white text-[10px] font-bold px-2 py-1 rounded hover:bg-rose-600 transition-all"
+                    >
+                      Enact Kill-Switch
+                    </button>
+                    <button
+                      class="bg-[#1E293B] text-slate-300 text-[10px] font-medium px-2 py-1 rounded hover:text-white transition-all"
+                    >
+                      Deploy Team
+                    </button>
+                  </div>
                 </div>
               </div>
-              <pre>Waiting for request...</pre>
-            </div>
-          </div>
-        </article>
-
-        <article class="card">
-          <div class="card-header">
-            <h3>Get Telemetry By Pump Session</h3>
-            <p>Returns the telemetry timeline for a session reference directly.</p>
-          </div>
-          <div class="card-body">
-            <form data-endpoint-form="telemetryBySession">
-              <label>
-                <span>Session Reference</span>
-                <input name="sessionReference" type="text" placeholder="session_reference" required />
-              </label>
-              <div class="actions">
-                <button class="primary" type="submit">Send Request</button>
-              </div>
-            </form>
-            <div class="result" id="result-telemetryBySession">
-              <div class="result-head">
-                <div class="result-meta">
-                  <span class="badge ok">Ready</span>
-                  <span class="muted">GET /api/internal/pump-sessions/:sessionReference/telemetry</span>
+              <!-- ALERT ITEM 2 -->
+              <div
+                class="p-3 bg-[#0B0F19] border border-amber-500/20 rounded-lg flex gap-3 items-start"
+              >
+                <i
+                  data-lucide="alert-circle"
+                  class="w-4 h-4 text-amber-400 shrink-0 mt-0.5"
+                ></i>
+                <div class="space-y-1">
+                  <h5 class="text-xs font-bold text-white">
+                    Puma Energy - Limbe Hub
+                  </h5>
+                  <p class="text-[11px] text-slate-400">
+                    Abnormal USSD query volume detected. Impending black-market
+                    aggregation loop suspected.
+                  </p>
+                  <button
+                    class="text-amber-400 text-[10px] font-bold hover:underline block pt-1"
+                  >
+                    Review Traffic Details →
+                  </button>
                 </div>
               </div>
-              <pre>Waiting for request...</pre>
             </div>
           </div>
-        </article>
+        </div>
 
-        <article class="card">
-          <div class="card-header">
-            <h3>Verify Receipt</h3>
-            <p>Looks up the public receipt verification route used by SmartLink receipts.</p>
-          </div>
-          <div class="card-body">
-            <form data-endpoint-form="verifyReceipt">
-              <label>
-                <span>Receipt Reference</span>
-                <input name="reference" type="text" placeholder="RCPT-ABC123456789" required />
-              </label>
-              <label>
-                <span>Response Format</span>
-                <select name="responseFormat">
-                  <option value="json">JSON</option>
-                  <option value="html">HTML</option>
-                </select>
-              </label>
-              <div class="actions">
-                <button class="primary" type="submit">Send Request</button>
-              </div>
-            </form>
-            <div class="result" id="result-verifyReceipt">
-              <div class="result-head">
-                <div class="result-meta">
-                  <span class="badge ok">Ready</span>
-                  <span class="muted">GET /verify/receipts/:reference</span>
-                </div>
-              </div>
-              <pre>Waiting for request...</pre>
+        <!-- DATA TABLE: REAL-TIME STATION LEDGER -->
+        <div
+          class="bg-[#0F172A] border border-[#1E293B] rounded-xl overflow-hidden"
+        >
+          <div
+            class="px-6 py-4 border-b border-[#1E293B] flex justify-between items-center"
+          >
+            <h4
+              class="text-xs font-bold text-white tracking-wide uppercase flex items-center gap-2"
+            >
+              <i data-lucide="list" class="w-4 h-4 text-slate-400"></i> Live
+              National Retail Logistics Node Ledger
+            </h4>
+            <div class="flex items-center gap-2">
+              <input
+                type="text"
+                placeholder="Search station ID or city..."
+                class="bg-[#0B0F19] border border-[#1E293B] px-3 py-1 rounded text-xs text-white focus:outline-none focus:border-amber-500 transition-all placeholder-slate-600 w-48"
+              />
             </div>
           </div>
-        </article>
-      </section>
+          <div class="overflow-x-auto">
+            <table class="w-full text-left text-xs border-collapse">
+              <thead>
+                <tr
+                  class="bg-[#0B0F19] text-slate-400 font-bold border-b border-[#1E293B]"
+                >
+                  <th class="p-4">Station Node Details</th>
+                  <th class="p-4">City</th>
+                  <th class="p-4">Remaining Fuel (ATG Verified)</th>
+                  <th class="p-4">Active Digital Queue</th>
+                  <th class="p-4">24h Dispensed Flow</th>
+                  <th class="p-4">Regulatory Status</th>
+                </tr>
+              </thead>
+              <tbody
+                class="divide-y divide-[#1E293B] font-medium text-slate-300"
+              >
+                <!-- ROW 1 -->
+                <tr class="hover:bg-[#1E293B]/20 transition-all">
+                  <td class="p-4 flex items-center gap-2 font-bold text-white">
+                    <div class="w-2 h-2 rounded-full bg-emerald-400"></div>
+                    TotalEnergies Area 4
+                  </td>
+                  <td class="p-4">Lilongwe</td>
+                  <td class="p-4 font-mono">22,450 Litres</td>
+                  <td class="p-4 font-semibold text-amber-400">
+                    14 Active Slots
+                  </td>
+                  <td class="p-4 font-mono">8,900 Litres</td>
+                  <td class="p-4">
+                    <span
+                      class="bg-emerald-500/10 text-emerald-400 px-2 py-0.5 rounded text-[10px] font-bold tracking-wide"
+                      >COMPLIANT</span
+                    >
+                  </td>
+                </tr>
+                <!-- ROW 2 -->
+                <tr class="hover:bg-[#1E293B]/20 transition-all">
+                  <td class="p-4 flex items-center gap-2 font-bold text-white">
+                    <div class="w-2 h-2 rounded-full bg-emerald-400"></div>
+                    Mount Meru Ginnery Corner
+                  </td>
+                  <td class="p-4">Blantyre</td>
+                  <td class="p-4 font-mono">11,050 Litres</td>
+                  <td class="p-4 font-semibold text-slate-500">0 Empty Node</td>
+                  <td class="p-4 font-mono">14,200 Litres</td>
+                  <td class="p-4">
+                    <span
+                      class="bg-emerald-500/10 text-emerald-400 px-2 py-0.5 rounded text-[10px] font-bold tracking-wide"
+                      >COMPLIANT</span
+                    >
+                  </td>
+                </tr>
+                <!-- ROW 3 -->
+                <tr class="hover:bg-[#1E293B]/20 transition-all">
+                  <td class="p-4 flex items-center gap-2 font-bold text-white">
+                    <div class="w-2 h-2 rounded-full bg-rose-500"></div>
+                    Petroda Clocktower
+                  </td>
+                  <td class="p-4">Blantyre</td>
+                  <td class="p-4 font-mono text-rose-400 font-bold">
+                    142 Litres
+                  </td>
+                  <td class="p-4 font-semibold text-rose-400">
+                    412 Drivers Congested
+                  </td>
+                  <td class="p-4 font-mono">22,000 Litres</td>
+                  <td class="p-4">
+                    <span
+                      class="bg-rose-500/10 text-rose-400 px-2 py-0.5 rounded text-[10px] font-bold tracking-wide"
+                      >OUT OF STOCK</span
+                    >
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
     </main>
 
+    <!-- Activate Lucide Icons Script -->
     <script>
-      const STORAGE_KEY = "pumpTelemetryTesterConfig";
-
-      const configElements = {
-        baseUrl: document.getElementById("baseUrl"),
-        stationToken: document.getElementById("stationToken"),
-        internalToken: document.getElementById("internalToken"),
-        stationPublicId: document.getElementById("stationPublicId"),
-        stationEmail: document.getElementById("stationEmail"),
-        stationPhone: document.getElementById("stationPhone"),
-        stationPassword: document.getElementById("stationPassword"),
-        internalEmail: document.getElementById("internalEmail"),
-        internalPassword: document.getElementById("internalPassword"),
-      };
-
-      function loadConfig() {
-        const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
-        configElements.baseUrl.value = saved.baseUrl || "http://localhost:4000";
-        configElements.stationToken.value = saved.stationToken || "";
-        configElements.internalToken.value = saved.internalToken || "";
-        configElements.stationPublicId.value = saved.stationPublicId || "";
-        configElements.stationEmail.value = saved.stationEmail || "";
-        configElements.stationPhone.value = saved.stationPhone || "";
-        configElements.stationPassword.value = "";
-        configElements.internalEmail.value = saved.internalEmail || "";
-        configElements.internalPassword.value = "";
-      }
-
-      function persistConfig() {
-        const payload = {
-          baseUrl: configElements.baseUrl.value.trim() || "http://localhost:4000",
-          stationToken: configElements.stationToken.value.trim(),
-          internalToken: configElements.internalToken.value.trim(),
-          stationPublicId: configElements.stationPublicId.value.trim(),
-          stationEmail: configElements.stationEmail.value.trim(),
-          stationPhone: configElements.stationPhone.value.trim(),
-          internalEmail: configElements.internalEmail.value.trim(),
-        };
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
-      }
-
-      function saveConfig() {
-        persistConfig();
-        alert("Pump telemetry tester settings saved.");
-      }
-
-      function clearConfig() {
-        localStorage.removeItem(STORAGE_KEY);
-        loadConfig();
-      }
-
-      function buildUrl(path, includeStationPublicId) {
-        const baseUrl = (configElements.baseUrl.value.trim() || "http://localhost:4000").replace(/\/+$/, "");
-        const url = new URL(baseUrl + path);
-        const stationPublicId = configElements.stationPublicId.value.trim();
-        if (includeStationPublicId && stationPublicId) {
-          url.searchParams.set("stationPublicId", stationPublicId);
-        }
-        return url;
-      }
-
-      function prettyJson(value) {
-        if (typeof value === "string") {
-          return value;
-        }
-        try {
-          return JSON.stringify(value, null, 2);
-        } catch (_error) {
-          return String(value);
-        }
-      }
-
-      function setResult(key, { ok, status, url, method, data, error }) {
-        const result = document.getElementById("result-" + key);
-        const head = result.querySelector(".result-head");
-        const body = result.querySelector("pre");
-        const badgeClass = ok ? "ok" : "error";
-        const badgeText = ok ? "Success" : "Error";
-        head.innerHTML = [
-          '<div class="result-meta">',
-          '<span class="badge ' + badgeClass + '">' + badgeText + "</span>",
-          "<span><strong>" + method + "</strong> " + escapeHtml(url) + "</span>",
-          typeof status === "number" ? "<span class='muted'>HTTP " + status + "</span>" : "",
-          "</div>",
-        ].join("");
-        body.textContent = prettyJson(ok ? data : error);
-      }
-
-      function escapeHtml(value) {
-        return String(value)
-          .replaceAll("&", "&amp;")
-          .replaceAll("<", "&lt;")
-          .replaceAll(">", "&gt;");
-      }
-
-      async function stationLogin({ email, phone, password }) {
-        const url = buildUrl("/auth/login", false);
-        const submitButton = document.querySelector('[data-endpoint-form="stationLogin"] button[type="submit"]');
-        submitButton.disabled = true;
-
-        setResult("stationLogin", {
-          ok: true,
-          method: "POST",
-          url: url.toString(),
-          data: { loading: true, message: "Logging in..." },
-        });
-
-        const payload = {
-          password,
-        };
-        if (email) payload.email = email;
-        if (phone) payload.phone = phone;
-
-        try {
-          const response = await fetch(url, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            credentials: "include",
-            body: JSON.stringify(payload),
-          });
-
-          const text = await response.text();
-          let parsed;
-          try {
-            parsed = text ? JSON.parse(text) : {};
-          } catch (_error) {
-            parsed = { raw: text };
-          }
-
-          if (!response.ok) {
-            setResult("stationLogin", {
-              ok: false,
-              status: response.status,
-              method: "POST",
-              url: url.toString(),
-              error: parsed,
-            });
-            return;
-          }
-
-          const responsePayload = parsed?.data || parsed;
-          const accessToken = String(responsePayload?.accessToken || "").trim();
-          const stationPublicId = String(responsePayload?.station?.publicId || "").trim();
-          if (accessToken) {
-            configElements.stationToken.value = accessToken;
-          }
-          if (stationPublicId) {
-            configElements.stationPublicId.value = stationPublicId;
-          }
-          if (accessToken || stationPublicId) {
-            persistConfig();
-          }
-
-          setResult("stationLogin", {
-            ok: true,
-            status: response.status,
-            method: "POST",
-            url: url.toString(),
-            data: {
-              message: "Station token loaded into the tester.",
-              accessToken,
-              user: responsePayload?.user || null,
-              station: responsePayload?.station || null,
-              role: responsePayload?.role || null,
-              stationMemberships: responsePayload?.stationMemberships || [],
-            },
-          });
-        } catch (error) {
-          setResult("stationLogin", {
-            ok: false,
-            method: "POST",
-            url: url.toString(),
-            error: {
-              message: error.message,
-              hint: "If this is a CORS error, serve this file through a simple local server or open it through your existing dev tooling.",
-            },
-          });
-        } finally {
-          submitButton.disabled = false;
-        }
-      }
-
-      async function internalLogin(email, password) {
-        const url = buildUrl("/api/internal/auth/login", false);
-        const submitButton = document.querySelector('[data-endpoint-form="internalLogin"] button[type="submit"]');
-        submitButton.disabled = true;
-
-        setResult("internalLogin", {
-          ok: true,
-          method: "POST",
-          url: url.toString(),
-          data: { loading: true, message: "Logging in..." },
-        });
-
-        try {
-          const response = await fetch(url, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({ email, password }),
-          });
-
-          const text = await response.text();
-          let parsed;
-          try {
-            parsed = text ? JSON.parse(text) : {};
-          } catch (_error) {
-            parsed = { raw: text };
-          }
-
-          if (!response.ok) {
-            setResult("internalLogin", {
-              ok: false,
-              status: response.status,
-              method: "POST",
-              url: url.toString(),
-              error: parsed,
-            });
-            return;
-          }
-
-          const payload = parsed?.data || parsed;
-          const accessToken = String(payload?.accessToken || "").trim();
-          if (accessToken) {
-            configElements.internalToken.value = accessToken;
-            persistConfig();
-          }
-
-          setResult("internalLogin", {
-            ok: true,
-            status: response.status,
-            method: "POST",
-            url: url.toString(),
-            data: {
-              message: accessToken ? "Internal token loaded into the tester." : "Login succeeded.",
-              accessToken,
-              user: payload?.user || null,
-              primaryRole: payload?.primaryRole || null,
-              permissions: payload?.permissions || [],
-              sessionPublicId: payload?.sessionPublicId || null,
-            },
-          });
-        } catch (error) {
-          setResult("internalLogin", {
-            ok: false,
-            method: "POST",
-            url: url.toString(),
-            error: {
-              message: error.message,
-              hint: "If this is a CORS error, serve this file through a simple local server or open it through your existing dev tooling.",
-            },
-          });
-        } finally {
-          submitButton.disabled = false;
-        }
-      }
-
-      async function requestJson({
-        key,
-        method,
-        path,
-        tokenType,
-        includeStationPublicId = false,
-        body = null,
-        extraHeaders = {},
-      }) {
-        const url = buildUrl(path, includeStationPublicId);
-        const headers = { ...extraHeaders };
-        let token = "";
-
-        if (tokenType === "station") {
-          token = configElements.stationToken.value.trim();
-        } else if (tokenType === "internal") {
-          token = configElements.internalToken.value.trim();
-        }
-
-        if (token) {
-          headers.Authorization = "Bearer " + token;
-        }
-        if (body) {
-          headers["Content-Type"] = "application/json";
-        }
-
-        const submitButton = document.querySelector('[data-endpoint-form="' + key + '"] button[type="submit"]');
-        submitButton.disabled = true;
-        setResult(key, {
-          ok: true,
-          method,
-          url: url.toString(),
-          data: { loading: true, message: "Request in progress..." },
-        });
-
-        try {
-          const response = await fetch(url, {
-            method,
-            headers,
-            body: body ? JSON.stringify(body) : undefined,
-          });
-
-          const text = await response.text();
-          let parsed;
-          try {
-            parsed = text ? JSON.parse(text) : {};
-          } catch (_error) {
-            parsed = { raw: text };
-          }
-
-          if (!response.ok) {
-            setResult(key, {
-              ok: false,
-              status: response.status,
-              method,
-              url: url.toString(),
-              error: parsed,
-            });
-            return;
-          }
-
-          setResult(key, {
-            ok: true,
-            status: response.status,
-            method,
-            url: url.toString(),
-            data: parsed,
-          });
-        } catch (error) {
-          setResult(key, {
-            ok: false,
-            method,
-            url: url.toString(),
-            error: {
-              message: error.message,
-              hint: "If this is a CORS error, serve this file through a simple local server or open it through your existing dev tooling.",
-            },
-          });
-        } finally {
-          submitButton.disabled = false;
-        }
-      }
-
-      document.querySelector('[data-endpoint-form="pumpSnapshot"]').addEventListener("submit", (event) => {
-        event.preventDefault();
-        const form = new FormData(event.currentTarget);
-        const pumpId = encodeURIComponent(String(form.get("pumpId") || "").trim());
-        requestJson({
-          key: "pumpSnapshot",
-          method: "GET",
-          path: "/api/monitoring/pumps/" + pumpId,
-          tokenType: "station",
-          includeStationPublicId: true,
-        });
-      });
-
-      document.querySelector('[data-endpoint-form="pumpNozzles"]').addEventListener("submit", (event) => {
-        event.preventDefault();
-        const form = new FormData(event.currentTarget);
-        const pumpId = encodeURIComponent(String(form.get("pumpId") || "").trim());
-        requestJson({
-          key: "pumpNozzles",
-          method: "GET",
-          path: "/api/monitoring/pumps/" + pumpId + "/nozzles",
-          tokenType: "station",
-          includeStationPublicId: true,
-        });
-      });
-
-      document.querySelector('[data-endpoint-form="simulateMonitoring"]').addEventListener("submit", (event) => {
-        event.preventDefault();
-        const form = new FormData(event.currentTarget);
-        const litresRaw = String(form.get("litres") || "").trim();
-        requestJson({
-          key: "simulateMonitoring",
-          method: "POST",
-          path: "/api/dev/monitoring/simulate",
-          tokenType: "station",
-          includeStationPublicId: true,
-          body: {
-            pumpId: String(form.get("pumpId") || "").trim(),
-            nozzleId: String(form.get("nozzleId") || "").trim(),
-            status: String(form.get("status") || "IDLE").trim(),
-            litres: litresRaw ? Number(litresRaw) : null,
-          },
-        });
-      });
-
-      document.querySelector('[data-endpoint-form="telemetryIngest"]').addEventListener("submit", (event) => {
-        event.preventDefault();
-        const form = new FormData(event.currentTarget);
-        const litresRaw = String(form.get("litresValue") || "").trim();
-        const flowRateRaw = String(form.get("flowRate") || "").trim();
-        const happenedAtRaw = String(form.get("happenedAt") || "").trim();
-        const payloadRaw = String(form.get("payload") || "").trim();
-        let payloadJson = {};
-
-        if (payloadRaw) {
-          try {
-            payloadJson = JSON.parse(payloadRaw);
-          } catch (error) {
-            setResult("telemetryIngest", {
-              ok: false,
-              method: "POST",
-              url: buildUrl("/api/monitoring/telemetry/events", true).toString(),
-              error: {
-                message: "Payload JSON is invalid.",
-                detail: error.message,
-              },
-            });
-            return;
-          }
-        }
-
-        requestJson({
-          key: "telemetryIngest",
-          method: "POST",
-          path: "/api/monitoring/telemetry/events",
-          tokenType: "station",
-          includeStationPublicId: true,
-          body: {
-            eventId: String(form.get("eventId") || "").trim() || undefined,
-            transactionPublicId: String(form.get("transactionPublicId") || "").trim() || undefined,
-            sessionReference: String(form.get("sessionReference") || "").trim() || undefined,
-            telemetryCorrelationId: String(form.get("telemetryCorrelationId") || "").trim() || undefined,
-            pumpId: String(form.get("pumpId") || "").trim(),
-            nozzleId: String(form.get("nozzleId") || "").trim(),
-            eventType: String(form.get("eventType") || "").trim(),
-            severity: String(form.get("severity") || "INFO").trim(),
-            litresValue: litresRaw ? Number(litresRaw) : null,
-            flowRate: flowRateRaw ? Number(flowRateRaw) : null,
-            rawErrorCode: String(form.get("rawErrorCode") || "").trim() || null,
-            message: String(form.get("message") || "").trim() || undefined,
-            sourceType: String(form.get("sourceType") || "").trim() || undefined,
-            happenedAt: happenedAtRaw ? new Date(happenedAtRaw).toISOString() : undefined,
-            payload: payloadJson,
-          },
-        });
-      });
-
-      document
-        .querySelector('[data-endpoint-form="pumpSessionByTransaction"]')
-        .addEventListener("submit", (event) => {
-          event.preventDefault();
-          const form = new FormData(event.currentTarget);
-          const transactionPublicId = encodeURIComponent(String(form.get("transactionPublicId") || "").trim());
-          requestJson({
-            key: "pumpSessionByTransaction",
-            method: "GET",
-            path: "/api/internal/transactions/" + transactionPublicId + "/pump-session",
-            tokenType: "internal",
-          });
-        });
-
-      document
-        .querySelector('[data-endpoint-form="telemetryByTransaction"]')
-        .addEventListener("submit", (event) => {
-          event.preventDefault();
-          const form = new FormData(event.currentTarget);
-          const transactionPublicId = encodeURIComponent(String(form.get("transactionPublicId") || "").trim());
-          requestJson({
-            key: "telemetryByTransaction",
-            method: "GET",
-            path: "/api/internal/transactions/" + transactionPublicId + "/telemetry",
-            tokenType: "internal",
-          });
-        });
-
-      document.querySelector('[data-endpoint-form="telemetryBySession"]').addEventListener("submit", (event) => {
-        event.preventDefault();
-        const form = new FormData(event.currentTarget);
-        const sessionReference = encodeURIComponent(String(form.get("sessionReference") || "").trim());
-        requestJson({
-          key: "telemetryBySession",
-          method: "GET",
-          path: "/api/internal/pump-sessions/" + sessionReference + "/telemetry",
-          tokenType: "internal",
-        });
-      });
-
-      document.querySelector('[data-endpoint-form="verifyReceipt"]').addEventListener("submit", (event) => {
-        event.preventDefault();
-        const form = new FormData(event.currentTarget);
-        const reference = encodeURIComponent(String(form.get("reference") || "").trim());
-        const responseFormat = String(form.get("responseFormat") || "json").trim().toLowerCase();
-        requestJson({
-          key: "verifyReceipt",
-          method: "GET",
-          path: "/verify/receipts/" + reference,
-          tokenType: "none",
-          extraHeaders: {
-            Accept: responseFormat === "html" ? "text/html" : "application/json",
-          },
-        });
-      });
-
-      document.querySelector('[data-endpoint-form="stationLogin"]').addEventListener("submit", (event) => {
-        event.preventDefault();
-        const form = new FormData(event.currentTarget);
-        const email = String(form.get("email") || "").trim();
-        const phone = String(form.get("phone") || "").trim();
-        const password = String(form.get("password") || "");
-        stationLogin({ email, phone, password });
-      });
-
-      document.querySelector('[data-endpoint-form="internalLogin"]').addEventListener("submit", (event) => {
-        event.preventDefault();
-        const form = new FormData(event.currentTarget);
-        const email = String(form.get("email") || "").trim();
-        const password = String(form.get("password") || "");
-        internalLogin(email, password);
-      });
-
-      document.getElementById("saveConfigButton").addEventListener("click", saveConfig);
-      document.getElementById("clearConfigButton").addEventListener("click", clearConfig);
-
-      loadConfig();
+      lucide.createIcons();
     </script>
   </body>
 </html>

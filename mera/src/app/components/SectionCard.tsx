@@ -14,11 +14,11 @@ export function SectionCard({
   className?: string
 }) {
   return (
-    <section className={`flex flex-col overflow-hidden rounded-[1.45rem] border border-slate-200/80 bg-white shadow-[0_8px_24px_-22px_rgba(15,23,42,0.18)] ${className}`}>
-      <header className="flex items-start justify-between gap-3 border-b border-slate-100 px-5 py-4">
+    <section className={`flex flex-col overflow-hidden rounded-[6px] border border-[var(--mera-panel-border)] bg-[var(--mera-panel)] shadow-[var(--mera-shadow-card)] ${className}`}>
+      <header className="flex items-start justify-between gap-3 border-b border-[var(--mera-panel-border-soft)] px-4 py-3">
         <div>
-          <h3 className="text-[1.02rem] font-semibold tracking-[-0.02em] text-slate-900">{title}</h3>
-          {subtitle ? <p className="mt-1 text-[0.95rem] leading-6 text-[#6b7b91]">{subtitle}</p> : null}
+          <h3 className="text-[12px] font-bold uppercase tracking-[0.08em] text-[var(--mera-panel-text)]">{title}</h3>
+          {subtitle ? <p className="mt-1 text-[11px] leading-5 text-[var(--mera-panel-text-muted)]">{subtitle}</p> : null}
         </div>
         {actions}
       </header>
