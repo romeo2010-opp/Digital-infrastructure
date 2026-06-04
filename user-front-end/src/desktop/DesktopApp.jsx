@@ -51,6 +51,7 @@ import { playSmartlinkCue, SMARTLINK_AUDIO_CUES } from '../utils/smartlinkAudio'
 import { UserAccountOverview } from '../features/settings/UserAccountOverview'
 import { UserSettingsWorkspace } from '../features/settings/UserSettingsWorkspace'
 import { AssistantScreen } from '../features/assistant/AssistantScreen'
+import { FleetDriverMode } from '../features/fleet/FleetDriverMode'
 import { DesktopPlaceholderPage } from './DesktopPlaceholderPage'
 import { UserDesktopLayout } from './UserDesktopLayout'
 import { matchDesktopRoute, DESKTOP_NAV_ITEMS } from './desktopNav'
@@ -639,6 +640,7 @@ export function DesktopApp({ theme = 'light', onThemeChange }) {
         maskedPlate: options.maskedPlate,
         requestedLiters: options.requestedLiters,
         prepay: options.prepay,
+        fleetFunding: options.fleetFunding,
       })
 
       const queueJoinId = String(response?.queueJoinId || response?.status?.queueJoinId || '').trim()
@@ -655,7 +657,7 @@ export function DesktopApp({ theme = 'light', onThemeChange }) {
         stationName: String(station?.name || station?.stationName || 'Unknown station').trim() || 'Unknown station',
         fuelType: String(options.fuelType || 'PETROL').trim().toUpperCase() || 'PETROL',
         requestedLiters: options.requestedLiters,
-        paymentMode: options.prepay ? 'PREPAY' : 'PAY_AT_PUMP',
+        paymentMode: options.fleetFunding ? 'FLEET_WALLET' : options.prepay ? 'PREPAY' : 'PAY_AT_PUMP',
         queueStatus: String(response?.status?.queueStatus || 'WAITING').trim().toUpperCase() || 'WAITING',
         joinedAt: new Date().toISOString(),
       })
@@ -1073,6 +1075,12 @@ export function DesktopApp({ theme = 'light', onThemeChange }) {
     content = (
       <section className='desktop-mobile-surface'>
         <ReservationsScreen />
+      </section>
+    )
+  } else if (route.name === 'fleet') {
+    content = (
+      <section className='desktop-mobile-surface'>
+        <FleetDriverMode layout='desktop' onBack={() => navigate('/d/overview')} />
       </section>
     )
   } else if (route.name === 'assistant') {

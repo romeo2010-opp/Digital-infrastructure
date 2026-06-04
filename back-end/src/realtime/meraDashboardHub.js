@@ -9,10 +9,14 @@ export function subscribeMeraDashboard(listener) {
 }
 
 export function publishMeraDashboardUpdate(payload = {}) {
+  const keys = Array.isArray(payload.keys) && payload.keys.length
+    ? payload.keys
+    : ["nationalOperations"]
   const message = {
-    type: "mera_dashboard_refresh",
+    type: "mera_portal_invalidate",
     at: new Date().toISOString(),
     ...payload,
+    keys,
   }
 
   for (const listener of listeners) {

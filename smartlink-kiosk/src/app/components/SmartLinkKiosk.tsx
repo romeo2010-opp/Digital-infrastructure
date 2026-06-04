@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { useAuth } from "../auth/AuthContext"
 import { useKioskOperations } from "../hooks/useKioskOperations"
 import { useKioskStationRealtime } from "../hooks/useKioskStationRealtime"
@@ -13,7 +13,9 @@ export function SmartLinkKiosk() {
   const [currentTime, setCurrentTime] = useState(new Date())
   const { session, isApiMode } = useAuth()
   const { refreshData } = useKioskOperations()
-  const { syncError, isHydrating, setApiMode, setSessionContext } = useFuelStore()
+  const { syncError, isHydrating, setApiMode, setRealtimeMode, setSessionContext } = useFuelStore()
+  const realtimeRefreshInFlightRef = useRef(false)
+  const realtimeRefreshQueuedRef = useRef(false)
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -35,10 +37,33 @@ export function SmartLinkKiosk() {
     void refreshData()
   }, [refreshData, session?.station?.publicId])
 
-  useKioskStationRealtime({
+  const refreshFromRealtime = useCallback(async () => {
+    if (realtimeRefreshInFlightRef.current) {
+      realtimeRefreshQueuedRef.current = true
+      return
+    }
+
+    realtimeRefreshInFlightRef.current = true
+    try {
+      do {
+        realtimeRefreshQueuedRef.current = false
+        await refreshData({ silent: true })
+      } while (realtimeRefreshQueuedRef.current)
+    } finally {
+      realtimeRefreshInFlightRef.current = false
+    }
+  }, [refreshData])
+
+  const realtime = useKioskStationRealtime({
     enabled: Boolean(isApiMode && session?.station?.publicId),
-    onChange: () => refreshData({ silent: true }),
+    fallbackIntervalMs: 2000,
+    connectTimeoutMs: 5000,
+    onChange: refreshFromRealtime,
   })
+
+  useEffect(() => {
+    setRealtimeMode(isApiMode ? realtime.mode : "disabled")
+  }, [isApiMode, realtime.mode, setRealtimeMode])
 
   const currentHour = currentTime.getHours()
   const isNightTheme = currentHour >= 18 || currentHour < 6

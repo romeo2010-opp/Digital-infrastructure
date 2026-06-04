@@ -101,10 +101,6 @@ export function clearStoredAuthSession() {
   if (!canUseStorage()) return
   window.localStorage.removeItem(ACCESS_TOKEN_KEY)
   window.localStorage.removeItem(SESSION_META_KEY)
-  window.localStorage.removeItem(ACTIVE_QUEUE_JOIN_ID_KEY)
-  window.localStorage.removeItem(ACTIVE_MANUAL_FUEL_ORDER_ID_KEY)
-  window.localStorage.removeItem(FAVORITE_STATION_IDS_KEY)
-  window.localStorage.removeItem(QUEUE_HISTORY_KEY)
 }
 
 export function getStoredNotificationsEnabled() {

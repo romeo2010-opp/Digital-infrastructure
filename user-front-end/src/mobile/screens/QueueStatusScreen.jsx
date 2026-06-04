@@ -158,6 +158,11 @@ function snapshotFromMessage(previous, message) {
       carsAhead: message.data.carsAhead ?? previous.carsAhead,
       totalQueued: message.data.totalQueued ?? previous.totalQueued,
       etaMinutes: message.data.etaMinutes ?? previous.etaMinutes,
+      operationalStatus:
+        message.data.operationalStatus ?? previous.operationalStatus,
+      assignedPump: message.data.assignedPump ?? previous.assignedPump,
+      pumpAssignment:
+        message.data.pumpAssignment ?? previous.pumpAssignment,
     };
   }
 
@@ -248,6 +253,15 @@ function paymentModeLabel(value) {
   return String(value || "").trim().toUpperCase() === "PREPAY"
     ? "Wallet prepay"
     : "Pay at pump";
+}
+
+function displayEnum(value) {
+  return String(value || '')
+    .toLowerCase()
+    .split('_')
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ')
 }
 
 function formatMoney(amount, currencyCode = "MWK") {
@@ -680,6 +694,9 @@ export function QueueStatusScreen({ queueJoinId, onBack, onLeaveComplete }) {
   const fuelRemainingPct = fuelRemainingPercent(snapshot);
   const nowServingValue = nowServingDisplay(snapshot);
   const instructions = nearQueueInstructions(Number(snapshot?.carsAhead || 0));
+  const assignedPump = snapshot?.assignedPump || null;
+  const pumpAssignment = snapshot?.pumpAssignment || null;
+  const approachInstruction = snapshot?.approachInstruction || null;
   const lastMovementText = formatRelativeTime(snapshot?.lastMovementAt);
   const usingApi = queueData === userQueueApi;
   const supportsBarcodeDetection =
@@ -1119,6 +1136,53 @@ export function QueueStatusScreen({ queueJoinId, onBack, onLeaveComplete }) {
                   : ""}
               </p>
             ) : null}
+          </article>
+
+          <article className="queue-card queue-assignment-card">
+            <h3>Pump Assignment</h3>
+            {assignedPump ? (
+              <>
+                <div className="queue-grid-two">
+                  <p>
+                    <span>Assigned pump</span>
+                    <strong>{assignedPump.displayName || `SmartLink Pump ${assignedPump.pumpNumber || ""}`}</strong>
+                  </p>
+                  <p>
+                    <span>Status</span>
+                    <strong>{displayEnum(pumpAssignment?.status || snapshot?.operationalStatus)}</strong>
+                  </p>
+                  <p>
+                    <span>Vehicle</span>
+                    <strong>
+                      {snapshot?.vehicle
+                        ? `${snapshot.vehicle.make || ""} ${snapshot.vehicle.model || ""}`.trim() || "Vehicle"
+                        : "Vehicle"}
+                    </strong>
+                  </p>
+                  <p>
+                    <span>Tank side</span>
+                    <strong>{displayEnum(snapshot?.vehicle?.tankSide || "UNKNOWN")}</strong>
+                  </p>
+                </div>
+                <p className="queue-muted queue-metric-note">
+                  {pumpAssignment?.reason || "This pump matches your fuel type and vehicle profile."}
+                </p>
+                {approachInstruction?.message ? (
+                  <p className={approachInstruction.shouldProceed ? "queue-success-text" : "queue-info-text"}>
+                    {approachInstruction.message}
+                  </p>
+                ) : null}
+              </>
+            ) : (
+              <>
+                <p className="queue-muted queue-metric-note">
+                  {pumpAssignment?.status === "MANUAL_REVIEW_REQUIRED"
+                    ? "We are confirming the best pump for your vehicle."
+                    : "SmartLink is checking fuel type, tank side, lane fit, and pump load."}
+                </p>
+                {pumpAssignment?.reason ? <p className="queue-warning-text">{pumpAssignment.reason}</p> : null}
+              </>
+            )}
           </article>
 
           <article className="queue-card">

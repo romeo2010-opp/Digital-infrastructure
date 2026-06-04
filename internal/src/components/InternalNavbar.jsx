@@ -1,29 +1,72 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useInternalAuth } from "../auth/AuthContext";
-import { useAppShell } from "../layout/AppShellContext";
-import { useInternalApprovalRequests } from "../notifications/InternalApprovalRequestsContext";
+import { useEffect, useMemo, useRef, useState } from "react"
+import { useNavigate } from "react-router-dom"
+import { useInternalAuth } from "../auth/AuthContext"
+import { useAppShell } from "../layout/AppShellContext"
+import { useInternalApprovalRequests } from "../notifications/InternalApprovalRequestsContext"
+import { navigationItems } from "../config/navigation"
+import InternalSettingsModal from "./InternalSettingsModal"
 
-function buildAvatarDataUrl() {
-  return "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 80 80'%3E%3Crect width='80' height='80' rx='40' fill='%23dbe8ff'/%3E%3Ccircle cx='40' cy='30' r='14' fill='%2357779f'/%3E%3Cpath d='M14 73c4-14 16-22 26-22s22 8 26 22' fill='%2357779f'/%3E%3C/svg%3E";
+function HeaderIcon({ name }) {
+  const common = {
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2",
+    strokeLinecap: "round",
+    strokeLinejoin: "round",
+    "aria-hidden": true,
+  }
+
+  if (name === "menu") {
+    return <svg {...common}><path d="M4 6h16M4 12h16M4 18h16" /></svg>
+  }
+
+  if (name === "search") {
+    return <svg {...common}><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
+  }
+
+  if (name === "bell") {
+    return <svg {...common}><path d="M15 17h5l-1.4-1.4A2 2 0 0 1 18 14.2V11a6 6 0 1 0-12 0v3.2c0 .5-.2 1-.6 1.4L4 17h5" /><path d="M9.5 17a2.5 2.5 0 0 0 5 0" /></svg>
+  }
+
+  if (name === "settings") {
+    return <svg {...common}><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06A1.65 1.65 0 0 0 15 19.4a1.65 1.65 0 0 0-1 .6 1.65 1.65 0 0 1-2 0 1.65 1.65 0 0 0-1-.6 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-.6-1 1.65 1.65 0 0 1 0-2 1.65 1.65 0 0 0 .6-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06A2 2 0 1 1 7.03 4.3l.06.06A1.65 1.65 0 0 0 9 4.6c.39 0 .77-.14 1-.6a1.65 1.65 0 0 1 2 0c.23.46.61.6 1 .6a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c0 .39.14.77.6 1a1.65 1.65 0 0 1 0 2c-.46.23-.6.61-.6 1Z" /></svg>
+  }
+
+  if (name === "chevron") {
+    return <svg {...common}><path d="m6 9 6 6 6-6" /></svg>
+  }
+
+  return null
 }
 
-export default function InternalNavbar({
-  pagetitle = "Overview",
-  alerts = null,
-}) {
-  const { session, logout } = useInternalAuth();
-  const { toggleNavigation } = useAppShell();
-  const { notificationItems } = useInternalApprovalRequests();
-  const [showAlerts, setShowAlerts] = useState(false);
-  const [showUserMenu, setShowUserMenu] = useState(false);
-  const alertsRef = useRef(null);
-  const userMenuRef = useRef(null);
-  const resolvedUserName = session?.profile?.user?.fullName || "Internal User";
-  const resolvedRoleName =
-    session?.profile?.roles?.[0]?.name ||
-    session?.profile?.primaryRole ||
-    "Internal role";
-  const avatar = buildAvatarDataUrl();
+function initialsFor(name) {
+  return String(name || "Internal User")
+    .split(/[.@_\s-]+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0])
+    .join("")
+    .toUpperCase()
+}
+
+export default function InternalNavbar({ pagetitle = "Overview", alerts = null }) {
+  const navigate = useNavigate()
+  const { session, logout } = useInternalAuth()
+  const { toggleNavigation } = useAppShell()
+  const { notificationItems } = useInternalApprovalRequests()
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [showAlerts, setShowAlerts] = useState(false)
+  const [showUserMenu, setShowUserMenu] = useState(false)
+  const [searchTerm, setSearchTerm] = useState("")
+  const [searchFocused, setSearchFocused] = useState(false)
+  const alertsRef = useRef(null)
+  const userMenuRef = useRef(null)
+  const searchRef = useRef(null)
+  const resolvedUserName = session?.profile?.user?.fullName || "Internal User"
+  const resolvedRoleName = session?.profile?.roles?.[0]?.name || session?.profile?.primaryRole || "Internal role"
+  const userInitials = initialsFor(resolvedUserName)
+
   const normalizedAlerts = useMemo(
     () =>
       [
@@ -40,96 +83,111 @@ export default function InternalNavbar({
           isActionable: Boolean(item.isActionable),
           onOpen: typeof item.onOpen === "function" ? item.onOpen : null,
         })),
-    [alerts, notificationItems],
-  );
+    [alerts, notificationItems]
+  )
+
+  const allowed = useMemo(() => new Set(session?.profile?.navigation || []), [session?.profile?.navigation])
+  const searchableItems = useMemo(() => navigationItems.filter((item) => allowed.has(item.key)), [allowed])
+  const searchResults = useMemo(() => {
+    const needle = searchTerm.trim().toLowerCase()
+    const source = needle
+      ? searchableItems.filter((item) => `${item.label} ${item.section}`.toLowerCase().includes(needle))
+      : searchableItems.slice(0, 5)
+    return source.slice(0, 7)
+  }, [searchTerm, searchableItems])
 
   useEffect(() => {
     function onPointerDown(event) {
-      if (alertsRef.current && !alertsRef.current.contains(event.target))
-        setShowAlerts(false);
-      if (userMenuRef.current && !userMenuRef.current.contains(event.target))
-        setShowUserMenu(false);
+      if (alertsRef.current && !alertsRef.current.contains(event.target)) setShowAlerts(false)
+      if (userMenuRef.current && !userMenuRef.current.contains(event.target)) setShowUserMenu(false)
+      if (searchRef.current && !searchRef.current.contains(event.target)) setSearchFocused(false)
     }
     function onKeyDown(event) {
       if (event.key === "Escape") {
-        setShowAlerts(false);
-        setShowUserMenu(false);
+        setShowAlerts(false)
+        setShowUserMenu(false)
+        setSearchFocused(false)
       }
     }
-    document.addEventListener("mousedown", onPointerDown);
-    document.addEventListener("keydown", onKeyDown);
+    document.addEventListener("mousedown", onPointerDown)
+    document.addEventListener("keydown", onKeyDown)
     return () => {
-      document.removeEventListener("mousedown", onPointerDown);
-      document.removeEventListener("keydown", onKeyDown);
-    };
-  }, []);
+      document.removeEventListener("mousedown", onPointerDown)
+      document.removeEventListener("keydown", onKeyDown)
+    }
+  }, [])
+
+  function openSearchResult(item) {
+    if (!item) return
+    setSearchTerm("")
+    setSearchFocused(false)
+    navigate(item.path)
+  }
+
+  function submitSearch(event) {
+    event.preventDefault()
+    openSearchResult(searchResults[0])
+  }
 
   return (
-    <nav className="topbar">
+    <header className="topbar">
       <div className="topbar-main">
         <div className="topbar-start">
-          <button
-            type="button"
-            className="icon-btn menu-btn"
-            aria-label="Open menu"
-            onClick={toggleNavigation}
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M4 6h16M4 12h16M4 18h16" />
-            </svg>
+          <button type="button" className="icon-btn menu-btn" aria-label="Open menu" onClick={toggleNavigation}>
+            <HeaderIcon name="menu" />
           </button>
-          <div className="topbar-title-block">
-            <h1 className="topbar-title">{pagetitle}</h1>
+          <div className="topbar-brand">
+            <img src="/smartlink-mark-tight.png" alt="SmartLink" />
+            <div className="topbar-brand-copy">
+              <strong>SmartLink Internal</strong>
+              <span>{pagetitle}</span>
+            </div>
           </div>
         </div>
 
-        <div className="topbar-end">
-          <div className="topbar-connectivity" role="status" aria-live="polite">
-            <span className="topbar-connectivity-dot" aria-hidden="true" />
-            <div className="topbar-connectivity-copy">
-              <span className="topbar-connectivity-state online">
-                Internal Network Live
-              </span>
-              <span className="topbar-connectivity-pending">
-                {resolvedRoleName}
-              </span>
+        <form className="topbar-search" ref={searchRef} onSubmit={submitSearch}>
+          <HeaderIcon name="search" />
+          <input
+            value={searchTerm}
+            onChange={(event) => setSearchTerm(event.target.value)}
+            onFocus={() => setSearchFocused(true)}
+            placeholder="Search internal workspace"
+            aria-label="Search internal workspace"
+          />
+          {searchFocused ? (
+            <div className="topbar-search-popover">
+              {searchResults.length ? (
+                searchResults.map((item) => (
+                  <button key={item.key} type="button" onClick={() => openSearchResult(item)}>
+                    <strong>{item.label}</strong>
+                    <span>{item.section}</span>
+                  </button>
+                ))
+              ) : (
+                <p>No matching internal views.</p>
+              )}
             </div>
-          </div>
+          ) : null}
+        </form>
 
-          <button type="button" className="icon-btn" aria-label="Notifications">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M15 17h5l-1.4-1.4A2 2 0 0 1 18 14.2V11a6 6 0 1 0-12 0v3.2c0 .5-.2 1-.6 1.4L4 17h5" />
-              <path d="M9.5 17a2.5 2.5 0 0 0 5 0" />
-            </svg>
-          </button>
-
+        <div className="topbar-end">
           <div className="topbar-messages" ref={alertsRef}>
             <button
               type="button"
               className={`icon-btn has-badge ${showAlerts ? "active" : ""}`}
-              aria-label="Messages"
+              aria-label="Notifications"
               aria-expanded={showAlerts}
               onClick={() => setShowAlerts((prev) => !prev)}
             >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M4 6h16v12H4z" />
-                <path d="m4 8 8 6 8-6" />
-              </svg>
-              <span className="badge">{normalizedAlerts.length}</span>
+              <HeaderIcon name="bell" />
+              {normalizedAlerts.length ? <span className="badge">{normalizedAlerts.length > 9 ? "9+" : normalizedAlerts.length}</span> : null}
             </button>
 
             {showAlerts ? (
-              <div
-                className="topbar-messages-popover"
-                role="dialog"
-                aria-label="System messages"
-              >
+              <div className="topbar-messages-popover" role="dialog" aria-label="System messages">
                 <header>
                   <strong>System Messages</strong>
-                  <small>
-                    {normalizedAlerts.length} item
-                    {normalizedAlerts.length === 1 ? "" : "s"}
-                  </small>
+                  <small>{normalizedAlerts.length} item{normalizedAlerts.length === 1 ? "" : "s"}</small>
                 </header>
                 <div className="topbar-messages-list">
                   {normalizedAlerts.length ? (
@@ -146,8 +204,8 @@ export default function InternalNavbar({
                             type="button"
                             className="topbar-message-open"
                             onClick={() => {
-                              setShowAlerts(false);
-                              item.onOpen();
+                              setShowAlerts(false)
+                              item.onOpen()
                             }}
                           >
                             Open request
@@ -156,22 +214,18 @@ export default function InternalNavbar({
                       </article>
                     ))
                   ) : (
-                    <p className="topbar-messages-empty">
-                      No current errors or admin messages.
-                    </p>
+                    <p className="topbar-messages-empty">No current errors or admin messages.</p>
                   )}
                 </div>
               </div>
             ) : null}
           </div>
 
-          <button type="button" className="icon-btn" aria-label="Help">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <circle cx="12" cy="12" r="9" />
-              <path d="M9.4 9.2a2.7 2.7 0 1 1 4.2 2.3c-.9.6-1.4 1.1-1.4 2.1" />
-              <circle cx="12" cy="16.9" r=".6" />
-            </svg>
-          </button>
+          {allowed.has("settings") ? (
+            <button type="button" className="icon-btn" aria-label="Settings" onClick={() => setSettingsOpen(true)}>
+              <HeaderIcon name="settings" />
+            </button>
+          ) : null}
 
           <div className="topbar-user-menu" ref={userMenuRef}>
             <button
@@ -181,32 +235,38 @@ export default function InternalNavbar({
               aria-expanded={showUserMenu}
               onClick={() => setShowUserMenu((prev) => !prev)}
             >
-              <img src={avatar} alt={resolvedUserName} />
-              <span>{resolvedUserName}</span>
-              <svg viewBox="0 0 20 20" aria-hidden="true">
-                <path d="m5 7 5 5 5-5" />
-              </svg>
+              <span className="topbar-user-avatar">{userInitials || "SL"}</span>
+              <span className="topbar-user-copy">
+                <strong>{resolvedUserName}</strong>
+                <small>{resolvedRoleName}</small>
+              </span>
+              <HeaderIcon name="chevron" />
             </button>
 
             {showUserMenu ? (
-              <div
-                className="topbar-user-popover"
-                role="menu"
-                aria-label="Account options"
-              >
+              <div className="topbar-user-popover" role="menu" aria-label="Account options">
                 <div className="topbar-user-popover-section">
-                  <strong>
-                    {session?.profile?.user?.email || "internal@smartlink"}
-                  </strong>
+                  <strong>{session?.profile?.user?.email || "internal@smartlink"}</strong>
                   <small>{resolvedRoleName}</small>
                 </div>
-
+                {allowed.has("settings") ? (
+                  <button
+                    type="button"
+                    className="topbar-user-action"
+                    onClick={() => {
+                      setShowUserMenu(false)
+                      setSettingsOpen(true)
+                    }}
+                  >
+                    Settings
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   className="topbar-user-action topbar-user-action-danger"
                   onClick={() => {
-                    setShowUserMenu(false);
-                    logout();
+                    setShowUserMenu(false)
+                    logout()
                   }}
                 >
                   Log out
@@ -216,6 +276,7 @@ export default function InternalNavbar({
           </div>
         </div>
       </div>
-    </nav>
-  );
+      {settingsOpen ? <InternalSettingsModal onClose={() => setSettingsOpen(false)} /> : null}
+    </header>
+  )
 }

@@ -1094,7 +1094,37 @@ async function getQueueEntryOrThrow(queueJoinId) {
       qe.called_at,
       qe.last_moved_at,
       qe.metadata,
+      qe.vehicle_id,
+      qe.assigned_pump_id,
+      qe.assigned_kiosk_id,
+      qe.pump_assignment_status,
+      qe.assignment_reason,
+      qe.assignment_confidence,
+      qe.assignment_created_at,
+      qe.assignment_updated_at,
+      qe.assignment_locked_at,
       ft.code AS fuel_type,
+      v.public_id AS vehicle_public_id,
+      v.nickname AS vehicle_nickname,
+      v.vehicle_type,
+      v.usage_type,
+      v.make AS vehicle_make,
+      v.model AS vehicle_model,
+      v.year AS vehicle_year,
+      v.number_plate,
+      v.fuel_type AS vehicle_fuel_type,
+      v.tank_capacity_litres,
+      v.is_full_tank,
+      v.tank_side,
+      v.tank_side_source,
+      v.tank_side_confidence,
+      v.visual_mockup_key,
+      p.public_id AS assigned_pump_public_id,
+      p.pump_number AS assigned_pump_number,
+      COALESCE(pc.display_name, CONCAT('Pump ', p.pump_number)) AS assigned_pump_display_name,
+      pc.entry_direction AS assigned_pump_entry_direction,
+      pc.exit_direction AS assigned_pump_exit_direction,
+      pc.current_mode AS assigned_pump_current_mode,
       st.public_id AS station_public_id,
       st.name AS station_name,
       st.operator_name AS station_brand,
@@ -1102,6 +1132,9 @@ async function getQueueEntryOrThrow(queueJoinId) {
     FROM queue_entries qe
     INNER JOIN fuel_types ft ON ft.id = qe.fuel_type_id
     INNER JOIN stations st ON st.id = qe.station_id
+    LEFT JOIN vehicles v ON v.id = qe.vehicle_id
+    LEFT JOIN pumps p ON p.id = qe.assigned_pump_id
+    LEFT JOIN pump_configurations pc ON pc.pump_id = p.id
     WHERE qe.public_id = ${queueJoinId}
     LIMIT 1
   `
@@ -1109,6 +1142,113 @@ async function getQueueEntryOrThrow(queueJoinId) {
   const row = rows?.[0]
   if (!row) throw notFound("Queue entry not found")
   return row
+}
+
+function buildVehiclePayload(entry) {
+  if (!entry?.vehicle_public_id) return null
+  return {
+    id: entry.vehicle_public_id,
+    nickname: entry.vehicle_nickname || null,
+    vehicleType: entry.vehicle_type || "OTHER",
+    usageType: entry.usage_type || null,
+    make: entry.vehicle_make || "",
+    model: entry.vehicle_model || "",
+    year: entry.vehicle_year === null || entry.vehicle_year === undefined ? null : Number(entry.vehicle_year),
+    numberPlate: entry.number_plate || "",
+    fuelType: entry.vehicle_fuel_type || entry.fuel_type,
+    tankCapacityLitres:
+      entry.tank_capacity_litres === null || entry.tank_capacity_litres === undefined
+        ? null
+        : Number(entry.tank_capacity_litres),
+    isFullTank: Boolean(entry.is_full_tank),
+    tankSide: entry.tank_side || "UNKNOWN",
+    tankSideSource: entry.tank_side_source || "USER_CONFIRMED",
+    tankSideConfidence: entry.tank_side_confidence || "LOW",
+    visualMockupKey: entry.visual_mockup_key || null,
+  }
+}
+
+function buildAssignedPumpPayload(entry) {
+  if (!entry?.assigned_pump_public_id) return null
+  return {
+    id: entry.assigned_pump_public_id,
+    pumpNumber: entry.assigned_pump_number === null || entry.assigned_pump_number === undefined
+      ? null
+      : Number(entry.assigned_pump_number),
+    displayName: entry.assigned_pump_display_name || `Pump ${entry.assigned_pump_number || ""}`.trim(),
+    entryDirection: entry.assigned_pump_entry_direction || null,
+    exitDirection: entry.assigned_pump_exit_direction || null,
+    currentMode: entry.assigned_pump_current_mode || "OPEN_WALKIN",
+  }
+}
+
+function buildPumpAssignmentPayload(entry) {
+  return {
+    status: entry?.pump_assignment_status || "PENDING",
+    reason: entry?.assignment_reason || null,
+    confidence: entry?.assignment_confidence || null,
+    createdAt: toIsoOrNull(entry?.assignment_created_at),
+    updatedAt: toIsoOrNull(entry?.assignment_updated_at),
+    lockedAt: toIsoOrNull(entry?.assignment_locked_at),
+  }
+}
+
+function resolveOperationalStatus({ entry, serviceRequest, liveDispensingProgress }) {
+  const queueStatus = String(entry?.status || "").trim().toUpperCase()
+  const assignmentStatus = String(entry?.pump_assignment_status || "").trim().toUpperCase()
+  if (queueStatus === "SERVED") return "COMPLETED"
+  if (["NO_SHOW", "CANCELLED"].includes(queueStatus)) return queueStatus
+  if (assignmentStatus === "MANUAL_REVIEW_REQUIRED") return "MANUAL_REVIEW_REQUIRED"
+  if (liveDispensingProgress?.isDispensing || serviceRequest?.dispensingStartedAt) return "FUELING"
+  if (serviceRequest?.submittedAt || serviceRequest?.readyForPumpAt) return "READY_FOR_PUMP"
+  if (queueStatus === "CALLED") return "CALLED_TO_STATION"
+  if (entry?.assigned_pump_public_id && ["ASSIGNED", "LOCKED", "REASSIGNED"].includes(assignmentStatus)) {
+    return "PUMP_ASSIGNED"
+  }
+  return "WAITING"
+}
+
+function buildApproachInstruction({ operationalStatus, vehicle, assignedPump }) {
+  if (!assignedPump) {
+    return {
+      shouldProceed: false,
+      title: "Pump confirmation pending",
+      message: "We are confirming the best pump for your vehicle.",
+      entryDirection: null,
+    }
+  }
+
+  const pumpName = assignedPump.displayName || "your assigned pump"
+  const tankSide = String(vehicle?.tankSide || "UNKNOWN").replace(/_/g, " ").toLowerCase()
+  const directionText = assignedPump.entryDirection
+    ? ` Enter from ${assignedPump.entryDirection} and follow SmartLink lane signs.`
+    : ""
+  const tankText = vehicle?.tankSide && vehicle.tankSide !== "UNKNOWN"
+    ? ` Your fuel cap is on the ${tankSide}. Approach so the fuel cap faces the pump.`
+    : " SmartLink will confirm the safest lane approach at the station."
+
+  if (operationalStatus === "READY_FOR_PUMP" || operationalStatus === "FUELING") {
+    return {
+      shouldProceed: true,
+      title: `Go to ${pumpName} now`,
+      message: `Go to ${pumpName} now.${tankText}${directionText}`,
+      entryDirection: assignedPump.entryDirection || null,
+    }
+  }
+  if (operationalStatus === "CALLED_TO_STATION") {
+    return {
+      shouldProceed: true,
+      title: `Proceed to station`,
+      message: `Proceed to station. Your assigned pump is ${pumpName}.${tankText}${directionText}`,
+      entryDirection: assignedPump.entryDirection || null,
+    }
+  }
+  return {
+    shouldProceed: false,
+    title: `Assigned pump: ${pumpName}`,
+    message: `You have been assigned to ${pumpName}. Wait for SmartLink to call you before approaching the pump.`,
+    entryDirection: assignedPump.entryDirection || null,
+  }
 }
 
 export async function buildUserQueueStatusSnapshot({ queueJoinId, auth = null }) {
@@ -1223,10 +1363,20 @@ export async function buildUserQueueStatusSnapshot({ queueJoinId, auth = null })
       ? Number(fuelTelemetry.refillConfidence || REFILL_CONFIDENCE)
       : null,
   }
+  const vehicle = buildVehiclePayload(entry)
+  const assignedPump = buildAssignedPumpPayload(entry)
+  const pumpAssignment = buildPumpAssignmentPayload(entry)
+  const operationalStatus = resolveOperationalStatus({ entry, serviceRequest, liveDispensingProgress })
+  const approachInstruction = buildApproachInstruction({
+    operationalStatus,
+    vehicle,
+    assignedPump,
+  })
 
   return {
     queueJoinId: entry.public_id,
     queueStatus: entry.status,
+    operationalStatus,
     station: {
       id: entry.station_public_id,
       name: entry.station_name,
@@ -1250,6 +1400,10 @@ export async function buildUserQueueStatusSnapshot({ queueJoinId, auth = null })
     qrPayload,
     verifiedPump,
     stationStatus,
+    vehicle,
+    assignedPump,
+    pumpAssignment,
+    approachInstruction,
     requestedLiters,
     paymentMode,
     serviceRequest: serviceRequest
@@ -1287,6 +1441,9 @@ export function toQueueRealtimeEvents(snapshot) {
         carsAhead: snapshot.carsAhead,
         totalQueued: snapshot.totalQueued,
         etaMinutes: snapshot.etaMinutes,
+        operationalStatus: snapshot.operationalStatus,
+        assignedPump: snapshot.assignedPump || null,
+        pumpAssignment: snapshot.pumpAssignment || null,
       },
     },
     {

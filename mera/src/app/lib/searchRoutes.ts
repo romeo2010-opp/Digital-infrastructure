@@ -36,6 +36,16 @@ export function routeForSearchResult(result: SearchResult) {
       return `/complaints/${id}`
     case 'TASK':
       return `/tasks/${id}`
+    case 'ALERT':
+      return result.route || '/hoarding-watchlist'
+    case 'INSPECTION':
+      return result.route || '/field-inspections'
+    case 'DELIVERY':
+      return result.route || '/fuel-deliveries'
+    case 'PRICE':
+      return result.route || '/price-compliance'
+    case 'NOTICE':
+      return result.route || '/public-notices'
     case 'USER':
       return `/users/${id}`
     case 'REPORT':

@@ -5,6 +5,7 @@ import { Toolbar } from '../components/Toolbar'
 import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
 import { ModalShell } from '../components/ModalShell'
+import { FieldShell, ToolbarField } from '../components/FieldLabel'
 import { PortalTable } from '../components/PortalTable'
 import { SectionCard } from '../components/SectionCard'
 import { KpiDrilldownCard, KpiDrilldownDrawer, type DrilldownConfig } from '../components/KpiDrilldown'
@@ -28,7 +29,7 @@ function isOpenFlag(row: any) {
 }
 
 export function ComplianceFlags() {
-  const { data, runAction, api, token, hasPermission, liveDataLoading, actionLoading } = usePortal()
+  const { data, runAction, api, token, hasPermission, packetStatus, actionLoading } = usePortal()
   const navigate = useNavigate()
   const [search, setSearch] = useState('')
   const [severity, setSeverity] = useState('')
@@ -52,7 +53,7 @@ export function ComplianceFlags() {
       return matchesSearch(row, search)
     })
   }, [allRows, search, severity])
-  const isInitialLoading = liveDataLoading && !allRows.length
+  const isInitialLoading = packetStatus.flags === 'loading' && data.flags === undefined
   const openRows = rows.filter(isOpenFlag)
   const reviewRows = rows.filter((row: any) => String(row.resolvedStatus || '').toUpperCase() === 'UNDER_REVIEW')
   const closedRows = rows.filter((row: any) => !isOpenFlag(row))
@@ -96,10 +97,13 @@ export function ComplianceFlags() {
           </div>
 
           <Toolbar>
-            <div className="flex min-w-[280px] flex-1 items-center gap-2">
+            <ToolbarField label="Search cases" hint="Filter cases by flag ID, station, violation, generated reason, or source reference. Example: search hoarding or a station name." className="min-w-[280px] flex-1">
+            <div className="flex items-center gap-2">
               <Search className="size-4 text-[#9ca3af]" />
               <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search flags, stations, or references..." />
             </div>
+            </ToolbarField>
+            <ToolbarField label="Severity" hint="Limit cases by risk level. Example: Critical for immediate enforcement review.">
             <select className={fieldClass} value={severity} onChange={(event) => setSeverity(event.target.value)}>
               <option value="">All Severities</option>
               <option value="LOW">Low</option>
@@ -107,6 +111,7 @@ export function ComplianceFlags() {
               <option value="HIGH">High</option>
               <option value="CRITICAL">Critical</option>
             </select>
+            </ToolbarField>
             {canCreate ? (
               <Button type="button" size="sm" className="bg-[#111827] hover:bg-[#1f2937]" onClick={() => setModalOpen(true)} disabled={actionLoading}>
                 <Plus className="size-4" />
@@ -222,28 +227,38 @@ export function ComplianceFlags() {
         }
       >
         <div className="grid gap-3">
-          <select className={fieldClass} value={form.stationPublicId} onChange={(event) => setForm({ ...form, stationPublicId: event.target.value })}>
-            <option value="">Select station</option>
-            {normalizeRows(data.profiles).map((station: any) => (
-              <option key={station.public_id} value={station.public_id}>{station.name} {station.city ? `- ${station.city}` : ''}</option>
-            ))}
-          </select>
-          <select className={fieldClass} value={form.flagType} onChange={(event) => setForm({ ...form, flagType: event.target.value })}>
-            <option value="MANUAL_REVIEW">Manual Review</option>
-            <option value="POSSIBLE_HOARDING">Possible Hoarding</option>
-            <option value="COMPLAINT_SURGE">Complaint Surge</option>
-            <option value="REFUSAL_MISMATCH">Refusal Mismatch</option>
-            <option value="REPEATED_INSPECTION_FAILURE">Inspection Failure</option>
-            <option value="PROLONGED_DRY_STATUS">Prolonged Dry Status</option>
-          </select>
-          <select className={fieldClass} value={form.severity} onChange={(event) => setForm({ ...form, severity: event.target.value })}>
-            <option value="LOW">Low</option>
-            <option value="MEDIUM">Medium</option>
-            <option value="HIGH">High</option>
-            <option value="CRITICAL">Critical</option>
-          </select>
-          <Input value={form.sourceReference} onChange={(event) => setForm({ ...form, sourceReference: event.target.value })} placeholder="Source reference" />
-          <textarea className="min-h-28 rounded-md border border-[#e2e8f0] px-3 py-2 text-sm text-[#374151]" value={form.generatedReason} onChange={(event) => setForm({ ...form, generatedReason: event.target.value })} placeholder="Generated reason or evidence summary..." />
+          <FieldShell label="Station" hint="Choose the station this compliance flag belongs to. Example: station linked to repeated dry declarations.">
+            <select className={`${fieldClass} w-full`} value={form.stationPublicId} onChange={(event) => setForm({ ...form, stationPublicId: event.target.value })}>
+              <option value="">Select station</option>
+              {normalizeRows(data.profiles).map((station: any) => (
+                <option key={station.public_id} value={station.public_id}>{station.name} {station.city ? `- ${station.city}` : ''}</option>
+              ))}
+            </select>
+          </FieldShell>
+          <FieldShell label="Flag type" hint="Classify the risk signal. Example: POSSIBLE_HOARDING when delivery and sales patterns do not match.">
+            <select className={`${fieldClass} w-full`} value={form.flagType} onChange={(event) => setForm({ ...form, flagType: event.target.value })}>
+              <option value="MANUAL_REVIEW">Manual Review</option>
+              <option value="POSSIBLE_HOARDING">Possible Hoarding</option>
+              <option value="COMPLAINT_SURGE">Complaint Surge</option>
+              <option value="REFUSAL_MISMATCH">Refusal Mismatch</option>
+              <option value="REPEATED_INSPECTION_FAILURE">Inspection Failure</option>
+              <option value="PROLONGED_DRY_STATUS">Prolonged Dry Status</option>
+            </select>
+          </FieldShell>
+          <FieldShell label="Severity" hint="Set the operational risk level. Example: CRITICAL for public safety or confirmed illegal supply diversion.">
+            <select className={`${fieldClass} w-full`} value={form.severity} onChange={(event) => setForm({ ...form, severity: event.target.value })}>
+              <option value="LOW">Low</option>
+              <option value="MEDIUM">Medium</option>
+              <option value="HIGH">High</option>
+              <option value="CRITICAL">Critical</option>
+            </select>
+          </FieldShell>
+          <FieldShell label="Source reference" hint="Add the report, case, delivery, or inspection reference that triggered this flag. Example: COMPLAINT-2026-00018.">
+            <Input value={form.sourceReference} onChange={(event) => setForm({ ...form, sourceReference: event.target.value })} placeholder="Source reference" />
+          </FieldShell>
+          <FieldShell label="Evidence summary" hint="Explain why the flag exists. Example: Station declared dry while delivery logs show 36,000 litres received yesterday.">
+            <textarea className="min-h-28 w-full rounded-md border border-[#e2e8f0] px-3 py-2 text-sm text-[#374151]" value={form.generatedReason} onChange={(event) => setForm({ ...form, generatedReason: event.target.value })} placeholder="Generated reason or evidence summary..." />
+          </FieldShell>
         </div>
       </ModalShell>
 
@@ -261,11 +276,13 @@ export function ComplianceFlags() {
           </>
         }
       >
-        <select className={fieldClass} value={resolveStatus} onChange={(event) => setResolveStatus(event.target.value)}>
-          <option value="UNDER_REVIEW">Under Review</option>
-          <option value="RESOLVED">Resolved</option>
-          <option value="DISMISSED">Dismissed</option>
-        </select>
+        <FieldShell label="Resolution status" hint="Choose the current outcome. Example: RESOLVED after evidence clears the station, DISMISSED for duplicate or invalid flags.">
+          <select className={`${fieldClass} w-full`} value={resolveStatus} onChange={(event) => setResolveStatus(event.target.value)}>
+            <option value="UNDER_REVIEW">Under Review</option>
+            <option value="RESOLVED">Resolved</option>
+            <option value="DISMISSED">Dismissed</option>
+          </select>
+        </FieldShell>
       </ModalShell>
     </div>
   )

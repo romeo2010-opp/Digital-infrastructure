@@ -49,6 +49,34 @@ function normalizeOpsFuelType(value) {
   return ""
 }
 
+function startOfCurrentLocalWeek() {
+  const now = new Date()
+  const day = now.getDay()
+  const mondayOffset = day === 0 ? -6 : 1 - day
+  const monday = new Date(now)
+  monday.setDate(now.getDate() + mondayOffset)
+  monday.setHours(0, 0, 0, 0)
+  return monday
+}
+
+function addDays(date, days) {
+  const next = new Date(date)
+  next.setDate(next.getDate() + days)
+  return next
+}
+
+function formatLocalDate(date) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, "0")
+  const day = String(date.getDate()).padStart(2, "0")
+  return `${year}-${month}-${day}`
+}
+
+function toNumber(value, fallback = 0) {
+  const normalized = Number(value)
+  return Number.isFinite(normalized) ? normalized : fallback
+}
+
 function pickMeraOpsFuelType(row, requestedFuelType) {
   const requested = normalizeOpsFuelType(requestedFuelType)
   if (requested) return requested
@@ -793,6 +821,7 @@ export async function createComplianceFlagRecord({
     WHERE station_id = ${stationId}
       AND flag_type = ${flagType}
       AND resolved_status IN ('OPEN', 'UNDER_REVIEW')
+      AND (${String(sourceReference || "").trim() === ""} = TRUE OR source_reference = ${sourceReference})
       AND created_at >= DATE_SUB(CURRENT_TIMESTAMP(3), INTERVAL 24 HOUR)
     ORDER BY created_at DESC
     LIMIT 1
@@ -1144,8 +1173,23 @@ export async function listInspections(filters = {}, auth = null) {
       i.geotag_lat,
       i.geotag_lng,
       i.officer_notes,
-      i.inspection_status,
+      CASE
+        WHEN rt.status = 'COMPLETED' THEN 'CLOSED'
+        WHEN rt.status IN ('CANCELLED', 'REJECTED') THEN 'CLOSED'
+        WHEN rt.status = 'ESCALATED' THEN 'ESCALATED'
+        WHEN rt.status IN ('ACKNOWLEDGED', 'IN_PROGRESS', 'NEEDS_MORE_INFO') THEN 'OPEN'
+        ELSE i.inspection_status
+      END AS inspection_status,
+      i.inspection_status AS stored_inspection_status,
       i.created_at,
+      rt.task_number,
+      rt.title AS task_title,
+      rt.description AS task_description,
+      rt.type AS task_type,
+      rt.priority AS task_priority,
+      rt.status AS task_status,
+      rt.due_at AS task_due_at,
+      rt.completed_at AS task_completed_at,
       s.public_id AS station_public_id,
       s.name AS station_name,
       s.city AS station_city,
@@ -1154,7 +1198,23 @@ export async function listInspections(filters = {}, auth = null) {
     FROM inspections i
     INNER JOIN stations s ON s.id = i.station_id
     INNER JOIN mera_users mu ON mu.id = i.officer_id
-    WHERE (${statusFilter === ""} = TRUE OR i.inspection_status = ${statusFilter})
+    LEFT JOIN regulator_tasks rt
+      ON rt.id = (
+        SELECT linked_task.id
+        FROM regulator_tasks linked_task
+        WHERE linked_task.linked_entity_type = 'INSPECTION'
+          AND linked_task.linked_entity_id = i.public_id
+          AND linked_task.deleted_at IS NULL
+        ORDER BY linked_task.created_at DESC
+        LIMIT 1
+      )
+    WHERE (
+        ${statusFilter === ""} = TRUE
+        OR i.inspection_status = ${statusFilter}
+        OR (${statusFilter} = 'CLOSED' AND rt.status IN ('COMPLETED', 'CANCELLED', 'REJECTED'))
+        OR (${statusFilter} = 'ESCALATED' AND rt.status = 'ESCALATED')
+        OR (${statusFilter} = 'OPEN' AND rt.status IN ('ASSIGNED', 'ACKNOWLEDGED', 'IN_PROGRESS', 'NEEDS_MORE_INFO'))
+      )
       AND (${scopedDistrict === ""} = TRUE OR s.city = ${scopedDistrict})
       AND (${isFieldOfficer(auth) === false} = TRUE OR i.officer_id = ${auth?.userId || 0})
     ORDER BY i.created_at DESC
@@ -1177,7 +1237,18 @@ export async function listInspections(filters = {}, auth = null) {
       geotagLng: row.geotag_lng,
       officerNotes: row.officer_notes || null,
       inspectionStatus: row.inspection_status,
+      storedInspectionStatus: row.stored_inspection_status,
       createdAt: row.created_at,
+      task: row.task_number ? {
+        taskNumber: row.task_number,
+        title: row.task_title,
+        description: row.task_description,
+        type: row.task_type,
+        priority: row.task_priority,
+        status: row.task_status,
+        dueAt: row.task_due_at,
+        completedAt: row.task_completed_at,
+      } : null,
       station: {
         publicId: row.station_public_id,
         name: row.station_name,
@@ -1375,7 +1446,12 @@ export async function getStationEnforcementHistory(stationPublicId, auth = null)
       ea.resolved_at,
       mu.public_id AS actor_public_id,
       mu.full_name AS actor_name,
-      cf.public_id AS flag_public_id
+      cf.public_id AS flag_public_id,
+      cf.flag_type AS flag_type,
+      cf.severity AS flag_severity,
+      cf.generated_reason AS flag_reason,
+      cf.source_reference AS flag_source_reference,
+      cf.resolved_status AS flag_status
     FROM enforcement_actions ea
     INNER JOIN mera_users mu ON mu.id = ea.initiated_by
     LEFT JOIN compliance_flags cf ON cf.id = ea.related_flag_id
@@ -1440,6 +1516,16 @@ export async function listEnforcementActions(filters = {}, auth = null) {
         fullName: row.actor_name,
       },
       relatedFlagPublicId: row.flag_public_id || null,
+      relatedFlag: row.flag_public_id
+        ? {
+            publicId: row.flag_public_id,
+            flagType: row.flag_type,
+            severity: row.flag_severity,
+            generatedReason: row.flag_reason,
+            sourceReference: row.flag_source_reference,
+            resolvedStatus: row.flag_status,
+          }
+        : null,
     })),
   }
 }
@@ -1819,6 +1905,7 @@ export async function createFuelPriceReport(payload, actor) {
     INSERT INTO fuel_price_reports (station_id, petrol_price, diesel_price, submitted_by)
     VALUES (${station.id}, ${payload.petrolPrice}, ${payload.dieselPrice}, ${actor?.userId || null})
   `
+  await flagFuelPriceReportAnomalies({ station, payload, actor })
   await logMeraAudit({
     ...actorAuditContext(actor),
     actionType: "MERA_FUEL_PRICE_REPORT_CREATED",
@@ -1830,6 +1917,62 @@ export async function createFuelPriceReport(payload, actor) {
     petrolPrice: payload.petrolPrice,
     dieselPrice: payload.dieselPrice,
   }
+}
+
+function priceAnomalyForProduct({ fuelType, officialPrice, reportedPrice }) {
+  const official = Number(officialPrice || 0)
+  const reported = Number(reportedPrice || 0)
+  if (!official || !reported) return null
+  const mismatchAmount = reported - official
+  const mismatchPercent = mismatchAmount / official
+  const isHigh = mismatchAmount > 0
+  const tolerance = isHigh ? 0 : Math.max(50, official * 0.02)
+  if (Math.abs(mismatchAmount) <= tolerance) return null
+
+  const absPercent = Math.abs(mismatchPercent)
+  let severity = "LOW"
+  if (isHigh && absPercent >= 0.08) severity = "CRITICAL"
+  else if (isHigh && absPercent >= 0.04) severity = "HIGH"
+
+  return {
+    fuelType,
+    official,
+    reported,
+    mismatchAmount,
+    direction: isHigh ? "ABOVE_OFFICIAL" : "BELOW_OFFICIAL",
+    severity,
+  }
+}
+
+async function flagFuelPriceReportAnomalies({ station, payload, actor }) {
+  const officialRows = await prisma.$queryRaw`
+    SELECT fuel_type, price_per_litre
+    FROM mera_official_prices mop
+    WHERE mop.status = 'active'
+      AND mop.id = (
+        SELECT latest.id
+        FROM mera_official_prices latest
+        WHERE UPPER(latest.fuel_type) = UPPER(mop.fuel_type)
+          AND latest.status = 'active'
+          AND latest.effective_date <= CURRENT_DATE()
+        ORDER BY latest.effective_date DESC, latest.created_at DESC
+        LIMIT 1
+      )
+  `
+  const official = new Map((officialRows || []).map((row) => [String(row.fuel_type || "").trim().toUpperCase(), Number(row.price_per_litre || 0)]))
+  const anomalies = [
+    priceAnomalyForProduct({ fuelType: "PETROL", officialPrice: official.get("PETROL"), reportedPrice: payload.petrolPrice }),
+    priceAnomalyForProduct({ fuelType: "DIESEL", officialPrice: official.get("DIESEL"), reportedPrice: payload.dieselPrice }),
+  ].filter(Boolean)
+
+  await Promise.all(anomalies.map((item) => createComplianceFlagRecord({
+    stationId: station.id,
+    flagType: "PRICE_ANOMALY",
+    severity: item.severity,
+    generatedReason: `${item.fuelType} price ${item.direction === "ABOVE_OFFICIAL" ? "above" : "below"} official MERA price at ${station.name}: reported MWK ${item.reported.toFixed(2)} versus official MWK ${item.official.toFixed(2)} (${item.mismatchAmount > 0 ? "+" : ""}${item.mismatchAmount.toFixed(2)}).`,
+    sourceReference: `PRICE_REPORT:${item.fuelType}:${item.direction}`,
+    actor,
+  })))
 }
 
 export async function getDashboardOverview(auth = null) {
@@ -2602,6 +2745,77 @@ async function getFuelAvailabilityHistory(auth = null, intervalValue = "1h") {
   }
 }
 
+let dashboardMetricSnapshotTableReady = false
+
+async function ensureDashboardMetricSnapshotTable() {
+  if (dashboardMetricSnapshotTableReady) return
+  await prisma.$executeRaw`
+    CREATE TABLE IF NOT EXISTS mera_dashboard_metric_snapshots (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      scope_key VARCHAR(96) NOT NULL DEFAULT '__NATIONAL__',
+      metric_key VARCHAR(96) NOT NULL,
+      metric_value DECIMAL(18,4) NOT NULL DEFAULT 0,
+      captured_date DATE NOT NULL,
+      captured_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+      updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+      PRIMARY KEY (id),
+      UNIQUE KEY uq_mera_dashboard_metric_scope_day (scope_key, metric_key, captured_date),
+      KEY idx_mera_dashboard_metric_lookup (scope_key, metric_key, captured_date)
+    )
+  `
+  dashboardMetricSnapshotTableReady = true
+}
+
+async function recordDashboardMetricSnapshots(scopeKey, metrics = {}) {
+  await ensureDashboardMetricSnapshotTable()
+  const normalizedScope = String(scopeKey || "__NATIONAL__").trim() || "__NATIONAL__"
+  const entries = Object.entries(metrics).filter(([key, value]) => key && Number.isFinite(Number(value)))
+
+  for (const [metricKey, metricValue] of entries) {
+    await prisma.$executeRaw`
+      INSERT INTO mera_dashboard_metric_snapshots (
+        scope_key,
+        metric_key,
+        metric_value,
+        captured_date
+      )
+      VALUES (
+        ${normalizedScope},
+        ${metricKey},
+        ${Number(metricValue)},
+        CURRENT_DATE
+      )
+      ON DUPLICATE KEY UPDATE
+        metric_value = VALUES(metric_value),
+        updated_at = CURRENT_TIMESTAMP(3)
+    `
+  }
+
+  const comparisons = {}
+  for (const [metricKey, metricValue] of entries) {
+    const previousRows = await prisma.$queryRaw`
+      SELECT metric_value, captured_date
+      FROM mera_dashboard_metric_snapshots
+      WHERE scope_key = ${normalizedScope}
+        AND metric_key = ${metricKey}
+        AND captured_date < CURRENT_DATE
+      ORDER BY captured_date DESC
+      LIMIT 1
+    `
+    const previous = previousRows?.[0]
+    const currentValue = Number(metricValue)
+    const previousValue = previous ? Number(previous.metric_value || 0) : currentValue
+    comparisons[metricKey] = {
+      currentValue,
+      previousValue,
+      delta: currentValue - previousValue,
+      previousDate: previous?.captured_date || null,
+    }
+  }
+
+  return comparisons
+}
+
 export async function getSidebarStats(auth = null) {
   const [
     overview,
@@ -2957,6 +3171,16 @@ export async function getNationalOperationsDashboard(auth = null, options = {}) 
     .filter((row) => ["FAILED", "ESCALATED"].includes(String(row.inspection_status || "").toUpperCase()))
     .reduce((sum, row) => sum + normalizeDashboardNumber(row.total, 0), 0)
   const warnings = Math.max(0, inspectionTotal - compliant - violations)
+  const latestAvailabilityPoint = normalizeRows(fuelAvailabilityHistory?.points).slice(-1)[0] || {}
+  const dashboardMetricValues = {
+    activeStations: stationsOnline || normalizeDashboardNumber(latestAvailabilityPoint.stationsWithFuel, 0) || stationsTotal,
+    nationalFuelReserve: 0,
+    activeDriverQueues: topQueues.reduce((sum, row) => sum + normalizeDashboardNumber(row.queue, 0), 0),
+    avgWaitTime: avgQueueWait,
+    complianceViolations: violations,
+    activeEnforcementActions: normalizeDashboardNumber(overview?.activeEnforcementActions, 0),
+  }
+  const kpiComparisons = await recordDashboardMetricSnapshots(scopedDistrict || "__NATIONAL__", dashboardMetricValues).catch(() => ({}))
 
   const demandByDay = new Map()
   for (const row of normalizeRows(demandIndexRows)) {
@@ -3025,6 +3249,24 @@ export async function getNationalOperationsDashboard(auth = null, options = {}) 
         trendDirection: trendDirection(avgQueueWait, previousAvgQueueWait),
         sparkline: queueSparklineValues.length > 1 ? queueSparklineValues : buildSparkline(5, avgQueueWait, previousAvgQueueWait),
       },
+      nationalFuelReserve: {
+        value: dashboardMetricValues.nationalFuelReserve,
+        subtitle: "Days",
+        trendDirection: trendDirection(dashboardMetricValues.nationalFuelReserve, kpiComparisons?.nationalFuelReserve?.previousValue ?? dashboardMetricValues.nationalFuelReserve),
+        sparkline: buildSparkline(7, dashboardMetricValues.nationalFuelReserve, kpiComparisons?.nationalFuelReserve?.previousValue ?? dashboardMetricValues.nationalFuelReserve),
+      },
+      activeDriverQueues: {
+        value: dashboardMetricValues.activeDriverQueues,
+        subtitle: "Active queues",
+        trendDirection: trendDirection(dashboardMetricValues.activeDriverQueues, kpiComparisons?.activeDriverQueues?.previousValue ?? dashboardMetricValues.activeDriverQueues),
+        sparkline: buildSparkline(8, dashboardMetricValues.activeDriverQueues, kpiComparisons?.activeDriverQueues?.previousValue ?? dashboardMetricValues.activeDriverQueues),
+      },
+      avgWaitTime: {
+        value: dashboardMetricValues.avgWaitTime,
+        subtitle: "Average minutes",
+        trendDirection: trendDirection(dashboardMetricValues.avgWaitTime, kpiComparisons?.avgWaitTime?.previousValue ?? dashboardMetricValues.avgWaitTime),
+        sparkline: queueSparklineValues.length > 1 ? queueSparklineValues : buildSparkline(9, dashboardMetricValues.avgWaitTime, kpiComparisons?.avgWaitTime?.previousValue ?? dashboardMetricValues.avgWaitTime),
+      },
       criticalAlerts: {
         value: criticalAlerts,
         subtitle: "Active alerts",
@@ -3037,6 +3279,7 @@ export async function getNationalOperationsDashboard(auth = null, options = {}) 
     topQueues,
     fuelAvailability: overview?.fuelAvailabilityByType || [],
     fuelAvailabilityHistory,
+    kpiComparisons,
     queueTrend: normalizeTrendRows(queueTrendRows, "avg_wait_minutes", "hour_label"),
     fuelDemandIndex: Array.from(demandByDay.values()),
     complianceSummary: {
@@ -3078,6 +3321,7 @@ export async function getShortageHeatmapData(auth = null) {
       s.public_id,
       s.name,
       s.city,
+      COALESCE(NULLIF(s.operator_name, ''), 'Unknown OMC') AS operator_name,
       s.latitude,
       s.longitude,
       COALESCE(scs.availability_status, (
@@ -3108,10 +3352,44 @@ export async function getShortageHeatmapData(auth = null) {
         ORDER BY status_log.created_at DESC
         LIMIT 1
       )) AS latest_status_at,
+      COALESCE(active_queue.queue_count, 0) AS active_queue_count,
+      COALESCE(active_queue.avg_wait_minutes, 0) AS avg_wait_minutes,
+      COALESCE(open_complaints.open_cases, 0) AS open_cases,
+      COALESCE(open_flags.open_flags, 0) AS open_flags,
+      open_flags.max_flag_severity,
+      scs.latest_delivery_time,
+      scs.delivery_verified,
+      scs.delivered_litres_since_baseline,
+      scs.total_live_litres,
+      scs.total_capacity_litres,
       s.created_at,
       s.updated_at
     FROM stations s
     LEFT JOIN station_current_status scs ON scs.station_id = s.id
+    LEFT JOIN (
+      SELECT
+        station_id,
+        COUNT(*) AS queue_count,
+        AVG(TIMESTAMPDIFF(MINUTE, joined_at, CURRENT_TIMESTAMP(3))) AS avg_wait_minutes
+      FROM queue_entries
+      WHERE status IN ('WAITING', 'CALLED', 'LATE')
+      GROUP BY station_id
+    ) active_queue ON active_queue.station_id = s.id
+    LEFT JOIN (
+      SELECT station_id, COUNT(*) AS open_cases
+      FROM public_complaints
+      WHERE complaint_status IN ('NEW', 'TRIAGED', 'ASSIGNED', 'UNDER_INVESTIGATION', 'ESCALATED')
+      GROUP BY station_id
+    ) open_complaints ON open_complaints.station_id = s.id
+    LEFT JOIN (
+      SELECT
+        station_id,
+        COUNT(*) AS open_flags,
+        MAX(severity) AS max_flag_severity
+      FROM compliance_flags
+      WHERE resolved_status IN ('OPEN', 'UNDER_REVIEW')
+      GROUP BY station_id
+    ) open_flags ON open_flags.station_id = s.id
     WHERE s.is_active = 1
       AND s.deleted_at IS NULL
       AND (${scopedDistrict === ""} = TRUE OR s.city = ${scopedDistrict})
@@ -3181,6 +3459,67 @@ export async function getInspectionMetrics(auth = null) {
     byStatus: statusRows || [],
     topInspectors: officerRows || [],
   }
+}
+
+export async function getNationalConsumption(auth = null, options = {}) {
+  const range = String(options?.range || "7d").trim().toLowerCase()
+  if (range && range !== "7d") throw badRequest("Only range=7d is supported")
+
+  const scopedDistrict = districtFilterValue(auth)
+  const weekStart = startOfCurrentLocalWeek()
+  const weekEnd = addDays(weekStart, 7)
+  const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((day, index) => {
+    const date = addDays(weekStart, index)
+    return {
+      day,
+      date: formatLocalDate(date),
+      petrol: 0,
+      diesel: 0,
+      paraffin: 0,
+      total: 0,
+      source: "empty",
+    }
+  })
+  const byDate = new Map(days.map((row) => [row.date, row]))
+
+  const rows = await prisma.$queryRaw`
+    SELECT
+      DATE(tx.occurred_at) AS sale_date,
+      SUM(CASE WHEN UPPER(ft.code) = 'PETROL' THEN tx.litres ELSE 0 END) AS petrol,
+      SUM(CASE WHEN UPPER(ft.code) = 'DIESEL' THEN tx.litres ELSE 0 END) AS diesel,
+      SUM(CASE WHEN UPPER(ft.code) IN ('PARAFFIN', 'KEROSENE') THEN tx.litres ELSE 0 END) AS paraffin
+    FROM transactions tx
+    INNER JOIN fuel_types ft ON ft.id = tx.fuel_type_id
+    INNER JOIN stations s ON s.id = tx.station_id
+    WHERE tx.occurred_at >= ${weekStart}
+      AND tx.occurred_at < ${weekEnd}
+      AND tx.status NOT IN ('CANCELLED', 'REVERSED')
+      AND (${scopedDistrict === ""} = TRUE OR s.city = ${scopedDistrict})
+    GROUP BY DATE(tx.occurred_at)
+    ORDER BY DATE(tx.occurred_at) ASC
+  `
+
+  rows.forEach((row) => {
+    const date = formatLocalDate(new Date(row.sale_date))
+    const target = byDate.get(date)
+    if (!target) return
+    const petrol = toNumber(row.petrol)
+    const diesel = toNumber(row.diesel)
+    const paraffin = toNumber(row.paraffin)
+    target.petrol = petrol
+    target.diesel = diesel
+    target.paraffin = paraffin
+    target.total = petrol + diesel + paraffin
+    target.source = target.total > 0 ? "actual" : "empty"
+  })
+
+  return days.map((row) => ({
+    ...row,
+    petrol: Number(row.petrol.toFixed(2)),
+    diesel: Number(row.diesel.toFixed(2)),
+    paraffin: Number(row.paraffin.toFixed(2)),
+    total: Number((row.petrol + row.diesel + row.paraffin).toFixed(2)),
+  }))
 }
 
 export async function getTopComplaintStations(auth = null) {
@@ -3399,6 +3738,81 @@ export async function updateMeraUserStatus({ meraUserPublicId, accountStatus, ac
   }
 }
 
+export async function updateMeraUserPermissions({ meraUserPublicId, updates = {}, actor }) {
+  const user = await resolveMeraUserByPublicId(meraUserPublicId)
+  ensureDistrictAccess(actor, user.district_scope, "user")
+
+  const fields = []
+  const values = []
+  let nextRole = user.role_code
+  if (updates.roleName !== undefined) {
+    nextRole = normalizeRole(updates.roleName)
+    const roleRows = await prisma.$queryRaw`
+      SELECT id
+      FROM mera_roles
+      WHERE code = ${nextRole}
+      LIMIT 1
+    `
+    const roleId = roleRows?.[0]?.id
+    if (!roleId) throw badRequest("MERA role is not configured")
+    fields.push("role_id = ?")
+    values.push(roleId)
+  }
+  if (updates.districtScope !== undefined) {
+    fields.push("district_scope = ?")
+    values.push(String(updates.districtScope || "").trim() || null)
+  }
+  if (updates.regionScope !== undefined) {
+    fields.push("region_scope = ?")
+    values.push(String(updates.regionScope || "").trim() || null)
+  }
+  if (updates.accountStatus !== undefined) {
+    fields.push("account_status = ?")
+    values.push(normalizeAccountStatus(updates.accountStatus))
+  }
+
+  if (fields.length) {
+    await prisma.$executeRawUnsafe(
+      `UPDATE mera_users SET ${fields.join(", ")}, updated_at = CURRENT_TIMESTAMP(3) WHERE id = ?`,
+      ...values,
+      user.id
+    )
+  }
+
+  await logMeraAudit({
+    ...actorAuditContext(actor),
+    actionType: "MERA_USER_PERMISSIONS_UPDATED",
+    actionDescription: `MERA user ${user.full_name} access updated to role ${nextRole}.`,
+    affectedEntity: user.public_id,
+  })
+  return {
+    publicId: user.public_id,
+    roleName: nextRole,
+    updated: true,
+  }
+}
+
+export async function revokeMeraUserSessions({ meraUserPublicId, actor }) {
+  const user = await resolveMeraUserByPublicId(meraUserPublicId)
+  ensureDistrictAccess(actor, user.district_scope, "user")
+  const revokedCount = await prisma.$executeRaw`
+    UPDATE mera_auth_sessions
+    SET revoked_at = COALESCE(revoked_at, CURRENT_TIMESTAMP(3))
+    WHERE mera_user_id = ${user.id}
+      AND revoked_at IS NULL
+  `
+  await logMeraAudit({
+    ...actorAuditContext(actor),
+    actionType: "MERA_USER_SESSIONS_REVOKED",
+    actionDescription: `Active sessions revoked for MERA user ${user.full_name}.`,
+    affectedEntity: user.public_id,
+  })
+  return {
+    publicId: user.public_id,
+    revokedCount: Number(revokedCount || 0),
+  }
+}
+
 export async function listMeraAuditLogs({ page = 1, limit = 50 } = {}, auth = null) {
   const pagination = normalizePagination({ page, limit })
   const scopedDistrict = districtFilterValue(auth)
@@ -3416,8 +3830,25 @@ export async function listMeraAuditLogs({ page = 1, limit = 50 } = {}, auth = nu
       mu.public_id AS actor_public_id,
       COALESCE(mu.full_name, alm.actor_name) AS actor_name
     FROM audit_logs_mera alm
-    LEFT JOIN mera_users mu ON mu.id = alm.actor_id
-    WHERE (${scopedDistrict === ""} = TRUE OR mu.district_scope = ${scopedDistrict} OR alm.actor_id IS NULL)
+    INNER JOIN mera_users mu ON mu.id = alm.actor_id
+    WHERE (${scopedDistrict === ""} = TRUE OR mu.district_scope = ${scopedDistrict})
+      AND (
+        UPPER(alm.action_type) LIKE '%ENFORC%'
+        OR UPPER(alm.action_type) LIKE '%ESCALAT%'
+        OR UPPER(alm.action_type) LIKE '%RESOLV%'
+        OR UPPER(alm.action_type) LIKE '%CLOSE%'
+        OR UPPER(alm.action_type) LIKE '%SUSPEND%'
+        OR UPPER(alm.action_type) LIKE '%DISMISS%'
+        OR UPPER(alm.action_type) LIKE '%ASSIGN%'
+        OR UPPER(alm.action_type) LIKE '%STATUS%'
+        OR UPPER(alm.action_type) LIKE '%PERMISSION%'
+        OR UPPER(alm.action_type) LIKE '%SESSIONS_REVOKED%'
+        OR UPPER(alm.action_description) LIKE '%WARNING%'
+        OR UPPER(alm.action_description) LIKE '%FINE%'
+        OR UPPER(alm.action_description) LIKE '%CLOSURE%'
+        OR UPPER(alm.action_description) LIKE '%COMPLIANCE%'
+        OR UPPER(alm.action_description) LIKE '%VIOLATION%'
+      )
     ORDER BY alm.created_at DESC
     LIMIT ${pagination.limit}
     OFFSET ${pagination.offset}

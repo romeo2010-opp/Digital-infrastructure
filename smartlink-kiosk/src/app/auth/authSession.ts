@@ -3,6 +3,13 @@ let sessionMeta = {
   user: null as null | { publicId?: string | null; fullName?: string | null; email?: string | null; phone?: string | null },
   station: null as null | { publicId?: string | null; name?: string | null; timezone?: string | null },
   role: null as null | string,
+  kiosk: null as null | {
+    sessionId?: string | null
+    kioskName?: string | null
+    locationLabel?: string | null
+    permissions?: string[]
+    expiresAt?: string | null
+  },
   stationMemberships: [] as Array<{
     station?: { publicId?: string | null; name?: string | null; timezone?: string | null } | null
     role?: string | null
@@ -36,6 +43,7 @@ export function setSessionMeta(meta: typeof sessionMeta) {
     user: meta?.user || null,
     station: meta?.station || null,
     role: meta?.role || null,
+    kiosk: meta?.kiosk || null,
     stationMemberships: Array.isArray(meta?.stationMemberships) ? meta.stationMemberships : [],
   }
 }
@@ -50,6 +58,7 @@ export function clearAuthSession() {
     user: null,
     station: null,
     role: null,
+    kiosk: null,
     stationMemberships: [],
   }
 }
@@ -61,6 +70,14 @@ export function getTokenClaims() {
 
 export function getRoleCode() {
   return String(sessionMeta?.role || "").trim().toUpperCase()
+}
+
+export function getKioskSessionId() {
+  return String(sessionMeta?.kiosk?.sessionId || "").trim() || null
+}
+
+export function getKioskPermissions() {
+  return Array.isArray(sessionMeta?.kiosk?.permissions) ? sessionMeta.kiosk.permissions : []
 }
 
 export function getStationPublicId() {

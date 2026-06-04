@@ -1,14 +1,15 @@
-import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router'
-import { useEffect, useState } from 'react'
+import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router'
+import { useEffect, useRef, useState } from 'react'
 import { Check, ChevronDown, Copy, LayoutDashboard, Pencil, Pin, Plus, RefreshCcw, Trash2 } from 'lucide-react'
 import { Sidebar } from './components/Sidebar'
 import { PageHeader } from './components/PageHeader'
 import { LoginScreen } from './components/LoginScreen'
 import { ActionLoadingOverlay } from './components/ActionLoadingOverlay'
-import { PortalBootSkeleton } from './components/LiveDataSkeleton'
+import { Toaster } from './components/ui/sonner'
 import { canAccessPath, firstAccessiblePath } from './lib/access'
 import { PortalProvider, usePortal } from './lib/portalContext'
 import { DashboardChromeProvider, useDashboardChrome } from './lib/dashboardChrome'
+import { routePacketKeys } from './lib/packetRegistry'
 import { NationalDashboard } from './pages/NationalDashboard'
 import { FuelDeliveries } from './pages/FuelDeliveries'
 import { AvailabilityAudit } from './pages/AvailabilityAudit'
@@ -21,6 +22,9 @@ import { HoardingWatchlist } from './pages/HoardingWatchlist'
 import { StationProfiles } from './pages/StationProfiles'
 import { LicenseRegistry } from './pages/LicenseRegistry'
 import { ReportsIntelligence } from './pages/ReportsIntelligence'
+import { AnalyticsCommand } from './pages/AnalyticsCommand'
+import { PriceCompliance } from './pages/PriceCompliance'
+import { PublicNotices } from './pages/PublicNotices'
 import { UserAdministration } from './pages/UserAdministration'
 import { AuditTrail } from './pages/AuditTrail'
 import { SettingsCenter } from './pages/SettingsCenter'
@@ -37,7 +41,8 @@ import {
 } from './pages/RegulatorDetailPages'
 
 const routeMeta = [
-  { path: '/dashboard', title: 'MERA National Operations', subtitle: 'Regulatory command view for fuel availability, compliance, incidents and enforcement' },
+  { path: '/dashboard', title: 'MERA Command Centre', subtitle: 'National fuel status, intelligence alerts, inspections, cases and public communication' },
+  { path: '/command-centre', title: 'MERA Command Centre', subtitle: 'National fuel status, intelligence alerts, inspections, cases and public communication' },
   { path: '/search', title: 'Search Results', subtitle: 'Search regulator navigation and records' },
   { path: '/tasks/my', title: 'My Assigned Tasks', subtitle: 'Officer regulatory work queue and task completion workflow' },
   { path: '/tasks/new', title: 'Create Assignment', subtitle: 'Supervisor task assignment and officer dispatch workflow' },
@@ -50,25 +55,37 @@ const routeMeta = [
   { path: '/licences', title: 'Licence Detail', subtitle: 'Station licence dossier and linked records' },
   { path: '/licenses', title: 'Licence Detail', subtitle: 'Station licence dossier and linked records' },
   { path: '/users', title: 'MERA User Detail', subtitle: 'Officer profile and recent work' },
-  { path: '/national-heat-intelligence-map', title: 'National Heat Intelligence Map', subtitle: 'Live shortage posture and geographic heat signals' },
-  { path: '/hoarding-watchlist', title: 'Hoarding Watchlist', subtitle: 'Suspicious shortage behaviour and risk escalation' },
-  { path: '/station-regulatory-profiles', title: 'Station Regulatory Profiles', subtitle: 'Full station dossiers and case files' },
-  { path: '/fuel-deliveries', title: 'Fuel Deliveries', subtitle: 'Tanker and supply verification ledger' },
+  { path: '/national-heat-intelligence-map', title: 'Live Map', subtitle: 'Live Malawi station markers and fuel stress heat layers' },
+  { path: '/live-map', title: 'Live Map', subtitle: 'Live Malawi station markers and fuel stress heat layers' },
+  { path: '/hoarding-watchlist', title: 'Risk Watchlist', subtitle: 'Suspicious station behaviour, risk scores and intelligence alerts' },
+  { path: '/risk-watchlist', title: 'Risk Watchlist', subtitle: 'Suspicious station behaviour, risk scores and intelligence alerts' },
+  { path: '/station-regulatory-profiles', title: 'Stations', subtitle: 'Station investigation profiles and regulatory dossiers' },
+  { path: '/fuel-deliveries', title: 'Fuel Supply', subtitle: 'Delivery-to-sale tracking and supply verification ledger' },
+  { path: '/fuel-supply', title: 'Fuel Supply', subtitle: 'Delivery-to-sale tracking and supply verification ledger' },
   { path: '/availability-audit', title: 'Availability Audit', subtitle: 'Station declaration audit register' },
   { path: '/complaints-center', title: 'Complaints Center', subtitle: 'Citizen and officer complaint casework' },
-  { path: '/compliance-flags', title: 'Compliance Flags', subtitle: 'Flag review and evidence chain' },
-  { path: '/field-inspections', title: 'Field Inspections', subtitle: 'Operational field inspection queue' },
+  { path: '/compliance-flags', title: 'Cases', subtitle: 'Regulatory case management and evidence chain' },
+  { path: '/field-inspections', title: 'Inspections', subtitle: 'Inspection command board and priority assignment' },
+  { path: '/inspections', title: 'Inspections', subtitle: 'Inspection command board and priority assignment' },
   { path: '/enforcement-actions', title: 'Enforcement Actions', subtitle: 'Legal interventions and status tracking' },
   { path: '/license-registry', title: 'License Registry', subtitle: 'Station licensing and compliance condition register' },
   { path: '/reports-intelligence', title: 'Reports & Intelligence', subtitle: 'Generated regulatory outputs and downloads' },
+  { path: '/reports', title: 'Reports', subtitle: 'Generated regulatory outputs and downloads' },
+  { path: '/price-compliance', title: 'Price Compliance', subtitle: 'Official fuel prices, station reports and violation monitoring' },
+  { path: '/public-notices', title: 'Public Notices', subtitle: 'MERA public communication approval and publishing workflow' },
+  { path: '/analytics', title: 'Analytics', subtitle: 'Fuel stress index, district trends and station risk analytics' },
   { path: '/user-administration', title: 'User Administration', subtitle: 'MERA officer access and role management' },
   { path: '/audit-trail', title: 'Audit Trail', subtitle: 'Chronological compliance and oversight log' },
   { path: '/settings', title: 'Settings', subtitle: 'Workspace preferences and account controls' },
   { path: '/settings/preferences', title: 'Settings', subtitle: 'Workspace preferences and account controls' },
   { path: '/settings/notifications', title: 'Settings', subtitle: 'Workspace preferences and account controls' },
   { path: '/settings/security', title: 'Settings', subtitle: 'Workspace preferences and account controls' },
+  { path: '/settings/profile', title: 'Settings', subtitle: 'Workspace preferences and account controls' },
   { path: '/settings/users', title: 'Settings', subtitle: 'Workspace preferences and account controls' },
   { path: '/settings/audit', title: 'Settings', subtitle: 'Workspace preferences and account controls' },
+  { path: '/settings/organization', title: 'Settings', subtitle: 'Workspace preferences and account controls' },
+  { path: '/settings/integrations', title: 'Settings', subtitle: 'Workspace preferences and account controls' },
+  { path: '/settings/data', title: 'Settings', subtitle: 'Workspace preferences and account controls' },
 ] as const
 
 function resolveMeta(pathname: string) {
@@ -125,18 +142,21 @@ function dashboardSyncLabel(value?: string) {
 
 function DashboardViewStrip() {
   const { chrome } = useDashboardChrome()
+  const { refreshVisibleModules, packetStatus } = usePortal()
   const tabs = chrome?.tabs?.length ? chrome.tabs : dashboardFallbackTabs
   const activeTabId = chrome?.activeTabId || 'builtin-my-view'
   const activeTab = tabs.find((tab) => tab.id === activeTabId)
   const pinnedTabIds = chrome?.pinnedTabIds || []
   const onTabChange = chrome?.onTabChange || (() => {})
-  const onRefresh = chrome?.onRefresh || (() => {})
+  const onRefresh = chrome?.onRefresh || (() => refreshVisibleModules({ force: true, preferHttp: true, timeoutMs: 4500, reason: 'dashboard-strip-sync' }))
   const onCreateView = chrome?.onCreateView || (() => {})
   const onEditView = chrome?.onEditView
   const onDeleteView = chrome?.onDeleteView
   const onDuplicateTab = chrome?.onDuplicateTab
   const onCopyTab = chrome?.onCopyTab
   const onPinTab = chrome?.onPinTab
+  const stripRef = useRef<HTMLDivElement | null>(null)
+  const dragRef = useRef({ active: false, moved: false, startX: 0, scrollLeft: 0 })
   const [contextMenu, setContextMenu] = useState<{ tab: (typeof tabs)[number]; x: number; y: number } | null>(null)
 
   useEffect(() => {
@@ -170,13 +190,38 @@ function DashboardViewStrip() {
 
   return (
     <div className="flex h-11 min-h-11 w-full shrink-0 items-center overflow-hidden border-b border-[#dbe3ee] bg-white text-[#111827]">
-      <div className="min-w-0 flex-1 overflow-x-auto [scrollbar-width:none]">
+      <div
+        ref={stripRef}
+        className="min-w-0 flex-1 cursor-grab overflow-x-auto [scrollbar-width:none] active:cursor-grabbing"
+        onPointerDown={(event) => {
+          if (event.button !== 0) return
+          const el = stripRef.current
+          dragRef.current = { active: Boolean(el && el.scrollWidth > el.clientWidth), moved: false, startX: event.clientX, scrollLeft: el?.scrollLeft || 0 }
+          if (!dragRef.current.active || !el) return
+          el.setPointerCapture?.(event.pointerId)
+        }}
+        onPointerMove={(event) => {
+          const el = stripRef.current
+          if (!el || !dragRef.current.active) return
+          dragRef.current.moved = Math.abs(event.clientX - dragRef.current.startX) > 6
+          el.scrollLeft = dragRef.current.scrollLeft - (event.clientX - dragRef.current.startX)
+        }}
+        onPointerUp={(event) => {
+          dragRef.current.active = false
+          stripRef.current?.releasePointerCapture?.(event.pointerId)
+        }}
+        onPointerCancel={() => {
+          dragRef.current.active = false
+        }}
+      >
         <div className="flex min-w-max items-stretch gap-1 px-4">
           {tabs.map((tab) => (
             <button
               key={tab.id}
               type="button"
-              onClick={() => onTabChange(tab.id)}
+              onClick={() => {
+                onTabChange(tab.id)
+              }}
               onContextMenu={(event) => {
                 event.preventDefault()
                 setContextMenu({ tab, x: event.clientX, y: event.clientY })
@@ -205,7 +250,7 @@ function DashboardViewStrip() {
 
       <div className="flex h-11 shrink-0 items-center gap-1.5 bg-white px-3">
         <span className="hidden items-center gap-1 text-[11px] font-medium text-[#9ca3af] lg:inline-flex">
-          <span className={`size-1.5 rounded-full ${chrome?.loading ? 'animate-pulse bg-[#f59e0b]' : 'bg-[#10b981]'}`} />
+          <span className={`size-1.5 rounded-full ${chrome?.loading || packetStatus.nationalOperations === 'loading' ? 'animate-pulse bg-[#f59e0b]' : 'bg-[#10b981]'}`} />
           {dashboardSyncLabel(chrome?.lastSync)}
         </span>
         <button
@@ -214,7 +259,7 @@ function DashboardViewStrip() {
           className="grid size-7 place-items-center rounded-[4px] border border-[#e2e8f0] bg-white text-[#6b7280] transition hover:bg-[#f9fafb] hover:text-[#111827]"
           aria-label="Refresh national operations"
         >
-          <RefreshCcw className={`size-3.5 ${chrome?.loading ? 'animate-spin' : ''}`} />
+          <RefreshCcw className={`size-3.5 ${chrome?.loading || packetStatus.nationalOperations === 'loading' ? 'animate-spin' : ''}`} />
         </button>
         {activeTab?.kind === 'custom' && onDeleteView ? (
           <button
@@ -279,6 +324,7 @@ function PortalRoutes({ landingPath }: { landingPath: string }) {
     <Routes>
       <Route path="/" element={<Navigate to={landingPath} replace />} />
       <Route path="/dashboard" element={<NationalDashboard />} />
+      <Route path="/command-centre" element={<Navigate to="/dashboard" replace />} />
       <Route path="/search" element={<SearchResultsPage />} />
       <Route path="/tasks/my" element={<MyTasks />} />
       <Route path="/tasks/new" element={<CreateTask />} />
@@ -298,26 +344,38 @@ function PortalRoutes({ landingPath }: { landingPath: string }) {
       <Route path="/documents/task-evidence/:evidenceId" element={<DocumentDetailPage />} />
       <Route path="/documents/complaint-media/:complaintPublicId" element={<DocumentDetailPage />} />
       <Route path="/users/:userPublicId" element={<UserDetailPage />} />
-      <Route path="/users" element={<Navigate to="/user-administration" replace />} />
+      <Route path="/users" element={<Navigate to="/settings/users" replace />} />
       <Route path="/national-heat-intelligence-map" element={<SituationMonitor />} />
+      <Route path="/live-map" element={<SituationMonitor />} />
       <Route path="/hoarding-watchlist" element={<HoardingWatchlist />} />
+      <Route path="/risk-watchlist" element={<HoardingWatchlist />} />
       <Route path="/station-regulatory-profiles" element={<StationProfiles />} />
       <Route path="/fuel-deliveries" element={<FuelDeliveries />} />
+      <Route path="/fuel-supply" element={<FuelDeliveries />} />
       <Route path="/availability-audit" element={<AvailabilityAudit />} />
       <Route path="/complaints-center" element={<ComplaintsCenter />} />
       <Route path="/compliance-flags" element={<ComplianceFlags />} />
       <Route path="/field-inspections" element={<FieldInspections />} />
+      <Route path="/inspections" element={<FieldInspections />} />
       <Route path="/enforcement-actions" element={<EnforcementActions />} />
       <Route path="/license-registry" element={<LicenseRegistry />} />
       <Route path="/reports-intelligence" element={<ReportsIntelligence />} />
+      <Route path="/reports" element={<ReportsIntelligence />} />
+      <Route path="/price-compliance" element={<PriceCompliance />} />
+      <Route path="/public-notices" element={<PublicNotices />} />
+      <Route path="/analytics" element={<AnalyticsCommand />} />
       <Route path="/user-administration" element={<UserAdministration />} />
       <Route path="/audit-trail" element={<AuditTrail />} />
       <Route path="/settings" element={<Navigate to="/settings/preferences" replace />} />
       <Route path="/settings/preferences" element={<SettingsCenter section="preferences" />} />
       <Route path="/settings/notifications" element={<SettingsCenter section="notifications" />} />
       <Route path="/settings/security" element={<SettingsCenter section="security" />} />
+      <Route path="/settings/profile" element={<SettingsCenter section="profile" />} />
       <Route path="/settings/users" element={<SettingsCenter section="users" />} />
       <Route path="/settings/audit" element={<SettingsCenter section="audit" />} />
+      <Route path="/settings/organization" element={<SettingsCenter section="organization" />} />
+      <Route path="/settings/integrations" element={<SettingsCenter section="integrations" />} />
+      <Route path="/settings/data" element={<SettingsCenter section="data" />} />
       <Route path="/situation-monitor" element={<Navigate to="/national-heat-intelligence-map" replace />} />
       <Route path="/fuel-availability-map" element={<Navigate to="/national-heat-intelligence-map" replace />} />
       <Route path="/station-registry" element={<Navigate to="/station-regulatory-profiles" replace />} />
@@ -326,14 +384,37 @@ function PortalRoutes({ landingPath }: { landingPath: string }) {
       <Route path="/trends-analytics" element={<Navigate to="/reports-intelligence" replace />} />
       <Route path="/data-exports" element={<Navigate to="/reports-intelligence" replace />} />
       <Route path="/audit-logs" element={<Navigate to="/audit-trail" replace />} />
-      <Route path="/users-roles" element={<Navigate to="/user-administration" replace />} />
+      <Route path="/users-roles" element={<Navigate to="/settings/users" replace />} />
       <Route path="*" element={<Navigate to={landingPath} replace />} />
     </Routes>
   )
 }
 
+function routePacketLoading(pathname: string, data: any, packetStatus: Record<string, string>) {
+  const keys = routePacketKeys(pathname)
+  const missing = keys.some((key) => packetStatus[key] === 'loading' && !Object.prototype.hasOwnProperty.call(data || {}, key))
+  const refreshing = keys.some((key) => packetStatus[key] === 'loading')
+  return { missing, refreshing }
+}
+
+function RouteDataActivity({ active }: { active: boolean }) {
+  return (
+    <div
+      className={`pointer-events-none absolute inset-x-0 top-0 z-30 transition-all duration-300 ease-out ${
+        active ? 'translate-y-0 opacity-100' : '-translate-y-1 opacity-0'
+      }`}
+    >
+      <div className="h-0.5 overflow-hidden bg-[#e2e8f0]">
+        <div className="mera-route-loading-bar h-full w-1/3 bg-[#111827]" />
+      </div>
+      <div className="h-10 bg-linear-to-b from-white/70 to-transparent" />
+    </div>
+  )
+}
+
 function PortalShell() {
   const location = useLocation()
+  const navigate = useNavigate()
   const {
     session,
     user,
@@ -342,18 +423,52 @@ function PortalShell() {
     resendLoginCode,
     cancelLoginChallenge,
     pendingLoginChallenge,
+    loginSuccessGate,
+    loginPreloadSettled,
+    finishLoginSuccessGate,
     logout,
     bootLoading,
     loginError,
     loading,
-    hasLoadedSnapshot,
     actionLoading,
     actionLabel,
+    requestRoutePackets,
+    packetStatus,
+    data,
+    preferences,
   } = usePortal()
   const activeMeta = resolveMeta(location.pathname)
-  const landingPath = firstAccessiblePath(user)
+  const landingPreferencePaths: Record<string, string> = {
+    dashboard: '/dashboard',
+    commandCentre: '/dashboard',
+    complaints: '/complaints-center',
+    hoarding: '/hoarding-watchlist',
+    riskWatchlist: '/risk-watchlist',
+    audit: '/audit-trail',
+    tasks: '/tasks/my',
+    inspections: '/field-inspections',
+    enforcement: '/enforcement-actions',
+    priceCompliance: '/price-compliance',
+    reports: '/reports-intelligence',
+    users: '/settings/users',
+    profile: '/settings/profile',
+  }
+  const preferredLandingPath = landingPreferencePaths[String(preferences?.landingPage || 'dashboard')] || '/dashboard'
+  const landingPath = canAccessPath(user, preferredLandingPath) ? preferredLandingPath : (firstAccessiblePath(user) || '/dashboard')
+  const routeLoading = routePacketLoading(location.pathname, data, packetStatus)
 
-  if (!session?.accessToken) {
+  useEffect(() => {
+    if (typeof document === 'undefined') return
+    const density = String(preferences?.density || 'comfortable') === 'compact' ? 'compact' : 'comfortable'
+    document.documentElement.dataset.meraDensity = density
+  }, [preferences?.density])
+
+  useEffect(() => {
+    if (!session?.accessToken || loginSuccessGate) return
+    requestRoutePackets(location.pathname, { reason: 'route-visible-packets' })
+  }, [location.pathname, loginSuccessGate, requestRoutePackets, session?.accessToken])
+
+  if (!session?.accessToken || loginSuccessGate) {
     return (
       <LoginScreen
         onLogin={login}
@@ -361,14 +476,16 @@ function PortalShell() {
         onResendCode={resendLoginCode}
         onCancelCode={cancelLoginChallenge}
         pendingChallenge={pendingLoginChallenge}
-        loading={bootLoading}
+        successGate={loginSuccessGate}
+        successLoading={!loginPreloadSettled}
+        onSuccessAnimationComplete={() => {
+          finishLoginSuccessGate()
+          navigate(landingPath, { replace: true })
+        }}
+        loading={loginSuccessGate ? !loginPreloadSettled : bootLoading}
         error={loginError}
       />
     )
-  }
-
-  if (!hasLoadedSnapshot) {
-    return <PortalBootSkeleton />
   }
 
   if (!landingPath) {
@@ -379,17 +496,30 @@ function PortalShell() {
     return <Navigate to={landingPath} replace />
   }
 
-  const isDashboardRoute = location.pathname.startsWith('/dashboard')
+  const isDashboardRoute = location.pathname.startsWith('/dashboard') || location.pathname.startsWith('/command-centre')
+  const syncCurrentPage = () => requestRoutePackets(location.pathname, { force: true, primaryOnly: true, preferHttp: true, timeoutMs: 4500, reason: 'topbar-sync' })
 
   return (
     <div className="mera-app-root flex h-screen flex-col overflow-hidden text-[var(--mera-text)]">
       <ActionLoadingOverlay visible={actionLoading} label={actionLabel} />
-      <PageHeader title={activeMeta.title} subtitle={activeMeta.subtitle} user={user} loading={loading} onLogout={logout} />
+      <PageHeader
+        title={activeMeta.title}
+        subtitle={activeMeta.subtitle}
+        user={user}
+        loading={loading}
+        showSync={!isDashboardRoute}
+        syncLoading={routeLoading.missing}
+        onSync={syncCurrentPage}
+        onLogout={logout}
+      />
       {isDashboardRoute ? <DashboardViewStrip /> : null}
       <div className="flex min-h-0 flex-1 overflow-hidden bg-transparent">
         <Sidebar user={user} />
-        <main className="min-w-0 flex-1 overflow-hidden">
-          <PortalRoutes landingPath={landingPath} />
+        <main className="relative min-w-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain">
+          <RouteDataActivity active={routeLoading.missing} />
+          <div className={`min-h-full transition-[opacity,transform] duration-300 ease-out ${routeLoading.missing ? 'opacity-[0.96]' : 'opacity-100'}`}>
+            <PortalRoutes landingPath={landingPath} />
+          </div>
         </main>
       </div>
     </div>
@@ -402,6 +532,7 @@ export default function App() {
       <BrowserRouter>
         <DashboardChromeProvider>
           <PortalShell />
+          <Toaster position="top-right" richColors closeButton />
         </DashboardChromeProvider>
       </BrowserRouter>
     </PortalProvider>

@@ -29,6 +29,7 @@ const mainMenu = [
 ];
 
 const systemMenu = [
+  { label: "Kiosk Sessions", icon: <AccountIcon />, to: "/kiosk/sessions" },
   { label: "Settings", icon: <SettingsIcon />, to: "/settings" },
 ];
 

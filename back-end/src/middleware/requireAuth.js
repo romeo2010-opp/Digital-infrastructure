@@ -2,6 +2,7 @@ import jwt from "jsonwebtoken"
 import crypto from "crypto"
 import { prisma } from "../db/prisma.js"
 import { getStationSubscriptionAccess, isStationStaffRole } from "../modules/auth/stationSubscriptionAccess.js"
+import { getActiveKioskSessionForAuth, mapKioskAuthContext } from "../modules/kiosk/kiosk.service.js"
 
 const DEFAULT_SESSION_CACHE_TTL_MS = Number(process.env.AUTH_SESSION_CACHE_TTL_MS || 3000)
 const MAX_SESSION_CACHE_ENTRIES = Number(process.env.AUTH_SESSION_CACHE_MAX_ENTRIES || 1000)
@@ -118,6 +119,55 @@ async function getActiveSession({ sessionPublicId, refreshTokenHash, userId, sta
   return activeSession
 }
 
+function resolveKioskPath(req) {
+  const rawPath = String(req.originalUrl || req.path || "").split("?")[0]
+  return rawPath.replace(/^\/api(?=\/)/, "")
+}
+
+function resolveKioskPermissionForRequest(req) {
+  const method = String(req.method || "GET").toUpperCase()
+  const path = resolveKioskPath(req)
+
+  if (method === "GET" && /^\/stations\/[^/]+\/operations\/kiosk-data$/.test(path)) {
+    return "VIEW_QUEUE"
+  }
+  if (method === "GET" && /^\/stations\/[^/]+\/attendant\/dashboard$/.test(path)) {
+    return "VIEW_QUEUE"
+  }
+  if (method === "GET" && /^\/stations\/[^/]+\/attendant\/scan-and-go\/resolve$/.test(path)) {
+    return "VIEW_QUEUE"
+  }
+  if (method === "POST" && /^\/stations\/[^/]+\/queue\/join$/.test(path)) {
+    return "START_SERVICE"
+  }
+  if (method === "POST" && /^\/pump-sessions\/[^/]+\/(attach-fuel-order|start-dispensing|finalize-fuel-order)$/.test(path)) {
+    return "START_SERVICE"
+  }
+
+  const attendantOrderMatch = path.match(/^\/stations\/[^/]+\/attendant\/orders\/[^/]+\/[^/]+\/([^/]+)$/)
+  if (method === "POST" && attendantOrderMatch) {
+    const action = attendantOrderMatch[1]
+    if (["accept", "customer-arrived"].includes(action)) return "CONFIRM_CUSTOMER"
+    if (["update-service-request", "assign-pump", "start-service", "complete-service"].includes(action)) return "START_SERVICE"
+    if (action === "reject") return "MARK_NO_SHOW"
+    if (action === "issues") return "REPORT_DISPUTE"
+  }
+
+  return null
+}
+
+function kioskSessionCanUseRole(req, roles) {
+  const permissions = Array.isArray(req.auth?.kioskPermissions) ? req.auth.kioskPermissions : []
+  const role = String(req.auth?.role || "").trim().toUpperCase()
+  const requestedRoles = Array.isArray(roles) ? roles.map((item) => String(item).trim().toUpperCase()) : []
+  const requiredPermission = resolveKioskPermissionForRequest(req)
+
+  if (!requiredPermission || !permissions.includes(requiredPermission)) return false
+  if (requestedRoles.includes(role)) return true
+  if (role === "MANAGER" && requestedRoles.includes("ATTENDANT")) return true
+  return false
+}
+
 export async function requireAuth(req, res, next) {
   const authHeader = req.header("authorization") || ""
   if (!authHeader.startsWith("Bearer ")) {
@@ -132,6 +182,25 @@ export async function requireAuth(req, res, next) {
 
   try {
     const payload = jwt.verify(token, secret)
+    if (payload?.typ === "kiosk" || payload?.kioskSessionId) {
+      const kioskSessionPublicId =
+        typeof payload?.kioskSessionId === "string"
+          ? payload.kioskSessionId
+          : typeof payload?.sid === "string"
+            ? payload.sid
+            : null
+      const activeKioskSession = await getActiveKioskSessionForAuth({
+        sessionPublicId: kioskSessionPublicId,
+        userId: payload.uid,
+        stationId: payload.stationId,
+      })
+      if (!activeKioskSession) {
+        return unauthorized(res, "Kiosk session revoked or expired")
+      }
+      req.auth = mapKioskAuthContext(activeKioskSession)
+      return next()
+    }
+
     const tokenSessionPublicId = typeof payload?.sid === "string" ? payload.sid : null
     const refreshToken = req.cookies?.sl_refresh
     const refreshTokenHash = refreshToken ? hashToken(refreshToken) : null
@@ -175,6 +244,14 @@ export async function requireAuth(req, res, next) {
 
 export function requireRole(roles) {
   return function checkRole(req, res, next) {
+    if (req.auth?.sessionType === "KIOSK") {
+      if (kioskSessionCanUseRole(req, roles)) return next()
+      return res.status(403).json({
+        ok: false,
+        error: "Kiosk session permission denied",
+      })
+    }
+
     if (!req.auth?.role || !roles.includes(req.auth.role)) {
       return res.status(403).json({
         ok: false,

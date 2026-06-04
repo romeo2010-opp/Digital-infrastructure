@@ -6,7 +6,7 @@ interface TopBarProps {
 }
 
 export function TopBar({ currentTime }: TopBarProps) {
-  const { stationName, isOnline, isHydrating, syncError, hasLoaded, hybridPilotQueue } = useFuelStore();
+  const { stationName, isOnline, isHydrating, syncError, hasLoaded, realtimeMode, kioskAssignedPump, pumpMode } = useFuelStore();
   const { isNightTheme } = useKioskTheme();
 
   const signalState = !isOnline || syncError
@@ -15,7 +15,25 @@ export function TopBar({ currentTime }: TopBarProps) {
         detail: "Network unavailable",
         tone: "offline" as const,
       }
-    : isHydrating && hasLoaded
+    : realtimeMode === "websocket"
+      ? {
+          value: "Live",
+          detail: "WebSocket stream",
+          tone: "online" as const,
+        }
+      : realtimeMode === "polling"
+        ? {
+            value: "Polling",
+            detail: "Live polling fallback",
+            tone: "warning" as const,
+          }
+        : realtimeMode === "connecting"
+          ? {
+              value: "Connecting",
+              detail: "Opening live stream",
+              tone: "warning" as const,
+            }
+          : isHydrating && hasLoaded
       ? {
           value: "Refreshing",
           detail: "Sync in progress",
@@ -42,28 +60,17 @@ export function TopBar({ currentTime }: TopBarProps) {
     });
   };
 
-  const turnState = !hybridPilotQueue?.enabled
+  const pumpState = kioskAssignedPump
     ? {
-        value: "Standard Queue",
-        detail: "Hybrid mode not enabled",
-        tone: "default" as const,
+        value: kioskAssignedPump.displayName || `Pump ${kioskAssignedPump.pumpNumber || ""}`,
+        detail: String(pumpMode || kioskAssignedPump.currentMode || "OPEN_WALKIN").replace(/_/g, " "),
+        tone: pumpMode === "PAUSED" || pumpMode === "MAINTENANCE" ? "offline" as const : "online" as const,
       }
-    : hybridPilotQueue.digitalHoldActive
-      ? {
-          value: "Digital Queue",
-          detail:
-            hybridPilotQueue.currentNextAssignmentTarget?.source === "RESERVATION"
-              ? "Reservation has the next controllable slot"
-              : hybridPilotQueue.currentNextAssignmentTarget?.source === "READY_NOW_APP"
-                ? "Ready-now app user has the next slot"
-                : "SmartLink driver has the next turn",
-          tone: "warning" as const,
-        }
-      : {
-          value: "Walk-in Turn",
-          detail: "Pilot pump is open to walk-ins",
-          tone: "info" as const,
-        };
+    : {
+        value: "No Pump",
+        detail: "Configuration required",
+        tone: "offline" as const,
+      };
 
   return (
     <div className="grid gap-5 lg:grid-cols-4">
@@ -75,10 +82,10 @@ export function TopBar({ currentTime }: TopBarProps) {
         isNightTheme={isNightTheme}
       />
       <SummaryCard
-        label="Turn"
-        value={turnState.value}
-        detail={turnState.detail}
-        tone={turnState.tone}
+        label="Pump"
+        value={pumpState.value}
+        detail={pumpState.detail}
+        tone={pumpState.tone}
         isNightTheme={isNightTheme}
       />
       <SummaryCard

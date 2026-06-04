@@ -19,7 +19,7 @@ const reportColumns = [
 ]
 
 export function ReportsIntelligence() {
-  const { data, refresh, runAction, hasPermission, liveDataLoading, actionLoading } = usePortal()
+  const { data, refresh, runAction, hasPermission, packetStatus, actionLoading } = usePortal()
   const [range, setRange] = useState('30d')
   const [drilldown, setDrilldown] = useState<DrilldownConfig | null>(null)
   const canExport = hasPermission(MERA_PERMISSIONS.REPORTS_EXPORT)
@@ -30,7 +30,13 @@ export function ReportsIntelligence() {
   const offenderRows = normalizeRows(data.repeatedOffenders)
   const enforcementRows = normalizeRows(data.enforcementActions?.items)
   const complaintRows = normalizeRows(data.complaints?.items)
-  const isInitialLoading = liveDataLoading && !demandRows.length && !districtRows.length && !hoardingRows.length
+  const reportsPacketMissing =
+    data.demandForecastSummary === undefined &&
+    data.districtShortages === undefined &&
+    data.hoardingWatchlist === undefined
+  const isInitialLoading =
+    reportsPacketMissing &&
+    ['demandForecastSummary', 'districtShortages', 'hoardingWatchlist'].some((key) => packetStatus[key] === 'loading')
 
   const reportRows = useMemo(() => [
     {

@@ -47,6 +47,7 @@ import {
   getHybridQueueSnapshot,
   patchStationHybridQueueSettings,
 } from "./hybrid/integration.service.js"
+import { lockPumpAssignment } from "./smartPumpAssignmentService.js"
 import { PumpQueueState } from "./hybrid/index.js"
 
 const router = Router()
@@ -422,10 +423,11 @@ async function getReservationsFromTable(stationId, timeZone = "Africa/Blantyre")
   return (rows || []).map((row) => mapReservationRowToManagerPayload(row, timeZone))
 }
 
-export async function getQueueSnapshot(station) {
+export async function getQueueSnapshot(station, options = {}) {
   const stationId = Number(station?.id || 0)
+  const assignedPumpId = options?.assignedPumpId ? BigInt(options.assignedPumpId) : null
   const timeZone = String(station?.timezone || "").trim() || "Africa/Blantyre"
-  const [settingsRows, entriesRows, movementRows, stationRows, pumps, auditRows, hybridSnapshot] = await Promise.all([
+  const [settingsRows, entriesRows, movementRows, stationRows, pumps, pumpConfigRows, auditRows, hybridSnapshot] = await Promise.all([
     prisma.$queryRaw`
       SELECT *
       FROM station_queue_settings
@@ -447,11 +449,28 @@ export async function getQueueSnapshot(station) {
         qe.last_moved_at,
         DATE_FORMAT(qe.last_moved_at, '%Y-%m-%d %H:%i:%s') AS last_moved_at_local,
         qe.metadata,
-        ft.code AS fuel_type
+        qe.pump_assignment_status,
+        qe.assignment_reason,
+        qe.assignment_confidence,
+        qe.assignment_locked_at,
+        ft.code AS fuel_type,
+        v.public_id AS vehicle_public_id,
+        v.make AS vehicle_make,
+        v.model AS vehicle_model,
+        v.number_plate AS vehicle_number_plate,
+        v.tank_side AS vehicle_tank_side,
+        p.public_id AS assigned_pump_public_id,
+        p.pump_number AS assigned_pump_number,
+        COALESCE(pc.display_name, CONCAT('Pump ', p.pump_number)) AS assigned_pump_display_name,
+        pc.current_mode AS assigned_pump_mode
       FROM queue_entries qe
       INNER JOIN fuel_types ft ON ft.id = qe.fuel_type_id
+      LEFT JOIN vehicles v ON v.id = qe.vehicle_id
+      LEFT JOIN pumps p ON p.id = qe.assigned_pump_id
+      LEFT JOIN pump_configurations pc ON pc.pump_id = p.id
       WHERE qe.station_id = ${stationId}
         AND qe.status <> 'SERVED'
+        AND (${assignedPumpId} IS NULL OR qe.assigned_pump_id = ${assignedPumpId})
       ORDER BY qe.position ASC, qe.joined_at ASC
     `,
     prisma.$queryRaw`
@@ -468,6 +487,20 @@ export async function getQueueSnapshot(station) {
       LIMIT 1
     `,
     listStationPumpsWithNozzles(stationId, { includeInactive: true }),
+    prisma.$queryRaw`
+      SELECT
+        pc.pump_id,
+        p.public_id AS pump_public_id,
+        pc.display_name,
+        pc.current_mode,
+        pc.lane_side_supported,
+        pc.max_vehicle_size,
+        pc.is_smartlink_enabled
+      FROM pump_configurations pc
+      INNER JOIN pumps p ON p.id = pc.pump_id
+      WHERE pc.station_id = ${stationId}
+        AND (${assignedPumpId} IS NULL OR pc.pump_id = ${assignedPumpId})
+    `,
     prisma.$queryRaw`
       SELECT
         id,
@@ -504,7 +537,40 @@ export async function getQueueSnapshot(station) {
     maskedPlate: item.masked_plate,
     position: Number(item.position),
     status: item.status,
+    operationalStatus:
+      item.pump_assignment_status === "MANUAL_REVIEW_REQUIRED"
+        ? "MANUAL_REVIEW_REQUIRED"
+        : item.status === "CALLED"
+          ? "CALLED_TO_STATION"
+          : item.assigned_pump_public_id
+            ? "PUMP_ASSIGNED"
+            : item.status,
     fuelType: item.fuel_type,
+    vehicle: item.vehicle_public_id
+      ? {
+          id: item.vehicle_public_id,
+          make: item.vehicle_make || "",
+          model: item.vehicle_model || "",
+          numberPlate: item.vehicle_number_plate || item.masked_plate || "",
+          tankSide: item.vehicle_tank_side || "UNKNOWN",
+        }
+      : null,
+    assignedPump: item.assigned_pump_public_id
+      ? {
+          id: item.assigned_pump_public_id,
+          pumpNumber: item.assigned_pump_number === null || item.assigned_pump_number === undefined
+            ? null
+            : Number(item.assigned_pump_number),
+          displayName: item.assigned_pump_display_name || `Pump ${item.assigned_pump_number || ""}`.trim(),
+          mode: item.assigned_pump_mode || "OPEN_WALKIN",
+        }
+      : null,
+    pumpAssignment: {
+      status: item.pump_assignment_status || "PENDING",
+      reason: item.assignment_reason || null,
+      confidence: item.assignment_confidence || null,
+      lockedAt: zonedSqlDateTimeToUtcIso(item.assignment_locked_at, timeZone),
+    },
     joinedAt: zonedSqlDateTimeToUtcIso(item.joined_at_local || item.joined_at, timeZone),
     calledAt: zonedSqlDateTimeToUtcIso(item.called_at_local || item.called_at, timeZone),
     graceExpiresAt: zonedSqlDateTimeToUtcIso(item.grace_expires_at_local || item.grace_expires_at, timeZone),
@@ -512,8 +578,27 @@ export async function getQueueSnapshot(station) {
   }))
 
   const currentCall = entries.find((item) => item.effectiveStatus === "CALLED") || null
-  const queuePumps = await Promise.all((pumps || []).map(async (pump) => {
+  const configByPumpPublicId = new Map(
+    (pumpConfigRows || []).map((row) => [
+      String(row.pump_public_id || "").trim(),
+      {
+        displayName: row.display_name || null,
+        currentMode: row.current_mode || "OPEN_WALKIN",
+        laneSideSupported: row.lane_side_supported || "BOTH_SIDES",
+        maxVehicleSize: row.max_vehicle_size || "LARGE",
+        isSmartlinkEnabled: Boolean(row.is_smartlink_enabled),
+      },
+    ])
+  )
+  const scopedPumpPublicIds = assignedPumpId
+    ? new Set((pumpConfigRows || []).map((row) => String(row.pump_public_id || "").trim()).filter(Boolean))
+    : null
+  const visiblePumps = scopedPumpPublicIds
+    ? (pumps || []).filter((pump) => scopedPumpPublicIds.has(String(pump.public_id || "").trim()))
+    : (pumps || [])
+  const queuePumps = await Promise.all(visiblePumps.map(async (pump) => {
     const pumpPublicId = String(pump.public_id || "").trim()
+    const pumpConfig = configByPumpPublicId.get(pumpPublicId) || {}
     const stationPublicId = String(stationDetails?.public_id || station?.public_id || "").trim()
     const qrPayload =
       pumpPublicId && stationPublicId
@@ -526,7 +611,11 @@ export async function getQueueSnapshot(station) {
 
     return {
       id: pump.public_id,
-      label: `Pump ${pump.pump_number}`,
+      label: pumpConfig.displayName || `Pump ${pump.pump_number}`,
+      currentMode: pumpConfig.currentMode || "OPEN_WALKIN",
+      laneSideSupported: pumpConfig.laneSideSupported || "BOTH_SIDES",
+      maxVehicleSize: pumpConfig.maxVehicleSize || "LARGE",
+      isSmartlinkEnabled: Boolean(pumpConfig.isSmartlinkEnabled),
       isPilotPump: String(hybridSnapshot?.pilotPumpPublicId || "").trim() === pumpPublicId,
       hybridQueueState:
         String(hybridSnapshot?.pilotPumpPublicId || "").trim() === pumpPublicId
@@ -859,6 +948,7 @@ export async function resolveQueueServicePaymentReference(db, queueEntry) {
     ).trim() || null
 
   if (metadataPaymentReference) return metadataPaymentReference
+  if (!hasQueueWalletSettlementEvidence(queueEntry)) return null
   return resolveQueueWalletPaymentReference(db, queueEntry?.public_id)
 }
 
@@ -1271,7 +1361,12 @@ export async function createQueueServiceTransaction(
     )
   }
 
-  const actorStaffId = await resolveActorStaffId(db, stationId, actorUserId)
+  const normalizedActorUserId = Number(actorUserId || 0) || null
+  const queueUserId = Number(queueEntry?.user_id || 0) || null
+  const actorStaffId =
+    normalizedActorUserId && normalizedActorUserId !== queueUserId
+      ? await resolveActorStaffId(db, stationId, normalizedActorUserId)
+      : null
   const created = await createPromotionAwareTransaction(db, {
     stationId,
     fuelTypeCode,
@@ -1280,7 +1375,7 @@ export async function createQueueServiceTransaction(
     amount: normalizedAmount,
     userId: Number(queueEntry?.user_id || 0) || null,
     actorStaffId,
-    actorUserId,
+    actorUserId: normalizedActorUserId,
     pumpId: hardware.pumpId,
     nozzleId: hardware.nozzleId,
     pumpSessionPublicId: storedPumpSession.pumpSessionPublicId,
@@ -2330,6 +2425,7 @@ router.post(
         last_moved_at = CURRENT_TIMESTAMP(3)
       WHERE id = ${target.id}
     `
+    await lockPumpAssignment(target.public_id)
     await writeAuditLog({
       stationId: station.id,
       actionType: "QUEUE_CALL_NEXT",
@@ -2359,6 +2455,7 @@ router.post(
         last_moved_at = CURRENT_TIMESTAMP(3)
       WHERE id = ${entry.id}
     `
+    await lockPumpAssignment(entry.public_id)
     await writeAuditLog({
       stationId: station.id,
       actionType: "QUEUE_RECALL",
@@ -2398,6 +2495,7 @@ router.post(
         last_moved_at = CURRENT_TIMESTAMP(3)
       WHERE id = ${target.id}
     `
+    await lockPumpAssignment(target.public_id)
     await writeAuditLog({
       stationId: station.id,
       actionType: "QUEUE_CALL_POSITION",

@@ -266,9 +266,24 @@ async function createNotification({
   db = prisma,
 }) {
   if (!userId) return null
-  const notificationType = normalizeUpper(type)
+  const allowedNotificationTypes = new Set([
+    "TASK_ASSIGNED",
+    "TASK_REASSIGNED",
+    "TASK_DUE_SOON",
+    "TASK_OVERDUE",
+    "TASK_STATUS_CHANGED",
+    "TASK_ESCALATED",
+    "TASK_COMPLETED",
+  ])
+  const requestedType = normalizeUpper(type)
+  const notificationType = allowedNotificationTypes.has(requestedType) ? requestedType : "TASK_STATUS_CHANGED"
   const publicId = createPublicId()
-  await db.$executeRaw`
+  const scopedTitle = String(title || "").trim().slice(0, 180) || "MERA task update"
+  const scopedMessage = String(message || "").trim() || "A MERA task was updated."
+  const scopedLinkedEntityType = normalizeOptionalString(linkedEntityType)
+  const scopedLinkedEntityId = normalizeOptionalString(linkedEntityId)
+
+  const insertNotification = (scopedType) => db.$executeRaw`
     INSERT INTO mera_notifications (
       public_id,
       user_id,
@@ -281,14 +296,59 @@ async function createNotification({
     VALUES (
       ${publicId},
       ${userId},
-      ${notificationType},
-      ${String(title || "").trim().slice(0, 180) || "MERA task update"},
-      ${String(message || "").trim() || "A MERA task was updated."},
-      ${normalizeOptionalString(linkedEntityType)},
-      ${normalizeOptionalString(linkedEntityId)}
+      ${scopedType},
+      ${scopedTitle},
+      ${scopedMessage},
+      ${scopedLinkedEntityType},
+      ${scopedLinkedEntityId}
     )
   `
+
+  try {
+    await insertNotification(notificationType)
+  } catch (error) {
+    const messageText = String(error?.message || "")
+    if (!messageText.includes("Data truncated for column 'type'") || notificationType !== "TASK_STATUS_CHANGED") {
+      throw error
+    }
+    await insertNotification("TASK_ASSIGNED")
+  }
   return publicId
+}
+
+function formatTaskStatusLabel(status) {
+  return normalizeUpper(status).replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (letter) => letter.toUpperCase())
+}
+
+function notificationTypeForTaskStatus(status) {
+  const normalized = normalizeUpper(status)
+  if (normalized === "COMPLETED") return "TASK_COMPLETED"
+  if (normalized === "ESCALATED") return "TASK_ESCALATED"
+  return "TASK_STATUS_CHANGED"
+}
+
+async function notifyTaskStatusParticipants(task, actor, nextStatus, { reason = null, db = prisma } = {}) {
+  const recipientIds = Array.from(
+    new Set([task.assigned_to_user_id, task.assigned_by_user_id]
+      .map((value) => Number(value || 0))
+      .filter((value) => value && value !== Number(actor?.userId || 0)))
+  )
+  if (!recipientIds.length) return
+
+  const statusLabel = formatTaskStatusLabel(nextStatus)
+  const actorName = actor?.fullName || "A MERA officer"
+  const reasonSuffix = reason ? ` Reason: ${reason}` : ""
+
+  for (const userId of recipientIds) {
+    await createNotification({
+      userId,
+      type: notificationTypeForTaskStatus(nextStatus),
+      title: `Task ${statusLabel}: ${task.task_number}`,
+      message: `${actorName} changed ${task.title} from ${formatTaskStatusLabel(task.status)} to ${statusLabel}.${reasonSuffix}`,
+      linkedEntityId: task.task_number,
+      db,
+    })
+  }
 }
 
 async function listSupervisorUsersForTask(task) {
@@ -310,11 +370,16 @@ async function listSupervisorUsersForTask(task) {
   return rows || []
 }
 
-async function notifySupervisors(task, notification) {
+async function notifySupervisors(task, notification, excludedUserIds = []) {
+  const excluded = new Set(
+    [task?.assigned_to_user_id, ...excludedUserIds]
+      .map((value) => Number(value || 0))
+      .filter(Boolean)
+  )
   const users = await listSupervisorUsersForTask(task)
   await Promise.all(
     users
-      .filter((user) => Number(user.id) !== Number(task?.assigned_to_user_id || 0))
+      .filter((user) => !excluded.has(Number(user.id)))
       .map((user) =>
         createNotification({
           userId: user.id,
@@ -891,6 +956,44 @@ export async function createTask(payload, actor) {
       LIMIT 1
     `
     const taskId = rows?.[0]?.id
+    if (!linkedEntityId && ["STATION_INSPECTION", "FIELD_VISIT"].includes(type) && station?.id) {
+      const inspectionPublicId = createPublicId()
+      await tx.$executeRaw`
+        INSERT INTO inspections (
+          public_id,
+          station_id,
+          officer_id,
+          inspection_type,
+          reason,
+          priority,
+          scheduled_at,
+          status,
+          inspection_status,
+          stock_visible,
+          illegal_vending_detected
+        )
+        VALUES (
+          ${inspectionPublicId},
+          ${station.id},
+          ${assignee.id},
+          ${type === "STATION_INSPECTION" ? "ROUTINE" : "SPOT_CHECK"},
+          ${payload.description || payload.title || "Inspection task"},
+          ${String(priority || "MEDIUM").toLowerCase()},
+          ${dueAt},
+          'scheduled',
+          'OPEN',
+          1,
+          0
+        )
+      `
+      await tx.$executeRaw`
+        UPDATE regulator_tasks
+        SET linked_entity_type = 'INSPECTION',
+            linked_entity_id = ${inspectionPublicId},
+            updated_at = CURRENT_TIMESTAMP(3)
+        WHERE id = ${taskId}
+      `
+    }
     await logTaskActivity({
       taskId,
       actorUserId: actor.userId,
@@ -1073,6 +1176,20 @@ export async function changeTaskStatus(taskNumber, payload, actor) {
         updated_at = CURRENT_TIMESTAMP(3)
       WHERE id = ${task.id}
     `
+    if (String(task.linked_entity_type || "").toUpperCase() === "INSPECTION" && task.linked_entity_id) {
+      await tx.$executeRaw`
+        UPDATE inspections
+        SET
+          status = ${String(nextStatus).toLowerCase()},
+          inspection_status = CASE
+            WHEN ${nextStatus} = 'ESCALATED' THEN 'ESCALATED'
+            WHEN ${nextStatus} IN ('CANCELLED', 'REJECTED') THEN 'CLOSED'
+            ELSE 'OPEN'
+          END,
+          updated_at = CURRENT_TIMESTAMP(3)
+        WHERE public_id = ${task.linked_entity_id}
+      `
+    }
     await logTaskActivity({
       taskId: task.id,
       actorUserId: actor.userId,
@@ -1088,6 +1205,7 @@ export async function changeTaskStatus(taskNumber, payload, actor) {
         VALUES (${task.id}, ${actor.userId}, ${reason}, 'INTERNAL')
       `
     }
+    await notifyTaskStatusParticipants(task, actor, nextStatus, { reason, db: tx })
   })
 
   if (nextStatus === "ESCALATED") {
@@ -1096,7 +1214,7 @@ export async function changeTaskStatus(taskNumber, payload, actor) {
       type: "TASK_ESCALATED",
       title: `Task escalated: ${task.task_number}`,
       message: `${actor.fullName || "A MERA officer"} escalated ${task.title}.`,
-    })
+    }, [actor?.userId, task.assigned_by_user_id])
   }
 
   await logMeraAudit({
@@ -1209,6 +1327,7 @@ export async function escalateTask(taskNumber, payload, actor) {
       metadata: { reason },
       db: tx,
     })
+    await notifyTaskStatusParticipants(task, actor, "ESCALATED", { reason, db: tx })
   })
 
   const updated = await getTaskRowByNumber(task.task_number)
@@ -1216,7 +1335,7 @@ export async function escalateTask(taskNumber, payload, actor) {
     type: "TASK_ESCALATED",
     title: `Task escalated: ${task.task_number}`,
     message: `${actor.fullName || "A MERA officer"} escalated ${task.title}: ${reason}`,
-  })
+  }, [actor?.userId, task.assigned_by_user_id])
 
   await logMeraAudit({
     ...actorAuditContext(actor),
@@ -1247,6 +1366,17 @@ export async function completeTask(taskNumber, payload, actor) {
         updated_at = CURRENT_TIMESTAMP(3)
       WHERE id = ${task.id}
     `
+    if (String(task.linked_entity_type || "").toUpperCase() === "INSPECTION" && task.linked_entity_id) {
+      await tx.$executeRaw`
+        UPDATE inspections
+        SET
+          status = 'completed',
+          inspection_status = 'CLOSED',
+          completed_at = COALESCE(completed_at, CURRENT_TIMESTAMP(3)),
+          updated_at = CURRENT_TIMESTAMP(3)
+        WHERE public_id = ${task.linked_entity_id}
+      `
+    }
     await logTaskActivity({
       taskId: task.id,
       actorUserId: actor.userId,
@@ -1255,14 +1385,7 @@ export async function completeTask(taskNumber, payload, actor) {
       newValue: "COMPLETED",
       db: tx,
     })
-    await createNotification({
-      userId: task.assigned_by_user_id,
-      type: "TASK_COMPLETED",
-      title: `Task completed: ${task.task_number}`,
-      message: `${actor.fullName || "A MERA officer"} completed ${task.title}.`,
-      linkedEntityId: task.task_number,
-      db: tx,
-    })
+    await notifyTaskStatusParticipants(task, actor, "COMPLETED", { reason: completionNotes, db: tx })
   })
 
   await logMeraAudit({

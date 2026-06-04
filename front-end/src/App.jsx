@@ -15,6 +15,8 @@ import MyAccountPage from "./features/account/MyAccountPage"
 import TransactionsTestPage from "./pages/TransactionsTestPage"
 import SettlementsPage from "./pages/SettlementsPage"
 import LivePumpMonitoringPage from "./features/monitoring/LivePumpMonitoringPage"
+import KioskApprovalPage from "./features/kiosk/KioskApprovalPage"
+import KioskSessionsPage from "./features/kiosk/KioskSessionsPage"
 import Login from './pages/Login'
 import LoginBriefing from "./components/LoginBriefing"
 import { useAuth } from "./auth/AuthContext";
@@ -45,6 +47,8 @@ const ROUTE_TITLES = [
   { path: "/transactions-test", title: "Transactions" },
   { path: "/settlements", title: "Settlements" },
   { path: "/monitoring/pumps/:pumpId", title: "Live Monitoring" },
+  { path: "/kiosk/approve", title: "Kiosk Approval" },
+  { path: "/kiosk/sessions", title: "Kiosk Sessions" },
 ]
 
 function resolveRouteTitle(pathname, isAuthenticated) {
@@ -498,6 +502,8 @@ function AppRouterFrame({
                   : <PlanLockedPage title="Live Monitoring" featureName="Live monitoring" requiredPlan={stationPlan.getRequirement(STATION_PLAN_FEATURES.MONITORING)} />
               }
             />
+            <Route path="/kiosk/approve" element={<KioskApprovalPage />} />
+            <Route path="/kiosk/sessions" element={<KioskSessionsPage />} />
             <Route path="*" element={<Dashboard />} />
           </Routes>
         ) : (

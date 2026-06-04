@@ -3861,7 +3861,7 @@ export async function requestTechnicalInvestigation({ actor, stationPublicId, no
 
 export async function getStationsData() {
   await syncOverdueStationSubscriptions()
-  const [rows, subscriptionRows] = await Promise.all([
+  const [rows, subscriptionRows, licenseRows] = await Promise.all([
     prisma.$queryRaw`
       SELECT
         st.public_id,
@@ -3890,14 +3890,48 @@ export async function getStationsData() {
       FROM station_subscription_statuses sss
       INNER JOIN stations st ON st.id = sss.station_id
     `, "station_subscription_statuses"),
+    optionalRows(prisma.$queryRaw`
+      SELECT
+        fsl.license_number,
+        fsl.license_status,
+        fsl.issue_date,
+        fsl.expiry_date,
+        fsl.compliance_conditions,
+        fsl.created_at,
+        fsl.updated_at,
+        st.public_id AS station_public_id,
+        st.name AS station_name,
+        st.operator_name,
+        st.city
+      FROM fuel_station_licenses fsl
+      INNER JOIN stations st ON st.id = fsl.station_id
+      WHERE st.deleted_at IS NULL
+      ORDER BY fsl.expiry_date ASC, fsl.license_number ASC
+    `, "fuel_station_licenses"),
   ])
 
   const subscriptionsByStation = new Map(
     normalizeRows(subscriptionRows).map((row) => [row.station_public_id, row])
   )
+  const normalizedLicenses = normalizeRows(licenseRows)
 
   const items = normalizeRows(rows).map((row) => {
     const subscription = subscriptionsByStation.get(row.public_id)
+    const stationLicenses = normalizedLicenses
+      .filter((license) => license.station_public_id === row.public_id)
+      .map((license) => ({
+        licenseNumber: license.license_number,
+        licenseStatus: license.license_status,
+        issueDate: normalizeDateOnly(license.issue_date),
+        expiryDate: normalizeDateOnly(license.expiry_date),
+        complianceConditions: license.compliance_conditions || "",
+        stationPublicId: license.station_public_id,
+        stationName: license.station_name,
+        operatorName: license.operator_name,
+        city: license.city,
+        createdAt: normalizeDateTime(license.created_at),
+        updatedAt: normalizeDateTime(license.updated_at),
+      }))
     const subscriptionStatus = deriveEffectiveSubscriptionStatus(
       subscription?.subscription_status,
       subscription?.renewal_date
@@ -3916,9 +3950,24 @@ export async function getStationsData() {
       subscription_plan: subscription?.plan_name || "Unassigned",
       subscription_status: subscription ? subscriptionStatus : "NOT_CONFIGURED",
       renewal_date: subscription?.renewal_date || null,
+      licenses: stationLicenses,
       last_transaction_at: normalizeDateTime(row.last_transaction_at),
     }
   })
+
+  const licenses = normalizedLicenses.map((license) => ({
+    licenseNumber: license.license_number,
+    licenseStatus: license.license_status,
+    issueDate: normalizeDateOnly(license.issue_date),
+    expiryDate: normalizeDateOnly(license.expiry_date),
+    complianceConditions: license.compliance_conditions || "",
+    stationPublicId: license.station_public_id,
+    stationName: license.station_name,
+    operatorName: license.operator_name,
+    city: license.city,
+    createdAt: normalizeDateTime(license.created_at),
+    updatedAt: normalizeDateTime(license.updated_at),
+  }))
 
   return {
     summary: {
@@ -3926,8 +3975,15 @@ export async function getStationsData() {
       activeStations: items.filter((row) => Number(row.is_active) === 1).length,
       inactiveStations: items.filter((row) => Number(row.is_active) !== 1).length,
       overdueSubscriptions: items.filter((row) => ["OVERDUE", "GRACE"].includes(String(row.subscription_status || ""))).length,
+      activeLicenses: licenses.filter((row) => String(row.licenseStatus || "").toUpperCase() === "ACTIVE").length,
+      expiringLicenses: licenses.filter((row) => {
+        if (!row.expiryDate) return false
+        const expiry = new Date(`${row.expiryDate}T00:00:00Z`).getTime()
+        return Number.isFinite(expiry) && expiry <= Date.now() + 1000 * 60 * 60 * 24 * 45
+      }).length,
     },
     items,
+    licenses,
   }
 }
 

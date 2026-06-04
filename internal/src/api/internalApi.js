@@ -49,6 +49,13 @@ export const internalApi = {
     httpClient.post(`/api/internal/network-operations/stations/${stationPublicId}/request-field-visit`, { note }),
   requestTechnicalInvestigation: (stationPublicId, note = "") =>
     httpClient.post(`/api/internal/network-operations/stations/${stationPublicId}/request-technical-investigation`, note ? { note } : {}),
+  getKioskRegistrationChallenge: (challengeId) =>
+    httpClient.get(`/api/internal/kiosks/registration-challenges/${encodeURIComponent(challengeId)}`),
+  getKioskRegistrationStations: () => httpClient.get("/api/internal/kiosks/registration-stations"),
+  approveKioskRegistrationChallenge: (challengeId, payload) =>
+    httpClient.post(`/api/internal/kiosks/registration-challenges/${encodeURIComponent(challengeId)}/approve`, payload),
+  denyKioskRegistrationChallenge: (challengeId) =>
+    httpClient.post(`/api/internal/kiosks/registration-challenges/${encodeURIComponent(challengeId)}/deny`, {}),
   getStations: () => httpClient.get("/api/internal/stations"),
   createStation: (payload) => httpClient.post("/api/internal/stations", payload),
   getStationSetup: (stationPublicId) => httpClient.get(`/api/internal/stations/${stationPublicId}/setup`),

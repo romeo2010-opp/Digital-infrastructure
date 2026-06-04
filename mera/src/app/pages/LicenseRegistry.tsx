@@ -4,6 +4,7 @@ import { Toolbar } from '../components/Toolbar'
 import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
 import { ModalShell } from '../components/ModalShell'
+import { FieldShell, ToolbarField } from '../components/FieldLabel'
 import { PortalTable } from '../components/PortalTable'
 import { SectionCard } from '../components/SectionCard'
 import { SectionKpiStrip } from '../components/SectionKpiStrip'
@@ -60,10 +61,13 @@ export function LicenseRegistry() {
   return (
     <div className="flex h-full flex-col gap-4 overflow-y-auto p-4">
       <Toolbar>
-        <div className="flex min-w-[280px] flex-1 items-center gap-2">
+        <ToolbarField label="Search licences" hint="Filter licence records by licence number, station, owner, district, or status. Example: expired or station name." className="min-w-[280px] flex-1">
+        <div className="flex items-center gap-2">
           <Search className="size-4 text-slate-400" />
           <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search licenses or stations..." />
         </div>
+        </ToolbarField>
+        <ToolbarField label="Licence status" hint="Filter by current licence standing. Example: Pending Renewal or Suspended.">
         <select className={fieldClass} value={status} onChange={(event) => setStatus(event.target.value)}>
           <option value="">All Statuses</option>
           <option value="ACTIVE">Active</option>
@@ -72,6 +76,7 @@ export function LicenseRegistry() {
           <option value="REVOKED">Revoked</option>
           <option value="EXPIRED">Expired</option>
         </select>
+        </ToolbarField>
         {canCreate ? (
           <Button type="button" size="sm" className="bg-blue-700 hover:bg-blue-800" onClick={() => setModalOpen(true)}>
             <Plus className="size-4" />
@@ -181,32 +186,44 @@ export function LicenseRegistry() {
         }
       >
         <div className="grid gap-3">
-          <select className={fieldClass} value={createForm.stationPublicId} onChange={(event) => setCreateForm({ ...createForm, stationPublicId: event.target.value })}>
-            <option value="">Select station</option>
-            {normalizeRows(data.profiles).map((station: any) => (
-              <option key={station.public_id} value={station.public_id}>
-                {station.name} {station.city ? `- ${station.city}` : ''}
-              </option>
-            ))}
-          </select>
-          <Input value={createForm.licenseNumber} onChange={(event) => setCreateForm({ ...createForm, licenseNumber: event.target.value })} placeholder="License number" />
+          <FieldShell label="Station" hint="Choose the licensed station. Example: select the operator outlet this licence authorizes.">
+            <select className={`${fieldClass} w-full`} value={createForm.stationPublicId} onChange={(event) => setCreateForm({ ...createForm, stationPublicId: event.target.value })}>
+              <option value="">Select station</option>
+              {normalizeRows(data.profiles).map((station: any) => (
+                <option key={station.public_id} value={station.public_id}>
+                  {station.name} {station.city ? `- ${station.city}` : ''}
+                </option>
+              ))}
+            </select>
+          </FieldShell>
+          <FieldShell label="License number" hint="Enter the official licence reference exactly as issued. Example: MERA-FS-LIL-2026-0142.">
+            <Input value={createForm.licenseNumber} onChange={(event) => setCreateForm({ ...createForm, licenseNumber: event.target.value })} placeholder="License number" />
+          </FieldShell>
           <div className="grid gap-3 md:grid-cols-2">
-            <input type="date" className={fieldClass} value={createForm.issueDate} onChange={(event) => setCreateForm({ ...createForm, issueDate: event.target.value })} />
-            <input type="date" className={fieldClass} value={createForm.expiryDate} onChange={(event) => setCreateForm({ ...createForm, expiryDate: event.target.value })} />
+            <FieldShell label="Issue date" hint="Record when the licence became valid. Example: the date on the MERA approval letter.">
+              <input type="date" className={`${fieldClass} w-full`} value={createForm.issueDate} onChange={(event) => setCreateForm({ ...createForm, issueDate: event.target.value })} />
+            </FieldShell>
+            <FieldShell label="Expiry date" hint="Record the final valid date for renewal tracking. Example: the expiry date printed on the licence certificate.">
+              <input type="date" className={`${fieldClass} w-full`} value={createForm.expiryDate} onChange={(event) => setCreateForm({ ...createForm, expiryDate: event.target.value })} />
+            </FieldShell>
           </div>
-          <select className={fieldClass} value={createForm.licenseStatus} onChange={(event) => setCreateForm({ ...createForm, licenseStatus: event.target.value })}>
-            <option value="ACTIVE">Active</option>
-            <option value="PENDING_RENEWAL">Pending Renewal</option>
-            <option value="SUSPENDED">Suspended</option>
-            <option value="REVOKED">Revoked</option>
-            <option value="EXPIRED">Expired</option>
-          </select>
-          <textarea
-            className="min-h-28 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700"
-            value={createForm.complianceConditions}
-            onChange={(event) => setCreateForm({ ...createForm, complianceConditions: event.target.value })}
-            placeholder="Compliance conditions..."
-          />
+          <FieldShell label="License status" hint="Set the current compliance standing. Example: Active for valid licences, Suspended for restricted operation.">
+            <select className={`${fieldClass} w-full`} value={createForm.licenseStatus} onChange={(event) => setCreateForm({ ...createForm, licenseStatus: event.target.value })}>
+              <option value="ACTIVE">Active</option>
+              <option value="PENDING_RENEWAL">Pending Renewal</option>
+              <option value="SUSPENDED">Suspended</option>
+              <option value="REVOKED">Revoked</option>
+              <option value="EXPIRED">Expired</option>
+            </select>
+          </FieldShell>
+          <FieldShell label="Compliance conditions" hint="Capture operating conditions or renewal requirements. Example: submit tank calibration certificate before renewal.">
+            <textarea
+              className="min-h-28 w-full rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700"
+              value={createForm.complianceConditions}
+              onChange={(event) => setCreateForm({ ...createForm, complianceConditions: event.target.value })}
+              placeholder="Compliance conditions..."
+            />
+          </FieldShell>
         </div>
       </ModalShell>
 
@@ -237,22 +254,30 @@ export function LicenseRegistry() {
             {selectedLicense?.licenseNumber || 'License'}
           </div>
           <div className="grid gap-3 md:grid-cols-2">
-            <input type="date" className={fieldClass} value={editForm.issueDate} onChange={(event) => setEditForm({ ...editForm, issueDate: event.target.value })} />
-            <input type="date" className={fieldClass} value={editForm.expiryDate} onChange={(event) => setEditForm({ ...editForm, expiryDate: event.target.value })} />
+            <FieldShell label="Issue date" hint="Update the licence start date when the source record changes. Example: corrected issue date from the signed certificate.">
+              <input type="date" className={`${fieldClass} w-full`} value={editForm.issueDate} onChange={(event) => setEditForm({ ...editForm, issueDate: event.target.value })} />
+            </FieldShell>
+            <FieldShell label="Expiry date" hint="Update the renewal deadline used by alerts. Example: revised expiry after renewal approval.">
+              <input type="date" className={`${fieldClass} w-full`} value={editForm.expiryDate} onChange={(event) => setEditForm({ ...editForm, expiryDate: event.target.value })} />
+            </FieldShell>
           </div>
-          <select className={fieldClass} value={editForm.licenseStatus} onChange={(event) => setEditForm({ ...editForm, licenseStatus: event.target.value })}>
-            <option value="ACTIVE">Active</option>
-            <option value="PENDING_RENEWAL">Pending Renewal</option>
-            <option value="SUSPENDED">Suspended</option>
-            <option value="REVOKED">Revoked</option>
-            <option value="EXPIRED">Expired</option>
-          </select>
-          <textarea
-            className="min-h-28 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700"
-            value={editForm.complianceConditions}
-            onChange={(event) => setEditForm({ ...editForm, complianceConditions: event.target.value })}
-            placeholder="Compliance conditions..."
-          />
+          <FieldShell label="License status" hint="Set the latest operating status. Example: Pending Renewal during renewal review, Revoked after final enforcement decision.">
+            <select className={`${fieldClass} w-full`} value={editForm.licenseStatus} onChange={(event) => setEditForm({ ...editForm, licenseStatus: event.target.value })}>
+              <option value="ACTIVE">Active</option>
+              <option value="PENDING_RENEWAL">Pending Renewal</option>
+              <option value="SUSPENDED">Suspended</option>
+              <option value="REVOKED">Revoked</option>
+              <option value="EXPIRED">Expired</option>
+            </select>
+          </FieldShell>
+          <FieldShell label="Compliance conditions" hint="Update any binding conditions the station must satisfy. Example: resolve storage safety defect before reinstatement.">
+            <textarea
+              className="min-h-28 w-full rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700"
+              value={editForm.complianceConditions}
+              onChange={(event) => setEditForm({ ...editForm, complianceConditions: event.target.value })}
+              placeholder="Compliance conditions..."
+            />
+          </FieldShell>
         </div>
       </ModalShell>
     </div>

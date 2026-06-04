@@ -1,13 +1,14 @@
 import { useEffect, useState } from "react"
 import InternalShell from "../components/InternalShell"
 import { DataTable, Panel } from "../components/PanelTable"
+import { formatCodeLabel } from "../utils/display"
 
 function inferColumns(rows) {
   const sample = rows?.[0]
   if (!sample) return []
   return Object.keys(sample)
     .slice(0, 6)
-    .map((key) => ({ key, label: key.replace(/_/g, " ") }))
+    .map((key) => ({ key, label: formatCodeLabel(key) }))
 }
 
 function renderPanelContent(value) {
@@ -19,7 +20,7 @@ function renderPanelContent(value) {
       <div className="summary-stack">
         {Object.entries(value).map(([key, item]) => (
           <article key={key}>
-            <strong>{key.replace(/_/g, " ")}</strong>
+            <strong>{formatCodeLabel(key)}</strong>
             <p>{typeof item === "object" ? JSON.stringify(item) : String(item)}</p>
           </article>
         ))}

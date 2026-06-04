@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { userQueueApi } from '../api/userQueueApi'
+import { fleetApi } from '../api/fleetApi'
 import { queueMockService } from '../queueMockService'
 import { formatDateTime } from '../dateTime'
 import { maskPublicId } from '../../utils/masking'
+import { useMiniRouter } from '../useMiniRouter'
 
 const ALERTS_RECONNECT_BACKOFF_MS = [1200, 2500, 5000, 9000, 15000]
 
@@ -62,6 +64,7 @@ function upsertAlert(list, incoming) {
 }
 
 export function AlertsScreen() {
+  const { navigate } = useMiniRouter()
   const alertsData = useMemo(() => (userQueueApi.isApiMode() ? userQueueApi : queueMockService), [])
   const reconnectAttemptRef = useRef(0)
   const reconnectTimerRef = useRef(0)
@@ -300,6 +303,47 @@ export function AlertsScreen() {
     }
   }, [alerts, alertsData])
 
+  const acceptFleetInvite = useCallback(async (alert) => {
+    const scopedAlertId = String(alert?.publicId || '').trim()
+    const invitationPublicId = String(alert?.metadata?.invitationPublicId || '').trim()
+    if (!scopedAlertId || !invitationPublicId) return
+
+    setBusyState({ alertId: scopedAlertId, action: 'fleet-invite' })
+    setError('')
+    try {
+      await fleetApi.acceptInvitation(invitationPublicId)
+      if (typeof alertsData.markAlertRead === 'function') {
+        await alertsData.markAlertRead(scopedAlertId).catch(() => null)
+      }
+      if (typeof alertsData.archiveAlert === 'function') {
+        await alertsData.archiveAlert(scopedAlertId).catch(() => null)
+      }
+      const acceptedAt = new Date().toISOString()
+      setAlerts((current) =>
+        current.map((item) =>
+          item.publicId === scopedAlertId
+            ? {
+                ...item,
+                isRead: true,
+                status: 'READ',
+                readAt: item.readAt || acceptedAt,
+                metadata: {
+                  ...(item.metadata || {}),
+                  acceptedAt,
+                  accepted: true,
+                },
+              }
+            : item,
+        ).filter((item) => item.publicId !== scopedAlertId || !alertsData.archiveAlert),
+      )
+      navigate('/m/fleet')
+    } catch (requestError) {
+      setError(requestError?.message || 'Unable to accept fleet invitation.')
+    } finally {
+      setBusyState({ alertId: '', action: '' })
+    }
+  }, [alertsData, navigate])
+
   const isBusy = useCallback(
     (alertId, action = '') => busyState.alertId === alertId && (!action || busyState.action === action),
     [busyState]
@@ -379,6 +423,16 @@ export function AlertsScreen() {
               ) : null}
 
               <div className='alert-action-row'>
+                {alert.metadata?.type === 'fleet_invitation' && alert.metadata?.invitationPublicId && !alert.metadata?.accepted ? (
+                  <button
+                    type='button'
+                    className='details-action-button is-primary'
+                    onClick={() => acceptFleetInvite(alert)}
+                    disabled={busyState.alertId === alert.publicId}
+                  >
+                    {isBusy(alert.publicId, 'fleet-invite') ? 'Accepting...' : 'Accept fleet invite'}
+                  </button>
+                ) : null}
                 {!alert.isRead ? (
                   <button
                     type='button'

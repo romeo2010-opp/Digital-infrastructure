@@ -49,6 +49,15 @@ export function badRequest(message) {
   return error
 }
 
+export function tooManyRequests(message, retryAfterSeconds = null) {
+  const error = new Error(message)
+  error.status = 429
+  if (retryAfterSeconds !== null && Number.isFinite(Number(retryAfterSeconds))) {
+    error.retryAfterSeconds = Math.max(1, Math.ceil(Number(retryAfterSeconds)))
+  }
+  return error
+}
+
 export function unauthorized(message) {
   const error = new Error(message)
   error.status = 401

@@ -683,16 +683,45 @@ export function UserDetailPage() {
   const { token, api } = usePortal()
   const { data, loading, error, retry } = useDetailLoader((signal) => api.getUserDetail(token, userPublicId, signal), [api, token, userPublicId])
   const user = data?.user
+  const tasks = normalizeRows(data?.tasks)
+  const completedTasks = tasks.filter((task: any) => ['COMPLETED', 'CLOSED', 'RESOLVED'].includes(String(task.status || '').toUpperCase()))
+  const overdueTasks = tasks.filter((task: any) => {
+    const due = task.due_at || task.dueAt
+    if (!due) return false
+    const dueMs = new Date(due).getTime()
+    if (!Number.isFinite(dueMs)) return false
+    const completedAt = task.completed_at || task.completedAt
+    if (completedAt) return new Date(completedAt).getTime() > dueMs
+    return dueMs < Date.now() && !['COMPLETED', 'CANCELLED', 'REJECTED', 'CLOSED'].includes(String(task.status || '').toUpperCase())
+  })
+  const ratingScore = tasks.length ? Math.max(0, Math.min(100, Math.round((completedTasks.length / tasks.length) * 82 + Math.min(completedTasks.length, 18) - (overdueTasks.length / tasks.length) * 38))) : 0
+  const ratingTier = ratingScore >= 90 ? 'Platinum' : ratingScore >= 76 ? 'Gold' : ratingScore >= 58 ? 'Silver' : ratingScore >= 40 ? 'Bronze' : 'Needs support'
   return (
     <DetailShell fallback="/user-administration" title={user?.full_name || 'MERA User'} subtitle={user?.email || user?.role_display_name || 'Officer record'}>
       {loading ? <LoadingState /> : error ? <ErrorState message={error} onRetry={retry} /> : data ? (
         <>
           <SectionCard title="Officer Summary" subtitle="MERA user account, scope, and recent work">
-            <div className="grid gap-4 px-4 py-3 text-xs md:grid-cols-4">
+            <div className="grid gap-3 px-4 py-3 text-xs md:grid-cols-4">
+              {[
+                ['Rating', `${ratingScore}/100`, ratingTier],
+                ['Tasks completed', completedTasks.length, `${tasks.length} assigned`],
+                ['Overdue handled', overdueTasks.length, 'deadline risk'],
+                ['District', user?.district_scope || 'National scope', user?.region_scope || ''],
+              ].map(([label, value, detail]) => (
+                <div key={label} className="rounded-[8px] border border-[#e5e7eb] bg-white px-4 py-3">
+                  <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6b7280]">{label}</div>
+                  <div className="mt-2 break-words text-[18px] font-semibold tracking-[-0.04em] text-[#111827]">{value}</div>
+                  {detail ? <div className="mt-1 break-words text-[11px] font-medium text-[#6b7280]">{detail}</div> : null}
+                </div>
+              ))}
+            </div>
+            <div className="grid gap-3 border-t border-[#f3f4f6] px-4 py-3 text-xs md:grid-cols-3">
               <div><div className="text-slate-500">Role</div><div className="mt-1">{renderPill(user?.role_display_name || user?.role_code)}</div></div>
               <div><div className="text-slate-500">Status</div><div className="mt-1">{renderPill(user?.account_status)}</div></div>
-              <div><div className="text-slate-500">District</div><div className="mt-1">{user?.district_scope || 'National scope'}</div></div>
-              <div><div className="text-slate-500">Phone</div><div className="mt-1">{user?.phone || '-'}</div></div>
+              <div><div className="text-slate-500">Phone</div><div className="mt-1 break-words">{user?.phone || '-'}</div></div>
+              <div><div className="text-slate-500">Gender</div><div className="mt-1 break-words">{user?.gender || user?.sex || 'Not captured'}</div></div>
+              <div><div className="text-slate-500">Date of birth</div><div className="mt-1 break-words">{user?.date_of_birth || user?.dateOfBirth || user?.dob || 'Not captured'}</div></div>
+              <div><div className="text-slate-500">Email</div><div className="mt-1 break-words">{user?.email || '-'}</div></div>
             </div>
           </SectionCard>
           <SectionCard title="Assigned Tasks" subtitle="Recent tasks assigned to this MERA user">

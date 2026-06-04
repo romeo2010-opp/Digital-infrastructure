@@ -52,6 +52,7 @@ export async function runMeraStationStatusLoggerTick({
   if (!result?.skipped) {
     publishMeraDashboardUpdate({
       source: "station_status_logger",
+      keys: ["nationalOperations", "heatmap", "overview", "flaggedStations"],
       result: {
         inserted: result?.inserted || 0,
         scanned: result?.scanned || 0,

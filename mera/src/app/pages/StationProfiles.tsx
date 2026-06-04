@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { Plus, Search } from 'lucide-react'
 import { useNavigate } from 'react-router'
 import { Input } from '../components/ui/input'
+import { ToolbarField } from '../components/FieldLabel'
 import { SectionCard } from '../components/SectionCard'
 import { PortalTable } from '../components/PortalTable'
 import { KpiDrilldownCard, KpiDrilldownDrawer, type DrilldownConfig } from '../components/KpiDrilldown'
@@ -23,7 +24,7 @@ function licenseStatus(station: any) {
 }
 
 export function StationProfiles() {
-  const { data, selectedProfile, selectedProfileEnforcement, openProfile, hasPermission, liveDataLoading } = usePortal()
+  const { data, selectedProfile, selectedProfileEnforcement, openProfile, hasPermission, packetStatus } = usePortal()
   const navigate = useNavigate()
   const [search, setSearch] = useState('')
   const [status, setStatus] = useState('')
@@ -39,7 +40,7 @@ export function StationProfiles() {
       }),
     [allStations, search, status],
   )
-  const isInitialLoading = liveDataLoading && !allStations.length
+  const isInitialLoading = packetStatus.profiles === 'loading' && data.profiles === undefined
   const activeRows = stations.filter((station: any) => ['ACTIVE', 'VALID'].includes(licenseStatus(station)))
   const expiredRows = stations.filter((station: any) => ['EXPIRED', 'REVOKED', 'SUSPENDED', 'UNLICENSED'].includes(licenseStatus(station)))
   const renewalRows = stations.filter((station: any) => ['PENDING', 'PENDING_RENEWAL'].includes(licenseStatus(station)))
@@ -92,10 +93,13 @@ export function StationProfiles() {
 
           <div className="rounded-[6px] border border-[#e2e8f0] bg-white px-3 py-2">
             <div className="flex flex-wrap items-center gap-2">
-              <div className="flex min-w-[280px] flex-1 items-center gap-2">
+              <ToolbarField label="Search stations" hint="Filter station profiles by station, operator, licence, district, or risk marker. Example: active licence or Mzuzu." className="min-w-[280px] flex-1">
+              <div className="flex items-center gap-2">
                 <Search className="size-4 text-[#9ca3af]" />
                 <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search stations, operators, licenses..." />
               </div>
+              </ToolbarField>
+              <ToolbarField label="Licence status" hint="Filter stations by licence status. Example: Expired, Suspended, or Pending Renewal.">
               <select value={status} onChange={(event) => setStatus(event.target.value)} className="h-9 rounded-[5px] border border-[#e2e8f0] bg-white px-3 text-[12px] font-semibold text-[#374151]">
                 <option value="">All Statuses</option>
                 <option value="ACTIVE">Active</option>
@@ -105,6 +109,7 @@ export function StationProfiles() {
                 <option value="SUSPENDED">Suspended</option>
                 <option value="UNLICENSED">Unlicensed</option>
               </select>
+              </ToolbarField>
             </div>
           </div>
 

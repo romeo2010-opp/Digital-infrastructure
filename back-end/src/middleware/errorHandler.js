@@ -16,6 +16,11 @@ export function errorHandler(err, req, res, _next) {
 
   const status = err.status || 500
   const message = err.message || "Internal Server Error"
+  const retryAfterSeconds = Number(err.retryAfterSeconds || 0)
+
+  if (status === 429 && retryAfterSeconds > 0) {
+    res.setHeader("Retry-After", String(Math.ceil(retryAfterSeconds)))
+  }
 
   if (status >= 500) {
     const safeError = {
@@ -33,5 +38,6 @@ export function errorHandler(err, req, res, _next) {
   res.status(status).json({
     ok: false,
     error: message,
+    ...(status === 429 && retryAfterSeconds > 0 ? { retryAfterSeconds: Math.ceil(retryAfterSeconds) } : {}),
   })
 }

@@ -44,6 +44,12 @@ import {
   STATION_PLAN_FEATURES,
 } from "../subscriptions/planCatalog.js"
 import { computeStationFuelStatuses } from "../stations/fuelStatus.js"
+import { validateDriverFleetQueueFunding } from "../fleet/service.js"
+import { getUserVehicleForQueue } from "../vehicles/service.js"
+import {
+  assignPumpForQueueTicket,
+  reassignPump,
+} from "../queue/smartPumpAssignmentService.js"
 import { publishUserAlert } from "../../realtime/userAlertsHub.js"
 import { getPushPublicKeyConfig, sendPushAlertToUser } from "../common/pushNotifications.js"
 import {
@@ -306,6 +312,7 @@ const checkInReservationBodySchema = z.object({
 })
 
 const joinBodySchema = z.object({
+  vehicleId: z.string().trim().min(1).max(64).optional(),
   fuelType: z
     .string()
     .trim()
@@ -315,6 +322,17 @@ const joinBodySchema = z.object({
   maskedPlate: z.string().trim().max(32).optional(),
   requestedLiters: z.number().positive().max(500).optional(),
   prepay: z.boolean().optional(),
+  fleetFunding: z
+    .object({
+      fleetId: z.string().trim().min(8).max(64),
+      vehicleId: z.string().trim().min(8).max(64),
+      fuelRequestId: z.string().trim().min(8).max(64),
+    })
+    .optional(),
+})
+
+const updateQueueVehicleBodySchema = z.object({
+  vehicleId: z.string().trim().min(1).max(64),
 })
 
 const leaveBodySchema = z.object({
@@ -1881,6 +1899,12 @@ export async function executeQueueJoinAction({
 
   const parsedBody = joinBodySchema.parse(body || {})
   const station = await resolveStationOrThrow(scopedStationPublicId)
+  const selectedVehicle = parsedBody.vehicleId
+    ? await getUserVehicleForQueue({ auth, vehicleId: parsedBody.vehicleId })
+    : null
+  const effectiveFuelType = selectedVehicle?.fuelType || parsedBody.fuelType
+  const effectiveMaskedPlate = selectedVehicle?.numberPlate || parsedBody.maskedPlate || null
+  const selectedVehicleInternalId = selectedVehicle?.internalId ? BigInt(selectedVehicle.internalId) : null
 
   if (parsedBody.prepay === true) {
     await ensureWalletTablesReady()
@@ -1926,20 +1950,32 @@ export async function executeQueueJoinAction({
 
   if (!Number(settings?.is_queue_enabled || 0)) throw badRequest("Queue is disabled")
   if (Number(settings?.joins_paused || 0)) throw badRequest("Queue joins are currently paused")
-  if (parsedBody.fuelType === "PETROL" && !Number(settings?.petrol_enabled || 0)) {
+  if (effectiveFuelType === "PETROL" && !Number(settings?.petrol_enabled || 0)) {
     throw badRequest("Petrol queue is disabled")
   }
-  if (parsedBody.fuelType === "DIESEL" && !Number(settings?.diesel_enabled || 0)) {
+  if (effectiveFuelType === "DIESEL" && !Number(settings?.diesel_enabled || 0)) {
     throw badRequest("Diesel queue is disabled")
   }
 
   const fuelStatuses = await listStationFuelStatusesForQueueJoin(station.id, settings)
   const selectedFuelStatus = (fuelStatuses || []).find(
-    (item) => String(item?.code || "").trim().toUpperCase() === parsedBody.fuelType
+    (item) => String(item?.code || "").trim().toUpperCase() === effectiveFuelType
   )
   if (String(selectedFuelStatus?.status || "").trim().toLowerCase() === "unavailable") {
-    throw badRequest(`${selectedFuelStatus?.label || parsedBody.fuelType} is unavailable at this station right now`)
+    throw badRequest(`${selectedFuelStatus?.label || effectiveFuelType} is unavailable at this station right now`)
   }
+
+  const fleetFunding = parsedBody.fleetFunding
+    ? await validateDriverFleetQueueFunding({
+        auth,
+        fleetId: parsedBody.fleetFunding.fleetId,
+        vehicleId: parsedBody.fleetFunding.vehicleId,
+        fuelRequestId: parsedBody.fleetFunding.fuelRequestId,
+        stationPublicId: scopedStationPublicId,
+        requestedLitres: parsedBody.requestedLiters || null,
+        fuelType: effectiveFuelType,
+      })
+    : null
 
   const activeCount = Number(activeCountRows?.[0]?.active_count || 0)
   if (activeCount >= Number(settings?.capacity || 100)) {
@@ -1947,7 +1983,7 @@ export async function executeQueueJoinAction({
   }
 
   const [fuelTypeId, maxPositionRows] = await Promise.all([
-    getFuelTypeId(parsedBody.fuelType),
+    getFuelTypeId(effectiveFuelType),
     prisma.$queryRaw`
       SELECT COALESCE(MAX(position), 0) AS max_position
       FROM queue_entries
@@ -1959,9 +1995,36 @@ export async function executeQueueJoinAction({
   const nextPosition = Number(maxPositionRows?.[0]?.max_position || 0) + 1
   const queueJoinId = createPublicId()
   const metadataPayload = {
-    paymentMode: parsedBody.prepay ? "PREPAY" : "PAY_AT_PUMP",
+    paymentMode: fleetFunding ? "FLEET_WALLET" : parsedBody.prepay ? "PREPAY" : "PAY_AT_PUMP",
     prepaySelected: Boolean(parsedBody.prepay),
     source,
+  }
+  if (selectedVehicle) {
+    metadataPayload.vehicle = {
+      id: selectedVehicle.id,
+      nickname: selectedVehicle.nickname,
+      make: selectedVehicle.make,
+      model: selectedVehicle.model,
+      vehicleType: selectedVehicle.vehicleType,
+      numberPlate: selectedVehicle.numberPlate,
+      fuelType: selectedVehicle.fuelType,
+      tankSide: selectedVehicle.tankSide,
+      tankSideConfidence: selectedVehicle.tankSideConfidence,
+      visualMockupKey: selectedVehicle.visualMockupKey,
+    }
+  }
+  if (fleetFunding) {
+    metadataPayload.prepaySelected = false
+    metadataPayload.fleetFunding = {
+      fleetPublicId: fleetFunding.fleet.publicId,
+      fleetName: fleetFunding.fleet.name,
+      vehiclePublicId: fleetFunding.vehicle.publicId,
+      plateNumber: fleetFunding.vehicle.plateNumber,
+      fuelRequestPublicId: fleetFunding.fuelRequest.publicId,
+      approvedAmount: fleetFunding.fuelRequest.requestedAmount,
+      approvedLitres: fleetFunding.fuelRequest.requestedLitres,
+      holdReference: fleetFunding.fuelRequest.holdReference,
+    }
   }
   if (parsedBody.requestedLiters) {
     metadataPayload.requestedLiters = Number(parsedBody.requestedLiters)
@@ -1978,18 +2041,20 @@ export async function executeQueueJoinAction({
       position,
       status,
       last_moved_at,
-      metadata
+      metadata,
+      vehicle_id
     )
     VALUES (
       ${station.id},
       ${queueJoinId},
       ${authUserId},
-      ${parsedBody.maskedPlate || null},
+      ${effectiveMaskedPlate},
       ${fuelTypeId},
       ${nextPosition},
       'WAITING',
       CURRENT_TIMESTAMP(3),
-      ${metadata}
+      ${metadata},
+      ${selectedVehicleInternalId}
     )
   `
 
@@ -1998,11 +2063,14 @@ export async function executeQueueJoinAction({
     actionType: "QUEUE_USER_JOIN",
     payload: {
       queueJoinId,
-      fuelType: parsedBody.fuelType,
+      fuelType: effectiveFuelType,
+      vehicleId: selectedVehicle?.id || null,
       userPublicId: auth?.userPublicId || null,
       source,
     },
   })
+
+  await assignPumpForQueueTicket(queueJoinId)
 
   const status = await buildUserQueueStatusSnapshot({
     queueJoinId,
@@ -2626,6 +2694,97 @@ export async function executeLeaveQueueAction({
   return {
     httpStatus: 200,
     left: true,
+    queueJoinId: scopedQueueJoinId,
+    status,
+  }
+}
+
+export async function executeUpdateQueueVehicleAction({
+  queueJoinId,
+  auth,
+  body,
+  source = "user_app",
+} = {}) {
+  const scopedQueueJoinId = String(queueJoinId || "").trim()
+  if (!scopedQueueJoinId) throw badRequest("queueJoinId is required")
+
+  const authUserId = Number(auth?.userId || 0)
+  if (!Number.isFinite(authUserId) || authUserId <= 0) {
+    throw badRequest("Authenticated user context is required")
+  }
+
+  const parsedBody = updateQueueVehicleBodySchema.parse(body || {})
+  const selectedVehicle = await getUserVehicleForQueue({ auth, vehicleId: parsedBody.vehicleId })
+  const vehicleInternalId = selectedVehicle?.internalId ? BigInt(selectedVehicle.internalId) : null
+  if (!vehicleInternalId) throw badRequest("Vehicle profile is required")
+
+  const entryRows = await prisma.$queryRaw`
+    SELECT id, station_id, status, metadata, assignment_locked_at
+    FROM queue_entries
+    WHERE public_id = ${scopedQueueJoinId}
+      AND user_id = ${authUserId}
+    LIMIT 1
+  `
+  const entry = entryRows?.[0]
+  if (!entry?.id) throw badRequest("Queue entry not found")
+  if (entry.assignment_locked_at) {
+    throw badRequest("Pump assignment is locked. Cancel and rejoin or ask the station manager for help.")
+  }
+
+  const queueStatus = String(entry.status || "").toUpperCase()
+  if (!ACTIVE_QUEUE_STATUSES.includes(queueStatus)) {
+    throw badRequest("Vehicle can only be changed while the queue ticket is active.")
+  }
+
+  const fuelTypeId = await getFuelTypeId(selectedVehicle.fuelType)
+  const metadata = parseJsonObject(entry.metadata)
+  metadata.vehicle = {
+    id: selectedVehicle.id,
+    nickname: selectedVehicle.nickname,
+    make: selectedVehicle.make,
+    model: selectedVehicle.model,
+    vehicleType: selectedVehicle.vehicleType,
+    numberPlate: selectedVehicle.numberPlate,
+    fuelType: selectedVehicle.fuelType,
+    tankSide: selectedVehicle.tankSide,
+    tankSideConfidence: selectedVehicle.tankSideConfidence,
+    visualMockupKey: selectedVehicle.visualMockupKey,
+    changedAt: new Date().toISOString(),
+    source,
+  }
+
+  await prisma.$executeRaw`
+    UPDATE queue_entries
+    SET vehicle_id = ${vehicleInternalId},
+        fuel_type_id = ${fuelTypeId},
+        masked_plate = ${selectedVehicle.numberPlate},
+        metadata = ${JSON.stringify(metadata)},
+        assignment_locked_at = NULL,
+        assignment_updated_at = CURRENT_TIMESTAMP(3)
+    WHERE id = ${entry.id}
+  `
+
+  await writeAuditLog({
+    stationId: entry.station_id,
+    actionType: "QUEUE_VEHICLE_CHANGED",
+    payload: {
+      queueJoinId: scopedQueueJoinId,
+      vehicleId: selectedVehicle.id,
+      fuelType: selectedVehicle.fuelType,
+      tankSide: selectedVehicle.tankSide,
+      userPublicId: auth?.userPublicId || null,
+      source,
+    },
+  })
+
+  await reassignPump(scopedQueueJoinId, "Vehicle changed before pump assignment lock.")
+  const status = await buildUserQueueStatusSnapshot({
+    queueJoinId: scopedQueueJoinId,
+    auth,
+  })
+
+  return {
+    httpStatus: 200,
     queueJoinId: scopedQueueJoinId,
     status,
   }
@@ -4134,6 +4293,21 @@ router.get(
     })
 
     return ok(res, status)
+  })
+)
+
+router.patch(
+  "/user/queue/:queueJoinId/vehicle",
+  asyncHandler(async (req, res) => {
+    const queueJoinId = String(req.params.queueJoinId || "").trim()
+    const result = await executeUpdateQueueVehicleAction({
+      queueJoinId,
+      auth: req.auth,
+      body: req.body,
+      source: "user_app",
+    })
+    const { httpStatus = 200, ...payload } = result
+    return ok(res, payload, httpStatus)
   })
 )
 

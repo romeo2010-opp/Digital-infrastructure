@@ -740,7 +740,7 @@ export const userQueueApi = {
     })
   },
 
-  async joinQueue({ stationPublicId, fuelType = 'PETROL', maskedPlate, requestedLiters, prepay } = {}) {
+  async joinQueue({ stationPublicId, vehicleId, fuelType = 'PETROL', maskedPlate, requestedLiters, prepay, fleetFunding } = {}) {
     const scopedStationId = String(stationPublicId || '').trim()
     if (!scopedStationId) throw new Error('stationPublicId is required to join queue')
     const scopedFuelType = String(fuelType || 'PETROL').trim().toUpperCase() || 'PETROL'
@@ -750,9 +750,11 @@ export const userQueueApi = {
       method: 'POST',
       body: {
         fuelType: scopedFuelType,
+        ...(vehicleId ? { vehicleId } : {}),
         maskedPlate,
         ...(hasRequestedLiters ? { requestedLiters: parsedRequestedLiters } : {}),
         ...(typeof prepay === 'boolean' ? { prepay } : {}),
+        ...(fleetFunding ? { fleetFunding } : {}),
       },
     })
   },
@@ -762,6 +764,18 @@ export const userQueueApi = {
     if (!scopedQueueJoinId) throw new Error('queueJoinId is required')
     return request(`/api/user/queue/${encodeURIComponent(scopedQueueJoinId)}/status`, {
       method: 'GET',
+      signal: options.signal,
+    })
+  },
+
+  async changeQueueVehicle(queueJoinId, vehicleId, options = {}) {
+    const scopedQueueJoinId = String(queueJoinId || '').trim()
+    const scopedVehicleId = String(vehicleId || '').trim()
+    if (!scopedQueueJoinId) throw new Error('queueJoinId is required')
+    if (!scopedVehicleId) throw new Error('vehicleId is required')
+    return request(`/api/user/queue/${encodeURIComponent(scopedQueueJoinId)}/vehicle`, {
+      method: 'PATCH',
+      body: { vehicleId: scopedVehicleId },
       signal: options.signal,
     })
   },

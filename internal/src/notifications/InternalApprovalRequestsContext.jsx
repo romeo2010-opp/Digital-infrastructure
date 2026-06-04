@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState } from 
 import { useNavigate } from "react-router-dom"
 import { internalApi } from "../api/internalApi"
 import { useInternalAuth } from "../auth/AuthContext"
-import { formatDateTime, formatRelative } from "../utils/display"
+import { formatCodeLabel, formatDateTime, formatRelative } from "../utils/display"
 import StatusPill from "../components/StatusPill"
 
 const POLL_INTERVAL_MS = 5000
@@ -68,7 +68,7 @@ function StationApprovalRequestModal({ request, error, onClose, onDecision, deci
           {error ? <p className="empty-cell">{error}</p> : null}
           <div className="settings-summary-list admin-detail-grid">
             <div><span>Request</span><strong>{request.publicId}</strong></div>
-            <div><span>Request Type</span><strong>{String(request.requestType || "").replace(/_/g, " ") || "-"}</strong></div>
+            <div><span>Request Type</span><strong>{formatCodeLabel(request.requestType)}</strong></div>
             <div><span>Station</span><strong>{request.stationName}</strong></div>
             <div><span>City</span><strong>{request.city || "Unknown"}</strong></div>
             <div><span>Requested by</span><strong>{request.requesterName}</strong></div>
@@ -86,7 +86,7 @@ function StationApprovalRequestModal({ request, error, onClose, onDecision, deci
             <span>Status detail</span>
             <strong>
               {request.decision
-                ? `${request.decision} ${request.decidedAt ? `on ${formatDateTime(request.decidedAt)}` : ""}`.trim()
+                ? `${formatCodeLabel(request.decision)} ${request.decidedAt ? `on ${formatDateTime(request.decidedAt)}` : ""}`.trim()
                 : `Pending review. Submitted ${formatRelative(request.createdAt)}.`}
             </strong>
           </div>
@@ -104,7 +104,7 @@ function StationApprovalRequestModal({ request, error, onClose, onDecision, deci
                   </button>
                 </>
               ) : (
-                <strong>{request.status === "OPEN" ? `Waiting for ${String(request.ownerRoleCode || "approver").replace(/_/g, " ")} review.` : "Decision recorded."}</strong>
+                <strong>{request.status === "OPEN" ? `Waiting for ${formatCodeLabel(request.ownerRoleCode || "approver")} review.` : "Decision recorded."}</strong>
               )}
             </div>
           </div>
@@ -157,7 +157,7 @@ function SupportEscalationRequestModal({ request, error, onClose, onRespond, onA
         <header className="internal-modal-header">
           <div className="internal-modal-header-copy">
             <h3>{request.subject}</h3>
-            <p>Escalated support ticket assigned to {String(request.ownerRoleCode || "this role").replace(/_/g, " ").toLowerCase()}.</p>
+            <p>Escalated support ticket assigned to {formatCodeLabel(request.ownerRoleCode || "this role")}.</p>
           </div>
           <div className="internal-modal-header-actions">
             <StatusPill value={request.casePriority} />
@@ -424,8 +424,8 @@ export function InternalApprovalRequestsProvider({ children }) {
           id: item.publicId,
           type: item.status === "OPEN" ? "ADMIN" : "INFO",
           title: item.title,
-          body: `${item.stationName} · ${String(item.requestType || "REQUEST").replace(/_/g, " ")} · requested by ${item.requesterName}`,
-          meta: item.decision ? `${item.decision} · ${formatDateTime(item.decidedAt || item.updatedAt)}` : formatRelative(item.createdAt),
+          body: `${item.stationName} · ${formatCodeLabel(item.requestType || "REQUEST")} · requested by ${item.requesterName}`,
+          meta: item.decision ? `${formatCodeLabel(item.decision)} · ${formatDateTime(item.decidedAt || item.updatedAt)}` : formatRelative(item.createdAt),
           isActionable: true,
           onOpen: () => setActiveRequestId(item.publicId),
         })),
@@ -444,7 +444,7 @@ export function InternalApprovalRequestsProvider({ children }) {
           id: item.publicId,
           type: "ADMIN",
           title: `${item.operationType === "REFUND_REQUEST" ? "Wallet refund approval" : "Wallet operation approval"}`,
-          body: `${item.walletPublicId} · ${item.walletOwnerName || "Unknown customer"} · ${String(item.operationType || "").replace(/_/g, " ")}`,
+          body: `${item.walletPublicId} · ${item.walletOwnerName || "Unknown customer"} · ${formatCodeLabel(item.operationType)}`,
           meta: `Pending ${formatRelative(item.createdAt)}`,
           isActionable: true,
           onOpen: () => navigate(`/wallet-operations?walletId=${encodeURIComponent(item.walletPublicId)}`),
@@ -536,6 +536,8 @@ export function InternalApprovalRequestsProvider({ children }) {
       activeSupportEscalation,
       notificationItems,
       refreshRequests,
+      refreshSupportEscalations,
+      refreshWalletApprovalRequests,
       openRequest,
       closeRequest,
       openSupportEscalation,

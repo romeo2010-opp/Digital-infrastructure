@@ -6,6 +6,7 @@ import { Input } from '../components/ui/input'
 import { Textarea } from '../components/ui/textarea'
 import { ModalShell } from '../components/ModalShell'
 import { PageBackButton } from '../components/PageBackButton'
+import { FieldShell, ToolbarField } from '../components/FieldLabel'
 import { PortalTable } from '../components/PortalTable'
 import { SectionCard } from '../components/SectionCard'
 import { Toolbar } from '../components/Toolbar'
@@ -155,31 +156,43 @@ function filterTasks(rows: any[], filters: any) {
 function TaskFilters({ filters, setFilters, includeAssignee = false, users = [] }: any) {
   return (
     <Toolbar>
-      <Input className="h-9 w-64" value={filters.search} onChange={(event) => setFilters({ ...filters, search: event.target.value })} placeholder="Search tasks..." />
+      <ToolbarField label="Search tasks" hint="Filter tasks by title, number, station, district, linked entity, or evidence text. Example: TASK-2026 or overpricing.">
+        <Input className="h-9 w-64" value={filters.search} onChange={(event) => setFilters({ ...filters, search: event.target.value })} placeholder="Search tasks..." />
+      </ToolbarField>
       {includeAssignee ? (
+        <ToolbarField label="Assignee" hint="Filter tasks by assigned MERA officer. Example: view work owned by one field officer.">
         <select className={fieldClass} value={filters.assignedTo} onChange={(event) => setFilters({ ...filters, assignedTo: event.target.value })}>
           <option value="">All assignees</option>
           {normalizeRows(users).map((user: any) => (
             <option key={user.publicId} value={user.publicId}>{user.fullName || user.name}</option>
           ))}
         </select>
+        </ToolbarField>
       ) : null}
+      <ToolbarField label="Status" hint="Filter by current task workflow state. Example: Escalated, In Progress, or Needs More Info.">
       <select className={fieldClass} value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })}>
         <option value="">All statuses</option>
         {statuses.map((status) => <option key={status} value={status}>{status}</option>)}
       </select>
+      </ToolbarField>
+      <ToolbarField label="Priority" hint="Filter tasks by urgency. Example: Critical for safety or high-risk enforcement work.">
       <select className={fieldClass} value={filters.priority} onChange={(event) => setFilters({ ...filters, priority: event.target.value })}>
         <option value="">All priorities</option>
         {priorities.map((priority) => <option key={priority} value={priority}>{priority}</option>)}
       </select>
+      </ToolbarField>
+      <ToolbarField label="Task type" hint="Filter by assignment category. Example: Station Inspection or Complaint Review.">
       <select className={fieldClass} value={filters.type} onChange={(event) => setFilters({ ...filters, type: event.target.value })}>
         <option value="">All types</option>
         {taskTypes.map((type) => <option key={type} value={type}>{type}</option>)}
       </select>
-      <label className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700">
-        <input type="checkbox" checked={filters.overdue} onChange={(event) => setFilters({ ...filters, overdue: event.target.checked })} />
-        Overdue
-      </label>
+      </ToolbarField>
+      <ToolbarField label="Overdue only" hint="Show only tasks past their due date and not yet closed. Example: overdue inspection assignments.">
+        <label className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700">
+          <input type="checkbox" checked={filters.overdue} onChange={(event) => setFilters({ ...filters, overdue: event.target.checked })} />
+          Overdue
+        </label>
+      </ToolbarField>
     </Toolbar>
   )
 }
@@ -316,16 +329,22 @@ export function TaskOperations() {
         }
       >
         <div className="grid gap-3">
-          <select className={fieldClass} value={manageForm.assignedToUserPublicId} onChange={(event) => setManageForm({ ...manageForm, assignedToUserPublicId: event.target.value })}>
-            <option value="">Select assignee</option>
-            {normalizeRows(data.assignableUsers).map((user: any) => (
-              <option key={user.publicId} value={user.publicId}>{user.fullName || user.name} - {user.roleDisplayName || user.role}</option>
-            ))}
-          </select>
-          <select className={fieldClass} value={manageForm.priority} onChange={(event) => setManageForm({ ...manageForm, priority: event.target.value })}>
-            {priorities.map((priority) => <option key={priority} value={priority}>{priority}</option>)}
-          </select>
-          <Input type="datetime-local" value={manageForm.dueAt} onChange={(event) => setManageForm({ ...manageForm, dueAt: event.target.value })} />
+          <FieldShell label="Assignee" hint="Choose the MERA officer who owns the task. Example: assign a field inspection follow-up to the district compliance officer.">
+            <select className={`${fieldClass} w-full`} value={manageForm.assignedToUserPublicId} onChange={(event) => setManageForm({ ...manageForm, assignedToUserPublicId: event.target.value })}>
+              <option value="">Select assignee</option>
+              {normalizeRows(data.assignableUsers).map((user: any) => (
+                <option key={user.publicId} value={user.publicId}>{user.fullName || user.name} - {user.roleDisplayName || user.role}</option>
+              ))}
+            </select>
+          </FieldShell>
+          <FieldShell label="Priority" hint="Use priority to signal urgency. Example: CRITICAL for safety risks or verified illegal vending; HIGH for urgent station follow-up.">
+            <select className={`${fieldClass} w-full`} value={manageForm.priority} onChange={(event) => setManageForm({ ...manageForm, priority: event.target.value })}>
+              {priorities.map((priority) => <option key={priority} value={priority}>{priority}</option>)}
+            </select>
+          </FieldShell>
+          <FieldShell label="Due date" hint="Set the expected completion deadline. Example: same day for an active shortage response, next week for a routine licence review.">
+            <Input type="datetime-local" value={manageForm.dueAt} onChange={(event) => setManageForm({ ...manageForm, dueAt: event.target.value })} />
+          </FieldShell>
           {selectedTask ? (
             <Button
               type="button"
@@ -372,39 +391,63 @@ export function CreateTask() {
     <div className="h-full overflow-y-auto p-4">
       <SectionCard title="Create Assignment" subtitle="Supervisor assignment form for regulatory casework and field action">
         <div className="grid gap-4 p-4 lg:grid-cols-2">
-          <Input value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} placeholder="Task title" />
-          <select className={fieldClass} value={form.type} onChange={(event) => setForm({ ...form, type: event.target.value })}>
-            {taskTypes.map((type) => <option key={type} value={type}>{type}</option>)}
-          </select>
-          <Input value={form.category} onChange={(event) => setForm({ ...form, category: event.target.value })} placeholder="Category" />
-          <select className={fieldClass} value={form.priority} onChange={(event) => setForm({ ...form, priority: event.target.value })}>
-            {priorities.map((priority) => <option key={priority} value={priority}>{priority}</option>)}
-          </select>
-          <select className={fieldClass} value={form.assignedToUserPublicId} onChange={(event) => setForm({ ...form, assignedToUserPublicId: event.target.value })}>
-            <option value="">Assign to officer</option>
-            {normalizeRows(data.assignableUsers).map((user: any) => (
-              <option key={user.publicId} value={user.publicId}>{user.fullName || user.name} - {user.roleDisplayName || user.role}</option>
-            ))}
-          </select>
-          <Input type="datetime-local" value={form.dueAt} onChange={(event) => setForm({ ...form, dueAt: event.target.value })} />
-          <Input value={form.district} onChange={(event) => setForm({ ...form, district: event.target.value })} placeholder="District" />
-          <select
-            className={fieldClass}
-            value={form.stationPublicId}
-            onChange={(event) => {
-              const station = normalizeRows(data.profiles).find((item: any) => item.public_id === event.target.value)
-              setForm({ ...form, stationPublicId: event.target.value, stationName: station?.name || form.stationName, district: station?.city || form.district })
-            }}
-          >
-            <option value="">No station selected</option>
-            {normalizeRows(data.profiles).map((station: any) => (
-              <option key={station.public_id} value={station.public_id}>{station.name} - {station.city || 'No district'}</option>
-            ))}
-          </select>
-          <Input value={form.linkedEntityType} onChange={(event) => setForm({ ...form, linkedEntityType: event.target.value })} placeholder="Linked entity type" />
-          <Input value={form.linkedEntityId} onChange={(event) => setForm({ ...form, linkedEntityId: event.target.value })} placeholder="Linked entity ID" />
-          <Textarea className="lg:col-span-2" value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} placeholder="Description" />
-          <Textarea className="lg:col-span-2" value={form.evidenceSummary} onChange={(event) => setForm({ ...form, evidenceSummary: event.target.value })} placeholder="Evidence summary" />
+          <FieldShell label="Task title" hint="Use a short action-oriented title. Example: Investigate pump price mismatch at Area 18 Total.">
+            <Input value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} placeholder="Task title" />
+          </FieldShell>
+          <FieldShell label="Task type" hint="Classify the work so it routes into the right operational bucket. Example: PRICE_VIOLATION_REVIEW for overpricing evidence.">
+            <select className={`${fieldClass} w-full`} value={form.type} onChange={(event) => setForm({ ...form, type: event.target.value })}>
+              {taskTypes.map((type) => <option key={type} value={type}>{type}</option>)}
+            </select>
+          </FieldShell>
+          <FieldShell label="Category" hint="Add a human-readable grouping for reporting. Example: Pricing, Hoarding, Queue Control, or Licensing.">
+            <Input value={form.category} onChange={(event) => setForm({ ...form, category: event.target.value })} placeholder="Category" />
+          </FieldShell>
+          <FieldShell label="Priority" hint="Set urgency based on public impact and risk. Example: CRITICAL for public safety, HIGH for active fuel manipulation.">
+            <select className={`${fieldClass} w-full`} value={form.priority} onChange={(event) => setForm({ ...form, priority: event.target.value })}>
+              {priorities.map((priority) => <option key={priority} value={priority}>{priority}</option>)}
+            </select>
+          </FieldShell>
+          <FieldShell label="Assigned officer" hint="Select the MERA officer responsible for the next action. Example: the district inspector covering the station.">
+            <select className={`${fieldClass} w-full`} value={form.assignedToUserPublicId} onChange={(event) => setForm({ ...form, assignedToUserPublicId: event.target.value })}>
+              <option value="">Assign to officer</option>
+              {normalizeRows(data.assignableUsers).map((user: any) => (
+                <option key={user.publicId} value={user.publicId}>{user.fullName || user.name} - {user.roleDisplayName || user.role}</option>
+              ))}
+            </select>
+          </FieldShell>
+          <FieldShell label="Due date" hint="Choose when the task should be completed. Example: today 17:00 for a shortage response, Friday 12:00 for documentation review.">
+            <Input type="datetime-local" value={form.dueAt} onChange={(event) => setForm({ ...form, dueAt: event.target.value })} />
+          </FieldShell>
+          <FieldShell label="District" hint="Limits the operational scope and reporting district. Example: Lilongwe, Blantyre, Mzuzu.">
+            <Input value={form.district} onChange={(event) => setForm({ ...form, district: event.target.value })} placeholder="District" />
+          </FieldShell>
+          <FieldShell label="Station" hint="Link a station when the task concerns a specific site. Example: selecting a station fills the station and district context.">
+            <select
+              className={`${fieldClass} w-full`}
+              value={form.stationPublicId}
+              onChange={(event) => {
+                const station = normalizeRows(data.profiles).find((item: any) => item.public_id === event.target.value)
+                setForm({ ...form, stationPublicId: event.target.value, stationName: station?.name || form.stationName, district: station?.city || form.district })
+              }}
+            >
+              <option value="">No station selected</option>
+              {normalizeRows(data.profiles).map((station: any) => (
+                <option key={station.public_id} value={station.public_id}>{station.name} - {station.city || 'No district'}</option>
+              ))}
+            </select>
+          </FieldShell>
+          <FieldShell label="Linked entity type" hint="Connect the source record type. Example: COMPLAINT, INSPECTION, COMPLIANCE_FLAG, STATION, or ENFORCEMENT_ACTION.">
+            <Input value={form.linkedEntityType} onChange={(event) => setForm({ ...form, linkedEntityType: event.target.value })} placeholder="Linked entity type" />
+          </FieldShell>
+          <FieldShell label="Linked entity ID" hint="Paste the public ID for the source record. Example: a complaint ID, inspection reference, or station public ID.">
+            <Input value={form.linkedEntityId} onChange={(event) => setForm({ ...form, linkedEntityId: event.target.value })} placeholder="Linked entity ID" />
+          </FieldShell>
+          <FieldShell className="lg:col-span-2" label="Description" hint="Explain what the officer should verify and what outcome is expected. Example: Confirm displayed petrol price and collect pump photo evidence.">
+            <Textarea value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} placeholder="Description" />
+          </FieldShell>
+          <FieldShell className="lg:col-span-2" label="Evidence summary" hint="Summarize the evidence that caused this task. Example: Three complaints and a station price report show MWK 150/litre above official price.">
+            <Textarea value={form.evidenceSummary} onChange={(event) => setForm({ ...form, evidenceSummary: event.target.value })} placeholder="Evidence summary" />
+          </FieldShell>
         </div>
         <div className="flex items-center justify-between border-t border-slate-200 px-4 py-3">
           <div className="text-xs font-medium text-slate-500">{message}</div>
@@ -469,52 +512,68 @@ export function TaskDetails() {
   if (!task) return <div className="p-4"><PageBackButton fallback="/tasks" /><div className="mt-4 text-sm text-slate-500">Task not found.</div></div>
 
   return (
-    <div className="flex h-full flex-col gap-4 overflow-y-auto p-4">
+    <div className="flex h-full flex-col gap-4 overflow-y-auto bg-white p-5 text-[#111827] lg:p-6">
       <PageBackButton fallback="/tasks" />
-      <div className="rounded-[6px] border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="overflow-hidden rounded-[8px] border border-[#e5e7eb] bg-white shadow-[0_16px_40px_rgba(15,23,42,0.05)]">
+        <div className="border-b border-[#f3f4f6] px-5 py-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <div className="text-xs font-bold uppercase tracking-[0.08em] text-slate-500">{task.taskNumber}</div>
-            <h2 className="mt-1 text-xl font-semibold text-slate-900">{task.title}</h2>
+          <div className="min-w-0">
+            <div className="text-[12px] font-semibold uppercase tracking-[0.1em] text-[#6b7280]">{task.taskNumber}</div>
+            <h2 className="mt-2 max-w-4xl break-words text-[26px] font-semibold tracking-[-0.05em] text-[#111827]">{task.title}</h2>
             <div className="mt-2 flex flex-wrap gap-2">{renderPill(task.status)}{taskPriorityPill(task.priority)}{renderPill(task.type)}{isOverdue(task) ? renderPill('OVERDUE') : null}</div>
           </div>
           <div className="flex flex-wrap gap-2">
             <Button type="button" variant="outline" onClick={() => navigate('/tasks/my')} disabled={actionLoading}>My Tasks</Button>
-            {canManage ? <Button type="button" className="bg-blue-700 hover:bg-blue-800" onClick={() => navigate('/tasks')} disabled={actionLoading}>Task Operations</Button> : null}
+            {canManage ? <Button type="button" className="bg-[#111111] hover:bg-[#2a2a2a]" onClick={() => navigate('/tasks')} disabled={actionLoading}>Task Operations</Button> : null}
           </div>
         </div>
-        <div className="mt-4 grid gap-3 text-xs md:grid-cols-4">
-          <div><span className="font-semibold text-slate-500">Due</span><div>{normalizeDate(task.dueAt)}</div></div>
-          <div><span className="font-semibold text-slate-500">Assigned Officer</span><div>{task.assignedTo?.fullName || '-'}</div></div>
-          <div><span className="font-semibold text-slate-500">Assigned By</span><div>{task.assignedBy?.fullName || '-'}</div></div>
-          <div><span className="font-semibold text-slate-500">District</span><div>{task.district || '-'}</div></div>
+        </div>
+        <div className="grid gap-3 bg-[#fafafa] px-5 py-4 md:grid-cols-4">
+          {[
+            ['Due', normalizeDate(task.dueAt), isOverdue(task) ? 'text-red-700' : 'text-[#111827]'],
+            ['Assigned officer', task.assignedTo?.fullName || '-', 'text-[#111827]'],
+            ['Assigned by', task.assignedBy?.fullName || '-', 'text-[#111827]'],
+            ['District', task.district || '-', 'text-[#111827]'],
+          ].map(([label, value, color]) => (
+            <div key={label} className="min-w-0 rounded-[8px] border border-[#e5e7eb] bg-white px-4 py-3">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6b7280]">{label}</div>
+              <div className={`mt-2 break-words text-[16px] font-semibold tracking-[-0.03em] ${color}`}>{value}</div>
+            </div>
+          ))}
         </div>
       </div>
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
         <div className="grid gap-4">
           <SectionCard title="Task Summary">
-            <div className="space-y-4 p-4 text-sm text-slate-700">
-              <p className="leading-6">{task.description}</p>
-              <div className="grid gap-3 text-xs md:grid-cols-3">
-                <div><span className="font-semibold text-slate-500">Station</span><div>{task.stationName || '-'}</div></div>
-                <div><span className="font-semibold text-slate-500">Linked Entity</span><div>{task.linkedEntityType || '-'} {task.linkedEntityId || ''}</div></div>
-                <div><span className="font-semibold text-slate-500">Category</span><div>{task.category || '-'}</div></div>
+            <div className="space-y-4 p-5 text-[13px] font-medium text-[#4b5563]">
+              <p className="break-words leading-6">{task.description}</p>
+              <div className="grid gap-3 md:grid-cols-3">
+                {[
+                  ['Station', task.stationName || '-'],
+                  ['Linked Entity', `${task.linkedEntityType || '-'} ${task.linkedEntityId || ''}`.trim()],
+                  ['Category', task.category || '-'],
+                ].map(([label, value]) => (
+                  <div key={label} className="min-w-0 rounded-[8px] border border-[#e5e7eb] bg-[#fafafa] px-4 py-3">
+                    <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6b7280]">{label}</div>
+                    <div className="mt-2 break-words text-[13px] font-semibold text-[#111827]">{value}</div>
+                  </div>
+                ))}
               </div>
-              {task.evidenceSummary ? <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-xs">{task.evidenceSummary}</div> : null}
+              {task.evidenceSummary ? <div className="rounded-[8px] border border-[#e5e7eb] bg-[#fafafa] p-3 text-[12px] leading-5 text-[#4b5563]">{task.evidenceSummary}</div> : null}
             </div>
           </SectionCard>
 
           <SectionCard title="Linked Record">
-            <div className="p-4 text-sm text-slate-700">
+            <div className="p-5 text-[13px] font-medium text-[#4b5563]">
               {task.linkedEntitySummary ? (
                 <div className="grid gap-2">
-                  <div className="font-semibold text-slate-900">{task.linkedEntitySummary.title || task.linkedEntitySummary.id}</div>
-                  <div>{task.linkedEntitySummary.description || 'No linked summary available.'}</div>
+                  <div className="break-words text-[15px] font-semibold text-[#111827]">{task.linkedEntitySummary.title || task.linkedEntitySummary.id}</div>
+                  <div className="break-words leading-6">{task.linkedEntitySummary.description || 'No linked summary available.'}</div>
                   <div className="flex gap-2">{task.linkedEntitySummary.status ? renderPill(task.linkedEntitySummary.status) : null}{task.linkedEntitySummary.priority ? taskPriorityPill(task.linkedEntitySummary.priority) : null}</div>
                 </div>
               ) : (
-                <span className="text-slate-500">No linked record.</span>
+                <span className="text-[#6b7280]">No linked record.</span>
               )}
             </div>
           </SectionCard>
@@ -529,7 +588,9 @@ export function TaskDetails() {
               )) : <div className="p-4 text-sm text-slate-500">No notes recorded.</div>}
             </div>
             <div className="border-t border-slate-200 p-4">
-              <Textarea value={note} onChange={(event) => setNote(event.target.value)} placeholder="Add note" disabled={actionLoading} />
+              <FieldShell label="Task note" hint="Add operational context or a handover update. Example: Called station manager; requested updated pump photo before 14:00.">
+                <Textarea value={note} onChange={(event) => setNote(event.target.value)} placeholder="Add note" disabled={actionLoading} />
+              </FieldShell>
               <div className="mt-2 flex justify-end">
                 <Button
                   type="button"
@@ -589,7 +650,9 @@ export function TaskDetails() {
 
           <SectionCard title="Completion Panel">
             <div className="grid gap-3 p-4">
-              <Textarea value={completionNotes} onChange={(event) => setCompletionNotes(event.target.value)} placeholder="Completion notes" disabled={actionLoading} />
+              <FieldShell label="Completion notes" hint="Record what was completed and the final finding. Example: Price corrected to official MERA rate; evidence attached.">
+                <Textarea value={completionNotes} onChange={(event) => setCompletionNotes(event.target.value)} placeholder="Completion notes" disabled={actionLoading} />
+              </FieldShell>
               <Button
                 type="button"
                 className="bg-emerald-700 hover:bg-emerald-800"
@@ -617,8 +680,12 @@ export function TaskDetails() {
               {!normalizeRows(task.evidence).length ? <div className="p-4 text-sm text-slate-500">No evidence attached.</div> : null}
             </div>
             <div className="grid gap-2 border-t border-slate-200 p-4">
-              <Input value={evidence.title} onChange={(event) => setEvidence({ ...evidence, title: event.target.value })} placeholder="Evidence title" disabled={actionLoading} />
-              <Input type="file" onChange={(event) => setEvidence({ ...evidence, file: event.target.files?.[0] || null })} disabled={actionLoading} />
+              <FieldShell label="Evidence title" hint="Name the file so reviewers know what it proves. Example: Pump price board photo, signed inspection sheet, or station manager statement.">
+                <Input value={evidence.title} onChange={(event) => setEvidence({ ...evidence, title: event.target.value })} placeholder="Evidence title" disabled={actionLoading} />
+              </FieldShell>
+              <FieldShell label="Evidence file" hint="Attach the document, image, or video supporting this task update. Example: JPG pump photo, PDF notice, or MP4 queue footage.">
+                <Input type="file" onChange={(event) => setEvidence({ ...evidence, file: event.target.files?.[0] || null })} disabled={actionLoading} />
+              </FieldShell>
               <Button
                 type="button"
                 size="sm"

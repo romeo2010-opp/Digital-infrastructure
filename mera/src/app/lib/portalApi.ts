@@ -17,8 +17,18 @@ function resolveApiOrigin() {
 export function resolvePortalAssetUrl(assetPath: string) {
   const raw = String(assetPath || '').trim()
   if (!raw) return ''
-  if (/^https?:\/\//i.test(raw)) return raw
-  return new URL(raw.startsWith('/') ? raw : `/${raw}`, resolveApiOrigin()).toString()
+  const apiOrigin = resolveApiOrigin()
+
+  try {
+    const parsed = new URL(raw, apiOrigin)
+    if (parsed.pathname.startsWith('/uploads/mera/')) {
+      return new URL(`${parsed.pathname}${parsed.search}${parsed.hash}`, apiOrigin).toString()
+    }
+    if (/^https?:\/\//i.test(raw)) return raw
+    return parsed.toString()
+  } catch {
+    return new URL(raw.startsWith('/') ? raw : `/${raw}`, apiOrigin).toString()
+  }
 }
 
 export function resolvePortalWebSocketUrl(pathname: string, params: Record<string, string> = {}) {
@@ -116,6 +126,10 @@ export const portalApi = {
     return request('/api/mera/snapshot', { token })
   },
 
+  getPacket(token: string, key: string, params: Record<string, any> = {}, signal?: AbortSignal) {
+    return request(`/api/mera/packets/${encodeURIComponent(key)}${queryString(params)}`, { token, signal })
+  },
+
   getMyPreferences(token: string) {
     return request('/api/mera/auth/preferences', { token })
   },
@@ -175,12 +189,20 @@ export const portalApi = {
     return request(`/api/mera/dashboard/national-operations${query ? `?${query}` : ''}`, { token, signal })
   },
 
+  getNationalConsumption(token: string, range = '7d', signal?: AbortSignal) {
+    return request(`/api/mera/national-consumption${queryString({ range })}`, { token, signal })
+  },
+
   quickSearch(token: string, query: string, limit = 10, signal?: AbortSignal) {
     return request(`/api/mera/search${queryString({ q: query, limit })}`, { token, signal })
   },
 
   fullSearch(token: string, filters: Record<string, any> = {}, signal?: AbortSignal) {
     return request(`/api/mera/search/full${queryString(filters)}`, { token, signal })
+  },
+
+  searchSuggestions(token: string, query: string, limit = 8, signal?: AbortSignal) {
+    return request(`/api/mera/search/suggestions${queryString({ q: query, limit })}`, { token, signal })
   },
 
   listTasks(token: string, filters: Record<string, any> = {}) {
@@ -270,8 +292,68 @@ export const portalApi = {
     return request(`/api/mera/hoarding-watchlist/${stationPublicId}`, { token })
   },
 
+  getRiskSummary(token: string, filters: Record<string, any> = {}) {
+    return request(`/api/mera/risk/summary${queryString(filters)}`, { token })
+  },
+
+  listRiskStations(token: string, filters: Record<string, any> = {}) {
+    return request(`/api/mera/risk/stations${queryString(filters)}`, { token })
+  },
+
+  getRiskStation(token: string, stationId: string) {
+    return request(`/api/mera/risk/stations/${encodeURIComponent(stationId)}`, { token })
+  },
+
+  recalculateRisk(token: string) {
+    return request('/api/mera/risk/recalculate', { method: 'POST', token })
+  },
+
+  getRiskWatchlist(token: string, filters: Record<string, any> = {}) {
+    return request(`/api/mera/risk/watchlist${queryString(filters)}`, { token })
+  },
+
+  listAlerts(token: string, filters: Record<string, any> = {}) {
+    return request(`/api/mera/alerts${queryString(filters)}`, { token })
+  },
+
+  acknowledgeAlert(token: string, id: string) {
+    return request(`/api/mera/alerts/${encodeURIComponent(id)}/acknowledge`, { method: 'POST', token })
+  },
+
+  dismissAlert(token: string, id: string, payload: any) {
+    return request(`/api/mera/alerts/${encodeURIComponent(id)}/dismiss`, { method: 'POST', token, body: payload })
+  },
+
+  openCaseFromAlert(token: string, id: string) {
+    return request(`/api/mera/alerts/${encodeURIComponent(id)}/open-case`, { method: 'POST', token })
+  },
+
+  assignInspectionFromAlert(token: string, id: string, payload: any = {}) {
+    return request(`/api/mera/alerts/${encodeURIComponent(id)}/assign-inspection`, { method: 'POST', token, body: payload })
+  },
+
   listFuelDeliveryLogs(token: string) {
     return request('/api/mera/fuel-delivery-logs', { token })
+  },
+
+  listFuelSupplyDeliveries(token: string, filters: Record<string, any> = {}) {
+    return request(`/api/mera/fuel-supply/deliveries${queryString(filters)}`, { token })
+  },
+
+  createFuelSupplyDelivery(token: string, payload: any) {
+    return request('/api/mera/fuel-supply/deliveries', { method: 'POST', token, body: payload })
+  },
+
+  updateFuelSupplyDelivery(token: string, id: string, payload: any) {
+    return request(`/api/mera/fuel-supply/deliveries/${encodeURIComponent(id)}`, { method: 'PATCH', token, body: payload })
+  },
+
+  getFuelSupplyTimeline(token: string, filters: Record<string, any> = {}) {
+    return request(`/api/mera/fuel-supply/timeline${queryString(filters)}`, { token })
+  },
+
+  getStationFuelSupply(token: string, stationId: string) {
+    return request(`/api/mera/fuel-supply/stations/${encodeURIComponent(stationId)}`, { token })
   },
 
   createFuelDeliveryLog(token: string, payload: any) {
@@ -288,6 +370,22 @@ export const portalApi = {
 
   listComplaints(token: string) {
     return request('/api/mera/complaints', { token })
+  },
+
+  listComplaintClusters(token: string, filters: Record<string, any> = {}) {
+    return request(`/api/mera/complaints/clusters${queryString(filters)}`, { token })
+  },
+
+  getComplaintTrends(token: string, filters: Record<string, any> = {}) {
+    return request(`/api/mera/complaints/trends${queryString(filters)}`, { token })
+  },
+
+  linkComplaintToCase(token: string, complaintPublicId: string, caseId: string) {
+    return request(`/api/mera/complaints/${encodeURIComponent(complaintPublicId)}/link-case`, {
+      method: 'POST',
+      token,
+      body: { caseId },
+    })
   },
 
   createComplaint(payload: any) {
@@ -319,6 +417,38 @@ export const portalApi = {
     return request('/api/mera/flags', { token })
   },
 
+  listCases(token: string, filters: Record<string, any> = {}) {
+    return request(`/api/mera/cases${queryString(filters)}`, { token })
+  },
+
+  createCase(token: string, payload: any) {
+    return request('/api/mera/cases', { method: 'POST', token, body: payload })
+  },
+
+  updateCase(token: string, caseId: string, payload: any) {
+    return request(`/api/mera/cases/${encodeURIComponent(caseId)}`, { method: 'PATCH', token, body: payload })
+  },
+
+  addCaseNote(token: string, caseId: string, payload: any) {
+    return request(`/api/mera/cases/${encodeURIComponent(caseId)}/notes`, { method: 'POST', token, body: payload })
+  },
+
+  addCaseEvidence(token: string, caseId: string, payload: any) {
+    return request(`/api/mera/cases/${encodeURIComponent(caseId)}/evidence`, { method: 'POST', token, body: payload })
+  },
+
+  escalateCase(token: string, caseId: string, payload: any = {}) {
+    return request(`/api/mera/cases/${encodeURIComponent(caseId)}/escalate`, { method: 'POST', token, body: payload })
+  },
+
+  closeCase(token: string, caseId: string, payload: any = {}) {
+    return request(`/api/mera/cases/${encodeURIComponent(caseId)}/close`, { method: 'POST', token, body: payload })
+  },
+
+  exportCaseEvidencePack(token: string, caseId: string) {
+    return request(`/api/mera/cases/${encodeURIComponent(caseId)}/evidence-pack`, { token })
+  },
+
   createFlag(token: string, payload: any) {
     return request('/api/mera/flags', { method: 'POST', token, body: payload })
   },
@@ -337,6 +467,22 @@ export const portalApi = {
 
   createInspection(token: string, payload: any) {
     return request('/api/mera/inspections', { method: 'POST', token, body: payload })
+  },
+
+  getInspection(token: string, id: string) {
+    return request(`/api/mera/inspections/${encodeURIComponent(id)}`, { token })
+  },
+
+  updateInspection(token: string, id: string, payload: any) {
+    return request(`/api/mera/inspections/${encodeURIComponent(id)}`, { method: 'PATCH', token, body: payload })
+  },
+
+  completeInspection(token: string, id: string, payload: any) {
+    return request(`/api/mera/inspections/${encodeURIComponent(id)}/complete`, { method: 'POST', token, body: payload })
+  },
+
+  getRecommendedInspections(token: string, filters: Record<string, any> = {}) {
+    return request(`/api/mera/inspections/recommended${queryString(filters)}`, { token })
   },
 
   listEnforcementActions(token: string) {
@@ -373,6 +519,90 @@ export const portalApi = {
 
   getTopComplaintStations(token: string) {
     return request('/api/mera/analytics/top-complaint-stations', { token })
+  },
+
+  listOfficialPrices(token: string, filters: Record<string, any> = {}) {
+    return request(`/api/mera/prices/official${queryString(filters)}`, { token })
+  },
+
+  createOfficialPrice(token: string, payload: any) {
+    return request('/api/mera/prices/official', { method: 'POST', token, body: payload })
+  },
+
+  listPriceCompliance(token: string, filters: Record<string, any> = {}) {
+    return request(`/api/mera/prices/compliance${queryString(filters)}`, { token })
+  },
+
+  listPriceViolations(token: string, filters: Record<string, any> = {}) {
+    return request(`/api/mera/prices/violations${queryString(filters)}`, { token })
+  },
+
+  getReportTypes(token: string) {
+    return request('/api/mera/reports/types', { token })
+  },
+
+  generateReport(token: string, payload: any) {
+    return request('/api/mera/reports/generate', { method: 'POST', token, body: payload })
+  },
+
+  listGeneratedReports(token: string, filters: Record<string, any> = {}) {
+    return request(`/api/mera/reports${queryString(filters)}`, { token })
+  },
+
+  getGeneratedReport(token: string, id: string) {
+    return request(`/api/mera/reports/${encodeURIComponent(id)}`, { token })
+  },
+
+  downloadGeneratedReport(token: string, id: string) {
+    return request(`/api/mera/reports/${encodeURIComponent(id)}/download`, { token })
+  },
+
+  listPublicNotices(token: string, filters: Record<string, any> = {}) {
+    return request(`/api/mera/public-notices${queryString(filters)}`, { token })
+  },
+
+  createPublicNotice(token: string, payload: any) {
+    return request('/api/mera/public-notices', { method: 'POST', token, body: payload })
+  },
+
+  updatePublicNotice(token: string, id: string, payload: any) {
+    return request(`/api/mera/public-notices/${encodeURIComponent(id)}`, { method: 'PATCH', token, body: payload })
+  },
+
+  submitPublicNotice(token: string, id: string) {
+    return request(`/api/mera/public-notices/${encodeURIComponent(id)}/submit`, { method: 'POST', token })
+  },
+
+  approvePublicNotice(token: string, id: string, payload: any = {}) {
+    return request(`/api/mera/public-notices/${encodeURIComponent(id)}/approve`, { method: 'POST', token, body: payload })
+  },
+
+  rejectPublicNotice(token: string, id: string, payload: any = {}) {
+    return request(`/api/mera/public-notices/${encodeURIComponent(id)}/reject`, { method: 'POST', token, body: payload })
+  },
+
+  publishPublicNotice(token: string, id: string) {
+    return request(`/api/mera/public-notices/${encodeURIComponent(id)}/publish`, { method: 'POST', token })
+  },
+
+  getPublicNoticeHistory(token: string, id: string) {
+    return request(`/api/mera/public-notices/${encodeURIComponent(id)}/history`, { token })
+  },
+
+  getFuelStressAnalytics(token: string) {
+    return request('/api/mera/analytics/fuel-stress', { token })
+  },
+
+  getDistrictAnalytics(token: string) {
+    return request('/api/mera/analytics/districts', { token })
+  },
+
+  getStationAnalytics(token: string) {
+    return request('/api/mera/analytics/stations', { token })
+  },
+
+  getTrendAnalytics(token: string) {
+    return request('/api/mera/analytics/trends', { token })
   },
 
   getDistrictShortageSummaries(token: string) {
@@ -432,6 +662,21 @@ export const portalApi = {
       method: 'PATCH',
       token,
       body: { accountStatus },
+    })
+  },
+
+  updateUserPermissions(token: string, publicId: string, payload: any) {
+    return request(`/api/mera/users/${encodeURIComponent(publicId)}/permissions`, {
+      method: 'PATCH',
+      token,
+      body: payload,
+    })
+  },
+
+  revokeUserSessions(token: string, publicId: string) {
+    return request(`/api/mera/users/${encodeURIComponent(publicId)}/sessions/revoke`, {
+      method: 'POST',
+      token,
     })
   },
 

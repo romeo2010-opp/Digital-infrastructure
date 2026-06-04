@@ -7,10 +7,10 @@ import {
   ArrowDown,
   ArrowUp,
   BellRing,
-  Bot,
   CalendarDays,
   CheckCircle2,
   ChevronDown,
+  ClipboardCheck,
   Clock3,
   Copy,
   Database,
@@ -61,7 +61,10 @@ import { portalApi } from '../lib/portalApi'
 import { useDashboardChrome } from '../lib/dashboardChrome'
 import { ModalShell } from '../components/ModalShell'
 import { Button } from '../components/ui/button'
-import { KpiDrilldownDrawer, type DrilldownConfig } from '../components/KpiDrilldown'
+import { FieldControl, FieldLabel, FieldShell } from '../components/FieldLabel'
+import { KpiDrilldownDrawer, renderDrilldownValue, type DrilldownConfig } from '../components/KpiDrilldown'
+import { MeraFuelHeatmap } from '../components/MeraFuelHeatmap'
+import { PortalTable } from '../components/PortalTable'
 import {
   Drawer,
   DrawerClose,
@@ -74,11 +77,6 @@ import {
 import {
   dateRangeFilters,
   districtFilters,
-  mockAnomalies,
-  mockComplianceMatrix,
-  mockIncidentQueue,
-  mockPriceVariance,
-  mockStationRisks,
   productFilters,
   savedNationalViews,
   widgetLibrary,
@@ -87,10 +85,11 @@ import {
   type StationRiskRow,
 } from '../data/nationalOperationsMock'
 
-const card = 'mera-glass-strong rounded-[10px] text-white shadow-[0_18px_52px_-34px_rgba(0,0,0,0.92)]'
-const commandSurface = 'mera-glass-strong rounded-[10px] text-white shadow-[0_18px_48px_-34px_rgba(0,0,0,0.9)]'
-const darkPanel = 'mera-glass-strong rounded-[10px] text-white shadow-[0_18px_52px_-34px_rgba(0,0,0,0.92)]'
-const lightPanel = 'overflow-hidden rounded-[6px] border border-[#e2e8f0] bg-white'
+const card = 'mera-glass-strong rounded-lg text-[#111827]'
+const commandSurface = 'mera-glass-strong rounded-lg text-[#111827]'
+const darkPanel = 'mera-glass-strong rounded-lg text-[#111827]'
+const lightPanel = 'overflow-hidden rounded-lg border border-[#e2e8f0] bg-white'
+const availabilityChartColors = ['#1D9E75', '#EF9F27', '#185FA5', '#E24B4A']
 
 type NationalCommandFilterState = {
   search: string
@@ -105,9 +104,12 @@ const availabilityIntervals = ['15m', '1h', '6h', '24h', '7d']
 const builtinDashboardTabs = [
   { id: 'builtin-my-view', label: 'My View', kind: 'builtin' as const },
   { id: 'builtin-national-overview', label: 'National Overview', kind: 'builtin' as const },
+  { id: 'builtin-tasks', label: 'Tasks', kind: 'builtin' as const },
+  { id: 'builtin-my-tasks', label: 'My Tasks', kind: 'builtin' as const },
+  { id: 'builtin-views', label: 'Views', kind: 'builtin' as const },
   { id: 'builtin-fuel-supply', label: 'Fuel Supply', kind: 'builtin' as const },
   { id: 'builtin-compliance-watch', label: 'Compliance Watch', kind: 'builtin' as const },
-  { id: 'builtin-enforcement', label: 'Enforcement', kind: 'builtin' as const },
+  { id: 'builtin-enforcement', label: 'Enforcement Watch', kind: 'builtin' as const },
 ]
 const dashboardCustomViewsStorageKey = 'meraDashboardCustomViews.v1'
 const dashboardPinnedTabsStorageKey = 'meraDashboardPinnedTabs.v1'
@@ -139,9 +141,18 @@ type DashboardViewBlock = {
   colorPreset?: DashboardColorPreset
 }
 
+type DashboardHeaderButton = {
+  id: string
+  label: string
+  path: string
+  variant: 'primary' | 'secondary'
+}
+
 type DashboardCustomView = {
   id: string
   label: string
+  subtitle?: string
+  headerButtons?: DashboardHeaderButton[]
   scopeType: DashboardScopeType
   scopeValue: string
   product: string
@@ -314,6 +325,11 @@ function formatKpiDelta(current: number, previous: number, suffix = '', maximumF
   return `${sign}${formatted}${suffix}`
 }
 
+function comparisonPrevious(comparisons: any, key: string, fallback: number) {
+  const value = Number(comparisons?.[key]?.previousValue)
+  return Number.isFinite(value) ? value : fallback
+}
+
 function formatChartTimestamp(value: any) {
   if (!value) return ''
   const date = new Date(value)
@@ -398,7 +414,7 @@ async function loadSmartlinkLogoPdfImage(): Promise<PdfLogoImage> {
   canvas.height = Math.max(1, Math.round(naturalHeight * scale))
   const context = canvas.getContext('2d')
   if (!context) throw new Error('PDF logo canvas is unavailable.')
-  context.fillStyle = '#ffffff'
+  context.fillStyle = 'rgb(255,255,255)'
   context.fillRect(0, 0, canvas.width, canvas.height)
   context.drawImage(image, 0, 0, canvas.width, canvas.height)
   const jpegDataUrl = canvas.toDataURL('image/jpeg', 0.92)
@@ -415,6 +431,12 @@ function pdfNumber(value: number) {
 }
 
 function hexToPdfColor(hex: string) {
+  const rgbMatch = hex.match(/^rgb\((\d+),\s*(\d+),\s*(\d+)\)$/i)
+  if (rgbMatch) {
+    const [, red, green, blue] = rgbMatch
+    return [red, green, blue].map((value) => pdfNumber(Number(value) / 255)).join(' ')
+  }
+
   const normalized = hex.replace('#', '')
   const expanded = normalized.length === 3
     ? normalized.split('').map((part) => `${part}${part}`).join('')
@@ -577,7 +599,7 @@ function buildAvailabilityExportPdf({
   const minAvailabilityPct = Math.min(...safeRows.map(availabilityPct))
   const avgAvailabilityPct = safeRows.reduce((sum, row) => sum + availabilityPct(row), 0) / Math.max(1, safeRows.length)
   const statusLabel = latestAvailabilityPct >= 90 ? 'Stable National Coverage' : latestAvailabilityPct >= 75 ? 'Watch Coverage' : 'Critical Coverage'
-  const statusColor = latestAvailabilityPct >= 90 ? '#0f9f58' : latestAvailabilityPct >= 75 ? '#b7791f' : '#b91c1c'
+  const statusColor = latestAvailabilityPct >= 90 ? '#1D9E75' : latestAvailabilityPct >= 75 ? '#EF9F27' : '#E24B4A'
   const plot = { left: 74, top: 228, right: 48, bottom: 178 }
   const plotWidth = width - plot.left - plot.right
   const plotHeight = height - plot.top - plot.bottom
@@ -599,7 +621,7 @@ function buildAvailabilityExportPdf({
   const addLine = (x1: number, y1: number, x2: number, y2: number, stroke: string, strokeWidth = 1, dash = '') => {
     commands.push(`q ${pdfStroke(stroke)} ${pdfNumber(strokeWidth)} w ${dash} ${pdfNumber(x1)} ${pdfNumber(pdfY(y1))} m ${pdfNumber(x2)} ${pdfNumber(pdfY(y2))} l S Q`)
   }
-  const addText = (text: any, x: number, y: number, size: number, color = '#050505', font = 'F1', align: 'left' | 'center' | 'right' = 'left') => {
+  const addText = (text: any, x: number, y: number, size: number, color = 'rgb(5,5,5)', font = 'F1', align: 'left' | 'center' | 'right' = 'left') => {
     const value = pdfText(text) || ' '
     const widthEstimate = value.length * size * (font === 'F2' ? 0.58 : 0.52)
     const tx = align === 'center' ? x - widthEstimate / 2 : align === 'right' ? x - widthEstimate : x
@@ -625,16 +647,16 @@ function buildAvailabilityExportPdf({
     commands.push(`q ${pdfFill(fill)} ${stroke ? pdfStroke(stroke) : ''} ${pdfNumber(strokeWidth)} w ${pdfNumber(x + radius)} ${pdfNumber(cy)} m ${pdfNumber(x + radius)} ${pdfNumber(cy + c)} ${pdfNumber(x + c)} ${pdfNumber(cy + radius)} ${pdfNumber(x)} ${pdfNumber(cy + radius)} c ${pdfNumber(x - c)} ${pdfNumber(cy + radius)} ${pdfNumber(x - radius)} ${pdfNumber(cy + c)} ${pdfNumber(x - radius)} ${pdfNumber(cy)} c ${pdfNumber(x - radius)} ${pdfNumber(cy - c)} ${pdfNumber(x - c)} ${pdfNumber(cy - radius)} ${pdfNumber(x)} ${pdfNumber(cy - radius)} c ${pdfNumber(x + c)} ${pdfNumber(cy - radius)} ${pdfNumber(x + radius)} ${pdfNumber(cy - c)} ${pdfNumber(x + radius)} ${pdfNumber(cy)} c ${stroke ? 'B' : 'f'} Q`)
   }
   const addMetricCard = (x: number, y: number, cardWidth: number, label: string, value: string, detail: string, accent: string) => {
-    addRect(x, y, cardWidth, 58, '#ffffff', '#d7dde5', 0.8)
+    addRect(x, y, cardWidth, 58, 'rgb(255,255,255)', 'rgb(215,221,229)', 0.8)
     addRect(x, y, 4, 58, accent)
-    addText(label.toUpperCase(), x + 15, y + 17, 7.6, '#657080', 'F2')
-    addText(value, x + 15, y + 40, 18, '#111827', 'F2')
-    addText(detail, x + cardWidth - 12, y + 39, 8.2, '#657080', 'F1', 'right')
+    addText(label.toUpperCase(), x + 15, y + 17, 7.6, 'rgb(101,112,128)', 'F2')
+    addText(value, x + 15, y + 40, 18, 'rgb(17,24,39)', 'F2')
+    addText(detail, x + cardWidth - 12, y + 39, 8.2, 'rgb(101,112,128)', 'F1', 'right')
   }
 
-  addRect(0, 0, width, height, '#eef3f7')
-  addRect(22, 22, width - 44, height - 44, '#ffffff', '#c8d2dc', 1)
-  addRect(22, 22, width - 44, 92, '#102033')
+  addRect(0, 0, width, height, 'rgb(238,243,247)')
+  addRect(22, 22, width - 44, height - 44, 'rgb(255,255,255)', 'rgb(200,210,220)', 1)
+  addRect(22, 22, width - 44, 92, 'rgb(16,32,51)')
   addRect(22, 112, width - 44, 3, statusColor)
 
   const logoX = 48
@@ -642,67 +664,67 @@ function buildAvailabilityExportPdf({
   if (logoImage) {
     commands.push(`q 34 0 0 34 ${pdfNumber(logoX)} ${pdfNumber(pdfY(logoY + 34))} cm /Im1 Do Q`)
   } else {
-    addRect(logoX, logoY, 34, 34, '#ffffff')
-    addText('S', logoX + 11, logoY + 23, 16, '#102033', 'F2')
+    addRect(logoX, logoY, 34, 34, 'rgb(255,255,255)')
+    addText('S', logoX + 11, logoY + 23, 16, 'rgb(16,32,51)', 'F2')
   }
-  addText('MERA NATIONAL FUEL INFRASTRUCTURE', logoX + 46, 49, 17, '#ffffff', 'F2')
-  addText('Availability and Delivery Verification Command Export', logoX + 46, 70, 9.2, '#b9c6d4')
-  addText(`Coverage Window: ${rangeLabel}`, logoX + 46, 91, 9.2, '#dce5ef', 'F2')
-  addRect(width - 212, 43, 164, 30, '#182c43', '#33506d', 0.8)
-  addText('NATIONAL LEVEL', width - 130, 62, 9, '#ffffff', 'F2', 'center')
-  addText(`Generated ${generatedLabel}`, width - 48, 92, 8.4, '#b9c6d4', 'F1', 'right')
+  addText('MERA NATIONAL FUEL INFRASTRUCTURE', logoX + 46, 49, 17, 'rgb(255,255,255)', 'F2')
+  addText('Availability and Delivery Verification Command Export', logoX + 46, 70, 9.2, 'rgb(185,198,212)')
+  addText(`Coverage Window: ${rangeLabel}`, logoX + 46, 91, 9.2, 'rgb(220,229,239)', 'F2')
+  addRect(width - 212, 43, 164, 30, 'rgb(24,44,67)', 'rgb(51,80,109)', 0.8)
+  addText('NATIONAL LEVEL', width - 130, 62, 9, 'rgb(255,255,255)', 'F2', 'center')
+  addText(`Generated ${generatedLabel}`, width - 48, 92, 8.4, 'rgb(185,198,212)', 'F1', 'right')
 
-  addMetricCard(48, 136, 174, 'Network Availability', `${latestAvailabilityPct.toFixed(1)}%`, `${number(latest.stationsWithFuel).toLocaleString()} / ${totalStations.toLocaleString()} stations`, '#0f9f58')
-  addMetricCard(236, 136, 174, 'Delivery Verified', `${latestVerifiedPct.toFixed(1)}%`, `${number(latest.deliveryVerifiedStationsWithFuel).toLocaleString()} verified`, '#2563eb')
-  addMetricCard(424, 136, 174, 'Availability Floor', `${minAvailabilityPct.toFixed(1)}%`, `avg ${avgAvailabilityPct.toFixed(1)}%`, '#64748b')
+  addMetricCard(48, 136, 174, 'Network Availability', `${latestAvailabilityPct.toFixed(1)}%`, `${number(latest.stationsWithFuel).toLocaleString()} / ${totalStations.toLocaleString()} stations`, '#1D9E75')
+  addMetricCard(236, 136, 174, 'Delivery Verified', `${latestVerifiedPct.toFixed(1)}%`, `${number(latest.deliveryVerifiedStationsWithFuel).toLocaleString()} verified`, '#185FA5')
+  addMetricCard(424, 136, 174, 'Availability Floor', `${minAvailabilityPct.toFixed(1)}%`, `avg ${avgAvailabilityPct.toFixed(1)}%`, 'rgb(100,116,139)')
   addMetricCard(612, 136, 182, 'Operational Gap', availabilityGap.toLocaleString(), statusLabel, statusColor)
 
-  addText('National Availability Corridor', 48, 214, 13.5, '#111827', 'F2')
-  addText('Stations carrying fuel as a share of the active national network. Threshold bands are regulator operating bands.', 48, 230, 8.2, '#64748b')
-  addRect(plot.left, plot.top, plotWidth, plotHeight, '#fbfdff', '#d4dde7', 0.9)
-  addRect(plot.left, yForPct(100), plotWidth, yForPct(90) - yForPct(100), '#edf9f1')
-  addRect(plot.left, yForPct(90), plotWidth, yForPct(75) - yForPct(90), '#fff8df')
-  addRect(plot.left, yForPct(75), plotWidth, yForPct(0) - yForPct(75), '#fff1f0')
-  addText('Stable', plot.left + plotWidth - 10, yForPct(96), 7.2, '#0f9f58', 'F2', 'right')
-  addText('Watch', plot.left + plotWidth - 10, yForPct(84), 7.2, '#b7791f', 'F2', 'right')
-  addText('Critical', plot.left + plotWidth - 10, yForPct(52), 7.2, '#b91c1c', 'F2', 'right')
+  addText('National Availability Corridor', 48, 214, 13.5, 'rgb(17,24,39)', 'F2')
+  addText('Stations carrying fuel as a share of the active national network. Threshold bands are regulator operating bands.', 48, 230, 8.2, 'rgb(100,116,139)')
+  addRect(plot.left, plot.top, plotWidth, plotHeight, 'rgb(251,253,255)', 'rgb(212,221,231)', 0.9)
+  addRect(plot.left, yForPct(100), plotWidth, yForPct(90) - yForPct(100), 'rgb(237,249,241)')
+  addRect(plot.left, yForPct(90), plotWidth, yForPct(75) - yForPct(90), 'rgb(255,248,223)')
+  addRect(plot.left, yForPct(75), plotWidth, yForPct(0) - yForPct(75), 'rgb(255,241,240)')
+  addText('Stable', plot.left + plotWidth - 10, yForPct(96), 7.2, '#1D9E75', 'F2', 'right')
+  addText('Watch', plot.left + plotWidth - 10, yForPct(84), 7.2, '#EF9F27', 'F2', 'right')
+  addText('Critical', plot.left + plotWidth - 10, yForPct(52), 7.2, '#E24B4A', 'F2', 'right')
 
   yTicks.forEach((tick) => {
     const y = yForPct(tick)
-    addLine(plot.left, y, plot.left + plotWidth, y, tick === 75 || tick === 90 ? '#b9c4cf' : '#e2e8f0', tick === 75 || tick === 90 ? 0.95 : 0.55, tick === 75 || tick === 90 ? '[4 3] 0 d' : '')
-    addText(`${tick}%`, plot.left - 13, y + 3, 8, '#667085', 'F1', 'right')
+    addLine(plot.left, y, plot.left + plotWidth, y, tick === 75 || tick === 90 ? 'rgb(185,196,207)' : 'rgb(226,232,240)', tick === 75 || tick === 90 ? 0.95 : 0.55, tick === 75 || tick === 90 ? '[4 3] 0 d' : '')
+    addText(`${tick}%`, plot.left - 13, y + 3, 8, 'rgb(102,112,133)', 'F1', 'right')
   })
   xTicks.forEach(({ row, index }) => {
     const x = xFor(index)
-    addLine(x, plot.top, x, plot.top + plotHeight, '#eef2f7', 0.4)
-    addText(row.label, x, plot.top + plotHeight + 18, 7.5, '#667085', 'F1', 'center')
+    addLine(x, plot.top, x, plot.top + plotHeight, 'rgb(238,242,247)', 0.4)
+    addText(row.label, x, plot.top + plotHeight + 18, 7.5, 'rgb(102,112,133)', 'F1', 'center')
   })
 
-  addFilledSeries(fuelPoints, plot.top + plotHeight, '#c8f4d6')
-  addPolyline(fuelPoints, '#0f9f58', 2.8)
-  addPolyline(verifiedPoints, '#2563eb', 2.2)
-  if (fuelPoints.length <= 72) fuelPoints.forEach((point) => addCircle(point.x, point.y, 2.7, '#ffffff', '#0f9f58', 1.2))
-  if (verifiedPoints.length <= 72) verifiedPoints.forEach((point) => addCircle(point.x, point.y, 2.2, '#ffffff', '#2563eb', 1.1))
+  addFilledSeries(fuelPoints, plot.top + plotHeight, 'rgb(200,244,214)')
+  addPolyline(fuelPoints, '#1D9E75', 2.8)
+  addPolyline(verifiedPoints, '#185FA5', 2.2)
+  if (fuelPoints.length <= 72) fuelPoints.forEach((point) => addCircle(point.x, point.y, 2.7, 'rgb(255,255,255)', '#1D9E75', 1.2))
+  if (verifiedPoints.length <= 72) verifiedPoints.forEach((point) => addCircle(point.x, point.y, 2.2, 'rgb(255,255,255)', '#185FA5', 1.1))
 
   const legendY = 432
-  addRect(48, legendY, 252, 34, '#ffffff', '#d7dde5', 0.8)
-  addCircle(66, legendY + 17, 4, '#0f9f58')
-  addText('National availability', 80, legendY + 21, 8.8, '#111827', 'F2')
-  addText('stations carrying fuel / active network', 184, legendY + 21, 7.4, '#667085')
-  addRect(312, legendY, 216, 34, '#ffffff', '#d7dde5', 0.8)
-  addCircle(330, legendY + 17, 4, '#2563eb')
-  addText('Delivery verified', 344, legendY + 21, 8.8, '#111827', 'F2')
-  addText('recent delivery evidence', 432, legendY + 21, 7.4, '#667085')
-  addRect(540, legendY, 254, 34, '#ffffff', '#d7dde5', 0.8)
-  addText('Thresholds', 558, legendY + 21, 8.8, '#111827', 'F2')
-  addText('90% stable | 75% watch | below 75% critical', 620, legendY + 21, 7.4, '#667085')
+  addRect(48, legendY, 252, 34, 'rgb(255,255,255)', 'rgb(215,221,229)', 0.8)
+  addCircle(66, legendY + 17, 4, '#1D9E75')
+  addText('National availability', 80, legendY + 21, 8.8, 'rgb(17,24,39)', 'F2')
+  addText('stations carrying fuel / active network', 184, legendY + 21, 7.4, 'rgb(102,112,133)')
+  addRect(312, legendY, 216, 34, 'rgb(255,255,255)', 'rgb(215,221,229)', 0.8)
+  addCircle(330, legendY + 17, 4, '#185FA5')
+  addText('Delivery verified', 344, legendY + 21, 8.8, 'rgb(17,24,39)', 'F2')
+  addText('recent delivery evidence', 432, legendY + 21, 7.4, 'rgb(102,112,133)')
+  addRect(540, legendY, 254, 34, 'rgb(255,255,255)', 'rgb(215,221,229)', 0.8)
+  addText('Thresholds', 558, legendY + 21, 8.8, 'rgb(17,24,39)', 'F2')
+  addText('90% stable | 75% watch | below 75% critical', 620, legendY + 21, 7.4, 'rgb(102,112,133)')
 
   const tableX = 48
   const tableY = 476
   const rowHeight = 7.8
-  addText('Recent National Data Points', tableX, tableY - 10, 9.6, '#111827', 'F2')
-  addRect(tableX, tableY, width - 96, 18 + tableRows.length * rowHeight, '#ffffff', '#d7dde5', 0.8)
-  addRect(tableX, tableY, width - 96, 18, '#f1f5f9')
+  addText('Recent National Data Points', tableX, tableY - 10, 9.6, 'rgb(17,24,39)', 'F2')
+  addRect(tableX, tableY, width - 96, 18 + tableRows.length * rowHeight, 'rgb(255,255,255)', 'rgb(215,221,229)', 0.8)
+  addRect(tableX, tableY, width - 96, 18, 'rgb(241,245,249)')
   const columns = [
     { label: 'Time', x: tableX + 14, align: 'left' as const },
     { label: 'Available', x: tableX + 190, align: 'right' as const },
@@ -711,21 +733,21 @@ function buildAvailabilityExportPdf({
     { label: 'Verified %', x: tableX + 574, align: 'right' as const },
     { label: 'Active Network', x: tableX + 720, align: 'right' as const },
   ]
-  columns.forEach((column) => addText(column.label, column.x, tableY + 12, 7.2, '#475467', 'F2', column.align))
+  columns.forEach((column) => addText(column.label, column.x, tableY + 12, 7.2, 'rgb(71,84,103)', 'F2', column.align))
   tableRows.forEach((row, index) => {
     const y = tableY + 28 + index * rowHeight
-    if (index % 2 === 0) addRect(tableX + 1, y - 7, width - 98, rowHeight, '#fbfdff')
-    addText(row.label, tableX + 14, y, 7.2, '#1f2937')
-    addText(number(row.stationsWithFuel).toLocaleString(), tableX + 190, y, 7.2, '#1f2937', 'F1', 'right')
-    addText(`${availabilityPct(row).toFixed(1)}%`, tableX + 312, y, 7.2, '#0f9f58', 'F2', 'right')
-    addText(number(row.deliveryVerifiedStationsWithFuel).toLocaleString(), tableX + 452, y, 7.2, '#1f2937', 'F1', 'right')
-    addText(`${verifiedPct(row).toFixed(1)}%`, tableX + 574, y, 7.2, '#2563eb', 'F2', 'right')
-    addText(number(row.totalStations, totalStations).toLocaleString(), tableX + 720, y, 7.2, '#1f2937', 'F1', 'right')
+    if (index % 2 === 0) addRect(tableX + 1, y - 7, width - 98, rowHeight, 'rgb(251,253,255)')
+    addText(row.label, tableX + 14, y, 7.2, 'rgb(31,41,55)')
+    addText(number(row.stationsWithFuel).toLocaleString(), tableX + 190, y, 7.2, 'rgb(31,41,55)', 'F1', 'right')
+    addText(`${availabilityPct(row).toFixed(1)}%`, tableX + 312, y, 7.2, '#1D9E75', 'F2', 'right')
+    addText(number(row.deliveryVerifiedStationsWithFuel).toLocaleString(), tableX + 452, y, 7.2, 'rgb(31,41,55)', 'F1', 'right')
+    addText(`${verifiedPct(row).toFixed(1)}%`, tableX + 574, y, 7.2, '#185FA5', 'F2', 'right')
+    addText(number(row.totalStations, totalStations).toLocaleString(), tableX + 720, y, 7.2, 'rgb(31,41,55)', 'F1', 'right')
   })
 
-  addLine(48, height - 34, width - 48, height - 34, '#cfd8e3', 0.8)
-  addText('Smartlink MERA Portal | National operations export | Inventory-derived availability and delivery verification series.', 48, height - 18, 7.6, '#667085')
-  addText('For operational oversight and infrastructure planning use.', width - 48, height - 18, 7.6, '#667085', 'F1', 'right')
+  addLine(48, height - 34, width - 48, height - 34, 'rgb(207,216,227)', 0.8)
+  addText('Smartlink MERA Portal | National operations export | Inventory-derived availability and delivery verification series.', 48, height - 18, 7.6, 'rgb(102,112,133)')
+  addText('For operational oversight and infrastructure planning use.', width - 48, height - 18, 7.6, 'rgb(102,112,133)', 'F1', 'right')
 
   return createPdfDocument({
     width,
@@ -781,8 +803,8 @@ function Sparkline({ data = [], color }: { data?: number[]; color: string }) {
 function PanelHeader({ title, action = 'View all' }: { title: string; action?: string }) {
   return (
     <div className="mb-3 flex h-5 items-center justify-between">
-      <h2 className="text-[14px] font-semibold uppercase tracking-[-0.02em] text-[var(--mera-panel-text)]">{title}</h2>
-      <button type="button" className="rounded-[5px] px-1.5 py-0.5 text-[12px] font-medium text-[var(--mera-info)] transition duration-150 hover:bg-[var(--mera-hover)] hover:text-[var(--mera-panel-text)]">{action}</button>
+      <h2 className="text-[14px] font-medium uppercase tracking-[0] text-[#111827]">{title}</h2>
+      <button type="button" className="rounded-md px-1.5 py-0.5 text-[12px] font-medium text-[#2563eb] transition duration-150 hover:bg-[#f9fafb] hover:text-[#111827]">{action}</button>
     </div>
   )
 }
@@ -853,21 +875,21 @@ function FuelAvailabilityOverview({
     <section className={`${card} ${mode === 'history' ? 'min-h-[292px]' : 'h-[228px] overflow-hidden'} p-4 ${className}`}>
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
-          <h2 className="truncate text-[14px] font-semibold uppercase tracking-[-0.02em] text-[var(--mera-panel-text)]">Fuel Availability Overview</h2>
-          <div className="mt-1 truncate text-[12px] text-[var(--mera-panel-text-muted)]">
+          <h2 className="truncate text-[14px] font-medium uppercase tracking-[0] text-[#111827]">Fuel Availability Overview</h2>
+          <div className="mt-1 truncate text-[12px] text-[#6b7280]">
             {mode === 'history' ? 'National availability percentage against time' : 'By fuel type'}
           </div>
         </div>
         {mode === 'history' ? (
           <div className="flex max-w-full shrink-0 flex-wrap items-center gap-2">
-            <div className="flex max-w-full shrink-0 overflow-x-auto rounded-[6px] border border-[var(--mera-panel-border)] bg-[var(--mera-panel)] p-0.5">
+            <div className="flex max-w-full shrink-0 overflow-x-auto rounded-md border border-[#e2e8f0] bg-white p-0.5">
               {availabilityIntervals.map((interval) => (
                 <button
                   key={interval}
                   type="button"
                   onClick={() => onIntervalChange?.(interval)}
-                  className={`h-6 rounded-[5px] px-2 text-[10px] font-semibold transition ${
-                    selectedInterval === interval ? 'bg-[var(--mera-shell-active)] text-[var(--mera-brand)]' : 'text-[var(--mera-panel-text-muted)] hover:text-[var(--mera-panel-text)]'
+                  className={`h-6 rounded-md px-2 text-[10px] font-medium transition ${
+                    selectedInterval === interval ? 'bg-[#111827] text-white' : 'text-[#6b7280] hover:text-[#111827]'
                   }`}
                 >
                   {interval}
@@ -876,7 +898,7 @@ function FuelAvailabilityOverview({
             </div>
             <button
               type="button"
-              className="inline-flex h-7 items-center gap-1.5 rounded-[6px] border border-[var(--mera-panel-border)] bg-[var(--mera-panel)] px-2.5 text-[11px] font-semibold text-[var(--mera-panel-text)] transition hover:bg-[var(--mera-hover)]"
+              className="inline-flex h-7 items-center gap-1.5 rounded-md border border-[#e2e8f0] bg-white px-2.5 text-[11px] font-medium text-[#111827] transition hover:bg-[#f9fafb]"
               onClick={() => setExportOpen(true)}
             >
               <Download className="size-3.5" />
@@ -889,26 +911,26 @@ function FuelAvailabilityOverview({
         <>
           <div className="mt-3 flex min-w-0 items-end justify-between gap-3">
             <div className="min-w-0">
-              <div className="text-[26px] font-semibold leading-none tracking-[-0.04em] text-[var(--mera-panel-text)]">
+              <div className="text-[26px] font-medium leading-none tracking-[0] text-[#111827]">
                 {number(latest.stationsWithFuel).toLocaleString()}
               </div>
-              <div className="mt-1 truncate text-[11px] text-[var(--mera-panel-text-muted)]">
+              <div className="mt-1 truncate text-[11px] text-[#6b7280]">
                 of {number(latest.totalStations).toLocaleString()} stations currently carrying fuel
               </div>
-              <div className="mt-1 inline-flex items-center gap-2 text-[11px] text-[var(--mera-panel-text-muted)]">
-                <span className="h-px w-5 bg-[var(--mera-info)]" />
+              <div className="mt-1 inline-flex items-center gap-2 text-[11px] text-[#6b7280]">
+                <span className="h-px w-5 bg-accent-primary" />
                 {number(latest.deliveryVerifiedStationsWithFuel).toLocaleString()} delivery-verified
               </div>
             </div>
-            {loading ? <div className="text-[11px] font-medium text-[var(--mera-info)]">Updating</div> : null}
+            {loading ? <div className="text-[11px] font-medium text-[#2563eb]">Updating</div> : null}
           </div>
           <div className="mt-3 h-[176px] min-h-[176px] min-w-0 overflow-visible pb-1">
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={chartRows} margin={{ top: 10, right: 14, bottom: 8, left: 2 }}>
                 <defs>
                   <linearGradient id="availabilityFuelFill" x1="0" x2="0" y1="0" y2="1">
-                    <stop offset="0%" stopColor="#32db64" stopOpacity={0.28} />
-                    <stop offset="78%" stopColor="#32db64" stopOpacity={0.03} />
+                    <stop offset="0%" stopColor={'#1D9E75'} stopOpacity={0.28} />
+                    <stop offset="78%" stopColor={'#1D9E75'} stopOpacity={0.03} />
                   </linearGradient>
                 </defs>
                 <CartesianGrid stroke="var(--mera-chart-grid)" vertical={false} />
@@ -934,7 +956,7 @@ function FuelAvailabilityOverview({
                 />
                 <Tooltip
                   wrapperStyle={{ zIndex: 20 }}
-                  contentStyle={{ background: 'var(--mera-chart-tooltip-bg)', border: '1px solid var(--mera-chart-tooltip-border)', borderRadius: 7, color: 'var(--mera-chart-tooltip-text)' }}
+                  contentStyle={{ background: 'var(--mera-chart-tooltip-bg)', border: '1px solid var(--mera-chart-tooltip-border)', borderRadius: 8, color: 'var(--mera-chart-tooltip-text)' }}
                   labelFormatter={(_label, payload: any[]) => formatChartTimestamp(payload?.[0]?.payload?.timestamp) || _label}
                   formatter={(value: any, name: any, item: any) => {
                     const row = item?.payload || {}
@@ -951,17 +973,17 @@ function FuelAvailabilityOverview({
                 <Area
                   type="monotone"
                   dataKey="availabilityPercent"
-                  stroke="#32db64"
+                  stroke={'#1D9E75'}
                   strokeWidth={2.4}
                   fill="url(#availabilityFuelFill)"
-                  dot={{ r: 2.4, strokeWidth: 1.4, fill: 'var(--mera-panel)', stroke: '#32db64' }}
+                  dot={{ r: 2.4, strokeWidth: 1.4, fill: 'var(--mera-chart-tooltip-bg)', stroke: '#1D9E75' }}
                   activeDot={{ r: 4 }}
                   connectNulls
                 />
                 <Line
                   type="monotone"
                   dataKey="deliveryVerifiedPercent"
-                  stroke="var(--mera-info)"
+                  stroke={'#185FA5'}
                   strokeWidth={2}
                   dot={false}
                   activeDot={{ r: 3.5 }}
@@ -977,7 +999,7 @@ function FuelAvailabilityOverview({
           <ResponsiveContainer>
             <PieChart>
               <Pie data={pieRows} innerRadius={42} outerRadius={68} paddingAngle={1} dataKey="value">
-                {['#32db64', '#ffd21f', '#ff991f', '#ff3434'].map((color) => <Cell key={color} fill={color} />)}
+                {availabilityChartColors.map((color) => <Cell key={color} fill={color} />)}
               </Pie>
             </PieChart>
           </ResponsiveContainer>
@@ -985,13 +1007,13 @@ function FuelAvailabilityOverview({
         <div className="min-w-0 flex-1 space-y-2">
           {pieRows.map((row: any, index: number) => (
             <div key={row.name} className="flex items-start gap-2 text-[12px]">
-              <span className="mt-1 size-2 rounded-full" style={{ background: ['#32db64', '#ffd21f', '#ff991f', '#ff3434'][index] }} />
+              <span className="mt-1 size-2 rounded-full" style={{ background: availabilityChartColors[index] }} />
               <div className="min-w-0 flex-1">
-                <div className="flex justify-between gap-2 text-[var(--mera-panel-text)]">
+                <div className="flex justify-between gap-2 text-[#111827]">
                   <span className="truncate">{row.name}</span>
                   <span>{row.percent}%</span>
                 </div>
-                <div className="text-[10px] text-[var(--mera-panel-text-muted)]">({row.value} stations)</div>
+                <div className="text-[10px] text-[#6b7280]">({row.value} stations)</div>
               </div>
             </div>
           ))}
@@ -1004,7 +1026,7 @@ function FuelAvailabilityOverview({
           onOpenChange={setExportOpen}
           title="Export Fuel Availability Graph"
           description="Choose the range to include in the exported Smartlink PDF."
-          className="border-[var(--mera-panel-border)] bg-[var(--mera-panel)]"
+          className="border-[#e2e8f0] bg-white"
           footer={
             <>
               <Button type="button" variant="outline" onClick={() => setExportOpen(false)} disabled={exporting}>
@@ -1018,32 +1040,32 @@ function FuelAvailabilityOverview({
           }
         >
           <div className="grid gap-3">
-            <label className="text-sm font-semibold text-[var(--mera-panel-text)]">Range</label>
+            <label className="text-sm font-medium text-[#111827]">Range</label>
             <div className="grid gap-2 sm:grid-cols-2">
               {availabilityExportRanges.map((range) => (
                 <button
                   key={range.value}
                   type="button"
                   onClick={() => setExportRange(range.value)}
-                  className={`rounded-[10px] border px-3 py-3 text-left text-sm font-semibold transition ${
+                  className={`rounded-md border px-3 py-3 text-left text-sm font-medium transition ${
                     exportRange === range.value
                       ? 'border-[var(--mera-panel-text)] bg-[var(--mera-shell-active)] text-[var(--mera-brand)]'
-                      : 'border-[var(--mera-panel-border)] bg-[var(--mera-panel)] text-[var(--mera-panel-text-soft)] hover:bg-[var(--mera-hover)]'
+                      : 'border-[#e2e8f0] bg-white text-[#111827] hover:bg-[#f9fafb]'
                   }`}
                 >
                   <span className="block">{range.label}</span>
-                  {'detail' in range ? <span className="mt-1 block text-xs font-medium text-[var(--mera-panel-text-muted)]">{range.detail}</span> : null}
+                  {'detail' in range ? <span className="mt-1 block text-xs font-medium text-[#6b7280]">{range.detail}</span> : null}
                 </button>
               ))}
             </div>
-            <div className="flex items-center gap-3 rounded-[10px] border border-[var(--mera-panel-border)] bg-[var(--mera-panel-muted)] px-3 py-3">
+            <div className="flex items-center gap-3 rounded-md border border-[#e2e8f0] bg-[#f9fafb] px-3 py-3">
               <img src="/smartlink-mark-tight.png" alt="" className="size-9 object-contain" />
               <div>
-                <div className="text-sm font-semibold text-[var(--mera-panel-text)]">Smartlink footer included</div>
-                <div className="text-xs text-[var(--mera-panel-text-muted)]">Every PDF export includes the Smartlink logo and footer.</div>
+                <div className="text-sm font-medium text-[#111827]">Smartlink footer included</div>
+                <div className="text-xs text-[#6b7280]">Every PDF export includes the Smartlink logo and footer.</div>
               </div>
             </div>
-            {exportError ? <div className="rounded-[10px] border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{exportError}</div> : null}
+            {exportError ? <div className="rounded-md border border-[#e2e8f0] bg-[#fef2f2] px-3 py-2 text-sm text-[#dc2626]">{exportError}</div> : null}
           </div>
         </ModalShell>
       ) : null}
@@ -1053,10 +1075,10 @@ function FuelAvailabilityOverview({
 
 function severityMeta(severity: string) {
   const key = String(severity || '').toLowerCase()
-  if (key === 'critical') return { label: 'Critical', color: '#ff3434', bg: 'rgba(255,52,52,0.12)' }
-  if (key === 'high') return { label: 'High', color: '#ff991f', bg: 'rgba(255,153,31,0.14)' }
-  if (key === 'medium' || key === 'warning') return { label: 'Watch', color: '#ffd21f', bg: 'rgba(255,210,31,0.14)' }
-  return { label: 'Info', color: '#2e9dff', bg: 'rgba(46,157,255,0.12)' }
+  if (key === 'critical') return { label: 'Critical', color: '#E24B4A', bg: 'rgba(255,52,52,0.12)' }
+  if (key === 'high') return { label: 'High', color: '#EF9F27', bg: 'rgba(255,153,31,0.14)' }
+  if (key === 'medium' || key === 'warning') return { label: 'Watch', color: '#EF9F27', bg: 'rgba(255,210,31,0.14)' }
+  return { label: 'Info', color: '#185FA5', bg: 'rgba(46,157,255,0.12)' }
 }
 
 function formatSla(minutes: number) {
@@ -1080,23 +1102,23 @@ function SelectControl({
   icon: any
 }) {
   return (
-    <label className="relative h-10 min-w-[148px] shrink-0 rounded-[7px] border border-white/10 bg-white/[0.045] px-3 py-1.5 text-left text-white transition hover:bg-white/[0.075]">
-      <span className="flex items-center gap-1.5 text-[9px] font-semibold uppercase tracking-[0.11em] text-slate-400">
+    <label className="relative h-10 min-w-[148px] shrink-0 rounded-md border border-white/10 bg-white/[0.045] px-3 py-1.5 text-left text-white transition hover:bg-white/[0.075]">
+      <span className="flex items-center gap-1.5 text-[9px] font-medium uppercase tracking-[0.11em] text-[#6b7280]">
         <Icon className="size-3" />
-        {label}
+        <FieldLabel label={label} hint={`Choose the ${label.toLowerCase()} used by the command centre view. Example: switch this control before comparing national dashboard data.`} className="mb-0 text-[9px] text-[#9ca3af]" />
       </span>
       <select
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className="mt-0.5 h-5 w-full appearance-none bg-transparent pr-5 text-[12px] font-semibold leading-none text-white outline-none"
+        className="mt-0.5 h-5 w-full appearance-none bg-transparent pr-5 text-[12px] font-medium leading-none text-white outline-none"
       >
         {options.map((option) => (
-          <option key={option} value={option} className="bg-[#081522] text-white">
+          <option key={option} value={option} className="bg-[#111827] text-white">
             {option}
           </option>
         ))}
       </select>
-      <ChevronDown className="pointer-events-none absolute bottom-2.5 right-2.5 size-3.5 text-slate-400" />
+      <ChevronDown className="pointer-events-none absolute bottom-2.5 right-2.5 size-3.5 text-[#6b7280]" />
     </label>
   )
 }
@@ -1121,42 +1143,42 @@ function NationalCommandBar({
   const updateFilter = (key: keyof NationalCommandFilterState, value: string) => {
     onFiltersChange({ ...filters, [key]: value })
   }
-  const tabs = ['My View', 'National Overview', 'Fuel Supply', 'Compliance Watch', 'Enforcement']
+  const tabs = ['My View', 'National Overview', 'Tasks', 'My Tasks', 'Views', 'Fuel Supply', 'Compliance Watch', 'Enforcement Watch']
 
   return (
-    <section className="flex min-h-12 flex-wrap items-center gap-2 rounded-[6px] border border-[#e2e8f0] bg-white px-3 py-1.5">
+    <section className="flex min-h-12 flex-wrap items-center gap-2 rounded-md border border-[#e2e8f0] bg-white px-3 py-1.5">
       <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1 gap-y-1">
         {tabs.map((view) => (
           <button
             key={view}
             type="button"
             onClick={() => updateFilter('savedView', view)}
-            className={`flex h-8 min-w-0 items-center rounded-[4px] border px-3 text-[13px] transition ${
+            className={`flex h-8 min-w-0 items-center rounded-md border px-3 text-[13px] transition ${
               filters.savedView === view
-                ? 'border-[#111827] bg-[#111827] font-semibold text-white'
+                ? 'border-[#e2e8f0] bg-[#111827] font-medium text-white'
                 : 'border-transparent text-[#6b7280] hover:bg-[#f9fafb] hover:text-[#111827]'
             }`}
           >
             <span className="truncate">{view}</span>
           </button>
         ))}
-        <button type="button" onClick={onOpenWidgets} className="flex h-8 items-center gap-1 rounded-[4px] border border-transparent px-3 text-[13px] font-medium text-[#6b7280] transition hover:bg-[#f9fafb] hover:text-[#111827]">
+        <button type="button" onClick={onOpenWidgets} className="flex h-8 items-center gap-1 rounded-md border border-transparent px-3 text-[13px] font-medium text-[#6b7280] transition hover:bg-[#f9fafb] hover:text-[#111827]">
           <Plus className="size-4" />
           New View
         </button>
       </div>
       <div className="ml-auto flex shrink-0 flex-wrap items-center gap-1.5">
-        <span className="hidden items-center gap-1 text-[12px] font-medium text-[#9ca3af] lg:inline-flex">
-          <span className={`size-1.5 rounded-full ${loading ? 'animate-pulse bg-[#f59e0b]' : 'bg-[#10b981]'}`} />
+        <span className="hidden items-center gap-1 text-[12px] font-medium text-[#6b7280] lg:inline-flex">
+          <span className={`size-1.5 rounded-full ${loading ? 'animate-pulse bg-[#fffbeb]' : 'bg-[#ecfdf5]'}`} />
           {lastSync ? `Last sync ${timeAgo(lastSync)}` : 'Sync pending'}
         </span>
-        <button type="button" onClick={onRefresh} className="grid size-8 place-items-center rounded-[4px] border border-[#e2e8f0] bg-white text-[#6b7280] transition hover:bg-[#f9fafb] hover:text-[#111827]" aria-label="Refresh national operations">
+        <button type="button" onClick={onRefresh} className="grid size-8 place-items-center rounded-md border border-[#e2e8f0] bg-white text-[#6b7280] transition hover:bg-[#f9fafb] hover:text-[#111827]" aria-label="Refresh national operations">
           <RefreshCcw className={`size-4 ${loading ? 'animate-spin' : ''}`} />
         </button>
-        <button type="button" onClick={onOpenExport} className="grid size-8 place-items-center rounded-[4px] border border-[#e2e8f0] bg-white text-[#6b7280] transition hover:bg-[#f9fafb] hover:text-[#111827]" aria-label="Export national operations">
+        <button type="button" onClick={onOpenExport} className="grid size-8 place-items-center rounded-md border border-[#e2e8f0] bg-white text-[#6b7280] transition hover:bg-[#f9fafb] hover:text-[#111827]" aria-label="Export national operations">
           <FileDown className="size-4" />
         </button>
-        <button type="button" onClick={onOpenWidgets} className="inline-flex h-8 items-center gap-1 rounded-[4px] bg-[#111827] px-3 text-[12px] font-semibold text-white transition hover:bg-[#1f2937]">
+        <button type="button" onClick={onOpenWidgets} className="inline-flex h-8 items-center gap-1 rounded-md bg-[#111827] px-3 text-[12px] font-medium text-white transition hover:bg-[#111827]">
           Add Widget
           <ChevronDown className="size-4" />
         </button>
@@ -1171,26 +1193,26 @@ function NationalKpiCard({ label, value, delta, deltaTone = 'neutral', accent, s
       ? 'bg-[#ecfdf5] text-[#059669]'
       : deltaTone === 'bad'
         ? 'bg-[#fef2f2] text-[#dc2626]'
-        : 'bg-[#f3f4f6] text-[#6b7280]'
+        : 'bg-[#f9fafb] text-[#6b7280]'
 
-  const className = `group relative min-h-[132px] overflow-hidden rounded-[6px] border border-[#e2e8f0] bg-white px-4 py-4 text-left ${
-    onClick ? 'transition hover:-translate-y-0.5 hover:border-[#cbd5e0] hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-[#111827]/15' : ''
+  const className = `group relative min-h-[132px] overflow-hidden rounded-md border border-[#e2e8f0] bg-white px-4 py-4 text-left ${
+    onClick ? 'transition hover:-translate-y-0.5 hover:border-[#e2e8f0] hover:shadow-sm focus:outline-none focus:ring focus:ring' : ''
   }`
   const content = (
     <>
       <div className="absolute inset-x-0 top-0 h-[3px]" style={{ background: accent }} />
       <div className="min-w-0">
-        <div className="truncate text-[11px] font-semibold uppercase tracking-[0.09em] text-[#9ca3af]">{label}</div>
-        <div className="mt-3 truncate text-[30px] font-bold leading-none tracking-[-0.02em] text-[#111827]">{value}</div>
+        <div className="truncate text-[11px] font-medium uppercase tracking-[0.09em] text-[#6b7280]">{label}</div>
+        <div className="mt-3 truncate text-[30px] font-medium leading-none tracking-normal text-[#111827]">{value}</div>
         <div className="mt-3 flex items-center gap-2">
-          <span className={`rounded-[3px] px-2 py-1 text-[12px] font-bold leading-none ${deltaClass}`}>{delta}</span>
-          <span className="text-[12px] font-medium text-[#9ca3af]">vs yesterday</span>
+          <span className={`rounded-md px-2 py-1 text-[12px] font-medium leading-none ${deltaClass}`}>{delta}</span>
+          <span className="text-[12px] font-medium text-[#6b7280]">vs yesterday</span>
         </div>
       </div>
       <div className="absolute bottom-3 right-3 h-8 w-[82px] opacity-40">
         <Sparkline data={sparkline} color={accent} />
       </div>
-      {onClick ? <ArrowUpRight className="absolute right-3 top-3 size-4 text-[#cbd5e0] transition group-hover:text-[#111827]" /> : null}
+      {onClick ? <ArrowUpRight className="absolute right-3 top-3 size-4 text-[#6b7280] transition group-hover:text-[#111827]" /> : null}
     </>
   )
 
@@ -1219,10 +1241,10 @@ function LightPanelHeader({
   children?: ReactNode
 }) {
   return (
-    <div className="flex min-h-12 items-center justify-between gap-3 border-b border-[#f1f5f9] px-4 py-3">
+    <div className="flex min-h-12 items-center justify-between gap-3 border-b border-[#e2e8f0] px-4 py-3">
       <div className="flex min-w-0 items-center gap-2">
         <Icon className="size-4 shrink-0 text-[#2563eb]" />
-        <h2 className="truncate text-[13px] font-bold uppercase tracking-[0.08em] text-[#374151]">{title}</h2>
+        <h2 className="truncate text-[13px] font-medium uppercase tracking-[0.08em] text-[#6b7280]">{title}</h2>
       </div>
       {meta ? <div className="shrink-0">{meta}</div> : children}
     </div>
@@ -1232,14 +1254,18 @@ function LightPanelHeader({
 function StatusPill({ children, tone = 'neutral' }: { children: ReactNode; tone?: 'good' | 'warn' | 'bad' | 'neutral' }) {
   const toneClass =
     tone === 'good'
-      ? 'border-[#a7f3d0] bg-[#ecfdf5] text-[#059669]'
+      ? 'border-[#e2e8f0] bg-[#ecfdf5] text-[#059669]'
       : tone === 'warn'
-        ? 'border-[#fde68a] bg-[#fffbeb] text-[#d97706]'
+        ? 'border-[#e2e8f0] bg-[#fffbeb] text-[#d97706]'
         : tone === 'bad'
-          ? 'border-[#fecaca] bg-[#fef2f2] text-[#dc2626]'
-          : 'border-[#e5e7eb] bg-[#f3f4f6] text-[#6b7280]'
+          ? 'border-[#e2e8f0] bg-[#fef2f2] text-[#dc2626]'
+          : 'border-[#e2e8f0] bg-[#f9fafb] text-[#6b7280]'
 
-  return <span className={`inline-flex items-center rounded-[3px] border px-2 py-0.5 text-[11px] font-semibold ${toneClass}`}>{children}</span>
+  return (
+    <span className={`inline-flex items-center rounded-md border px-2 py-0.5 text-[11px] font-medium ${toneClass}`}>
+      {renderDrilldownValue(children)}
+    </span>
+  )
 }
 
 function NationalSupplyCommandPanel({
@@ -1252,12 +1278,12 @@ function NationalSupplyCommandPanel({
   criticalAlerts: number
 }) {
   const regions = [
-    { name: 'Northern', coverage: 86, tone: '#f59e0b', status: 'Watch', statusTone: 'warn' as const },
-    { name: 'Central', coverage: 94, tone: '#10b981', status: 'Stable', statusTone: 'good' as const },
-    { name: 'Southern', coverage: 79, tone: '#ef4444', status: 'Pressure', statusTone: 'bad' as const },
+    { name: 'Northern', coverage: 86, tone: '#EF9F27', status: 'Watch', statusTone: 'warn' as const },
+    { name: 'Central', coverage: 94, tone: '#1D9E75', status: 'Stable', statusTone: 'good' as const },
+    { name: 'Southern', coverage: 79, tone: '#E24B4A', status: 'Pressure', statusTone: 'bad' as const },
   ]
   const metaItems = [
-    { label: 'Stations', value: totalStations.toLocaleString(), className: 'text-[#374151]' },
+    { label: 'Stations', value: totalStations.toLocaleString(), className: 'text-[#6b7280]' },
     { label: 'Online', value: onlineStations.toLocaleString(), className: 'text-[#059669]' },
     { label: 'Critical', value: criticalAlerts.toLocaleString(), className: 'text-[#dc2626]' },
   ]
@@ -1271,27 +1297,27 @@ function NationalSupplyCommandPanel({
           <div className="hidden items-center gap-4 sm:flex">
             {metaItems.map((item) => (
               <div key={item.label} className="text-right">
-                <div className={`text-[14px] font-bold leading-none ${item.className}`}>{item.value}</div>
-                <div className="mt-1 text-[10px] font-bold uppercase tracking-[0.08em] text-[#9ca3af]">{item.label}</div>
+                <div className={`text-[14px] font-medium leading-none ${item.className}`}>{item.value}</div>
+                <div className="mt-1 text-[10px] font-medium uppercase tracking-[0.08em] text-[#6b7280]">{item.label}</div>
               </div>
             ))}
           </div>
         }
       />
       <div className="grid gap-0 lg:grid-cols-[minmax(0,1fr)_260px]">
-        <div className="border-b border-[#f1f5f9] p-4 lg:border-b-0 lg:border-r">
-          <svg className="h-full min-h-[280px] w-full rounded-[5px] border border-[#f1f5f9] bg-[#f8fafc]" viewBox="0 0 460 260" role="img" aria-label="Malawi national supply status map">
-            <rect width="460" height="260" fill="#f8fafc" />
-            {[52, 104, 156, 208].map((y) => <line key={`h-${y}`} x1="0" y1={y} x2="460" y2={y} stroke="#eef2f7" strokeWidth="1" />)}
-            {[115, 230, 345].map((x) => <line key={`v-${x}`} x1={x} y1="0" x2={x} y2="260" stroke="#eef2f7" strokeWidth="1" />)}
-            <path d="M234 22 L253 34 L265 57 L270 82 L267 105 L273 128 L281 154 L283 184 L276 209 L262 230 L249 242 L236 246 L224 238 L212 218 L204 193 L199 168 L193 143 L190 119 L194 94 L200 70 L211 46 L224 28 Z" fill="#eff6ff" stroke="#bfdbfe" strokeWidth="2" />
-            <path d="M257 35 L269 58 L270 82 L264 105 L256 98 L251 76 L248 55 Z" fill="#dbeafe" stroke="#93c5fd" strokeWidth="1" opacity="0.85" />
+        <div className="border-b border-[#e2e8f0] p-4 lg:border-b-0 lg:border-r">
+          <svg className="h-full min-h-[280px] w-full rounded-md border border-[#e2e8f0] bg-[#f9fafb]" viewBox="0 0 460 260" role="img" aria-label="Malawi national supply status map">
+            <rect width="460" height="260" fill="var(--mera-panel-muted)" />
+            {[52, 104, 156, 208].map((y) => <line key={`h-${y}`} x1="0" y1={y} x2="460" y2={y} stroke="var(--mera-panel-border)" strokeWidth="0.5" />)}
+            {[115, 230, 345].map((x) => <line key={`v-${x}`} x1={x} y1="0" x2={x} y2="260" stroke="var(--mera-panel-border)" strokeWidth="0.5" />)}
+            <path d="M234 22 L253 34 L265 57 L270 82 L267 105 L273 128 L281 154 L283 184 L276 209 L262 230 L249 242 L236 246 L224 238 L212 218 L204 193 L199 168 L193 143 L190 119 L194 94 L200 70 L211 46 L224 28 Z" fill="transparent" stroke="var(--mera-panel-text-soft)" strokeWidth="1.15" />
+            <path d="M257 35 L269 58 L270 82 L264 105 L256 98 L251 76 L248 55 Z" fill="transparent" stroke="var(--mera-panel-text-soft)" strokeWidth="1.15" opacity="0.85" />
             {[
-              { label: 'Karonga', x: 258, y: 44, color: '#f59e0b' },
-              { label: 'Mzuzu', x: 248, y: 82, color: '#10b981' },
-              { label: 'Lilongwe', x: 225, y: 142, color: '#10b981', r: 7 },
-              { label: 'Zomba', x: 236, y: 187, color: '#f59e0b' },
-              { label: 'Blantyre', x: 220, y: 216, color: '#ef4444', r: 7 },
+              { label: 'Karonga', x: 258, y: 44, color: '#EF9F27' },
+              { label: 'Mzuzu', x: 248, y: 82, color: '#1D9E75' },
+              { label: 'Lilongwe', x: 225, y: 142, color: '#1D9E75', r: 7 },
+              { label: 'Zomba', x: 236, y: 187, color: '#EF9F27' },
+              { label: 'Blantyre', x: 220, y: 216, color: '#E24B4A', r: 7 },
             ].map((point) => (
               <g key={point.label}>
                 <circle cx={point.x} cy={point.y} r={(point as any).r || 6} fill={point.color} opacity="0.95" />
@@ -1300,18 +1326,18 @@ function NationalSupplyCommandPanel({
               </g>
             ))}
             {[
-              { x: 214, y: 63, color: '#10b981' },
-              { x: 232, y: 113, color: '#10b981' },
-              { x: 207, y: 164, color: '#f59e0b' },
-              { x: 214, y: 126, color: '#10b981' },
+              { x: 214, y: 63, color: '#1D9E75' },
+              { x: 232, y: 113, color: '#1D9E75' },
+              { x: 207, y: 164, color: '#EF9F27' },
+              { x: 214, y: 126, color: '#1D9E75' },
             ].map((dot, index) => <circle key={index} cx={dot.x} cy={dot.y} r="4" fill={dot.color} opacity="0.55" />)}
             <g transform="translate(20 232)">
-              <circle cx="0" cy="0" r="5" fill="#10b981" />
-              <text x="10" y="4" fill="#9ca3af" fontSize="11">Operational</text>
-              <circle cx="104" cy="0" r="5" fill="#f59e0b" />
-              <text x="114" y="4" fill="#9ca3af" fontSize="11">Low Stock</text>
-              <circle cx="197" cy="0" r="5" fill="#ef4444" />
-              <text x="207" y="4" fill="#9ca3af" fontSize="11">Critical</text>
+              <circle cx="0" cy="0" r="5" fill={'#1D9E75'} />
+              <text x="10" y="4" fill="#6b7280" fontSize="11">Operational</text>
+              <circle cx="104" cy="0" r="5" fill={'#EF9F27'} />
+              <text x="114" y="4" fill="#6b7280" fontSize="11">Low Stock</text>
+              <circle cx="197" cy="0" r="5" fill={'#E24B4A'} />
+              <text x="207" y="4" fill="#6b7280" fontSize="11">Critical</text>
             </g>
           </svg>
         </div>
@@ -1319,10 +1345,10 @@ function NationalSupplyCommandPanel({
           {regions.map((region) => (
             <div key={region.name} className="grid gap-2">
               <div className="flex items-center justify-between gap-3">
-                <div className="text-[13px] font-semibold text-[#374151]">{region.name}</div>
-                <div className="text-[13px] font-bold" style={{ color: region.tone }}>{region.coverage}%</div>
+                <div className="text-[13px] font-medium text-[#6b7280]">{region.name}</div>
+                <div className="text-[13px] font-medium" style={{ color: region.tone }}>{region.coverage}%</div>
               </div>
-              <div className="h-2 overflow-hidden rounded-full bg-[#f1f5f9]">
+              <div className="h-2 overflow-hidden rounded-full bg-[#f9fafb]">
                 <div className="h-full rounded-full" style={{ width: `${region.coverage}%`, background: region.tone }} />
               </div>
               <div>
@@ -1338,22 +1364,22 @@ function NationalSupplyCommandPanel({
 
 function FuelReserveStatusPanel() {
   const rows = [
-    { fuel: 'Petrol', reserve: 71, burn: '4.2 ML/d', depletion: '8.2 days', tone: '#2563eb', status: 'ok' },
-    { fuel: 'Diesel', reserve: 84, burn: '5.8 ML/d', depletion: '11.4 days', tone: '#10b981', status: 'ok' },
-    { fuel: 'Kerosene', reserve: 38, burn: '1.1 ML/d', depletion: '3.8 days', tone: '#f59e0b', status: 'warn' },
-    { fuel: 'Jet A-1', reserve: 22, burn: '0.8 ML/d', depletion: '2.1 days', tone: '#ef4444', status: 'crit' },
-    { fuel: 'LPG', reserve: 61, burn: '0.6 ML/d', depletion: '7.0 days', tone: '#64748b', status: 'neutral' },
+    { fuel: 'Petrol', reserve: 71, burn: '4.2 ML/d', depletion: '8.2 days', tone: '#185FA5', status: 'ok' },
+    { fuel: 'Diesel', reserve: 84, burn: '5.8 ML/d', depletion: '11.4 days', tone: '#1D9E75', status: 'ok' },
+    { fuel: 'Kerosene', reserve: 38, burn: '1.1 ML/d', depletion: '3.8 days', tone: '#EF9F27', status: 'warn' },
+    { fuel: 'Jet A-1', reserve: 22, burn: '0.8 ML/d', depletion: '2.1 days', tone: '#E24B4A', status: 'crit' },
+    { fuel: 'LPG', reserve: 61, burn: '0.6 ML/d', depletion: '7.0 days', tone: '#185FA5', status: 'neutral' },
   ]
   const variance = [
-    { label: 'Petrol variance', value: '+MWK 61/L', tone: '#d97706' },
-    { label: 'Diesel variance', value: '+MWK 12/L', tone: '#059669' },
-    { label: 'Kerosene variance', value: '+MWK 94/L', tone: '#dc2626' },
+    { label: 'Petrol variance', value: '+MWK 61/L', tone: '#EF9F27' },
+    { label: 'Diesel variance', value: '+MWK 12/L', tone: '#1D9E75' },
+    { label: 'Kerosene variance', value: '+MWK 94/L', tone: '#E24B4A' },
   ]
 
   return (
     <section className={lightPanel}>
       <LightPanelHeader icon={Fuel} title="Fuel Reserve Status" />
-      <div className="grid grid-cols-[minmax(130px,1fr)_110px_92px_92px] gap-3 border-b border-[#f1f5f9] px-4 py-2 text-[11px] font-bold uppercase tracking-[0.08em] text-[#9ca3af] max-sm:hidden">
+      <div className="grid grid-cols-[minmax(130px,1fr)_110px_92px_92px] gap-3 border-b border-[#e2e8f0] px-4 py-2 text-[11px] font-medium uppercase tracking-[0.08em] text-[#6b7280] max-sm:hidden">
         <div>Fuel Type</div>
         <div className="text-right">Reserve</div>
         <div className="text-right">Burn/day</div>
@@ -1361,27 +1387,27 @@ function FuelReserveStatusPanel() {
       </div>
       <div>
         {rows.map((row) => (
-          <div key={row.fuel} className="grid grid-cols-[minmax(130px,1fr)_110px_92px_92px] items-center gap-3 border-b border-[#f9fafb] px-4 py-3 text-[13px] max-sm:grid-cols-1 max-sm:gap-2">
-            <div className="flex items-center gap-2 font-semibold text-[#374151]">
+          <div key={row.fuel} className="grid grid-cols-[minmax(130px,1fr)_110px_92px_92px] items-center gap-3 border-b border-[#e2e8f0] px-4 py-3 text-[13px] max-sm:grid-cols-1 max-sm:gap-2">
+            <div className="flex items-center gap-2 font-medium text-[#6b7280]">
               <span className="size-2 rounded-full" style={{ background: row.tone }} />
               {row.fuel}
             </div>
-            <div className="flex items-center justify-end gap-2 text-right text-[13px] font-semibold text-[#6b7280] max-sm:justify-start">
+            <div className="flex items-center justify-end gap-2 text-right text-[13px] font-medium text-[#6b7280] max-sm:justify-start">
               <span style={{ color: row.tone }}>{row.reserve}%</span>
-              <span className="h-2 w-[56px] overflow-hidden rounded-full bg-[#f1f5f9]">
+              <span className="h-2 w-[56px] overflow-hidden rounded-full bg-[#f9fafb]">
                 <span className="block h-full rounded-full" style={{ width: `${row.reserve}%`, background: row.tone }} />
               </span>
             </div>
             <div className="text-right text-[#6b7280] max-sm:text-left">{row.burn}</div>
-            <div className="text-right font-semibold max-sm:text-left" style={{ color: row.tone }}>{row.depletion}</div>
+            <div className="text-right font-medium max-sm:text-left" style={{ color: row.tone }}>{row.depletion}</div>
           </div>
         ))}
       </div>
-      <div className="grid gap-2 border-t border-[#f1f5f9] p-4 sm:grid-cols-3">
+      <div className="grid gap-2 border-t border-[#e2e8f0] p-4 sm:grid-cols-3">
         {variance.map((item) => (
-          <div key={item.label} className="rounded-[5px] border border-[#f1f5f9] bg-[#f9fafb] px-3 py-2">
-            <div className="text-[11px] font-medium text-[#9ca3af]">{item.label}</div>
-            <div className="mt-1 text-[14px] font-bold" style={{ color: item.tone }}>{item.value}</div>
+          <div key={item.label} className="rounded-md border border-[#e2e8f0] bg-[#f9fafb] px-3 py-2">
+            <div className="text-[11px] font-medium text-[#6b7280]">{item.label}</div>
+            <div className="mt-1 text-[14px] font-medium" style={{ color: item.tone }}>{item.value}</div>
           </div>
         ))}
       </div>
@@ -1399,12 +1425,12 @@ function SupplyPipelinePanel({ displayMode = 'list' as DashboardBlockDisplay }: 
 
   return (
     <section className={lightPanel}>
-      <LightPanelHeader icon={Truck} title="Supply Pipeline - In Transit" meta={<div className="text-[12px] font-semibold text-[#9ca3af]">{displayMode}</div>} />
+      <LightPanelHeader icon={Truck} title="Supply Pipeline - In Transit" meta={<div className="text-[12px] font-medium text-[#6b7280]">{displayMode}</div>} />
       {displayMode === 'table' ? (
         <div className="overflow-x-auto">
           <table className="w-full min-w-[560px] text-[13px]">
             <thead>
-              <tr className="border-b border-[#f1f5f9] text-[10px] uppercase tracking-[0.08em] text-[#9ca3af]">
+              <tr className="border-b border-[#e2e8f0] text-[10px] uppercase tracking-[0.08em] text-[#6b7280]">
                 <th className="px-4 py-2 text-left">Route</th>
                 <th className="px-4 py-2 text-left">Load</th>
                 <th className="px-4 py-2 text-right">ETA</th>
@@ -1413,10 +1439,10 @@ function SupplyPipelinePanel({ displayMode = 'list' as DashboardBlockDisplay }: 
             </thead>
             <tbody>
               {rows.map((row) => (
-                <tr key={row.route} className="border-b border-[#f9fafb]">
-                  <td className="px-4 py-3 font-semibold text-[#111827]">{row.route}</td>
+                <tr key={row.route} className="border-b border-[#e2e8f0]">
+                  <td className="px-4 py-3 font-medium text-[#111827]">{row.route}</td>
                   <td className="px-4 py-3 text-[#6b7280]">{row.meta}</td>
-                  <td className={`px-4 py-3 text-right font-bold ${row.tone === 'warn' ? 'text-[#d97706]' : 'text-[#374151]'}`}>{row.eta}</td>
+                  <td className={`px-4 py-3 text-right font-medium ${row.tone === 'warn' ? 'text-[#d97706]' : 'text-[#6b7280]'}`}>{row.eta}</td>
                   <td className="px-4 py-3 text-right text-[#6b7280]">{row.volume}</td>
                 </tr>
               ))}
@@ -1426,19 +1452,19 @@ function SupplyPipelinePanel({ displayMode = 'list' as DashboardBlockDisplay }: 
       ) : (
         <div>
           {rows.map((row) => (
-            <div key={row.route} className="grid grid-cols-[32px_minmax(0,1fr)_64px_54px] items-center gap-3 border-b border-[#f9fafb] px-4 py-3 last:border-b-0 max-sm:grid-cols-[32px_minmax(0,1fr)]">
-              <div className="grid size-8 place-items-center rounded-[4px] border border-[#e5e7eb] bg-[#f3f4f6] text-[#374151]">
+            <div key={row.route} className="grid grid-cols-[32px_minmax(0,1fr)_64px_54px] items-center gap-3 border-b border-[#e2e8f0] px-4 py-3 last:border-b-0 max-sm:grid-cols-[32px_minmax(0,1fr)]">
+              <div className="grid size-8 place-items-center rounded-md border border-[#e2e8f0] bg-[#f9fafb] text-[#6b7280]">
                 <Truck className="size-4" />
               </div>
               <div className="min-w-0">
-                <div className="truncate text-[13px] font-semibold text-[#111827]">{row.route}</div>
-                <div className="mt-0.5 truncate text-[12px] text-[#9ca3af]">{row.meta}</div>
+                <div className="truncate text-[13px] font-medium text-[#111827]">{row.route}</div>
+                <div className="mt-0.5 truncate text-[12px] text-[#6b7280]">{row.meta}</div>
               </div>
               <div className="text-right max-sm:col-start-2 max-sm:text-left">
-                <div className={`text-[13px] font-bold ${row.tone === 'warn' ? 'text-[#d97706]' : 'text-[#374151]'}`}>{row.eta}</div>
-                <div className="text-[11px] font-medium text-[#9ca3af]">{row.etaLabel}</div>
+                <div className={`text-[13px] font-medium ${row.tone === 'warn' ? 'text-[#d97706]' : 'text-[#6b7280]'}`}>{row.eta}</div>
+                <div className="text-[11px] font-medium text-[#6b7280]">{row.etaLabel}</div>
               </div>
-              <div className="rounded-[3px] border border-[#e5e7eb] bg-[#f3f4f6] px-2 py-1 text-center text-[11px] font-bold text-[#6b7280] max-sm:col-start-2 max-sm:w-max">{row.volume}</div>
+              <div className="rounded-md border border-[#e2e8f0] bg-[#f9fafb] px-2 py-1 text-center text-[11px] font-medium text-[#6b7280] max-sm:col-start-2 max-sm:w-max">{row.volume}</div>
             </div>
           ))}
         </div>
@@ -1448,35 +1474,37 @@ function SupplyPipelinePanel({ displayMode = 'list' as DashboardBlockDisplay }: 
 }
 
 function ComplianceAlertsPanel({ items, displayMode = 'list' as DashboardBlockDisplay }: { items: IncidentQueueItem[]; displayMode?: DashboardBlockDisplay }) {
-  const fallback = [
-    { severity: 'critical', station: 'Total Limbe - #0012', description: 'Price ceiling exceeded by MWK 94/L - Kerosene', time: '09:14' },
-    { severity: 'critical', station: 'Puma Blantyre - #0031', description: 'Tank calibration expired - 3 pumps flagged', time: '08:52' },
-    { severity: 'high', station: 'NOCMA Depot - Lilongwe', description: 'Stock discrepancy - Reported vs metered: -8.2kL', time: '07:30' },
-    { severity: 'high', station: 'Petroda Karonga - #0088', description: 'License renewal overdue by 14 days', time: '06:00' },
-    { severity: 'medium', station: 'Engen Mzuzu - #0055', description: 'Queue manipulation detected - Digital audit', time: '05:12' },
-  ]
-  const rows = items.length
-    ? items.slice(0, 5).map((item, index) => ({
-        severity: item.severity,
-        station: item.title,
-        description: item.station,
-        time: index === 0 ? '09:14' : index === 1 ? '08:52' : index === 2 ? '07:30' : index === 3 ? '06:00' : '05:12',
-      }))
-    : fallback
+  const rows = items.slice(0, 5).map((item) => ({
+    severity: item.severity,
+    station: item.title,
+    description: item.station,
+    time: item.status || 'live',
+  }))
   const badgeForAlert = (severity: string) => {
-    if (severity === 'critical') return { label: 'CRIT', className: 'border-[#fecaca] bg-[#fee2e2] text-[#b91c1c]' }
-    if (severity === 'high') return { label: 'HIGH', className: 'border-[#fde68a] bg-[#fef3c7] text-[#92400e]' }
-    return { label: 'MED', className: 'border-[#e5e7eb] bg-[#f3f4f6] text-[#374151]' }
+    if (severity === 'critical') return { label: 'CRIT', className: 'border-[#e2e8f0] bg-[#fef2f2] text-[#dc2626]' }
+    if (severity === 'high') return { label: 'HIGH', className: 'border-[#e2e8f0] bg-[#fffbeb] text-[#d97706]' }
+    return { label: 'MED', className: 'border-[#e2e8f0] bg-[#f9fafb] text-[#6b7280]' }
   }
 
   return (
-    <section className={lightPanel}>
-      <LightPanelHeader icon={AlertTriangle} title="Compliance Alerts" meta={<div className="text-[12px] font-bold text-[#dc2626]">{displayMode}</div>} />
+    <section className="overflow-hidden rounded-[8px] border border-[#e5e7eb] bg-white shadow-[0_16px_40px_rgba(15,23,42,0.05)]">
+      <div className="border-b border-[#e5e7eb] bg-[#fafafa] px-4 py-3">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2 text-[13px] font-semibold tracking-[-0.018em] text-[#111827]">
+              <AlertTriangle className="size-4 text-[#111827]" />
+              Compliance alerts
+            </div>
+            <div className="mt-1 text-[12px] font-medium text-[#6b7280]">Prioritized live compliance exceptions from complaints, inspections, and supply status.</div>
+          </div>
+          <span className="rounded-full border border-[#e5e7eb] bg-white px-2.5 py-1 text-[11px] font-semibold text-[#111827]">{rows.length} active</span>
+        </div>
+      </div>
       {displayMode === 'table' ? (
         <div className="overflow-x-auto">
           <table className="w-full min-w-[560px] text-[13px]">
             <thead>
-              <tr className="border-b border-[#f1f5f9] text-[10px] uppercase tracking-[0.08em] text-[#9ca3af]">
+              <tr className="border-b border-[#e2e8f0] text-[10px] uppercase tracking-[0.08em] text-[#6b7280]">
                 <th className="px-4 py-2 text-left">Severity</th>
                 <th className="px-4 py-2 text-left">Station</th>
                 <th className="px-4 py-2 text-left">Message</th>
@@ -1487,11 +1515,11 @@ function ComplianceAlertsPanel({ items, displayMode = 'list' as DashboardBlockDi
               {rows.map((row) => {
                 const badge = badgeForAlert(row.severity)
                 return (
-                  <tr key={`${row.station}-${row.time}`} className="border-b border-[#f9fafb]">
-                    <td className="px-4 py-3"><span className={`rounded-[3px] border px-1.5 py-1 text-[10px] font-bold leading-none ${badge.className}`}>{badge.label}</span></td>
-                    <td className="px-4 py-3 font-semibold text-[#111827]">{row.station}</td>
-                    <td className="px-4 py-3 text-[#6b7280]">{row.description}</td>
-                    <td className="px-4 py-3 text-right text-[#9ca3af]">{row.time}</td>
+                  <tr key={`${row.station}-${row.time}`} className="border-b border-[#e2e8f0]">
+                    <td className="px-4 py-3"><span className={`rounded-md border px-1.5 py-1 text-[10px] font-medium leading-none ${badge.className}`}>{badge.label}</span></td>
+                  <td className="px-4 py-3 font-medium text-[#111827]">{stationDisplayValue(row.station)}</td>
+                  <td className="px-4 py-3 text-[#6b7280]">{stationDisplayValue(row.description)}</td>
+                    <td className="px-4 py-3 text-right text-[#6b7280]">{row.time}</td>
                   </tr>
                 )
               })}
@@ -1500,19 +1528,19 @@ function ComplianceAlertsPanel({ items, displayMode = 'list' as DashboardBlockDi
         </div>
       ) : (
         <div>
-          {rows.map((row) => {
+          {rows.length ? rows.map((row) => {
             const badge = badgeForAlert(row.severity)
             return (
-              <div key={`${row.station}-${row.time}`} className="grid grid-cols-[46px_minmax(0,1fr)_44px] gap-3 border-b border-[#f9fafb] px-4 py-3 last:border-b-0">
-                <div className={`mt-0.5 h-max rounded-[3px] border px-1.5 py-1 text-center text-[10px] font-bold leading-none ${badge.className}`}>{badge.label}</div>
+              <div key={`${row.station}-${row.time}`} className="grid grid-cols-[46px_minmax(0,1fr)_44px] gap-3 border-b border-[#e5e7eb] px-4 py-3 last:border-b-0 hover:bg-[#fafafa]">
+                <div className={`mt-0.5 h-max rounded-md border px-1.5 py-1 text-center text-[10px] font-medium leading-none ${badge.className}`}>{badge.label}</div>
                 <div className="min-w-0">
-                  <div className="truncate text-[13px] font-semibold text-[#111827]">{row.station}</div>
-                  <div className="mt-0.5 truncate text-[12px] text-[#9ca3af]">{row.description}</div>
+                  <div className="truncate text-[13px] font-medium text-[#111827]">{stationDisplayValue(row.station)}</div>
+                  <div className="mt-0.5 truncate text-[12px] text-[#6b7280]">{stationDisplayValue(row.description)}</div>
                 </div>
-                <div className="text-right text-[12px] font-medium text-[#cbd5e0]">{row.time}</div>
+                <div className="text-right text-[12px] font-medium text-[#6b7280]">{row.time}</div>
               </div>
             )
-          })}
+          }) : <div className="px-4 py-8 text-center text-[12px] text-[#6b7280]">No compliance alerts received.</div>}
         </div>
       )}
     </section>
@@ -1520,61 +1548,122 @@ function ComplianceAlertsPanel({ items, displayMode = 'list' as DashboardBlockDi
 }
 
 function ConsumptionPanel({ displayMode = 'line' as DashboardBlockDisplay }: { displayMode?: DashboardBlockDisplay }) {
+  const { token, api } = usePortal()
+  const [consumptionRows, setConsumptionRows] = useState<any[]>([])
+  const [consumptionLoading, setConsumptionLoading] = useState(false)
+  const [consumptionError, setConsumptionError] = useState('')
   const corridorRows = [
     { label: 'Beira Corridor', tone: 'good' as const, status: 'Normal' },
     { label: 'Nacala Corridor', tone: 'warn' as const, status: 'Delayed' },
     { label: 'Northern Corridor', tone: 'neutral' as const, status: 'Monitor' },
   ]
-  const points = [
-    { label: 'Mon', value: 7.2 },
-    { label: 'Tue', value: 8.4 },
-    { label: 'Wed', value: 8.9 },
-    { label: 'Thu', value: 7.8 },
-    { label: 'Fri', value: 10.8 },
-    { label: 'Sat', value: 9.7 },
-    { label: 'Sun', value: 11.5 },
-  ]
+  const fallbackDays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((day) => ({ day, total: 0, petrol: 0, diesel: 0, paraffin: 0, source: 'empty' }))
+  const rows = consumptionRows.length === 7 ? consumptionRows : fallbackDays
+  const points = rows.map((row) => ({
+    label: row.day,
+    total: number(row.total),
+    petrol: number(row.petrol),
+    diesel: number(row.diesel),
+    paraffin: number(row.paraffin),
+    source: row.source || 'empty',
+  }))
+  const maxLitres = Math.max(1, ...points.flatMap((point) => [point.total, point.petrol, point.diesel]))
+  const yTicks = [1, 0.67, 0.34, 0].map((ratio) => Math.round(maxLitres * ratio))
+  const plotPoint = (value: number, index: number) => {
+    const x = 36 + index * 43.6
+    const y = 108 - (value / maxLitres) * 92
+    return `${x.toFixed(1)},${Math.max(12, Math.min(108, y)).toFixed(1)}`
+  }
+  const totalPolyline = points.map((point, index) => plotPoint(point.total, index)).join(' ')
+  const petrolPolyline = points.map((point, index) => plotPoint(point.petrol, index)).join(' ')
+  const dieselPolyline = points.map((point, index) => plotPoint(point.diesel, index)).join(' ')
+  const sourceSet = new Set(points.map((point) => point.source))
+  const sourceLabel = sourceSet.has('actual')
+    ? 'Actual dispense/sales data'
+    : sourceSet.has('estimated')
+      ? 'Estimated from stock reports'
+      : 'No consumption records this week'
+
+  useEffect(() => {
+    if (!token) return undefined
+    const controller = new AbortController()
+    setConsumptionLoading(true)
+    setConsumptionError('')
+    api.getNationalConsumption(token, '7d', controller.signal)
+      .then((payload: any) => {
+        if (controller.signal.aborted) return
+        setConsumptionRows(Array.isArray(payload) ? payload : [])
+      })
+      .catch((error: any) => {
+        if (controller.signal.aborted) return
+        setConsumptionError(error?.message || 'Unable to load national consumption.')
+        setConsumptionRows([])
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setConsumptionLoading(false)
+      })
+    return () => controller.abort()
+  }, [api, displayMode, token])
 
   return (
     <section className={lightPanel}>
-      <LightPanelHeader icon={TrendingUp} title="National Consumption - 7d" meta={<div className="text-[12px] font-semibold text-[#9ca3af]">{displayMode}</div>} />
+      <LightPanelHeader
+        icon={TrendingUp}
+        title="National Consumption"
+        meta={<div className="text-right text-[12px] font-medium text-[#6b7280]"><div>7D Mon-Sun</div><div className="mt-0.5 text-[10px]">{displayMode}</div></div>}
+      />
       <div className="px-4 py-4">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-[11px] font-medium text-[#6b7280]">
+          <span>Litres consumed</span>
+          <span>{consumptionLoading ? 'Loading...' : sourceLabel}</span>
+        </div>
+        {consumptionError ? <div className="mb-3 rounded-md border border-[#e2e8f0] bg-[#f9fafb] px-3 py-2 text-[11px] font-medium text-[#6b7280]">{consumptionError}</div> : null}
         {displayMode === 'bar' ? (
           <div className="grid h-[132px] grid-cols-7 items-end gap-2">
             {points.map((point) => (
               <div key={point.label} className="grid h-full grid-rows-[1fr_auto] gap-2 text-center">
-                <div className="flex items-end rounded-t-[4px] bg-[#f1f5f9]">
-                  <div className="w-full rounded-t-[4px] bg-[#2563eb]" style={{ height: `${Math.max(16, (point.value / 12) * 100)}%` }} />
+                <div className="flex items-end rounded-t-[4px] bg-[#f9fafb]">
+                  <div className="w-full rounded-t-[4px] bg-[#eff6ff]" title={`${point.label}: ${point.total.toLocaleString()} L`} style={{ height: `${Math.max(0, (point.total / maxLitres) * 100)}%` }} />
                 </div>
-                <div className="text-[10px] font-semibold text-[#9ca3af]">{point.label}</div>
+                <div className="text-[10px] font-medium text-[#6b7280]">{point.label}</div>
               </div>
             ))}
           </div>
         ) : (
           <svg width="100%" height="132" viewBox="0 0 300 132" role="img" aria-label="Seven day national consumption trend">
             {[
-              { y: 12, label: '15ML' },
-              { y: 44, label: '12ML' },
-              { y: 76, label: '9ML' },
-              { y: 108, label: '6ML' },
-            ].map((row) => (
+              { y: 12, label: yTicks[0] },
+              { y: 44, label: yTicks[1] },
+              { y: 76, label: yTicks[2] },
+              { y: 108, label: yTicks[3] },
+            ].map((row, index) => (
               <g key={row.label}>
-                <text x="0" y={row.y + 4} fill="#d1d5db" fontSize="10">{row.label}</text>
-                <line x1="34" y1={row.y} x2="300" y2={row.y} stroke="#f1f5f9" strokeWidth="1" />
+                <text x="0" y={row.y + 4} fill="#9ca3af" fontSize="10">{index === 0 ? `${Math.round(row.label / 1000)}k L` : Math.round(row.label / 1000)}</text>
+                <line x1="34" y1={row.y} x2="300" y2={row.y} stroke="#f1f5f9" strokeWidth="0.5" />
               </g>
             ))}
-            <polyline points="36,86 80,70 124,64 168,78 212,48 256,58 298,38" fill="none" stroke="#2563eb" strokeWidth="2" />
-            {[['36', '86'], ['80', '70'], ['124', '64'], ['168', '78'], ['212', '48'], ['256', '58'], ['298', '38']].map(([x, y]) => <circle key={`${x}-${y}`} cx={x} cy={y} r="3" fill="#2563eb" />)}
+            <polyline points={dieselPolyline} fill="none" stroke="#d0a36f" strokeWidth="0.45" opacity="0.75" />
+            <polyline points={petrolPolyline} fill="none" stroke="#91b7a8" strokeWidth="0.45" opacity="0.75" />
+            <polyline points={totalPolyline} fill="none" stroke={'#185FA5'} strokeWidth="0.75" />
+            {points.map((point, index) => {
+              const [x, y] = plotPoint(point.total, index).split(',')
+              return <circle key={`${point.label}-${point.total}`} cx={x} cy={y} r="3" fill={'#185FA5'}><title>{`${point.label}: ${point.total.toLocaleString()} L`}</title></circle>
+            })}
             {points.map((point, index) => (
               <text key={point.label} x={32 + index * 44} y="130" fill="#9ca3af" fontSize="10">{point.label}</text>
             ))}
           </svg>
         )}
+        <div className="mt-3 flex flex-wrap items-center gap-3 text-[10px] font-medium text-[#6b7280]">
+          <span className="inline-flex items-center gap-1"><span className="size-2 rounded-full bg-[#185FA5]" />Total</span>
+          <span className="inline-flex items-center gap-1"><span className="size-2 rounded-full bg-[#91b7a8]" />Petrol</span>
+          <span className="inline-flex items-center gap-1"><span className="size-2 rounded-full bg-[#d0a36f]" />Diesel</span>
+        </div>
       </div>
-      <div className="grid gap-2 border-t border-[#f1f5f9] px-4 py-3">
+      <div className="grid gap-2 border-t border-[#e2e8f0] px-4 py-3">
         {corridorRows.map((row) => (
           <div key={row.label} className="flex items-center justify-between gap-3">
-            <div className="text-[13px] font-semibold text-[#374151]">{row.label}</div>
+            <div className="text-[13px] font-medium text-[#6b7280]">{row.label}</div>
             <StatusPill tone={row.tone}>{row.status}</StatusPill>
           </div>
         ))}
@@ -1593,15 +1682,15 @@ function SupplyCommandFrame({
   criticalAlerts: number
 }) {
   const districts = [
-    { name: 'Northern', coverage: 86, tone: '#13d9c4', risk: 'Watch' },
-    { name: 'Central', coverage: 94, tone: '#31dd75', risk: 'Stable' },
-    { name: 'Southern', coverage: 79, tone: '#f6c445', risk: 'Pressure' },
-    { name: 'Lakeshore', coverage: 88, tone: '#2e9dff', risk: 'Stable' },
+    { name: 'Northern', coverage: 86, tone: '#1D9E75', risk: 'Watch' },
+    { name: 'Central', coverage: 94, tone: '#1D9E75', risk: 'Stable' },
+    { name: 'Southern', coverage: 79, tone: '#EF9F27', risk: 'Pressure' },
+    { name: 'Lakeshore', coverage: 88, tone: '#185FA5', risk: 'Stable' },
   ]
   const corridors = [
-    { name: 'Beira Corridor', flow: 'Normal', stock: '4.2d', tone: '#31dd75' },
-    { name: 'Nacala Corridor', flow: 'Delayed', stock: '2.8d', tone: '#f6c445' },
-    { name: 'Dar es Salaam', flow: 'Watch', stock: '3.1d', tone: '#2e9dff' },
+    { name: 'Beira Corridor', flow: 'Normal', stock: '4.2d', tone: '#1D9E75' },
+    { name: 'Nacala Corridor', flow: 'Delayed', stock: '2.8d', tone: '#EF9F27' },
+    { name: 'Dar es Salaam', flow: 'Watch', stock: '3.1d', tone: '#185FA5' },
   ]
 
   return (
@@ -1609,60 +1698,60 @@ function SupplyCommandFrame({
       <div className="mb-2 flex flex-wrap items-center gap-2 px-1">
         <div className="mr-auto min-w-0">
           <div className="flex items-center gap-2">
-            <Layers3 className="size-3.5 text-[#7cc7ff]" />
-            <h2 className="truncate text-[12px] font-bold uppercase tracking-[0.1em] text-white">National Supply Command</h2>
+            <Layers3 className="size-3.5 text-[#6b7280]" />
+            <h2 className="truncate text-[12px] font-medium uppercase tracking-[0.1em] text-white">National Supply Command</h2>
           </div>
-          <div className="mt-1 text-[11px] text-[#7f8d9d]">Depot cover, corridor flow, regional availability and intervention priority.</div>
+          <div className="mt-1 text-[11px] text-[#6b7280]">Depot cover, corridor flow, regional availability and intervention priority.</div>
         </div>
         {[
-          { label: 'Stations', value: totalStations.toLocaleString(), color: '#2e9dff' },
-          { label: 'Online', value: onlineStations.toLocaleString(), color: '#31dd75' },
-          { label: 'Critical', value: criticalAlerts.toLocaleString(), color: '#f03245' },
+          { label: 'Stations', value: totalStations.toLocaleString(), color: '#185FA5' },
+          { label: 'Online', value: onlineStations.toLocaleString(), color: '#1D9E75' },
+          { label: 'Critical', value: criticalAlerts.toLocaleString(), color: '#E24B4A' },
         ].map((item) => (
-          <div key={item.label} className="rounded-[8px] border border-[var(--mera-glass-border)] bg-[rgba(8,22,36,0.58)] px-2 py-1.5 text-right shadow-[inset_0_1px_0_rgba(255,255,255,0.045)]">
-            <div className="text-[13px] font-bold leading-none" style={{ color: item.color }}>{item.value}</div>
-            <div className="mt-1 text-[10px] font-bold uppercase tracking-[0.1em] text-[#65758a]">{item.label}</div>
+          <div key={item.label} className="rounded-md border border-[var(--mera-glass-border)] bg-[#f9fafb] px-2 py-1.5 text-right shadow-none">
+            <div className="text-[13px] font-medium leading-none" style={{ color: item.color }}>{item.value}</div>
+            <div className="mt-1 text-[10px] font-medium uppercase tracking-[0.1em] text-[#6b7280]">{item.label}</div>
           </div>
         ))}
       </div>
-      <div className="grid min-h-[360px] gap-2 rounded-[9px] border border-[var(--mera-glass-border)] bg-[rgba(2,10,18,0.46)] p-2 lg:grid-cols-[minmax(0,1fr)_260px]">
-        <div className="relative min-h-[340px] overflow-hidden rounded-[9px] border border-[var(--mera-glass-border)] bg-[linear-gradient(135deg,rgba(9,27,43,0.86),rgba(4,17,28,0.76)),linear-gradient(90deg,rgba(77,210,255,0.08)_1px,transparent_1px),linear-gradient(0deg,rgba(77,210,255,0.045)_1px,transparent_1px)] bg-[length:auto,34px_34px,34px_34px] p-4">
-          <div className="absolute inset-0 opacity-[0.12] [background-image:linear-gradient(#89a7c422_1px,transparent_1px),linear-gradient(90deg,#89a7c422_1px,transparent_1px)] [background-size:32px_32px]" />
+      <div className="grid min-h-[360px] gap-2 rounded-md border border-[var(--mera-glass-border)] bg-[#f9fafb] p-2 lg:grid-cols-[minmax(0,1fr)_260px]">
+        <div className="relative min-h-[340px] overflow-hidden rounded-md border border-[var(--mera-glass-border)] bg-[linear-gradient(135deg,rgba(9,27,43,0.86),rgba(4,17,28,0.76)),linear-gradient(90deg,rgba(77,210,255,0.08)_1px,transparent_1px),linear-gradient(0deg,rgba(77,210,255,0.045)_1px,transparent_1px)] bg-[length:auto,34px_34px,34px_34px] p-4">
+          <div className="absolute inset-0 opacity-[0.12] [background-image:linear-gradient(rgba(137,167,196,0.13)_1px,transparent_1px),linear-gradient(90deg,rgba(137,167,196,0.13)_1px,transparent_1px)] [background-size:32px_32px]" />
           <div className="relative grid h-full gap-3 md:grid-cols-[170px_minmax(0,1fr)]">
-            <div className="flex min-h-[300px] flex-col justify-between rounded-[8px] border border-[var(--mera-glass-border)] bg-[rgba(7,19,31,0.62)] p-3 backdrop-blur-md">
+            <div className="flex min-h-[300px] flex-col justify-between rounded-md border border-[var(--mera-glass-border)] bg-[#f9fafb] p-3 backdrop-blur-md">
               {districts.map((district) => (
                 <div key={district.name}>
-                  <div className="mb-1 flex items-center justify-between text-[11px] font-semibold">
+                  <div className="mb-1 flex items-center justify-between text-[11px] font-medium">
                     <span className="text-white">{district.name}</span>
                     <span style={{ color: district.tone }}>{district.coverage}%</span>
                   </div>
-                  <div className="h-2 overflow-hidden rounded-full bg-[#102033]">
+                  <div className="h-2 overflow-hidden rounded-full bg-[#111827]">
                     <div className="h-full rounded-full" style={{ width: `${district.coverage}%`, background: district.tone }} />
                   </div>
-                  <div className="mt-1 text-[10px] font-medium text-[#7f8d9d]">{district.risk}</div>
+                  <div className="mt-1 text-[10px] font-medium text-[#6b7280]">{district.risk}</div>
                 </div>
               ))}
             </div>
 
-            <div className="relative min-h-[300px] rounded-[8px] border border-[var(--mera-glass-border)] bg-[rgba(7,19,31,0.54)] p-4 backdrop-blur-md">
-              <div className="absolute left-1/2 top-7 h-[250px] w-1 -translate-x-1/2 rounded-full bg-[#1a3145]" />
+            <div className="relative min-h-[300px] rounded-md border border-[var(--mera-glass-border)] bg-[#f9fafb] p-4 backdrop-blur-md">
+              <div className="absolute left-1/2 top-7 h-[250px] w-1 -translate-x-1/2 rounded-full bg-[#111827]" />
               {[
-                { label: 'Karonga', top: '12%', left: '50%', color: '#f6c445' },
-                { label: 'Mzuzu', top: '28%', left: '42%', color: '#13d9c4' },
-                { label: 'Lilongwe', top: '48%', left: '56%', color: '#31dd75' },
-                { label: 'Zomba', top: '66%', left: '46%', color: '#2e9dff' },
-                { label: 'Blantyre', top: '80%', left: '58%', color: '#f03245' },
+                { label: 'Karonga', top: '12%', left: '50%', color: '#EF9F27' },
+                { label: 'Mzuzu', top: '28%', left: '42%', color: '#1D9E75' },
+                { label: 'Lilongwe', top: '48%', left: '56%', color: '#1D9E75' },
+                { label: 'Zomba', top: '66%', left: '46%', color: '#185FA5' },
+                { label: 'Blantyre', top: '80%', left: '58%', color: '#E24B4A' },
               ].map((node) => (
                 <div key={node.label} className="absolute flex items-center gap-2" style={{ top: node.top, left: node.left }}>
-                  <span className="grid size-8 place-items-center rounded-full border border-white/20 bg-[#06111a] shadow-[0_0_18px_rgba(46,157,255,0.2)]">
+                  <span className="grid size-8 place-items-center rounded-full border border-white/20 bg-[#111827] shadow-none">
                     <span className="size-3 rounded-full" style={{ background: node.color }} />
                   </span>
-                  <span className="rounded-[6px] border border-[var(--mera-glass-border)] bg-[#06111a]/80 px-2 py-1 text-[11px] font-bold text-white backdrop-blur-md">{node.label}</span>
+                  <span className="rounded-md border border-[var(--mera-glass-border)] bg-[#111827]/80 px-2 py-1 text-[11px] font-medium text-white backdrop-blur-md">{node.label}</span>
                 </div>
               ))}
               <div className="absolute bottom-3 left-3 right-3 grid grid-cols-3 gap-2">
                 {['Depot cover 3.8d', 'Queue risk +14%', 'Price watch +61/L'].map((item) => (
-                  <div key={item} className="rounded-[6px] border border-[var(--mera-glass-border)] bg-[#06111a]/78 px-2 py-1.5 text-center text-[10px] font-semibold text-[#d5e7f6] backdrop-blur-md">
+                  <div key={item} className="rounded-md border border-[var(--mera-glass-border)] bg-[#111827]/78 px-2 py-1.5 text-center text-[10px] font-medium text-[#6b7280] backdrop-blur-md">
                     {item}
                   </div>
                 ))}
@@ -1673,17 +1762,17 @@ function SupplyCommandFrame({
 
         <aside className="grid gap-2">
           {corridors.map((row) => (
-            <div key={row.name} className="rounded-[8px] border border-[var(--mera-glass-border)] bg-[rgba(8,22,36,0.58)] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+            <div key={row.name} className="rounded-md border border-[var(--mera-glass-border)] bg-[#f9fafb] p-3 shadow-none">
               <div className="flex items-center justify-between gap-2">
-                <div className="text-[12px] font-bold text-white">{row.name}</div>
-                <span className="rounded-[4px] px-2 py-1 text-[10px] font-bold" style={{ background: `${row.tone}22`, color: row.tone }}>
+                <div className="text-[12px] font-medium text-white">{row.name}</div>
+                <span className="rounded-md px-2 py-1 text-[10px] font-medium" style={{ background: `${row.tone}22`, color: row.tone }}>
                   {row.flow}
                 </span>
               </div>
               <div className="mt-3 flex items-end justify-between">
                 <div>
-                  <div className="text-[10px] font-semibold uppercase tracking-[0.1em] text-[#65758a]">Stock Cover</div>
-                  <div className="mt-1 text-[22px] font-bold text-white">{row.stock}</div>
+                  <div className="text-[10px] font-medium uppercase tracking-[0.1em] text-[#6b7280]">Stock Cover</div>
+                  <div className="mt-1 text-[22px] font-medium text-white">{row.stock}</div>
                 </div>
                 <Sparkline data={[3, 4, 3.6, 4.4, 4.1, Number.parseFloat(row.stock)]} color={row.tone} />
               </div>
@@ -1701,12 +1790,12 @@ function IncidentCommandQueue({ items }: { items: IncidentQueueItem[] }) {
       <div className="mb-2.5 flex items-start justify-between gap-3">
         <div>
           <div className="flex items-center gap-2">
-            <BellRing className="size-3.5 text-[#f6c445]" />
-            <h2 className="text-[12px] font-bold uppercase tracking-[0.1em] text-white">Incident Command Queue</h2>
+            <BellRing className="size-3.5 text-[#d97706]" />
+            <h2 className="text-[12px] font-medium uppercase tracking-[0.1em] text-white">Incident Command Queue</h2>
           </div>
-          <div className="mt-1 text-[10px] text-[#65758a]">Ownership, SLA, and escalation posture.</div>
+          <div className="mt-1 text-[10px] text-[#6b7280]">Ownership, SLA, and escalation posture.</div>
         </div>
-        <span className="rounded-[4px] border border-[#f03245]/30 bg-[#32111a] px-2 py-1 text-[10px] font-bold text-[#ff9b9b]">
+        <span className="rounded-md border border-[#e2e8f0] bg-[#111827] px-2 py-1 text-[10px] font-medium text-[#dc2626]">
           4 urgent
         </span>
       </div>
@@ -1714,29 +1803,29 @@ function IncidentCommandQueue({ items }: { items: IncidentQueueItem[] }) {
         {items.slice(0, 6).map((item) => {
           const meta = severityMeta(item.severity)
           return (
-            <div key={item.id} className="rounded-[8px] border border-[var(--mera-glass-border)] bg-[rgba(8,22,36,0.58)] p-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+            <div key={item.id} className="rounded-md border border-[var(--mera-glass-border)] bg-[#f9fafb] p-2.5 shadow-none">
               <div className="flex items-start gap-2">
-                <span className="mt-0.5 grid size-6 shrink-0 place-items-center rounded-[4px]" style={{ color: meta.color, background: meta.bg }}>
+                <span className="mt-0.5 grid size-6 shrink-0 place-items-center rounded-md" style={{ color: meta.color, background: meta.bg }}>
                   <ShieldAlert className="size-3.5" />
                 </span>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
-                      <div className="truncate text-[11px] font-bold text-white">{item.title}</div>
-                      <div className="mt-1 truncate text-[10px] text-[#65758a]">{item.district} · {item.station}</div>
+                      <div className="truncate text-[11px] font-medium text-white">{item.title}</div>
+                      <div className="mt-1 truncate text-[10px] text-[#6b7280]">{item.district} · {item.station}</div>
                     </div>
-                    <span className="shrink-0 rounded-[3px] px-1.5 py-0.5 text-[8.5px] font-bold uppercase" style={{ color: meta.color, background: meta.bg }}>
+                    <span className="shrink-0 rounded-md px-1.5 py-0.5 text-[8.5px] font-medium uppercase" style={{ color: meta.color, background: meta.bg }}>
                       {meta.label}
                     </span>
                   </div>
-                  <div className="mt-2 grid grid-cols-3 gap-1.5 text-[9.5px] text-[#7f8d9d]">
+                  <div className="mt-2 grid grid-cols-3 gap-1.5 text-[9.5px] text-[#6b7280]">
                     <span className="truncate"><UserRound className="mr-1 inline size-3" />{item.owner}</span>
                     <span className="truncate"><Clock3 className="mr-1 inline size-3" />SLA {formatSla(item.slaMinutes)}</span>
-                    <span className="truncate text-right text-[#cbd6e2]">{item.status}</span>
+                    <span className="truncate text-right text-[#6b7280]">{item.status}</span>
                   </div>
                 </div>
               </div>
-              <button type="button" className="mt-2 inline-flex h-6 items-center gap-1 rounded-[5px] border border-[var(--mera-glass-border)] bg-[rgba(4,14,25,0.62)] px-2 text-[10px] font-bold text-white transition hover:border-[#4dd2ff]/55">
+              <button type="button" className="mt-2 inline-flex h-6 items-center gap-1 rounded-md border border-[var(--mera-glass-border)] bg-[#f9fafb] px-2 text-[10px] font-medium text-white transition hover:border-[#e2e8f0]">
                 {item.action}
                 <ArrowUpRight className="size-3" />
               </button>
@@ -1776,8 +1865,8 @@ function AvailabilityTrendPanel({
     <section className={`${darkPanel} h-[184px] p-3`}>
       <div className="mb-2 flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <h2 className="truncate text-[11px] font-bold uppercase tracking-[0.1em] text-white">Fuel Availability</h2>
-          <div className="mt-1 text-[10px] font-medium text-[#65758a]">National product availability trend</div>
+          <h2 className="truncate text-[11px] font-medium uppercase tracking-[0.1em] text-[#111827]">Fuel Availability</h2>
+          <div className="mt-1 text-[10px] font-medium text-[#6b7280]">National product availability trend</div>
         </div>
         <div className="flex shrink-0 items-center gap-1">
           {availabilityIntervals.slice(1).map((interval) => (
@@ -1785,8 +1874,8 @@ function AvailabilityTrendPanel({
               key={interval}
               type="button"
               onClick={() => onIntervalChange(interval)}
-              className={`h-6 rounded-[3px] px-2 text-[10px] font-bold ${
-                selectedInterval === interval ? 'bg-[#4dd2ff] text-[#04111c]' : 'bg-[rgba(8,22,36,0.62)] text-[#8ea6bc] hover:text-white'
+              className={`h-6 rounded-md px-2 text-[10px] font-medium ${
+                selectedInterval === interval ? 'bg-[#eff6ff] text-[#2563eb]' : 'bg-[#f9fafb] text-[#6b7280] hover:text-[#111827]'
               }`}
             >
               {interval}
@@ -1797,134 +1886,16 @@ function AvailabilityTrendPanel({
       <div className="h-[128px]">
         <ResponsiveContainer>
           <LineChart data={chartRows} margin={{ top: 8, right: 8, bottom: 0, left: -22 }}>
-            <CartesianGrid stroke="#17283a" vertical={false} />
-            <XAxis dataKey="label" tick={{ fill: '#65758a', fontSize: 8 }} axisLine={false} tickLine={false} />
-            <YAxis tick={{ fill: '#65758a', fontSize: 8 }} axisLine={false} tickLine={false} domain={[0, 100]} width={36} tickFormatter={(value) => `${value}%`} />
-            <Tooltip contentStyle={{ background: '#081522', border: '1px solid #213345', borderRadius: 5, color: '#eaf2fb', fontSize: 10 }} />
-            <Line type="monotone" dataKey="availabilityPercent" stroke="#13d9c4" strokeWidth={2} dot={false} activeDot={{ r: 3 }} connectNulls />
-            <Line type="monotone" dataKey="deliveryVerifiedPercent" stroke="#f6c445" strokeWidth={1.8} dot={false} activeDot={{ r: 3 }} connectNulls />
+            <CartesianGrid stroke="var(--mera-chart-grid)" vertical={false} />
+            <XAxis dataKey="label" tick={{ fill: 'var(--mera-chart-axis)', fontSize: 8 }} axisLine={false} tickLine={false} />
+            <YAxis tick={{ fill: 'var(--mera-chart-axis)', fontSize: 8 }} axisLine={false} tickLine={false} domain={[0, 100]} width={36} tickFormatter={(value) => `${value}%`} />
+            <Tooltip contentStyle={{ background: 'var(--mera-chart-tooltip-bg)', border: '1px solid var(--mera-chart-tooltip-border)', borderRadius: 8, color: 'var(--mera-chart-tooltip-text)', fontSize: 10 }} />
+            <Line type="monotone" dataKey="availabilityPercent" stroke={'#1D9E75'} strokeWidth={2} dot={false} activeDot={{ r: 3 }} connectNulls />
+            <Line type="monotone" dataKey="deliveryVerifiedPercent" stroke={'#EF9F27'} strokeWidth={1.8} dot={false} activeDot={{ r: 3 }} connectNulls />
           </LineChart>
         </ResponsiveContainer>
       </div>
-      {loading ? <div className="mt-1 text-[10px] font-bold uppercase tracking-[0.1em] text-[#f5c84c]">Updating</div> : null}
-    </section>
-  )
-}
-
-function PriceVariancePanel() {
-  return (
-    <section className={`${darkPanel} h-[184px] p-3`}>
-      <div className="mb-2 flex items-center justify-between">
-        <h2 className="text-[11px] font-bold uppercase tracking-[0.1em] text-white">Price Variance by Region</h2>
-        <span className="text-[10px] font-semibold text-[#65758a]">MWK/L</span>
-      </div>
-      <div className="h-[142px]">
-        <ResponsiveContainer>
-          <BarChart data={mockPriceVariance} margin={{ top: 8, right: 8, left: -24, bottom: 0 }}>
-            <CartesianGrid stroke="#17283a" vertical={false} />
-            <XAxis dataKey="region" tick={{ fill: '#65758a', fontSize: 8 }} axisLine={false} tickLine={false} />
-            <YAxis tick={{ fill: '#65758a', fontSize: 8 }} axisLine={false} tickLine={false} width={34} tickFormatter={(value) => `+${value}`} />
-            <Tooltip contentStyle={{ background: '#081522', border: '1px solid #213345', borderRadius: 5, color: '#eaf2fb', fontSize: 10 }} formatter={(value: any) => [`MWK +${value}/L`, 'Variance']} />
-            <Bar dataKey="petrol" fill="#f03245" radius={[3, 3, 0, 0]} />
-            <Bar dataKey="diesel" fill="#f6c445" radius={[3, 3, 0, 0]} />
-            <Bar dataKey="lpg" fill="#13d9c4" radius={[3, 3, 0, 0]} />
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
-    </section>
-  )
-}
-
-function InspectionFunnelPanel() {
-  const rows = [
-    { label: 'Scheduled', value: 1248, color: '#2e9dff' },
-    { label: 'In Progress', value: 876, color: '#13d9c4' },
-    { label: 'Completed', value: 642, color: '#31dd75' },
-    { label: 'Actions', value: 248, color: '#f6c445' },
-  ]
-  const max = Math.max(...rows.map((row) => row.value))
-  return (
-    <section className={`${darkPanel} h-[184px] p-3`}>
-      <div className="mb-3 flex items-center justify-between">
-        <h2 className="text-[11px] font-bold uppercase tracking-[0.1em] text-white">Inspection Completion Funnel</h2>
-        <span className="text-[10px] font-semibold text-[#65758a]">May 1 - May 15</span>
-      </div>
-      <div className="space-y-2">
-        {rows.map((row) => (
-          <div key={row.label}>
-            <div className="mb-1 flex items-center justify-between text-[10px] font-semibold text-[#7f8d9d]">
-              <span>{row.label}</span>
-              <span className="text-white">{row.value.toLocaleString()}</span>
-            </div>
-            <div className="h-5 overflow-hidden rounded-[5px] bg-[rgba(8,22,36,0.66)]">
-              <div className="flex h-full items-center justify-end pr-2 text-[9px] font-bold text-[#06111a]" style={{ width: `${Math.max(18, (row.value / max) * 100)}%`, background: row.color }}>
-                {Math.round((row.value / max) * 100)}%
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
-      <div className="mt-2 text-right text-[10px] font-bold text-[#31dd75]">Compliance Rate 52.3%</div>
-    </section>
-  )
-}
-
-function ComplianceMatrixPanel({ complianceRows }: { complianceRows: Array<{ name: string; value: number; color: string }> }) {
-  const totalIssues = complianceRows.reduce((sum, row) => sum + row.value, 0)
-  return (
-    <section className={`${darkPanel} h-[184px] p-3`}>
-      <div className="mb-2 flex items-center justify-between">
-        <h2 className="text-[11px] font-bold uppercase tracking-[0.1em] text-white">Compliance Heat Matrix</h2>
-        <span className="text-[10px] font-semibold text-[#65758a]">{totalIssues} records</span>
-      </div>
-      <div className="space-y-2">
-        {mockComplianceMatrix.map((row) => (
-          <div key={row.label}>
-            <div className="mb-1 flex items-center justify-between text-[10px]">
-              <span className="font-semibold text-[#cbd6e2]">{row.label}</span>
-              <span className="text-[#65758a]">{row.compliant}% clear</span>
-            </div>
-            <div className="grid h-5 grid-cols-[minmax(0,1fr)_42px_30px] overflow-hidden rounded-[5px] border border-[var(--mera-glass-border)] bg-[rgba(8,22,36,0.66)] text-[9px] font-bold">
-              <div className="flex items-center px-2 text-[#06111a]" style={{ width: `${row.compliant}%`, minWidth: 36, background: '#31dd75' }}>OK</div>
-              <div className="flex items-center justify-center bg-[#f6c445]/85 text-[#06111a]">{row.watch}</div>
-              <div className="flex items-center justify-center bg-[#f03245] text-white">{row.breach}</div>
-            </div>
-          </div>
-        ))}
-      </div>
-    </section>
-  )
-}
-
-function AnomalyReviewPanel() {
-  return (
-    <section className={`${darkPanel} h-full min-h-[360px] p-3`}>
-      <div className="mb-2 flex items-center justify-between">
-        <div>
-          <div className="flex items-center gap-2">
-            <Bot className="size-3.5 text-[#f6c445]" />
-            <h2 className="text-[12px] font-bold uppercase tracking-[0.1em] text-white">Anomaly Review</h2>
-          </div>
-          <div className="mt-1 text-[10px] text-[#65758a]">AI signals requiring review.</div>
-        </div>
-        <span className="rounded-[4px] border border-[#31dd75]/25 bg-[#0a2a1e] px-2 py-1 text-[10px] font-bold uppercase text-[#55e489]">AI Insights</span>
-      </div>
-      <div className="space-y-2">
-        {mockAnomalies.map((item) => (
-          <div key={item.signal} className="rounded-[8px] border border-[var(--mera-glass-border)] bg-[rgba(8,22,36,0.58)] p-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <div className="text-[11px] font-bold leading-4 text-white">{item.signal}</div>
-                <div className="mt-1 truncate text-[10px] text-[#65758a]">{item.district} · {item.action}</div>
-              </div>
-              <span className="shrink-0 text-[10px] font-bold text-[#31dd75]">{item.confidence}%</span>
-            </div>
-          </div>
-        ))}
-      </div>
-      <button type="button" className="mt-3 h-7 w-full rounded-[6px] border border-[var(--mera-glass-border)] bg-[rgba(8,22,36,0.62)] text-[10px] font-bold text-[#d7e7f5] hover:border-[#4dd2ff]/55">
-        View All Insights
-      </button>
+      {loading ? <div className="mt-1 text-[10px] font-medium uppercase tracking-[0.1em] text-[#d97706]">Updating</div> : null}
     </section>
   )
 }
@@ -1933,39 +1904,39 @@ function StationRiskTable({ rows }: { rows: StationRiskRow[] }) {
   return (
     <section className={`${darkPanel} overflow-hidden p-3`}>
       <div className="mb-2 flex items-center justify-between">
-        <h2 className="text-[11px] font-bold uppercase tracking-[0.1em] text-white">Station Risk Watchlist</h2>
-        <span className="text-[10px] font-semibold text-[#65758a]">{rows.length} active · View all</span>
+        <h2 className="text-[11px] font-medium uppercase tracking-[0.1em] text-white">Station Risk Watchlist</h2>
+        <span className="text-[10px] font-medium text-[#6b7280]">{rows.length} active · View all</span>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[760px] table-fixed text-left">
           <thead>
-            <tr className="border-y border-[var(--mera-glass-border)] bg-[rgba(8,22,36,0.62)] text-[9px] uppercase tracking-[0.1em] text-[#8ea6bc]">
-              <th className="w-[132px] px-2 py-1.5 font-bold">Station ID</th>
-              <th className="px-2 py-1.5 font-bold">Station</th>
-              <th className="w-[96px] px-2 py-1.5 font-bold">District</th>
-              <th className="w-[72px] px-2 py-1.5 text-right font-bold">Fuel Days</th>
-              <th className="w-[96px] px-2 py-1.5 font-bold">Last Signal</th>
-              <th className="w-[96px] px-2 py-1.5 font-bold">License</th>
-              <th className="w-[90px] px-2 py-1.5 font-bold">Price</th>
-              <th className="w-[70px] px-2 py-1.5 text-right font-bold">Risk</th>
-              <th className="w-[86px] px-2 py-1.5 text-right font-bold">Action</th>
+            <tr className="border-y border-[var(--mera-glass-border)] bg-[#f9fafb] text-[9px] uppercase tracking-[0.1em] text-[#6b7280]">
+              <th className="w-[132px] px-2 py-1.5 font-medium">Station ID</th>
+              <th className="px-2 py-1.5 font-medium">Station</th>
+              <th className="w-[96px] px-2 py-1.5 font-medium">District</th>
+              <th className="w-[72px] px-2 py-1.5 text-right font-medium">Fuel Days</th>
+              <th className="w-[96px] px-2 py-1.5 font-medium">Last Signal</th>
+              <th className="w-[96px] px-2 py-1.5 font-medium">License</th>
+              <th className="w-[90px] px-2 py-1.5 font-medium">Price</th>
+              <th className="w-[70px] px-2 py-1.5 text-right font-medium">Risk</th>
+              <th className="w-[86px] px-2 py-1.5 text-right font-medium">Action</th>
             </tr>
           </thead>
           <tbody>
             {rows.map((row) => {
-              const riskColor = row.riskScore >= 80 ? '#f03245' : row.riskScore >= 60 ? '#f6c445' : '#2e9dff'
+              const riskColor = row.riskScore >= 80 ? '#E24B4A' : row.riskScore >= 60 ? '#EF9F27' : '#185FA5'
               return (
-                <tr key={row.stationId} className="border-b border-[rgba(163,221,255,0.09)] text-[10px] last:border-0">
-                  <td className="truncate px-2 py-1.5 font-bold text-white">{row.stationId}</td>
-                  <td className="truncate px-2 py-1.5 text-[#cbd6e2]">{row.station}</td>
-                  <td className="truncate px-2 py-1.5 text-[#7f8d9d]">{row.district}</td>
-                  <td className="px-2 py-1.5 text-right font-bold text-white">{row.fuelDays.toFixed(1)}</td>
-                  <td className="truncate px-2 py-1.5 text-[#7f8d9d]">{row.lastSignal}</td>
-                  <td className="truncate px-2 py-1.5 text-[#7f8d9d]">{row.licenseStatus}</td>
-                  <td className="truncate px-2 py-1.5 font-bold text-white">{row.priceCheck}</td>
-                  <td className="px-2 py-1.5 text-right font-bold" style={{ color: riskColor }}>{row.riskScore}</td>
+                <tr key={row.stationId} className="border-b border-[#e2e8f0] text-[10px] last:border-0">
+                  <td className="truncate px-2 py-1.5 font-medium text-white">{row.stationId}</td>
+                  <td className="truncate px-2 py-1.5 text-[#6b7280]">{stationDisplayValue(row.station)}</td>
+                  <td className="truncate px-2 py-1.5 text-[#6b7280]">{row.district}</td>
+                  <td className="px-2 py-1.5 text-right font-medium text-white">{row.fuelDays.toFixed(1)}</td>
+                  <td className="truncate px-2 py-1.5 text-[#6b7280]">{row.lastSignal}</td>
+                  <td className="truncate px-2 py-1.5 text-[#6b7280]">{row.licenseStatus}</td>
+                  <td className="truncate px-2 py-1.5 font-medium text-white">{row.priceCheck}</td>
+                  <td className="px-2 py-1.5 text-right font-medium" style={{ color: riskColor }}>{row.riskScore}</td>
                   <td className="px-2 py-1.5 text-right">
-                    <button type="button" className="rounded-[5px] border border-[var(--mera-glass-border)] px-1.5 py-0.5 text-[9px] font-bold text-[#d7e7f5] transition hover:border-[#4dd2ff]/55">
+                    <button type="button" className="rounded-md border border-[var(--mera-glass-border)] px-1.5 py-0.5 text-[9px] font-medium text-[#6b7280] transition hover:border-[#e2e8f0]">
                       {row.actionLabel}
                     </button>
                   </td>
@@ -1986,22 +1957,22 @@ function PinnedWidgets({ widgets, onOpenWidgets }: { widgets: DashboardWidget[];
         <div key={widget.id} className={`${darkPanel} min-h-[112px] p-4`}>
           <div className="flex items-start justify-between gap-2">
             <div>
-              <div className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-500">{widget.category}</div>
-              <div className="mt-1 text-[13px] font-semibold text-white">{widget.title}</div>
+              <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-[#6b7280]">{widget.category}</div>
+              <div className="mt-1 text-[13px] font-medium text-white">{widget.title}</div>
             </div>
-            <span className="rounded-[5px] border border-[#2e9dff]/30 bg-[#2e9dff]/10 px-1.5 py-0.5 text-[9px] font-bold uppercase text-[#8fd0ff]">Pinned</span>
+            <span className="rounded-md border border-[#e2e8f0] bg-[#eff6ff]/10 px-1.5 py-0.5 text-[9px] font-medium uppercase text-[#6b7280]">Pinned</span>
           </div>
           <div className="mt-3 flex items-end justify-between gap-3">
-            <div className="text-[24px] font-semibold tracking-[-0.04em] text-white">{widget.metric}</div>
-            <div className="text-right text-[11px] font-semibold text-[#8fd0ff]">{widget.trend}</div>
+            <div className="text-[24px] font-medium tracking-normal text-white">{widget.metric}</div>
+            <div className="text-right text-[11px] font-medium text-[#6b7280]">{widget.trend}</div>
           </div>
-          <div className="mt-2 line-clamp-2 text-[11px] leading-4 text-slate-400">{widget.description}</div>
+          <div className="mt-2 line-clamp-2 text-[11px] leading-4 text-[#6b7280]">{widget.description}</div>
         </div>
       ))}
-      <button type="button" onClick={onOpenWidgets} className="min-h-[112px] rounded-[7px] border border-dashed border-white/18 bg-white/[0.025] p-4 text-left text-slate-300 transition hover:border-[#32db64]/50 hover:bg-[#32db64]/5">
-        <PackagePlus className="size-5 text-[#32db64]" />
-        <div className="mt-3 text-[13px] font-semibold text-white">Add operational widget</div>
-        <div className="mt-1 text-[11px] text-slate-400">Pin supply, licensing, telemetry, and pricing modules.</div>
+      <button type="button" onClick={onOpenWidgets} className="min-h-[112px] rounded-md border border-dashed border-white/18 bg-white/[0.025] p-4 text-left text-[#6b7280] transition hover:border-[#e2e8f0] hover:bg-[#ecfdf5]/5">
+        <PackagePlus className="size-5 text-[#059669]" />
+        <div className="mt-3 text-[13px] font-medium text-white">Add operational widget</div>
+        <div className="mt-1 text-[11px] text-[#6b7280]">Pin supply, licensing, telemetry, and pricing modules.</div>
       </button>
     </section>
   )
@@ -2024,6 +1995,8 @@ function createViewDraft(existingLabels: string[]): DashboardCustomView {
   return {
     id: createDashboardId('view'),
     label: uniqueViewLabel('Area Overview', existingLabels),
+    subtitle: 'Custom operational command view for the selected scope.',
+    headerButtons: [],
     scopeType: 'National',
     scopeValue: 'National',
     product: 'All Products',
@@ -2086,21 +2059,24 @@ const builtinViewTemplates: Record<string, Omit<DashboardCustomView, 'createdAt'
     product: 'All Products',
     colorPreset: 'red',
     blocks: [
-      { id: 'compliance-alerts', type: 'compliance-alerts', title: 'Compliance Alerts', size: 'medium', displayMode: 'list', colorPreset: 'red' },
+      { id: 'compliance-kpis', type: 'kpi-summary', title: 'Compliance Signals', size: 'wide', displayMode: 'metric', colorPreset: 'red' },
+      { id: 'compliance-alerts', type: 'compliance-alerts', title: 'Live Compliance Watch', size: 'medium', displayMode: 'list', colorPreset: 'red' },
       { id: 'compliance-risk', type: 'station-risk-table', title: 'Station Risk Table', size: 'wide', displayMode: 'table', colorPreset: 'amber' },
-      { id: 'compliance-matrix', type: 'compliance-matrix', title: 'Compliance Matrix', size: 'medium', displayMode: 'bar', colorPreset: 'teal' },
+      { id: 'compliance-price', type: 'price-variance', title: 'Price Variance Evidence', size: 'medium', displayMode: 'bar', colorPreset: 'blue' },
+      { id: 'compliance-matrix', type: 'compliance-matrix', title: 'Compliance Matrix', size: 'medium', displayMode: 'bar', colorPreset: 'green' },
     ],
   },
   'builtin-enforcement': {
     id: 'builtin-enforcement',
-    label: 'Enforcement',
+    label: 'Enforcement Watch',
     scopeType: 'National',
     scopeValue: 'National',
     product: 'All Products',
     colorPreset: 'amber',
     blocks: [
-      { id: 'enforcement-alerts', type: 'compliance-alerts', title: 'Escalations', size: 'medium', displayMode: 'list', colorPreset: 'red' },
-      { id: 'enforcement-risk', type: 'station-risk-table', title: 'Station Risk Table', size: 'wide', displayMode: 'table', colorPreset: 'amber' },
+      { id: 'enforcement-kpis', type: 'kpi-summary', title: 'Enforcement Signals', size: 'wide', displayMode: 'metric', colorPreset: 'amber' },
+      { id: 'enforcement-alerts', type: 'compliance-alerts', title: 'Escalation Queue', size: 'medium', displayMode: 'table', colorPreset: 'red' },
+      { id: 'enforcement-risk', type: 'station-risk-table', title: 'Case Priority Board', size: 'wide', displayMode: 'table', colorPreset: 'amber' },
       { id: 'enforcement-price', type: 'price-variance', title: 'Price Evidence', size: 'medium', displayMode: 'table', colorPreset: 'blue' },
     ],
   },
@@ -2159,45 +2135,42 @@ function DashboardBlockRow({
         onDropBlock(event.dataTransfer.getData('text/plain') || draggingBlockId, block.id)
       }}
       onDragEnd={onDragEnd}
-      className={`rounded-[6px] border border-[#e2e8f0] bg-white p-3 transition ${isDragging ? 'scale-[0.99] opacity-60' : 'opacity-100'}`}
+      className={`rounded-md border border-[#e2e8f0] bg-white p-3 transition ${isDragging ? 'scale-[0.99] opacity-60' : 'opacity-100'}`}
     >
       <div className="flex items-start gap-3">
-        <div className="mt-1 grid size-8 shrink-0 cursor-grab place-items-center rounded-[5px] border border-[#e5e7eb] bg-[#f9fafb] text-[#9ca3af]" title="Drag to reorder">
+        <div className="mt-1 grid size-8 shrink-0 cursor-grab place-items-center rounded-md border border-[#e2e8f0] bg-[#f9fafb] text-[#6b7280]" title="Drag to reorder">
           <GripVertical className="size-4" />
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <div className="text-[13px] font-bold text-[#111827]">{block.title}</div>
+            <div className="text-[13px] font-medium text-[#111827]">{block.title}</div>
             <span className="size-2 rounded-full" style={{ background: blockColorPreset.accent }} />
-            <span className="rounded-[3px] bg-[#f3f4f6] px-1.5 py-0.5 text-[9px] font-bold uppercase text-[#6b7280]">{libraryItem.title}</span>
+            <span className="rounded-md bg-[#f9fafb] px-1.5 py-0.5 text-[9px] font-medium uppercase text-[#6b7280]">{libraryItem.title}</span>
           </div>
           <div className="mt-1 text-[12px] leading-5 text-[#6b7280]">{libraryItem.description}</div>
         </div>
-        <button type="button" onClick={() => onRemove(block.id)} className="grid size-8 shrink-0 place-items-center rounded-[5px] text-[#dc2626] transition hover:bg-[#fef2f2]" aria-label="Remove block">
+        <button type="button" onClick={() => onRemove(block.id)} className="grid size-8 shrink-0 place-items-center rounded-md text-[#dc2626] transition hover:bg-[#fef2f2]" aria-label="Remove block">
           <Trash2 className="size-4" />
         </button>
       </div>
       <div className="mt-3 grid gap-2 sm:grid-cols-4">
-        <label className="grid gap-1 sm:col-span-2">
-          <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#9ca3af]">Block Title</span>
-          <input value={block.title} onChange={(event) => onUpdate(block.id, { title: event.target.value })} className="h-9 rounded-[5px] border border-[#e2e8f0] bg-white px-2 text-[12px] font-semibold text-[#374151] outline-none focus:border-[#111827]/40" />
-        </label>
-        <label className="grid gap-1">
-          <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#9ca3af]">Size</span>
-          <select value={block.size} onChange={(event) => onUpdate(block.id, { size: event.target.value as DashboardBlockSize })} className="h-9 rounded-[5px] border border-[#e2e8f0] bg-white px-2 text-[12px] font-semibold text-[#374151]">
+        <FieldShell className="grid gap-1 sm:col-span-2" label="Block title" hint="Name this dashboard block for the custom view. Example: Critical station risks.">
+          <input value={block.title} onChange={(event) => onUpdate(block.id, { title: event.target.value })} className="h-9 rounded-md border border-[#e2e8f0] bg-white px-2 text-[12px] font-medium text-[#6b7280] outline-none focus:border-[#e2e8f0]" />
+        </FieldShell>
+        <FieldShell className="grid gap-1" label="Block size" hint="Choose how much grid space this block uses. Example: Wide for charts, Small for KPI tiles.">
+          <select value={block.size} onChange={(event) => onUpdate(block.id, { size: event.target.value as DashboardBlockSize })} className="h-9 rounded-md border border-[#e2e8f0] bg-white px-2 text-[12px] font-medium text-[#6b7280]">
             <option value="small">Small</option>
             <option value="medium">Medium</option>
             <option value="wide">Wide</option>
           </select>
-        </label>
-        <label className="grid gap-1">
-          <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#9ca3af]">Display</span>
-          <select value={block.displayMode} onChange={(event) => onUpdate(block.id, { displayMode: event.target.value as DashboardBlockDisplay })} className="h-9 rounded-[5px] border border-[#e2e8f0] bg-white px-2 text-[12px] font-semibold text-[#374151]">
+        </FieldShell>
+        <FieldShell className="grid gap-1" label="Display mode" hint="Select how the block visualizes data. Example: table for records, chart for trends.">
+          <select value={block.displayMode} onChange={(event) => onUpdate(block.id, { displayMode: event.target.value as DashboardBlockDisplay })} className="h-9 rounded-md border border-[#e2e8f0] bg-white px-2 text-[12px] font-medium text-[#6b7280]">
             {libraryItem.modes.map((mode) => <option key={mode} value={mode}>{mode}</option>)}
           </select>
-        </label>
+        </FieldShell>
         <div className="sm:col-span-3">
-          <span className="mb-1 block text-[10px] font-bold uppercase tracking-[0.08em] text-[#9ca3af]">Block Color</span>
+          <FieldLabel label="Block color" hint="Choose the accent color used for this dashboard block. Example: red for enforcement risk." className="mb-1 text-[10px]" />
           <div className="flex flex-wrap gap-1.5">
             {(Object.keys(colorPresets) as DashboardColorPreset[]).map((presetKey) => {
               const preset = colorPresets[presetKey]
@@ -2207,7 +2180,7 @@ function DashboardBlockRow({
                   key={presetKey}
                   type="button"
                   onClick={() => onUpdate(block.id, { colorPreset: presetKey })}
-                  className={`grid size-7 place-items-center rounded-[5px] border transition ${active ? 'border-[#111827] bg-white' : 'border-[#e2e8f0] bg-[#f9fafb] hover:border-[#cbd5e0]'}`}
+                  className={`grid size-7 place-items-center rounded-md border transition ${active ? 'border-[#e2e8f0] bg-white' : 'border-[#e2e8f0] bg-[#f9fafb] hover:border-[#e2e8f0]'}`}
                   aria-label={`Use ${preset.label} block color`}
                 >
                   <span className="size-3.5 rounded-full" style={{ background: preset.accent }} />
@@ -2217,10 +2190,10 @@ function DashboardBlockRow({
           </div>
         </div>
         <div className="grid grid-cols-2 gap-2 sm:pt-5">
-          <button type="button" onClick={() => onMove(index, Math.max(0, index - 1))} disabled={index === 0} className="grid h-9 place-items-center rounded-[5px] border border-[#e2e8f0] text-[#6b7280] disabled:opacity-40" aria-label="Move block up">
+          <button type="button" onClick={() => onMove(index, Math.max(0, index - 1))} disabled={index === 0} className="grid h-9 place-items-center rounded-md border border-[#e2e8f0] text-[#6b7280] disabled:opacity-40" aria-label="Move block up">
             <ArrowUp className="size-4" />
           </button>
-          <button type="button" onClick={() => onMove(index, index + 1)} className="grid h-9 place-items-center rounded-[5px] border border-[#e2e8f0] text-[#6b7280]" aria-label="Move block down">
+          <button type="button" onClick={() => onMove(index, index + 1)} className="grid h-9 place-items-center rounded-md border border-[#e2e8f0] text-[#6b7280]" aria-label="Move block down">
             <ArrowDown className="size-4" />
           </button>
         </div>
@@ -2318,6 +2291,16 @@ function ViewBuilderDrawer({
       blocks: current.blocks.map((block) => block.id === id ? { ...block, ...next } : block),
     }))
   }
+  const updateHeaderButton = (index: number, next: Partial<DashboardHeaderButton>) => {
+    setDraft((current) => {
+      const buttons = [...(current.headerButtons || [])]
+      while (buttons.length <= index) {
+        buttons.push({ id: createDashboardId('action'), label: '', path: '', variant: buttons.length === 0 ? 'primary' : 'secondary' })
+      }
+      buttons[index] = { ...buttons[index], ...next }
+      return { ...current, headerButtons: buttons.slice(0, 2) }
+    })
+  }
   const removeBlock = (id: string) => setDraft((current) => ({ ...current, blocks: current.blocks.filter((block) => block.id !== id) }))
   const resetLayout = () => updateDraft({ blocks: defaultDashboardBlocks() })
   const save = () => {
@@ -2329,41 +2312,45 @@ function ViewBuilderDrawer({
   return (
     <Drawer open={open} onOpenChange={onOpenChange} direction="right">
       <DrawerContent className="w-[760px] min-w-[520px] max-w-[96vw] resize-x overflow-auto border-[#e2e8f0] bg-white text-[#111827] sm:max-w-none">
-        <DrawerHeader className="border-b border-[#f1f5f9] p-5">
+        <DrawerHeader className="border-b border-[#e2e8f0] p-5">
           <DrawerTitle className="text-[#111827]">{editingView ? 'Edit Custom View' : 'Create Custom View'}</DrawerTitle>
           <DrawerDescription className="text-[#6b7280]">Build a scoped operational overview with ordered blocks, saved locally in this browser.</DrawerDescription>
         </DrawerHeader>
         <div className="min-h-0 flex-1 overflow-y-auto p-5">
           <div className="grid gap-5">
-            <section className="grid gap-3 rounded-[6px] border border-[#e2e8f0] bg-[#f9fafb] p-4">
+            <section className="grid gap-3 rounded-md border border-[#e2e8f0] bg-[#f9fafb] p-4">
               <div className="grid gap-3 sm:grid-cols-2">
                 <label className="grid gap-1">
-                  <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#9ca3af]">View Name</span>
-                  <input value={draft.label} onChange={(event) => updateDraft({ label: event.target.value })} className="h-10 rounded-[5px] border border-[#e2e8f0] bg-white px-3 text-[13px] font-semibold text-[#111827] outline-none focus:border-[#111827]/40" />
+                  <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-[#6b7280]">View Name</span>
+                  <input value={draft.label} onChange={(event) => updateDraft({ label: event.target.value })} className="h-10 rounded-md border border-[#e2e8f0] bg-white px-3 text-[13px] font-medium text-[#111827] outline-none focus:border-[#e2e8f0]" />
                 </label>
                 <label className="grid gap-1">
-                  <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#9ca3af]">Fuel Product</span>
-                  <select value={draft.product} onChange={(event) => updateDraft({ product: event.target.value })} className="h-10 rounded-[5px] border border-[#e2e8f0] bg-white px-3 text-[13px] font-semibold text-[#374151]">
+                  <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-[#6b7280]">Header Subtitle</span>
+                  <input value={draft.subtitle || ''} onChange={(event) => updateDraft({ subtitle: event.target.value })} placeholder="Describe what this view is for..." className="h-10 rounded-md border border-[#e2e8f0] bg-white px-3 text-[13px] font-medium text-[#111827] outline-none focus:border-[#e2e8f0]" />
+                </label>
+                <label className="grid gap-1">
+                  <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-[#6b7280]">Fuel Product</span>
+                  <select value={draft.product} onChange={(event) => updateDraft({ product: event.target.value })} className="h-10 rounded-md border border-[#e2e8f0] bg-white px-3 text-[13px] font-medium text-[#6b7280]">
                     {productFilters.map((product) => <option key={product} value={product}>{product}</option>)}
                   </select>
                 </label>
                 <label className="grid gap-1">
-                  <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#9ca3af]">Scope Type</span>
-                  <select value={draft.scopeType} onChange={(event) => updateScopeType(event.target.value as DashboardScopeType)} className="h-10 rounded-[5px] border border-[#e2e8f0] bg-white px-3 text-[13px] font-semibold text-[#374151]">
+                  <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-[#6b7280]">Scope Type</span>
+                  <select value={draft.scopeType} onChange={(event) => updateScopeType(event.target.value as DashboardScopeType)} className="h-10 rounded-md border border-[#e2e8f0] bg-white px-3 text-[13px] font-medium text-[#6b7280]">
                     <option value="National">National</option>
                     <option value="Region">Region</option>
                     <option value="District">District</option>
                   </select>
                 </label>
                 <label className="grid gap-1">
-                  <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#9ca3af]">Scope</span>
-                  <select value={draft.scopeValue} onChange={(event) => updateDraft({ scopeValue: event.target.value })} className="h-10 rounded-[5px] border border-[#e2e8f0] bg-white px-3 text-[13px] font-semibold text-[#374151]">
+                  <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-[#6b7280]">Scope</span>
+                  <select value={draft.scopeValue} onChange={(event) => updateDraft({ scopeValue: event.target.value })} className="h-10 rounded-md border border-[#e2e8f0] bg-white px-3 text-[13px] font-medium text-[#6b7280]">
                     {scopeOptionsFor(draft.scopeType).map((scope) => <option key={scope} value={scope}>{scope}</option>)}
                   </select>
                 </label>
               </div>
               <div>
-                <div className="mb-2 flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.08em] text-[#9ca3af]">
+                <div className="mb-2 flex items-center gap-2 text-[10px] font-medium uppercase tracking-[0.08em] text-[#6b7280]">
                   <Palette className="size-3.5" />
                   Color Preset
                 </div>
@@ -2372,7 +2359,7 @@ function ViewBuilderDrawer({
                     const preset = colorPresets[presetKey]
                     const active = draft.colorPreset === presetKey
                     return (
-                      <button key={presetKey} type="button" onClick={() => updateDraft({ colorPreset: presetKey })} className={`flex h-9 items-center gap-2 rounded-[5px] border px-3 text-[12px] font-semibold transition ${active ? 'border-[#111827] bg-white text-[#111827]' : 'border-[#e2e8f0] bg-white text-[#6b7280] hover:border-[#cbd5e0]'}`}>
+                      <button key={presetKey} type="button" onClick={() => updateDraft({ colorPreset: presetKey })} className={`flex h-9 items-center gap-2 rounded-md border px-3 text-[12px] font-medium transition ${active ? 'border-[#e2e8f0] bg-white text-[#111827]' : 'border-[#e2e8f0] bg-white text-[#6b7280] hover:border-[#e2e8f0]'}`}>
                         <span className="size-3 rounded-full" style={{ background: preset.accent }} />
                         {preset.label}
                       </button>
@@ -2380,24 +2367,57 @@ function ViewBuilderDrawer({
                   })}
                 </div>
               </div>
+              <div className="grid gap-3 rounded-md border border-[#e2e8f0] bg-white p-3">
+                <div>
+                  <div className="text-[13px] font-medium text-[#111827]">Header Buttons</div>
+                  <div className="mt-1 text-[12px] text-[#6b7280]">Optional actions shown on the custom view header.</div>
+                </div>
+                {[0, 1].map((index) => {
+                  const button = draft.headerButtons?.[index] || { label: '', path: '', variant: index === 0 ? 'primary' : 'secondary' }
+                  return (
+                    <div key={index} className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_120px]">
+                      <input
+                        value={button.label}
+                        onChange={(event) => updateHeaderButton(index, { label: event.target.value })}
+                        placeholder={index === 0 ? 'Primary label' : 'Secondary label'}
+                        className="h-10 rounded-md border border-[#e2e8f0] bg-white px-3 text-[13px] font-medium text-[#111827] outline-none"
+                      />
+                      <input
+                        value={button.path}
+                        onChange={(event) => updateHeaderButton(index, { path: event.target.value })}
+                        placeholder="/tasks or /price-compliance"
+                        className="h-10 rounded-md border border-[#e2e8f0] bg-white px-3 text-[13px] font-medium text-[#111827] outline-none"
+                      />
+                      <select
+                        value={button.variant}
+                        onChange={(event) => updateHeaderButton(index, { variant: event.target.value as DashboardHeaderButton['variant'] })}
+                        className="h-10 rounded-md border border-[#e2e8f0] bg-white px-3 text-[13px] font-medium text-[#6b7280]"
+                      >
+                        <option value="primary">Primary</option>
+                        <option value="secondary">Secondary</option>
+                      </select>
+                    </div>
+                  )
+                })}
+              </div>
             </section>
 
             <section className="grid gap-3">
               <div className="flex items-center justify-between gap-3">
                 <div>
-                  <div className="text-[13px] font-bold text-[#111827]">Block Library</div>
+                  <div className="text-[13px] font-medium text-[#111827]">Block Library</div>
                   <div className="text-[12px] text-[#6b7280]">Add up to {maxBlocksPerView} clean snapped blocks.</div>
                 </div>
-                <button type="button" onClick={resetLayout} className="inline-flex h-8 items-center gap-1 rounded-[5px] border border-[#e2e8f0] px-2 text-[12px] font-semibold text-[#6b7280] hover:bg-[#f9fafb]">
+                <button type="button" onClick={resetLayout} className="inline-flex h-8 items-center gap-1 rounded-md border border-[#e2e8f0] px-2 text-[12px] font-medium text-[#6b7280] hover:bg-[#f9fafb]">
                   <RotateCcw className="size-3.5" />
                   Reset
                 </button>
               </div>
               <div className="grid gap-2 sm:grid-cols-2">
                 {blockLibrary.map((item) => (
-                  <button key={item.type} type="button" onClick={() => addBlock(item)} disabled={draft.blocks.length >= maxBlocksPerView} className="rounded-[6px] border border-[#e2e8f0] bg-white p-3 text-left transition hover:bg-[#f9fafb] disabled:cursor-not-allowed disabled:opacity-45">
+                  <button key={item.type} type="button" onClick={() => addBlock(item)} disabled={draft.blocks.length >= maxBlocksPerView} className="rounded-md border border-[#e2e8f0] bg-white p-3 text-left transition hover:bg-[#f9fafb] disabled:cursor-not-allowed disabled:opacity-45">
                     <div className="flex items-center justify-between gap-2">
-                      <div className="text-[13px] font-bold text-[#111827]">{item.title}</div>
+                      <div className="text-[13px] font-medium text-[#111827]">{item.title}</div>
                       <Plus className="size-4 text-[#6b7280]" />
                     </div>
                     <div className="mt-1 text-[12px] leading-5 text-[#6b7280]">{item.description}</div>
@@ -2409,10 +2429,10 @@ function ViewBuilderDrawer({
             <section className="grid gap-3">
               <div className="flex items-center justify-between gap-3">
                 <div>
-                  <div className="text-[13px] font-bold text-[#111827]">View Blocks</div>
+                  <div className="text-[13px] font-medium text-[#111827]">View Blocks</div>
                   <div className="text-[12px] text-[#6b7280]">Drag blocks into order or use the move controls.</div>
                 </div>
-                <div className="text-[12px] font-semibold text-[#9ca3af]">{draft.blocks.length}/{maxBlocksPerView}</div>
+                <div className="text-[12px] font-medium text-[#6b7280]">{draft.blocks.length}/{maxBlocksPerView}</div>
               </div>
               {draft.blocks.length ? (
                 <div className="grid gap-2">
@@ -2432,15 +2452,15 @@ function ViewBuilderDrawer({
                   ))}
                 </div>
               ) : (
-                <div className="rounded-[6px] border border-dashed border-[#cbd5e0] bg-[#f9fafb] p-6 text-center text-[13px] font-semibold text-[#6b7280]">
+                <div className="rounded-md border border-dashed border-[#e2e8f0] bg-[#f9fafb] p-6 text-center text-[13px] font-medium text-[#6b7280]">
                   Add blocks from the library to compose this overview.
                 </div>
               )}
             </section>
           </div>
         </div>
-        <DrawerFooter className="border-t border-[#f1f5f9] p-5">
-          <div className="mr-auto text-[12px] font-semibold text-[#dc2626]">{validation}</div>
+        <DrawerFooter className="border-t border-[#e2e8f0] p-5">
+          <div className="mr-auto text-[12px] font-medium text-[#dc2626]">{validation}</div>
           {editingView ? (
             <>
               <Button type="button" variant="outline" onClick={() => onDuplicate(editingView.id)}>
@@ -2479,17 +2499,27 @@ function scopeMatchesDistrict(view: DashboardCustomView, district: string) {
   return (regionDistricts[view.scopeValue] || []).includes(district)
 }
 
-function PriceVarianceLightPanel({ displayMode }: { displayMode: DashboardBlockDisplay }) {
-  const maxValue = Math.max(...mockPriceVariance.flatMap((row) => [row.petrol, row.diesel, row.lpg]), 1)
+function PriceVarianceLightPanel({ displayMode, rows = [] }: { displayMode: DashboardBlockDisplay; rows?: any[] }) {
+  const maxValue = Math.max(...rows.flatMap((row) => [number(row.petrol), number(row.diesel), number(row.lpg)]), 1)
+  const totalVariance = rows.reduce((sum, row) => sum + number(row.petrol) + number(row.diesel) + number(row.lpg), 0)
 
   return (
-    <section className={lightPanel}>
-      <LightPanelHeader icon={TrendingUp} title="Price Variance" meta={<div className="text-[12px] font-semibold text-[#9ca3af]">{displayMode}</div>} />
+    <section className="overflow-hidden rounded-[8px] border border-[#e5e7eb] bg-white shadow-[0_16px_40px_rgba(15,23,42,0.05)]">
+      <div className="flex items-start justify-between gap-3 border-b border-[#e5e7eb] bg-[#fafafa] px-4 py-3">
+        <div>
+          <div className="flex items-center gap-2 text-[13px] font-semibold tracking-[-0.018em] text-[#111827]">
+            <TrendingUp className="size-4" />
+            Price variance evidence
+          </div>
+          <div className="mt-1 text-[12px] font-medium text-[#6b7280]">Regional pump-price deviation signals available for compliance review.</div>
+        </div>
+        <span className="rounded-full border border-[#e5e7eb] bg-white px-2.5 py-1 text-[11px] font-semibold text-[#111827]">+{totalVariance}</span>
+      </div>
       {displayMode === 'table' ? (
         <div className="overflow-x-auto">
           <table className="w-full min-w-[420px] text-[13px]">
             <thead>
-              <tr className="border-b border-[#f1f5f9] text-[10px] uppercase tracking-[0.08em] text-[#9ca3af]">
+              <tr className="border-b border-[#e2e8f0] text-[10px] uppercase tracking-[0.08em] text-[#6b7280]">
                 <th className="px-4 py-2 text-left">Region</th>
                 <th className="px-4 py-2 text-right">Petrol</th>
                 <th className="px-4 py-2 text-right">Diesel</th>
@@ -2497,28 +2527,32 @@ function PriceVarianceLightPanel({ displayMode }: { displayMode: DashboardBlockD
               </tr>
             </thead>
             <tbody>
-              {mockPriceVariance.map((row) => (
-                <tr key={row.region} className="border-b border-[#f9fafb]">
-                  <td className="px-4 py-3 font-semibold text-[#374151]">{row.region}</td>
+              {rows.length ? rows.map((row) => (
+                <tr key={row.region} className="border-b border-[#e2e8f0]">
+                  <td className="px-4 py-3 font-medium text-[#6b7280]">{row.region}</td>
                   <td className="px-4 py-3 text-right text-[#d97706]">+{row.petrol}</td>
                   <td className="px-4 py-3 text-right text-[#2563eb]">+{row.diesel}</td>
                   <td className="px-4 py-3 text-right text-[#059669]">+{row.lpg}</td>
                 </tr>
-              ))}
+              )) : (
+                <tr className="border-b border-[#e2e8f0]">
+                  <td colSpan={4} className="px-4 py-8 text-center text-[12px] text-[#6b7280]">No price variance packet received.</td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
       ) : (
         <div className="grid gap-3 p-4">
-          {mockPriceVariance.map((row) => (
+          {rows.length ? rows.map((row) => (
             <div key={row.region} className="grid grid-cols-[76px_minmax(0,1fr)_42px] items-center gap-3 text-[12px]">
-              <div className="font-semibold text-[#374151]">{row.region}</div>
-              <div className="h-2 overflow-hidden rounded-full bg-[#f1f5f9]">
-                <div className="h-full rounded-full bg-[#2563eb]" style={{ width: `${(row.petrol / maxValue) * 100}%` }} />
+              <div className="font-medium text-[#6b7280]">{row.region}</div>
+              <div className="h-2 overflow-hidden rounded-full bg-[#f9fafb]">
+                <div className="h-full rounded-full bg-[#eff6ff]" style={{ width: `${(row.petrol / maxValue) * 100}%` }} />
               </div>
-              <div className="text-right font-bold text-[#2563eb]">+{row.petrol}</div>
+              <div className="text-right font-medium text-[#2563eb]">+{row.petrol}</div>
             </div>
-          ))}
+          )) : <div className="py-8 text-center text-[12px] text-[#6b7280]">No price variance packet received.</div>}
         </div>
       )}
     </section>
@@ -2526,14 +2560,26 @@ function PriceVarianceLightPanel({ displayMode }: { displayMode: DashboardBlockD
 }
 
 function StationRiskLightTable({ rows }: { rows: StationRiskRow[] }) {
-  const safeRows = rows.length ? rows : mockStationRisks.slice(0, 4)
+  const highRiskRows = rows.filter((row) => number(row.riskScore) >= 70)
   return (
-    <section className={lightPanel}>
-      <LightPanelHeader icon={Table2} title="Station Risk Table" meta={<div className="text-[12px] font-semibold text-[#9ca3af]">{safeRows.length} rows</div>} />
+    <section className="overflow-hidden rounded-[8px] border border-[#e5e7eb] bg-white shadow-[0_16px_40px_rgba(15,23,42,0.05)]">
+      <div className="flex items-start justify-between gap-3 border-b border-[#e5e7eb] bg-[#fafafa] px-4 py-3">
+        <div>
+          <div className="flex items-center gap-2 text-[13px] font-semibold tracking-[-0.018em] text-[#111827]">
+            <Table2 className="size-4" />
+            Station risk board
+          </div>
+          <div className="mt-1 text-[12px] font-medium text-[#6b7280]">Ranked station exposure by fuel days, compliance risk, and next recommended action.</div>
+        </div>
+        <div className="flex gap-2">
+          <span className="rounded-full border border-[#e5e7eb] bg-white px-2.5 py-1 text-[11px] font-semibold text-[#111827]">{rows.length} rows</span>
+          <span className="rounded-full border border-[#fee2e2] bg-[#fef2f2] px-2.5 py-1 text-[11px] font-semibold text-[#dc2626]">{highRiskRows.length} high</span>
+        </div>
+      </div>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[620px] text-[13px]">
           <thead>
-            <tr className="border-b border-[#f1f5f9] text-[10px] uppercase tracking-[0.08em] text-[#9ca3af]">
+            <tr className="border-b border-[#e2e8f0] text-[10px] uppercase tracking-[0.08em] text-[#6b7280]">
               <th className="px-4 py-2 text-left">Station</th>
               <th className="px-4 py-2 text-left">District</th>
               <th className="px-4 py-2 text-right">Fuel Days</th>
@@ -2542,15 +2588,19 @@ function StationRiskLightTable({ rows }: { rows: StationRiskRow[] }) {
             </tr>
           </thead>
           <tbody>
-            {safeRows.slice(0, 6).map((row) => (
-              <tr key={row.stationId} className="border-b border-[#f9fafb]">
-                <td className="px-4 py-3 font-semibold text-[#111827]">{row.station}</td>
+            {rows.length ? rows.slice(0, 6).map((row) => (
+              <tr key={row.stationId} className="border-b border-[#e5e7eb] hover:bg-[#fafafa]">
+                <td className="px-4 py-3 font-medium text-[#111827]">{stationDisplayValue(row.station)}</td>
                 <td className="px-4 py-3 text-[#6b7280]">{row.district}</td>
                 <td className="px-4 py-3 text-right text-[#6b7280]">{row.fuelDays.toFixed(1)}</td>
-                <td className="px-4 py-3 text-right font-bold text-[#dc2626]">{row.riskScore}</td>
-                <td className="px-4 py-3 text-right font-semibold text-[#2563eb]">{row.actionLabel}</td>
+                <td className="px-4 py-3 text-right"><span className={`rounded-md px-2 py-1 text-[11px] font-semibold ${row.riskScore >= 70 ? 'bg-[#fef2f2] text-[#dc2626]' : row.riskScore >= 45 ? 'bg-[#fffbeb] text-[#d97706]' : 'bg-[#ecfdf5] text-[#059669]'}`}>{row.riskScore}</span></td>
+                <td className="px-4 py-3 text-right font-medium text-[#111827]">{row.actionLabel}</td>
               </tr>
-            ))}
+            )) : (
+              <tr className="border-b border-[#e2e8f0]">
+                <td colSpan={5} className="px-4 py-8 text-center text-[12px] text-[#6b7280]">No station risk packet received.</td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
@@ -2558,15 +2608,15 @@ function StationRiskLightTable({ rows }: { rows: StationRiskRow[] }) {
   )
 }
 
-function ComplianceMatrixLightPanel({ displayMode }: { displayMode: DashboardBlockDisplay }) {
+function ComplianceMatrixLightPanel({ displayMode, rows = [] }: { displayMode: DashboardBlockDisplay; rows?: any[] }) {
   return (
     <section className={lightPanel}>
-      <LightPanelHeader icon={ShieldCheck} title="Compliance Matrix" meta={<div className="text-[12px] font-semibold text-[#9ca3af]">{displayMode}</div>} />
+      <LightPanelHeader icon={ShieldCheck} title="Compliance Matrix" meta={<div className="text-[12px] font-medium text-[#6b7280]">{displayMode}</div>} />
       {displayMode === 'table' ? (
         <div className="overflow-x-auto">
           <table className="w-full min-w-[480px] text-[13px]">
             <thead>
-              <tr className="border-b border-[#f1f5f9] text-[10px] uppercase tracking-[0.08em] text-[#9ca3af]">
+              <tr className="border-b border-[#e2e8f0] text-[10px] uppercase tracking-[0.08em] text-[#6b7280]">
                 <th className="px-4 py-2 text-left">Check</th>
                 <th className="px-4 py-2 text-right">Compliant</th>
                 <th className="px-4 py-2 text-right">Watch</th>
@@ -2574,32 +2624,36 @@ function ComplianceMatrixLightPanel({ displayMode }: { displayMode: DashboardBlo
               </tr>
             </thead>
             <tbody>
-              {mockComplianceMatrix.map((row) => (
-                <tr key={row.label} className="border-b border-[#f9fafb]">
-                  <td className="px-4 py-3 font-semibold text-[#374151]">{row.label}</td>
-                  <td className="px-4 py-3 text-right font-bold text-[#059669]">{row.compliant}%</td>
+              {rows.length ? rows.map((row) => (
+                <tr key={row.label} className="border-b border-[#e2e8f0]">
+                  <td className="px-4 py-3 font-medium text-[#6b7280]">{row.label}</td>
+                  <td className="px-4 py-3 text-right font-medium text-[#059669]">{row.compliant}%</td>
                   <td className="px-4 py-3 text-right text-[#d97706]">{row.watch}%</td>
                   <td className="px-4 py-3 text-right text-[#dc2626]">{row.breach}%</td>
                 </tr>
-              ))}
+              )) : (
+                <tr className="border-b border-[#e2e8f0]">
+                  <td colSpan={4} className="px-4 py-8 text-center text-[12px] text-[#6b7280]">No compliance matrix packet received.</td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
       ) : (
         <div className="grid gap-3 p-4">
-          {mockComplianceMatrix.map((row) => (
+          {rows.length ? rows.map((row) => (
             <div key={row.label} className="grid gap-2">
               <div className="flex items-center justify-between gap-3 text-[13px]">
-                <div className="font-semibold text-[#374151]">{row.label}</div>
-                <div className="font-bold text-[#059669]">{row.compliant}%</div>
+                <div className="font-medium text-[#6b7280]">{row.label}</div>
+                <div className="font-medium text-[#059669]">{row.compliant}%</div>
               </div>
-              <div className="grid h-2 grid-cols-[var(--ok)_var(--watch)_var(--breach)] overflow-hidden rounded-full bg-[#f1f5f9]" style={{ '--ok': `${row.compliant}fr`, '--watch': `${row.watch}fr`, '--breach': `${row.breach}fr` } as any}>
-                <div className="bg-[#10b981]" />
-                <div className="bg-[#f59e0b]" />
-                <div className="bg-[#ef4444]" />
+              <div className="grid h-2 grid-cols-[var(--ok)_var(--watch)_var(--breach)] overflow-hidden rounded-full bg-[#f9fafb]" style={{ '--ok': `${row.compliant}fr`, '--watch': `${row.watch}fr`, '--breach': `${row.breach}fr` } as any}>
+                <div className="bg-[#ecfdf5]" />
+                <div className="bg-[#fffbeb]" />
+                <div className="bg-[#fef2f2]" />
               </div>
             </div>
-          ))}
+          )) : <div className="py-8 text-center text-[12px] text-[#6b7280]">No compliance matrix packet received.</div>}
         </div>
       )}
     </section>
@@ -2615,6 +2669,8 @@ function CustomDashboardBlock({
   criticalAlerts,
   incidentItems,
   riskRows,
+  priceVarianceRows,
+  complianceMatrixRows,
 }: {
   block: DashboardViewBlock
   view: DashboardCustomView
@@ -2624,13 +2680,15 @@ function CustomDashboardBlock({
   criticalAlerts: number
   incidentItems: IncidentQueueItem[]
   riskRows: StationRiskRow[]
+  priceVarianceRows: any[]
+  complianceMatrixRows: any[]
 }) {
   const scopedIncidents = incidentItems.filter((item) => scopeMatchesDistrict(view, item.district))
   const scopedRiskRows = riskRows.filter((row) => scopeMatchesDistrict(view, row.district))
   const preset = colorPresets[block.colorPreset || view.colorPreset]
   const frame = (children: ReactNode) => (
     <div className={blockSizeClass(block.size)}>
-      <div className="mb-1.5 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.08em] text-[#6b7280]">
+      <div className="mb-1.5 flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.08em] text-[#6b7280]">
         <span className="size-2 rounded-full" style={{ background: preset.accent }} />
         {block.title}
       </div>
@@ -2641,7 +2699,7 @@ function CustomDashboardBlock({
   if (block.type === 'kpi-summary') {
     return (
       <div className={blockSizeClass(block.size)}>
-        <div className="mb-1.5 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.08em] text-[#6b7280]">
+        <div className="mb-1.5 flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.08em] text-[#6b7280]">
           <span className="size-2 rounded-full" style={{ background: preset.accent }} />
           {block.title}
         </div>
@@ -2658,9 +2716,9 @@ function CustomDashboardBlock({
   if (block.type === 'pipeline-list') return frame(<SupplyPipelinePanel displayMode={block.displayMode} />)
   if (block.type === 'compliance-alerts') return frame(<ComplianceAlertsPanel items={scopedIncidents} displayMode={block.displayMode} />)
   if (block.type === 'consumption-chart') return frame(<ConsumptionPanel displayMode={block.displayMode} />)
-  if (block.type === 'price-variance') return frame(<PriceVarianceLightPanel displayMode={block.displayMode} />)
+  if (block.type === 'price-variance') return frame(<PriceVarianceLightPanel displayMode={block.displayMode} rows={priceVarianceRows} />)
   if (block.type === 'station-risk-table') return frame(<StationRiskLightTable rows={scopedRiskRows} />)
-  return frame(<ComplianceMatrixLightPanel displayMode={block.displayMode} />)
+  return frame(<ComplianceMatrixLightPanel displayMode={block.displayMode} rows={complianceMatrixRows} />)
 }
 
 function CustomDashboardView({
@@ -2671,6 +2729,8 @@ function CustomDashboardView({
   criticalAlerts,
   incidentItems,
   riskRows,
+  priceVarianceRows,
+  complianceMatrixRows,
   onEdit,
   onDuplicate,
   editable = true,
@@ -2682,37 +2742,57 @@ function CustomDashboardView({
   criticalAlerts: number
   incidentItems: IncidentQueueItem[]
   riskRows: StationRiskRow[]
+  priceVarianceRows: any[]
+  complianceMatrixRows: any[]
   onEdit?: () => void
   onDuplicate?: () => void
   editable?: boolean
 }) {
   const preset = colorPresets[view.colorPreset]
   const scopeLabel = view.scopeType === 'National' ? 'National' : view.scopeValue
+  const navigate = useNavigate()
+  const headerButtons = (view.headerButtons || []).filter((button) => button.label && button.path).slice(0, 2)
 
   return (
     <div className="grid gap-3">
-      <section className="overflow-hidden rounded-[6px] border border-[#e2e8f0] bg-white">
+      <section className="overflow-hidden rounded-[8px] border border-[#e5e7eb] bg-white shadow-[0_14px_35px_rgba(15,23,42,0.045)]">
         <div className="h-[3px]" style={{ background: preset.accent }} />
-        <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+        <div className="grid gap-4 px-5 py-5 lg:grid-cols-[minmax(0,1fr)_auto]">
           <div className="min-w-0">
-            <div className="truncate text-[18px] font-bold tracking-[-0.02em] text-[#111827]">{view.label}</div>
-            <div className="mt-1 flex flex-wrap items-center gap-2 text-[12px] font-semibold text-[#6b7280]">
-              <span className="rounded-[4px] px-2 py-1" style={{ background: preset.soft, color: preset.text }}>{scopeLabel}</span>
+            <div className="text-[12px] font-semibold uppercase tracking-[0.1em]" style={{ color: preset.text }}>{scopeLabel} View</div>
+            <div className="mt-2 truncate text-[28px] font-semibold tracking-[-0.055em] text-[#111827]">{view.label}</div>
+            <p className="mt-2 max-w-3xl text-[13px] font-medium leading-6 text-[#6b7280]">{view.subtitle || 'Custom operational command view for the selected scope.'}</p>
+            <div className="mt-3 flex flex-wrap items-center gap-2 text-[12px] font-medium text-[#6b7280]">
+              <span className="rounded-md px-2 py-1" style={{ background: preset.soft, color: preset.text }}>{scopeLabel}</span>
               <span>{view.product}</span>
               <span>{view.blocks.length} blocks</span>
             </div>
           </div>
-          {editable && onEdit ? (
-            <Button type="button" size="sm" onClick={onEdit}>
-              <Pencil className="size-4" />
-              Edit View
-            </Button>
-          ) : onDuplicate ? (
-            <Button type="button" size="sm" onClick={onDuplicate}>
-              <Copy className="size-4" />
-              Duplicate
-            </Button>
-          ) : null}
+          <div className="flex flex-wrap items-start gap-2">
+            {headerButtons.map((button) => (
+              <Button
+                key={button.id}
+                type="button"
+                size="sm"
+                variant={button.variant === 'secondary' ? 'outline' : undefined}
+                className={button.variant === 'primary' ? 'bg-[#111111] hover:bg-[#2a2a2a]' : undefined}
+                onClick={() => navigate(button.path)}
+              >
+                {button.label}
+              </Button>
+            ))}
+            {editable && onEdit ? (
+              <Button type="button" size="sm" variant={headerButtons.length ? 'outline' : undefined} onClick={onEdit}>
+                <Pencil className="size-4" />
+                Edit View
+              </Button>
+            ) : onDuplicate ? (
+              <Button type="button" size="sm" variant={headerButtons.length ? 'outline' : undefined} onClick={onDuplicate}>
+                <Copy className="size-4" />
+                Duplicate
+              </Button>
+            ) : null}
+          </div>
         </div>
       </section>
       {view.blocks.length ? (
@@ -2728,15 +2808,86 @@ function CustomDashboardView({
               criticalAlerts={criticalAlerts}
               incidentItems={incidentItems}
               riskRows={riskRows}
+              priceVarianceRows={priceVarianceRows}
+              complianceMatrixRows={complianceMatrixRows}
             />
           ))}
         </div>
       ) : (
-        <div className="rounded-[6px] border border-dashed border-[#cbd5e0] bg-white p-8 text-center text-[13px] font-semibold text-[#6b7280]">
+        <div className="rounded-md border border-dashed border-[#e2e8f0] bg-white p-8 text-center text-[13px] font-medium text-[#6b7280]">
           This view is empty. Edit it to add operational blocks.
         </div>
       )}
     </div>
+  )
+}
+
+function tableDate(value: any) {
+  if (!value) return '-'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return String(value)
+  return date.toLocaleDateString()
+}
+
+function stationDisplayValue(value: any) {
+  if (!value) return '-'
+  if (typeof value !== 'object' || Array.isArray(value)) return renderDrilldownValue(value)
+  const name = value.name || value.stationName || value.station_name || value.title || value.label || value.publicId || value.public_id || value.id
+  const city = value.city || value.district || value.location
+  return [name, city].filter(Boolean).join(' - ') || renderDrilldownValue(value)
+}
+
+function statusToneFor(value: any): 'good' | 'warn' | 'bad' | 'neutral' {
+  const text = String(value || '').toLowerCase()
+  if (text.includes('critical') || text.includes('severe') || text.includes('crisis') || text.includes('dry') || text.includes('overdue')) return 'bad'
+  if (text.includes('high') || text.includes('stress') || text.includes('watch') || text.includes('low') || text.includes('pending')) return 'warn'
+  if (text.includes('available') || text.includes('stable') || text.includes('complete') || text.includes('compliant')) return 'good'
+  return 'neutral'
+}
+
+function CommandSummaryTable({
+  title,
+  icon: Icon,
+  columns,
+  rows,
+  emptyLabel = 'No records available.',
+}: {
+  title: string
+  icon: any
+  columns: Array<{ key: string; label: string; render?: (row: any) => ReactNode; align?: 'right' | 'left' }>
+  rows: any[]
+  emptyLabel?: string
+}) {
+  return (
+    <section className={lightPanel}>
+      <LightPanelHeader icon={Icon} title={title} />
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[420px] text-[12px]">
+          <thead>
+            <tr className="border-b border-[#e2e8f0] text-[10px] uppercase tracking-[0.08em] text-[#6b7280]">
+              {columns.map((column) => (
+                <th key={column.key} className={`px-4 py-2 ${column.align === 'right' ? 'text-right' : 'text-left'}`}>{column.label}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length ? rows.map((row, index) => (
+              <tr key={row.id || row.publicId || row.caseId || row.inspectionId || row.deliveryId || `${title}-${index}`} className="border-b border-[#e2e8f0] last:border-b-0">
+                {columns.map((column) => (
+                  <td key={column.key} className={`px-4 py-3 ${column.align === 'right' ? 'text-right' : 'text-left'} ${column.key === columns[0]?.key ? 'font-medium text-[#111827]' : 'text-[#6b7280]'}`}>
+                    {renderDrilldownValue(column.render ? column.render(row) : row[column.key])}
+                  </td>
+                ))}
+              </tr>
+            )) : (
+              <tr>
+                <td colSpan={columns.length} className="px-4 py-6 text-center text-[12px] text-[#6b7280]">{emptyLabel}</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </section>
   )
 }
 
@@ -2750,6 +2901,12 @@ function NationalOverviewDashboard({
   onlineStations,
   criticalAlerts,
   incidentItems,
+  mapStations,
+  deliveryRows,
+  caseRows,
+  inspectionRows,
+  complaintRows,
+  districtRows,
   onOpenKpi,
 }: {
   activeStations: number
@@ -2761,16 +2918,65 @@ function NationalOverviewDashboard({
   onlineStations: number
   criticalAlerts: number
   incidentItems: IncidentQueueItem[]
+  mapStations: any[]
+  deliveryRows: any[]
+  caseRows: any[]
+  inspectionRows: any[]
+  complaintRows: any[]
+  districtRows: any[]
   onOpenKpi: (drilldown: DrilldownConfig) => void
 }) {
   const [focus, setFocus] = useState('supply')
+  const [showAllStatus, setShowAllStatus] = useState(false)
+  const mapRows = mapStations
+  const isFuelAvailable = (row: any, key: 'petrol' | 'diesel') => {
+    const value = String(row?.[`${key}Status`] || row?.[`${key}_status`] || row?.availabilityStatus || row?.availability_status || '').toLowerCase()
+    return value.includes('available') || value.includes('low') || value.includes('limited')
+  }
+  const petrolAvailability = Math.round(percentOf(mapRows.filter((row) => isFuelAvailable(row, 'petrol')).length, mapRows.length || 1))
+  const dieselAvailability = Math.round(percentOf(mapRows.filter((row) => isFuelAvailable(row, 'diesel')).length, mapRows.length || 1))
+  const averageQueueTime = Math.round(averageNumber(mapRows.map((row) => row.averageWaitTime ?? row.avgWaitMinutes ?? row.avg_wait_minutes)))
+  const stationsOffline = mapRows.filter((row) => String(row.markerStatus || row.status || row.availabilityStatus || row.availability_status || '').toLowerCase().includes('offline')).length
+  const highRiskStations = mapRows.filter((row) => number(row.riskScore ?? row.risk_score) >= 76).length
+  const openCases = caseRows.length || incidentItems.length
+  const todayKey = new Date().toDateString()
+  const todaysDeliveries = deliveryRows.filter((row) => {
+    const value = row.actualArrival || row.actual_arrival || row.expectedArrival || row.expected_arrival || row.createdAt || row.created_at
+    const date = value ? new Date(value) : null
+    return date && !Number.isNaN(date.getTime()) && date.toDateString() === todayKey
+  }).length || Math.min(deliveryRows.length, 8)
+  const publicComplaintsToday = complaintRows.filter((row) => {
+    const value = row.createdAt || row.created_at
+    const date = value ? new Date(value) : null
+    return date && !Number.isNaN(date.getTime()) && date.toDateString() === todayKey
+  }).length || Math.min(complaintRows.length, 12)
+  const nationalStatus = !mapRows.length
+    ? 'No Data'
+    : highRiskStations >= 5 || petrolAvailability < 55 || dieselAvailability < 55
+    ? 'Severe'
+    : highRiskStations >= 3 || petrolAvailability < 70 || dieselAvailability < 70
+      ? 'Stressed'
+      : averageQueueTime >= 40
+        ? 'Mild Pressure'
+        : 'Stable'
+  const statusBar = [
+    { label: 'National Fuel Status', value: nationalStatus, tone: statusToneFor(nationalStatus) },
+    { label: 'Petrol Availability', value: `${petrolAvailability}%`, tone: statusToneFor(petrolAvailability < 70 ? 'watch' : 'available') },
+    { label: 'Diesel Availability', value: `${dieselAvailability}%`, tone: statusToneFor(dieselAvailability < 70 ? 'watch' : 'available') },
+    { label: 'Average Queue Time', value: `${averageQueueTime} min`, tone: statusToneFor(averageQueueTime >= 40 ? 'watch' : 'stable') },
+    { label: 'Stations Offline', value: stationsOffline.toLocaleString(), tone: statusToneFor(stationsOffline ? 'watch' : 'stable') },
+    { label: 'High-Risk Stations', value: highRiskStations.toLocaleString(), tone: statusToneFor(highRiskStations ? 'high' : 'stable') },
+    { label: 'Open Cases', value: openCases.toLocaleString(), tone: statusToneFor(openCases > 10 ? 'watch' : 'stable') },
+    { label: "Today's Deliveries", value: todaysDeliveries.toLocaleString(), tone: 'neutral' as const },
+    { label: 'Public Complaints Today', value: publicComplaintsToday.toLocaleString(), tone: statusToneFor(publicComplaintsToday > 10 ? 'watch' : 'stable') },
+  ]
   const cards = [
     {
       id: 'supply',
       label: 'Network Coverage',
       value: activeStations.toLocaleString(),
       detail: 'Active stations feeding the national view',
-      accent: '#2563eb',
+      accent: '#185FA5',
       drilldown: kpiCards[0]?.drilldown,
     },
     {
@@ -2778,7 +2984,7 @@ function NationalOverviewDashboard({
       label: 'Reserve Pressure',
       value: `${reserveDays.toFixed(1)}d`,
       detail: 'National reserve cover and burn outlook',
-      accent: '#10b981',
+      accent: '#1D9E75',
       drilldown: kpiCards[1]?.drilldown,
     },
     {
@@ -2786,14 +2992,14 @@ function NationalOverviewDashboard({
       label: 'Queue & Pipeline Load',
       value: activeDriverQueues.toLocaleString(),
       detail: 'Driver queues and supply movements',
-      accent: '#f59e0b',
+      accent: '#EF9F27',
     },
     {
       id: 'compliance',
       label: 'Compliance Risk',
       value: complianceRiskCount.toLocaleString(),
       detail: 'Violations, alerts, and station risk',
-      accent: '#ef4444',
+      accent: '#E24B4A',
       drilldown: {
         title: 'Compliance risk',
         value: complianceRiskCount.toLocaleString(),
@@ -2816,6 +3022,37 @@ function NationalOverviewDashboard({
       document.getElementById(`national-overview-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     })
   }
+  const alertFeed = incidentItems.length
+    ? incidentItems.slice(0, 7).map((item) => ({ title: item.title, station: item.station, district: item.district, severity: item.severity, action: 'Review evidence' }))
+    : mapRows
+        .filter((row) => number(row.riskScore ?? row.risk_score) >= 56)
+        .slice(0, 7)
+        .map((row) => ({
+          title: `${row.stationName || row.station_name || row.name} risk signal`,
+          station: row.stationName || row.station_name || row.name,
+          district: row.district || row.city || '-',
+          severity: number(row.riskScore ?? row.risk_score) >= 91 ? 'critical' : number(row.riskScore ?? row.risk_score) >= 76 ? 'high' : 'medium',
+          action: number(row.riskScore ?? row.risk_score) >= 76 ? 'Assign inspection' : 'Request explanation',
+        }))
+  const districtStressRows = (districtRows.length ? districtRows : Array.from(new Set(mapRows.map((row) => row.district || row.city || 'Unknown'))).map((district) => {
+    const rows = mapRows.filter((row) => (row.district || row.city || 'Unknown') === district)
+    const availability = Math.round(percentOf(rows.filter((row) => isFuelAvailable(row, 'petrol') || isFuelAvailable(row, 'diesel')).length, rows.length || 1))
+    return {
+      district,
+      availability,
+      avgWait: Math.round(averageNumber(rows.map((row) => row.averageWaitTime ?? row.avgWaitMinutes ?? row.avg_wait_minutes))),
+      stress: rows.some((row) => number(row.riskScore ?? row.risk_score) >= 76) ? 'High' : availability < 70 ? 'Watch' : 'Stable',
+    }
+  })).slice(0, 6)
+  const deliverySummaryRows = deliveryRows.slice(0, 6).map((row) => ({
+    ...row,
+    station: row.stationName || row.station_name || row.station || row.stationId || row.station_id || '-',
+    fuel: row.fuelType || row.fuel_type || '-',
+    eta: row.actualArrival || row.actual_arrival || row.expectedArrival || row.expected_arrival || row.createdAt || row.created_at,
+    status: row.status || row.stationConfirmationStatus || row.station_confirmation_status || 'pending_review',
+  }))
+  const openCaseRows = (caseRows.length ? caseRows : incidentItems).slice(0, 6)
+  const priorityInspectionRows = inspectionRows.slice(0, 6)
 
   return (
     <div className="grid gap-3">
@@ -2825,21 +3062,115 @@ function NationalOverviewDashboard({
             key={card.id}
             type="button"
             onClick={() => activate(card.id, card.drilldown)}
-            className={`relative min-h-[132px] overflow-hidden rounded-[6px] border bg-white px-4 py-4 text-left transition hover:-translate-y-0.5 hover:border-[#cbd5e0] hover:shadow-sm ${
-              focus === card.id ? 'border-[#111827]' : 'border-[#e2e8f0]'
+            className={`relative min-h-[132px] overflow-hidden rounded-md border bg-white px-4 py-4 text-left transition hover:-translate-y-0.5 hover:border-[#e2e8f0] hover:shadow-sm ${
+              focus === card.id ? 'border-[#e2e8f0]' : 'border-[#e2e8f0]'
             }`}
           >
             <div className="absolute inset-x-0 top-0 h-[3px]" style={{ background: card.accent }} />
-            <div className="text-[11px] font-semibold uppercase tracking-[0.09em] text-[#9ca3af]">{card.label}</div>
-            <div className="mt-3 text-[30px] font-bold leading-none tracking-[-0.02em] text-[#111827]">{card.value}</div>
+            <div className="text-[11px] font-medium uppercase tracking-[0.09em] text-[#6b7280]">{card.label}</div>
+            <div className="mt-3 text-[30px] font-medium leading-none tracking-normal text-[#111827]">{card.value}</div>
             <div className="mt-3 text-[12px] font-medium leading-5 text-[#6b7280]">{card.detail}</div>
-            <div className="absolute bottom-3 right-3 text-[11px] font-bold text-[#9ca3af]">Open</div>
+            <div className="absolute bottom-3 right-3 text-[11px] font-medium text-[#6b7280]">Open</div>
           </button>
         ))}
       </section>
 
-      <div id="national-overview-supply" className="scroll-mt-3">
-        <NationalSupplyCommandPanel totalStations={totalStations} onlineStations={onlineStations} criticalAlerts={criticalAlerts} />
+      <section className="overflow-hidden rounded-md border border-[#e2e8f0] bg-white shadow-sm">
+        <div className="flex items-center justify-between gap-3 px-4 py-3">
+          <div className="min-w-0">
+            <h2 className="truncate text-[13px] font-medium uppercase tracking-[0.08em] text-[#111827]">National fuel indicators</h2>
+            <p className="mt-1 truncate text-[12px] font-medium text-[#6b7280]">Detailed status checks sit below the main KPI cards.</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowAllStatus((current) => !current)}
+            className="h-8 shrink-0 rounded-md border border-[#e2e8f0] bg-white px-3 text-[12px] font-medium text-[#111827] transition hover:bg-[#f9fafb]"
+          >
+            {showAllStatus ? 'Hide' : 'View all'}
+          </button>
+        </div>
+        {showAllStatus ? (
+          <div className="grid gap-3 border-t border-[#e2e8f0] bg-[#f9fafb] p-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            {statusBar.map((item) => (
+              <div key={item.label} className="rounded-md border border-[#e2e8f0] bg-white px-4 py-3">
+                <div className="truncate text-[10px] font-medium uppercase tracking-[0.08em] text-[#6b7280]">{item.label}</div>
+                <div className="mt-2 flex items-center justify-between gap-3">
+                  <span className="truncate text-[20px] font-medium tracking-normal text-[#111827]">{item.value}</span>
+                  <StatusPill tone={item.tone}>{item.tone === 'bad' ? 'Alert' : item.tone === 'warn' ? 'Watch' : item.tone === 'good' ? 'OK' : 'Live'}</StatusPill>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </section>
+
+      <div id="national-overview-supply" className="grid scroll-mt-3 gap-3 xl:grid-cols-[minmax(0,1.62fr)_minmax(320px,0.78fr)]">
+        <MeraFuelHeatmap rows={mapRows} title="Live Malawi Fuel Network" className="h-[520px] min-h-[520px]" />
+        <section className={lightPanel}>
+          <LightPanelHeader icon={BellRing} title="Intelligence Alert Feed" meta={<div className="text-[12px] font-medium text-[#dc2626]">{alertFeed.length}</div>} />
+          <div className="max-h-[468px] divide-y divide-[#e2e8f0] overflow-y-auto">
+            {alertFeed.length ? alertFeed.map((alert, index) => (
+              <div key={`${alert.title}-${index}`} className="px-4 py-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="truncate text-[13px] font-medium text-[#111827]">{alert.title}</div>
+                    <div className="mt-1 truncate text-[12px] text-[#6b7280]">{alert.station} - {alert.district}</div>
+                  </div>
+                  <StatusPill tone={statusToneFor(alert.severity)}>{alert.severity}</StatusPill>
+                </div>
+                <div className="mt-2 flex items-center justify-between gap-2 text-[11px]">
+                  <span className="font-medium text-[#2563eb]">{alert.action}</span>
+                  <span className="text-[#6b7280]">Risk engine</span>
+                </div>
+              </div>
+            )) : (
+              <div className="px-4 py-8 text-center text-[12px] text-[#6b7280]">No active intelligence alerts.</div>
+            )}
+          </div>
+        </section>
+      </div>
+
+      <div className="grid gap-3 xl:grid-cols-4">
+        <CommandSummaryTable
+          title="District Fuel Stress"
+          icon={Activity}
+          rows={districtStressRows}
+          columns={[
+            { key: 'district', label: 'District' },
+            { key: 'availability', label: 'Avail.', align: 'right', render: (row) => `${row.availability ?? row.availabilityRate ?? row.value ?? 0}%` },
+            { key: 'stress', label: 'Stress', render: (row) => <StatusPill tone={statusToneFor(row.stress || row.status)}>{row.stress || row.status || 'Stable'}</StatusPill> },
+          ]}
+        />
+        <CommandSummaryTable
+          title="Delivery Timeline"
+          icon={Truck}
+          rows={deliverySummaryRows}
+          columns={[
+            { key: 'station', label: 'Station' },
+            { key: 'fuel', label: 'Fuel' },
+            { key: 'eta', label: 'Time', render: (row) => tableDate(row.eta) },
+          ]}
+        />
+        <CommandSummaryTable
+          title="Open Case Summary"
+          icon={ShieldAlert}
+          rows={openCaseRows}
+          columns={[
+            { key: 'title', label: 'Case', render: (row) => row.title || row.flagTitle || row.station || row.stationName || '-' },
+            { key: 'district', label: 'District', render: (row) => row.district || '-' },
+            { key: 'severity', label: 'Severity', render: (row) => <StatusPill tone={statusToneFor(row.severity || row.priority)}>{row.severity || row.priority || row.status || 'open'}</StatusPill> },
+          ]}
+        />
+        <CommandSummaryTable
+          title="Inspection Priority"
+          icon={ClipboardCheck}
+          rows={priorityInspectionRows}
+          columns={[
+            { key: 'station', label: 'Station', render: (row) => row.stationName || row.station_name || row.station || row.stationPublicId || '-' },
+            { key: 'district', label: 'District', render: (row) => row.district || '-' },
+            { key: 'priority', label: 'Priority', render: (row) => <StatusPill tone={statusToneFor(row.priority || row.status)}>{row.priority || row.status || '-'}</StatusPill> },
+          ]}
+        />
       </div>
 
       <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
@@ -2861,6 +3192,480 @@ function NationalOverviewDashboard({
   )
 }
 
+function WatchMetric({ label, value, detail, tone = 'neutral' }: { label: string; value: ReactNode; detail: string; tone?: 'good' | 'warn' | 'bad' | 'neutral' }) {
+  const toneClass =
+    tone === 'bad'
+      ? 'bg-[#fef2f2] text-[#dc2626]'
+      : tone === 'warn'
+        ? 'bg-[#fffbeb] text-[#d97706]'
+        : tone === 'good'
+          ? 'bg-[#ecfdf5] text-[#059669]'
+          : 'bg-[#f3f4f6] text-[#111827]'
+  return (
+    <div className="rounded-[8px] border border-[#e5e7eb] bg-white px-4 py-3 shadow-[0_14px_35px_rgba(15,23,42,0.045)]">
+      <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6b7280]">{label}</div>
+      <div className="mt-2 text-[26px] font-semibold leading-none tracking-[-0.04em] text-[#111827]">{value}</div>
+      <div className={`mt-3 inline-flex rounded-full px-2 py-1 text-[11px] font-semibold ${toneClass}`}>{detail}</div>
+    </div>
+  )
+}
+
+function ComplianceWatchCommand({
+  incidentItems,
+  riskRows,
+  priceVarianceRows,
+  complianceMatrixRows,
+  caseRows,
+  inspectionRows,
+  complaintRows,
+  onOpenRoute,
+}: {
+  incidentItems: IncidentQueueItem[]
+  riskRows: StationRiskRow[]
+  priceVarianceRows: any[]
+  complianceMatrixRows: any[]
+  caseRows: any[]
+  inspectionRows: any[]
+  complaintRows: any[]
+  onOpenRoute: (path: string) => void
+}) {
+  const criticalAlerts = incidentItems.filter((item) => ['critical', 'high'].includes(String(item.severity || '').toLowerCase()))
+  const failedInspections = inspectionRows.filter((row) => /FAILED|ESCALATED|VIOLATION|NON/i.test(String(row.inspectionStatus || row.inspection_status || row.status || '')))
+  const highRiskRows = riskRows.filter((row) => number(row.riskScore) >= 70)
+  const varianceTotal = priceVarianceRows.reduce((sum, row) => sum + number(row.petrol) + number(row.diesel) + number(row.lpg), 0)
+  const detectionRows = (incidentItems.length ? incidentItems : caseRows).slice(0, 8)
+
+  return (
+    <div className="grid gap-3">
+      <section className="overflow-hidden rounded-[8px] border border-[#e5e7eb] bg-white">
+        <div className="grid gap-5 px-5 py-5 lg:grid-cols-[minmax(0,1fr)_auto]">
+          <div>
+            <div className="text-[12px] font-semibold uppercase tracking-[0.1em] text-[#dc2626]">Compliance Watch</div>
+            <h2 className="mt-2 text-[28px] font-semibold tracking-[-0.055em] text-[#111827]">Detection, evidence, and station compliance posture.</h2>
+            <p className="mt-2 max-w-3xl text-[13px] font-medium leading-6 text-[#6b7280]">
+              This view is for finding non-compliance early: price variance, complaint pressure, inspection failures, and station risk signals.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-start gap-2">
+            <Button type="button" size="sm" className="bg-[#111111] hover:bg-[#2a2a2a]" onClick={() => onOpenRoute('/compliance-flags')}>
+              Open cases
+            </Button>
+            <Button type="button" size="sm" variant="outline" onClick={() => onOpenRoute('/price-compliance')}>
+              Price evidence
+            </Button>
+          </div>
+        </div>
+      </section>
+
+      <section className="grid gap-3 md:grid-cols-4">
+        <WatchMetric label="Open signals" value={Math.max(incidentItems.length, caseRows.length)} detail={`${criticalAlerts.length} critical/high`} tone={criticalAlerts.length ? 'bad' : 'good'} />
+        <WatchMetric label="Price variance" value={`+${varianceTotal}`} detail={`${priceVarianceRows.length} regions`} tone={varianceTotal ? 'warn' : 'good'} />
+        <WatchMetric label="Failed inspections" value={failedInspections.length} detail="field evidence" tone={failedInspections.length ? 'bad' : 'good'} />
+        <WatchMetric label="Complaints" value={complaintRows.length} detail="public reports" tone={complaintRows.length ? 'warn' : 'good'} />
+      </section>
+
+      <section className="grid gap-3 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
+        <div className="overflow-hidden rounded-[8px] border border-[#e5e7eb] bg-white shadow-[0_14px_35px_rgba(15,23,42,0.045)]">
+          <div className="border-b border-[#e5e7eb] px-4 py-3">
+            <div className="text-[13px] font-semibold text-[#111827]">Detection Queue</div>
+            <div className="mt-1 text-[12px] font-medium text-[#6b7280]">Signals that need review before enforcement is opened.</div>
+          </div>
+          <div className="divide-y divide-[#e5e7eb]">
+            {detectionRows.length ? detectionRows.map((row: any, index) => (
+              <button key={`${row.title || row.public_id || index}`} type="button" onClick={() => onOpenRoute('/compliance-flags')} className="grid w-full gap-2 px-4 py-3 text-left transition hover:bg-[#fafafa] md:grid-cols-[minmax(0,1fr)_120px_110px]">
+                <div className="min-w-0">
+                  <div className="truncate text-[13px] font-semibold text-[#111827]">{renderDrilldownValue(row.title || row.flag_type || row.station_name || row.station || 'Compliance signal')}</div>
+                  <div className="mt-1 truncate text-[12px] font-medium text-[#6b7280]">{stationDisplayValue(row.station || row.station_name || row.description || row.district)}</div>
+                </div>
+                <div className="text-[12px] font-medium text-[#6b7280]">{row.district || '-'}</div>
+                <div className="text-right"><StatusPill tone={statusToneFor(row.severity || row.status)}>{row.severity || row.status || 'open'}</StatusPill></div>
+              </button>
+            )) : <div className="px-4 py-10 text-center text-[12px] font-medium text-[#6b7280]">No compliance signals available.</div>}
+          </div>
+        </div>
+
+        <div className="grid gap-3">
+          <CommandSummaryTable
+            title="Station Risk Evidence"
+            icon={ShieldAlert}
+            rows={highRiskRows.length ? highRiskRows.slice(0, 7) : riskRows.slice(0, 7)}
+            columns={[
+              { key: 'station', label: 'Station' },
+              { key: 'district', label: 'District' },
+              { key: 'riskScore', label: 'Risk', align: 'right', render: (row) => row.riskScore },
+            ]}
+          />
+          <CommandSummaryTable
+            title="Compliance Matrix"
+            icon={ShieldCheck}
+            rows={complianceMatrixRows}
+            columns={[
+              { key: 'label', label: 'Check' },
+              { key: 'compliant', label: 'OK', align: 'right', render: (row) => `${row.compliant}%` },
+              { key: 'breach', label: 'Breach', align: 'right', render: (row) => `${row.breach}%` },
+            ]}
+          />
+        </div>
+      </section>
+
+      <PriceVarianceLightPanel displayMode="bar" rows={priceVarianceRows} />
+    </div>
+  )
+}
+
+function EnforcementWatchCommand({
+  enforcementRows,
+  riskRows,
+  incidentItems,
+  caseRows,
+  onOpenRoute,
+}: {
+  enforcementRows: any[]
+  riskRows: StationRiskRow[]
+  incidentItems: IncidentQueueItem[]
+  caseRows: any[]
+  onOpenRoute: (path: string) => void
+}) {
+  const activeRows = enforcementRows.filter((row) => /OPEN|IN_PROGRESS|ESCALATED|PENDING/i.test(String(row.action_status || row.actionStatus || row.status || '')))
+  const escalatedRows = enforcementRows.filter((row) => /ESCALATED|SUSPENSION|FINE|CLOSURE/i.test(`${row.action_status || row.actionStatus || row.status || ''} ${row.action_type || row.actionType || ''}`))
+  const overdueRows = enforcementRows.filter((row) => {
+    const due = row.deadline_at || row.deadlineAt || row.due_at || row.dueAt
+    if (!due) return false
+    const date = new Date(due)
+    return !Number.isNaN(date.getTime()) && date.getTime() < Date.now() && !/CLOSED|COMPLIED|RESOLVED/i.test(String(row.action_status || row.actionStatus || row.status || ''))
+  })
+  const priorityRows = activeRows.length ? activeRows : enforcementRows
+  const escalationSeeds = escalatedRows.length
+    ? escalatedRows
+    : incidentItems.filter((item) => ['critical', 'high'].includes(String(item.severity || '').toLowerCase()))
+
+  return (
+    <div className="grid gap-3">
+      <section className="overflow-hidden rounded-[8px] border border-[#111827] bg-[#111111] text-white">
+        <div className="grid gap-5 px-5 py-5 lg:grid-cols-[minmax(0,1fr)_auto]">
+          <div>
+            <div className="text-[12px] font-semibold uppercase tracking-[0.1em] text-[#d1d5db]">Enforcement Watch</div>
+            <h2 className="mt-2 text-[28px] font-semibold tracking-[-0.055em]">Legal action, escalation posture, and deadline control.</h2>
+            <p className="mt-2 max-w-3xl text-[13px] font-medium leading-6 text-[#d1d5db]">
+              This view starts after evidence becomes actionable: enforcement actions, penalties, suspensions, deadlines, and unresolved escalations.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-start gap-2">
+            <Button type="button" size="sm" className="bg-white text-[#111111] hover:bg-[#f3f4f6]" onClick={() => onOpenRoute('/enforcement-actions')}>
+              Enforcement registry
+            </Button>
+            <Button type="button" size="sm" variant="outline" className="border-white/25 bg-transparent text-white hover:bg-white/10" onClick={() => onOpenRoute('/compliance-flags')}>
+              Source cases
+            </Button>
+          </div>
+        </div>
+      </section>
+
+      <section className="grid gap-3 md:grid-cols-4">
+        <WatchMetric label="Active actions" value={activeRows.length} detail={`${enforcementRows.length} total`} tone={activeRows.length ? 'warn' : 'good'} />
+        <WatchMetric label="Escalated" value={escalatedRows.length} detail="legal pressure" tone={escalatedRows.length ? 'bad' : 'good'} />
+        <WatchMetric label="Overdue" value={overdueRows.length} detail="deadline breach" tone={overdueRows.length ? 'bad' : 'good'} />
+        <WatchMetric label="Source cases" value={caseRows.length || incidentItems.length} detail="evidence base" tone={(caseRows.length || incidentItems.length) ? 'warn' : 'neutral'} />
+      </section>
+
+      <section className="grid gap-3 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
+        <div className="overflow-hidden rounded-[8px] border border-[#e5e7eb] bg-white shadow-[0_14px_35px_rgba(15,23,42,0.045)]">
+          <div className="border-b border-[#e5e7eb] px-4 py-3">
+            <div className="text-[13px] font-semibold text-[#111827]">Action Control Board</div>
+            <div className="mt-1 text-[12px] font-medium text-[#6b7280]">Open enforcement actions ordered for legal follow-through.</div>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[760px] text-[13px]">
+              <thead>
+                <tr className="border-b border-[#e5e7eb] text-[10px] uppercase tracking-[0.08em] text-[#6b7280]">
+                  <th className="px-4 py-2 text-left">Action</th>
+                  <th className="px-4 py-2 text-left">Station</th>
+                  <th className="px-4 py-2 text-left">Type</th>
+                  <th className="px-4 py-2 text-left">Status</th>
+                  <th className="px-4 py-2 text-right">Deadline</th>
+                </tr>
+              </thead>
+              <tbody>
+                {priorityRows.slice(0, 8).map((row, index) => (
+                  <tr key={row.public_id || row.publicId || index} className="border-b border-[#e5e7eb] hover:bg-[#fafafa]">
+                    <td className="px-4 py-3 font-semibold text-[#111827]">{row.reference_number || row.ref || row.public_id || row.publicId || `Action ${index + 1}`}</td>
+                    <td className="px-4 py-3 text-[#6b7280]">{stationDisplayValue(row.station_name || row.stationName || row.station)}</td>
+                    <td className="px-4 py-3 text-[#6b7280]">{row.action_type || row.actionType || '-'}</td>
+                    <td className="px-4 py-3"><StatusPill tone={statusToneFor(row.action_status || row.actionStatus || row.status)}>{row.action_status || row.actionStatus || row.status || 'open'}</StatusPill></td>
+                    <td className="px-4 py-3 text-right text-[#6b7280]">{tableDate(row.deadline_at || row.deadlineAt || row.due_at || row.dueAt || row.issued_at || row.issuedAt)}</td>
+                  </tr>
+                ))}
+                {!priorityRows.length ? (
+                  <tr>
+                    <td colSpan={5} className="px-4 py-10 text-center text-[12px] font-medium text-[#6b7280]">No enforcement actions available.</td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="grid gap-3">
+          <CommandSummaryTable
+            title="Escalation Inputs"
+            icon={AlertTriangle}
+            rows={escalationSeeds.slice(0, 7)}
+            columns={[
+              { key: 'title', label: 'Signal', render: (row) => row.title || row.action_type || row.actionType || row.station_name || '-' },
+              { key: 'district', label: 'District', render: (row) => row.district || '-' },
+              { key: 'severity', label: 'Level', render: (row) => <StatusPill tone={statusToneFor(row.severity || row.action_status || row.status)}>{row.severity || row.action_status || row.status || 'review'}</StatusPill> },
+            ]}
+          />
+          <CommandSummaryTable
+            title="Station Priority"
+            icon={Table2}
+            rows={riskRows.slice(0, 7)}
+            columns={[
+              { key: 'station', label: 'Station' },
+              { key: 'riskScore', label: 'Risk', align: 'right', render: (row) => row.riskScore },
+              { key: 'actionLabel', label: 'Next' },
+            ]}
+          />
+        </div>
+      </section>
+    </div>
+  )
+}
+
+function taskField(task: any, keys: string[], fallback = '-') {
+  const value = keys.map((key) => task?.[key]).find((item) => item !== undefined && item !== null && item !== '')
+  return value === undefined || value === null || value === '' ? fallback : value
+}
+
+function taskDateValue(task: any) {
+  return taskField(task, ['dueAt', 'dueDate', 'due_at'], '')
+}
+
+function isTaskDueToday(task: any) {
+  const due = taskDateValue(task)
+  if (!due) return false
+  const date = new Date(due)
+  if (Number.isNaN(date.getTime())) return false
+  return date.toDateString() === new Date().toDateString()
+}
+
+function isTaskOverdue(task: any) {
+  if (task?.isOverdue) return true
+  const due = taskDateValue(task)
+  if (!due) return false
+  const status = String(task.status || '').toUpperCase()
+  if (['COMPLETED', 'CANCELLED', 'REJECTED', 'CLOSED'].includes(status)) return false
+  const date = new Date(due)
+  return !Number.isNaN(date.getTime()) && date.getTime() < Date.now()
+}
+
+function uniqueTaskOptions(rows: any[], keys: string[]) {
+  return Array.from(new Set(rows.map((row) => String(taskField(row, keys, '')).trim()).filter(Boolean))).sort()
+}
+
+function RegulatorTasksDashboardView({
+  title,
+  subtitle,
+  rows,
+  filterable,
+  onOpenTask,
+  onOpenAll,
+}: {
+  title: string
+  subtitle: string
+  rows: any[]
+  filterable?: boolean
+  onOpenTask: (task: any) => void
+  onOpenAll: () => void
+}) {
+  const [filters, setFilters] = useState({
+    status: 'All',
+    severity: 'All',
+    district: 'All',
+    category: 'All',
+    dueMode: 'All',
+  })
+  const statusOptions = uniqueTaskOptions(rows, ['status'])
+  const severityOptions = uniqueTaskOptions(rows, ['severity', 'priority'])
+  const districtOptions = uniqueTaskOptions(rows, ['district', 'stationDistrict'])
+  const categoryOptions = uniqueTaskOptions(rows, ['category', 'taskType', 'linkedEntityType', 'type'])
+  const visibleRows = rows.filter((task) => {
+    const status = String(taskField(task, ['status'], ''))
+    const severity = String(taskField(task, ['severity', 'priority'], ''))
+    const district = String(taskField(task, ['district', 'stationDistrict'], ''))
+    const category = String(taskField(task, ['category', 'taskType', 'linkedEntityType', 'type'], ''))
+    if (filters.status !== 'All' && status !== filters.status) return false
+    if (filters.severity !== 'All' && severity !== filters.severity) return false
+    if (filters.district !== 'All' && district !== filters.district) return false
+    if (filters.category !== 'All' && category !== filters.category) return false
+    if (filters.dueMode === 'Due Today' && !isTaskDueToday(task)) return false
+    if (filters.dueMode === 'Overdue' && !isTaskOverdue(task)) return false
+    return true
+  })
+  const taskKpis = [
+    { label: 'Total', value: rows.length, tone: 'neutral' as const },
+    { label: 'Critical', value: rows.filter((task) => String(taskField(task, ['severity', 'priority'], '')).toUpperCase() === 'CRITICAL').length, tone: 'bad' as const },
+    { label: 'Due Today', value: rows.filter(isTaskDueToday).length, tone: 'warn' as const },
+    { label: 'Overdue', value: rows.filter(isTaskOverdue).length, tone: 'bad' as const },
+  ]
+
+  return (
+    <section className={lightPanel}>
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#e2e8f0] px-4 py-3">
+        <div>
+          <h2 className="text-[13px] font-medium uppercase tracking-[0.08em] text-[#111827]">{title}</h2>
+          <p className="mt-1 text-[12px] text-[#6b7280]">{subtitle}</p>
+        </div>
+        <button type="button" onClick={onOpenAll} className="h-8 rounded-md bg-[#111827] px-3 text-[12px] font-medium text-white hover:bg-[#111827]">Open Task Centre</button>
+      </div>
+      <div className="grid border-b border-[#e2e8f0] sm:grid-cols-4">
+        {taskKpis.map((item) => (
+          <div key={item.label} className="border-r border-[#e2e8f0] px-4 py-3 last:border-r-0">
+            <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-[#6b7280]">{item.label}</div>
+            <div className={`mt-1 text-xl font-medium ${item.tone === 'bad' ? 'text-[#dc2626]' : item.tone === 'warn' ? 'text-[#d97706]' : 'text-[#111827]'}`}>{item.value}</div>
+          </div>
+        ))}
+      </div>
+      {filterable ? (
+        <div className="flex flex-wrap gap-2 border-b border-[#e2e8f0] px-4 py-3">
+          {[
+            ['status', 'Status', ['All', ...statusOptions]],
+            ['severity', 'Severity', ['All', ...severityOptions]],
+            ['district', 'District', ['All', ...districtOptions]],
+            ['category', 'Category', ['All', ...categoryOptions]],
+            ['dueMode', 'Due', ['All', 'Due Today', 'Overdue']],
+          ].map(([key, label, options]: any) => (
+            <label key={key} className="grid gap-1">
+              <span className="text-[9px] font-medium uppercase tracking-[0.08em] text-[#6b7280]">{label}</span>
+              <select
+                value={(filters as any)[key]}
+                onChange={(event) => setFilters((current) => ({ ...current, [key]: event.target.value }))}
+                className="h-8 min-w-[132px] rounded-md border border-[#e2e8f0] bg-white px-2 text-[12px] font-medium text-[#6b7280]"
+              >
+                {options.map((option: string) => <option key={option} value={option}>{option}</option>)}
+              </select>
+            </label>
+          ))}
+        </div>
+      ) : null}
+      <PortalTable
+        rows={visibleRows}
+        emptyMessage="No regulatory tasks match the current view."
+        columns={[
+          {
+            key: 'title',
+            label: 'Task Title',
+            render: (task) => <span className="font-medium text-[#111827]">{renderDrilldownValue(taskField(task, ['title', 'taskTitle', 'name'], 'Regulatory task'))}</span>,
+          },
+          { key: 'category', label: 'Category', render: (task) => renderDrilldownValue(taskField(task, ['category', 'taskType', 'linkedEntityType', 'type'], 'Regulatory')) },
+          { key: 'station', label: 'Station / District', render: (task) => renderDrilldownValue(taskField(task, ['stationName', 'station', 'district', 'stationDistrict'], '-')) },
+          { key: 'severity', label: 'Severity', render: (task) => <StatusPill tone={statusToneFor(taskField(task, ['severity', 'priority'], ''))}>{renderDrilldownValue(taskField(task, ['severity', 'priority'], '-'))}</StatusPill> },
+          { key: 'assignedOfficer', label: 'Assigned Officer', render: (task) => renderDrilldownValue(taskField(task, ['assignedOfficerName', 'assignedToName', 'assigneeName', 'assignedOfficer', 'assignedTo'], 'Unassigned')) },
+          {
+            key: 'dueDate',
+            label: 'Due Date',
+            render: (task) => {
+              const due = taskDateValue(task)
+              return <span className={isTaskOverdue(task) ? 'font-medium text-[#dc2626]' : ''}>{due ? tableDate(due) : '-'}</span>
+            },
+          },
+          { key: 'status', label: 'Status', render: (task) => <StatusPill tone={statusToneFor(task.status)}>{task.status || '-'}</StatusPill> },
+          { key: 'sourceEngine', label: 'Source Engine', render: (task) => renderDrilldownValue(taskField(task, ['sourceEngine', 'source', 'linkedEntityType'], 'Regulator Task Engine')) },
+          {
+            key: 'action',
+            label: 'Action',
+            className: 'text-right',
+            render: (task) => (
+              <div className="text-right">
+                <button type="button" onClick={() => onOpenTask(task)} className="h-7 rounded-md border border-[#e2e8f0] bg-white px-2 text-[11px] font-medium text-[#6b7280] hover:bg-[#f9fafb]">Open</button>
+              </div>
+            ),
+          },
+        ]}
+      />
+    </section>
+  )
+}
+
+function SavedViewsDashboardView({
+  customViews,
+  pinnedTabIds,
+  onCreate,
+  onOpen,
+  onEdit,
+  onDuplicate,
+  onDelete,
+}: {
+  customViews: DashboardCustomView[]
+  pinnedTabIds: string[]
+  onCreate: () => void
+  onOpen: (id: string) => void
+  onEdit: (id: string) => void
+  onDuplicate: (id: string) => void
+  onDelete: (id: string) => void
+}) {
+  const builtinViews = builtinDashboardTabs
+    .filter((tab) => !['builtin-tasks', 'builtin-my-tasks', 'builtin-views'].includes(tab.id))
+    .map((tab) => builtinViewFor(tab.id))
+    .filter(Boolean) as DashboardCustomView[]
+  const rows = [
+    ...builtinViews.map((view) => ({ ...view, source: 'Built-in', pinned: true })),
+    ...customViews.map((view) => ({ ...view, source: 'Saved View', pinned: pinnedTabIds.includes(view.id) })),
+  ]
+
+  return (
+    <section className={lightPanel}>
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#e2e8f0] px-4 py-3">
+        <div>
+          <h2 className="text-[13px] font-medium uppercase tracking-[0.08em] text-[#111827]">Views</h2>
+          <p className="mt-1 text-[12px] text-[#6b7280]">Saved and built-in command-centre views for national, regional, and district operations.</p>
+        </div>
+        <button type="button" onClick={onCreate} className="inline-flex h-8 items-center gap-1 rounded-md bg-[#111827] px-3 text-[12px] font-medium text-white hover:bg-[#111827]">
+          <Plus className="size-4" />
+          New View
+        </button>
+      </div>
+      <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-3">
+        {rows.map((view) => (
+          <article key={view.id} className="rounded-md border border-[#e2e8f0] bg-white p-4 shadow-sm">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="size-2 rounded-full" style={{ background: colorPresets[view.colorPreset || 'slate'].accent }} />
+                  <h3 className="truncate text-[14px] font-medium text-[#111827]">{view.label}</h3>
+                </div>
+                <div className="mt-1 text-[12px] text-[#6b7280]">{view.scopeType} - {view.scopeValue} - {view.product}</div>
+              </div>
+              <StatusPill tone={view.source === 'Built-in' ? 'neutral' : 'good'}>{view.source}</StatusPill>
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-2 text-[11px]">
+              <div className="rounded-md bg-[#f9fafb] px-3 py-2">
+                <div className="font-medium uppercase tracking-[0.08em] text-[#6b7280]">Blocks</div>
+                <div className="mt-1 text-[15px] font-medium text-[#111827]">{view.blocks.length}</div>
+              </div>
+              <div className="rounded-md bg-[#f9fafb] px-3 py-2">
+                <div className="font-medium uppercase tracking-[0.08em] text-[#6b7280]">Pinned</div>
+                <div className="mt-1 text-[15px] font-medium text-[#111827]">{view.pinned ? 'Yes' : 'No'}</div>
+              </div>
+            </div>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button type="button" onClick={() => onOpen(view.id)} className="h-8 rounded-md bg-[#111827] px-3 text-[12px] font-medium text-white hover:bg-[#111827]">Open</button>
+              {view.source === 'Saved View' ? (
+                <>
+                  <button type="button" onClick={() => onEdit(view.id)} className="h-8 rounded-md border border-[#e2e8f0] px-3 text-[12px] font-medium text-[#6b7280] hover:bg-[#f9fafb]">Edit</button>
+                  <button type="button" onClick={() => onDelete(view.id)} className="h-8 rounded-md border border-[#e2e8f0] px-3 text-[12px] font-medium text-[#dc2626] hover:bg-[#fef2f2]">Delete</button>
+                </>
+              ) : (
+                <button type="button" onClick={() => onDuplicate(view.id)} className="h-8 rounded-md border border-[#e2e8f0] px-3 text-[12px] font-medium text-[#6b7280] hover:bg-[#f9fafb]">Duplicate</button>
+              )}
+            </div>
+          </article>
+        ))}
+      </div>
+    </section>
+  )
+}
+
 function WidgetLibraryDrawer({
   open,
   onOpenChange,
@@ -2877,7 +3682,7 @@ function WidgetLibraryDrawer({
   return (
     <Drawer open={open} onOpenChange={onOpenChange} direction="right">
       <DrawerContent className="w-[560px] max-w-[94vw] border-[#e2e8f0] bg-white text-[#111827] sm:max-w-[560px]">
-        <DrawerHeader className="border-b border-[#f1f5f9] p-5">
+        <DrawerHeader className="border-b border-[#e2e8f0] p-5">
           <DrawerTitle className="text-[#111827]">Add Widget</DrawerTitle>
           <DrawerDescription className="text-[#6b7280]">Pin operational modules to this dashboard view and keep the national command surface focused.</DrawerDescription>
         </DrawerHeader>
@@ -2890,31 +3695,31 @@ function WidgetLibraryDrawer({
                   key={widget.id}
                   type="button"
                   onClick={() => onToggleWidget(widget.id)}
-                  className={`rounded-[7px] border p-4 text-left transition ${
-                    pinned ? 'border-[#a7f3d0] bg-[#ecfdf5]' : 'border-[#e2e8f0] bg-white hover:bg-[#f9fafb]'
+                  className={`rounded-md border p-4 text-left transition ${
+                    pinned ? 'border-[#e2e8f0] bg-[#ecfdf5]' : 'border-[#e2e8f0] bg-white hover:bg-[#f9fafb]'
                   }`}
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
-                        <span className="rounded-[5px] bg-[#f3f4f6] px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.1em] text-[#6b7280]">{widget.category}</span>
-                        <span className="text-[10px] font-bold uppercase tracking-[0.1em] text-[#2563eb]">{widget.size}</span>
+                        <span className="rounded-md bg-[#f9fafb] px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.1em] text-[#6b7280]">{widget.category}</span>
+                        <span className="text-[10px] font-medium uppercase tracking-[0.1em] text-[#2563eb]">{widget.size}</span>
                       </div>
-                      <div className="mt-2 text-[14px] font-semibold text-[#111827]">{widget.title}</div>
+                      <div className="mt-2 text-[14px] font-medium text-[#111827]">{widget.title}</div>
                       <div className="mt-1 text-[12px] leading-5 text-[#6b7280]">{widget.description}</div>
                     </div>
-                    <span className={`grid size-8 shrink-0 place-items-center rounded-[7px] border ${pinned ? 'border-[#10b981] bg-[#10b981] text-white' : 'border-[#e2e8f0] text-[#6b7280]'}`}>
+                    <span className={`grid size-8 shrink-0 place-items-center rounded-md border ${pinned ? 'border-[#e2e8f0] bg-[#ecfdf5] text-white' : 'border-[#e2e8f0] text-[#6b7280]'}`}>
                       {pinned ? <CheckCircle2 className="size-4" /> : <Plus className="size-4" />}
                     </span>
                   </div>
                   <div className="mt-4 grid grid-cols-2 gap-2">
-                    <div className="rounded-[6px] border border-[#f1f5f9] bg-[#f9fafb] px-3 py-2">
-                      <div className="text-[10px] uppercase tracking-[0.1em] text-[#9ca3af]">Metric</div>
-                      <div className="mt-1 text-[16px] font-semibold text-[#111827]">{widget.metric}</div>
+                    <div className="rounded-md border border-[#e2e8f0] bg-[#f9fafb] px-3 py-2">
+                      <div className="text-[10px] uppercase tracking-[0.1em] text-[#6b7280]">Metric</div>
+                      <div className="mt-1 text-[16px] font-medium text-[#111827]">{widget.metric}</div>
                     </div>
-                    <div className="rounded-[6px] border border-[#f1f5f9] bg-[#f9fafb] px-3 py-2">
-                      <div className="text-[10px] uppercase tracking-[0.1em] text-[#9ca3af]">Trend</div>
-                      <div className="mt-1 text-[16px] font-semibold text-[#2563eb]">{widget.trend}</div>
+                    <div className="rounded-md border border-[#e2e8f0] bg-[#f9fafb] px-3 py-2">
+                      <div className="text-[10px] uppercase tracking-[0.1em] text-[#6b7280]">Trend</div>
+                      <div className="mt-1 text-[16px] font-medium text-[#2563eb]">{widget.trend}</div>
                     </div>
                   </div>
                 </button>
@@ -2922,7 +3727,7 @@ function WidgetLibraryDrawer({
             })}
           </div>
         </div>
-        <DrawerFooter className="border-t border-[#f1f5f9] p-5">
+        <DrawerFooter className="border-t border-[#e2e8f0] p-5">
           <DrawerClose asChild>
             <Button type="button" variant="outline">
               Done
@@ -2986,7 +3791,7 @@ function DashboardExportModal({
       onOpenChange={onOpenChange}
       title="Export National Operations"
       description="Choose the operational window to export. This keeps the existing availability PDF export path."
-      className="border-[var(--mera-panel-border)] bg-[var(--mera-panel)]"
+      className="border-[#e2e8f0] bg-white"
       footer={
         <>
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={exporting}>
@@ -3006,36 +3811,85 @@ function DashboardExportModal({
               key={range.value}
               type="button"
               onClick={() => setExportRange(range.value)}
-              className={`rounded-[10px] border px-3 py-3 text-left text-sm font-semibold transition ${
+              className={`rounded-md border px-3 py-3 text-left text-sm font-medium transition ${
                 exportRange === range.value
-                  ? 'border-[#111827] bg-[#111827] text-white'
-                  : 'border-[var(--mera-panel-border)] bg-[var(--mera-panel)] text-[var(--mera-panel-text-soft)] hover:bg-[var(--mera-hover)]'
+                  ? 'border-[#e2e8f0] bg-[#111827] text-white'
+                  : 'border-[#e2e8f0] bg-white text-[#111827] hover:bg-[#f9fafb]'
               }`}
             >
               <span className="block">{range.label}</span>
-              {'detail' in range ? <span className="mt-1 block text-xs font-medium text-[var(--mera-panel-text-muted)]">{range.detail}</span> : null}
+              {'detail' in range ? <span className="mt-1 block text-xs font-medium text-[#6b7280]">{range.detail}</span> : null}
             </button>
           ))}
         </div>
-        <div className="rounded-[10px] border border-[var(--mera-panel-border)] bg-[var(--mera-panel-muted)] px-3 py-3 text-sm text-[var(--mera-panel-text-soft)]">
+        <div className="rounded-md border border-[#e2e8f0] bg-[#f9fafb] px-3 py-3 text-sm text-[#111827]">
           The export package starts with the fuel availability series and keeps the MERA operational footer for audit circulation.
         </div>
-        {exportError ? <div className="rounded-[10px] border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{exportError}</div> : null}
+        {exportError ? <div className="rounded-md border border-[#e2e8f0] bg-[#fef2f2] px-3 py-2 text-sm text-[#dc2626]">{exportError}</div> : null}
       </div>
     </ModalShell>
   )
 }
 
 function normalizeIncidentItems(operations: any): IncidentQueueItem[] {
-  return mockIncidentQueue.slice(0, 6)
+  const rows = Array.isArray(operations?.incidentQueue)
+    ? operations.incidentQueue
+    : Array.isArray(operations?.incidents)
+      ? operations.incidents
+      : Array.isArray(operations?.alerts)
+        ? operations.alerts
+        : []
+  return rows.slice(0, 6).map((row: any, index: number) => ({
+    id: row.id || row.publicId || row.sourceKey || `incident-${index}`,
+    severity: String(row.severity || row.riskLevel || row.priority || 'info').toLowerCase().includes('critical')
+      ? 'critical'
+      : String(row.severity || row.riskLevel || row.priority || '').toLowerCase().includes('high')
+        ? 'high'
+        : String(row.severity || row.riskLevel || row.priority || '').toLowerCase().includes('medium')
+          ? 'medium'
+          : 'info',
+    title: row.title || row.type || row.alertType || row.category || 'Incident',
+    station: stationDisplayValue(row.station || row.stationName || row.name),
+    district: row.district || row.city || '-',
+    owner: row.owner || row.assignedOfficer || row.source || '-',
+    slaMinutes: number(row.slaMinutes ?? row.sla_minutes),
+    status: row.status || row.state || '-',
+    action: row.action || row.recommendedAction || row.detail || row.description || '-',
+  }))
 }
 
 function stationRiskFromHeatmap(rows: any[]): StationRiskRow[] {
-  return mockStationRisks.slice(0, 6)
+  return (Array.isArray(rows) ? rows : []).slice(0, 12).map((row: any, index: number) => ({
+    stationId: row.stationId || row.publicId || row.station_public_id || row.id || `station-${index}`,
+    station: stationDisplayValue(row.station || row.stationName || row.name),
+    district: row.district || row.city || '-',
+    fuelDays: number(row.fuelDays ?? row.fuel_days ?? row.daysOfFuel ?? row.stockDays),
+    lastSignal: row.lastSignal || row.last_signal || row.updatedAt || row.timestamp || '-',
+    licenseStatus: row.licenseStatus || row.license_status || row.licenceStatus || '-',
+    priceCheck: row.priceCheck || row.price_check || row.priceCompliance || '-',
+    riskScore: number(row.riskScore ?? row.risk_score ?? row.risk),
+    actionLabel: row.actionLabel || row.recommendedAction || row.status || '-',
+  }))
+}
+
+function priceVarianceFromComplianceRows(rows: any[]) {
+  const grouped = new Map<string, any>()
+  rows.forEach((row: any) => {
+    const region = row.district || row.city || row.region || 'National'
+    const fuel = String(row.fuelType || row.fuel_type || '').toLowerCase()
+    const mismatch = Math.abs(number(row.mismatchAmount ?? row.mismatch_amount ?? row.variance ?? row.priceVariance))
+    if (!mismatch) return
+    const current = grouped.get(region) || { region, petrol: 0, diesel: 0, lpg: 0 }
+    if (fuel.includes('diesel')) current.diesel = Math.max(current.diesel, mismatch)
+    else if (fuel.includes('lpg') || fuel.includes('gas')) current.lpg = Math.max(current.lpg, mismatch)
+    else current.petrol = Math.max(current.petrol, mismatch)
+    grouped.set(region, current)
+  })
+  return [...grouped.values()].slice(0, 8)
 }
 
 export function NationalDashboard() {
-  const { data, token, realtimePulse } = usePortal()
+  const { data, token, realtimePulse, requestPackets, packetStatus } = usePortal()
   const navigate = useNavigate()
   const { setDashboardChrome, clearDashboardChrome } = useDashboardChrome()
   const [availabilityInterval, setAvailabilityInterval] = useState('1h')
@@ -3058,6 +3912,7 @@ export function NationalDashboard() {
   })
   const operations = intervalOperations || data.nationalOperations || {}
   const kpis = operations.kpis || {}
+  const kpiComparisons = operations.kpiComparisons || {}
   const fuelRows = Array.isArray(operations.fuelAvailability) ? operations.fuelAvailability : []
   const totalStations = number(kpis.totalStations?.value || 0, 0)
   const pieRows = fuelRows.map((row: any) => ({
@@ -3067,11 +3922,20 @@ export function NationalDashboard() {
   }))
   const compliance = operations.complianceSummary || {}
   const complianceRows = [
-    { name: 'Inspections', value: number(compliance.inspections), color: '#2e9dff' },
-    { name: 'Compliant', value: number(compliance.compliant), color: '#32db64' },
-    { name: 'Warnings', value: number(compliance.warnings), color: '#ffd21f' },
-    { name: 'Violations', value: number(compliance.violations), color: '#ff3434' },
+    { name: 'Inspections', value: number(compliance.inspections), color: '#185FA5' },
+    { name: 'Compliant', value: number(compliance.compliant), color: '#1D9E75' },
+    { name: 'Warnings', value: number(compliance.warnings), color: '#EF9F27' },
+    { name: 'Violations', value: number(compliance.violations), color: '#E24B4A' },
   ]
+  const complianceTotal = number(compliance.inspections) || number(compliance.compliant) + number(compliance.warnings) + number(compliance.violations)
+  const complianceMatrixRows = complianceTotal ? [{
+    label: 'Inspection Outcomes',
+    compliant: Math.round(percentOf(compliance.compliant, complianceTotal)),
+    watch: Math.round(percentOf(compliance.warnings, complianceTotal)),
+    breach: Math.round(percentOf(compliance.violations, complianceTotal)),
+  }] : []
+  const priceComplianceRows = Array.isArray(data.priceCompliance?.compliance?.items) ? data.priceCompliance.compliance.items : []
+  const priceVarianceRows = priceVarianceFromComplianceRows(priceComplianceRows)
   const availabilityHistory = Array.isArray(operations.fuelAvailabilityHistory?.points) ? operations.fuelAvailabilityHistory.points : []
   const mapStations = Array.isArray(data.nationalOperations?.heatmap)
     ? data.nationalOperations.heatmap
@@ -3087,7 +3951,7 @@ export function NationalDashboard() {
     : number(kpis.stationsOnline?.percent)
   const criticalAlerts = number(kpis.criticalAlerts?.value)
   const complianceRiskCount = number(compliance.violations) + criticalAlerts
-  const openEnforcementCases = Math.max(14, criticalAlerts + number(compliance.violations))
+  const openEnforcementCases = criticalAlerts + number(compliance.violations)
   const stationRiskRows = stationRiskFromHeatmap(mapStations)
   const normalizedSearch = filters.search.trim().toLowerCase()
   const visibleRiskRows = stationRiskRows.filter((row) => {
@@ -3114,14 +3978,12 @@ export function NationalDashboard() {
   )
   const recentActivityRows = Array.isArray(operations.recentActivity) && operations.recentActivity.length
     ? operations.recentActivity
-    : [
-        { tone: 'success', text: 'National operations feed synchronized', timestamp: operations.lastSync || operations.generatedAt },
-        { tone: 'warning', text: 'Pricing anomaly review queued for Blantyre', timestamp: operations.generatedAt },
-        { tone: 'info', text: 'Telemetry and compliance review queue updated', timestamp: null },
-      ]
+    : []
   const taskStats = data.taskStats || {}
-  const dashboardTaskRows = (Array.isArray(data.myTasks?.items) && data.myTasks.items.length ? data.myTasks.items : data.tasks?.items || []).slice(0, 5)
-  const allTaskRows = Array.isArray(data.myTasks?.items) && data.myTasks.items.length ? data.myTasks.items : data.tasks?.items || []
+  const systemTaskRows = Array.isArray(data.tasks?.items) ? data.tasks.items : []
+  const assignedTaskRows = Array.isArray(data.myTasks?.items) ? data.myTasks.items : []
+  const dashboardTaskRows = (assignedTaskRows.length ? assignedTaskRows : systemTaskRows).slice(0, 5)
+  const allTaskRows = systemTaskRows.length ? systemTaskRows : assignedTaskRows
   const taskPanelTitle = Array.isArray(data.taskStats?.workloadByOfficer) && data.taskStats.workloadByOfficer.length ? 'Task Operations' : 'My Assigned Tasks'
   const stationKpiColumns = [
     { key: 'station', label: 'Station', render: (row: any) => row.station || row.name || row.stationName || row.station_id || '-' },
@@ -3172,24 +4034,14 @@ export function NationalDashboard() {
       return
     }
 
-    const controller = new AbortController()
     setAvailabilityLoading(true)
-    portalApi
-      .getNationalOperationsDashboard(token, availabilityInterval, controller.signal)
-      .then((payload) => {
-        setIntervalOperations(payload)
-      })
-      .catch((error) => {
-        if (error?.name !== 'AbortError') {
-          setIntervalOperations(null)
-        }
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setAvailabilityLoading(false)
-      })
-
-    return () => controller.abort()
-  }, [availabilityInterval, data.nationalOperations?.fuelAvailabilityHistory?.interval, realtimePulse, token])
+    setIntervalOperations(null)
+    requestPackets(['nationalOperations'], {
+      paramsByKey: { nationalOperations: { availabilityInterval } },
+      reason: 'availability-interval',
+      force: true,
+    }).finally(() => setAvailabilityLoading(false))
+  }, [availabilityInterval, data.nationalOperations?.fuelAvailabilityHistory?.interval, realtimePulse, requestPackets, token])
 
   useEffect(() => {
     saveCustomViews(customViews)
@@ -3277,14 +4129,23 @@ export function NationalDashboard() {
 
   const refreshDashboard = useCallback(() => {
     if (!token) return
-    const controller = new AbortController()
+    setIntervalOperations(null)
     setAvailabilityLoading(true)
-    portalApi
-      .getNationalOperationsDashboard(token, availabilityInterval, controller.signal)
-      .then((payload) => setIntervalOperations(payload))
-      .catch(() => {})
+    requestPackets(['notifications', 'tasks', 'myTasks', 'taskStats', 'priceCompliance'], {
+      reason: 'dashboard-sync-background',
+      force: true,
+      preferHttp: true,
+      timeoutMs: 6000,
+    }).catch(() => {})
+    requestPackets(['nationalOperations', 'overview', 'heatmap'], {
+      paramsByKey: { nationalOperations: { availabilityInterval } },
+      reason: 'dashboard-sync-button',
+      force: true,
+      preferHttp: true,
+      timeoutMs: 4500,
+    })
       .finally(() => setAvailabilityLoading(false))
-  }, [availabilityInterval, token])
+  }, [availabilityInterval, requestPackets, token])
 
   const toggleWidget = (id: string) => {
     setPinnedWidgetIds((current) => (current.includes(id) ? current.filter((item) => item !== id) : [...current, id]))
@@ -3293,23 +4154,32 @@ export function NationalDashboard() {
   const stationSeries = kpis.stationsOnline?.sparkline || (
     availabilityHistory.length
       ? availabilityHistory.map((row: any) => number(row.stationsWithFuel)).slice(-8)
-      : [1198, 1212, 1204, 1226, 1240, 1232, 1248]
+      : []
   )
-  const activeStations = stationsOnline || number(latestAvailability.stationsWithFuel) || totalStations || 1248
-  const previousActiveStations = number(stationSeries[stationSeries.length - 2], activeStations - 18)
-  const reserveSeries = kpis.nationalFuelReserve?.sparkline || kpis.depotStockDays?.sparkline || [4.4, 4.2, 4.0, 4.1, 3.9, 4.0, 3.8]
-  const reserveDays = number(kpis.nationalFuelReserve?.value || kpis.depotStockDays?.value, number(reserveSeries[reserveSeries.length - 1], 3.8))
-  const previousReserveDays = number(reserveSeries[reserveSeries.length - 2], reserveDays + 0.2)
+  const activeStations = stationsOnline || number(latestAvailability.stationsWithFuel) || totalStations
+  const previousActiveStations = comparisonPrevious(kpiComparisons, 'activeStations', number(stationSeries[stationSeries.length - 2], activeStations))
+  const reserveSeries = kpis.nationalFuelReserve?.sparkline || kpis.depotStockDays?.sparkline || []
+  const reserveDays = number(kpis.nationalFuelReserve?.value || kpis.depotStockDays?.value, number(reserveSeries[reserveSeries.length - 1]))
+  const previousReserveDays = comparisonPrevious(kpiComparisons, 'nationalFuelReserve', number(reserveSeries[reserveSeries.length - 2], reserveDays))
   const inspectionRows = Array.isArray(data.inspections?.items) ? data.inspections.items : []
   const queuedDrivers = inspectionRows.reduce((sum: number, row: any) => sum + number(row.queueLength), 0)
-  const queueSeries = kpis.activeDriverQueues?.sparkline || [71, 74, 69, 80, 83, 79, 86]
-  const activeDriverQueues = number(kpis.activeDriverQueues?.value || operations.activeDriverQueues, queuedDrivers || number(queueSeries[queueSeries.length - 1], 86))
-  const previousDriverQueues = number(queueSeries[queueSeries.length - 2], activeDriverQueues - 7)
+  const queueSeries = kpis.activeDriverQueues?.sparkline || []
+  const activeDriverQueues = number(kpis.activeDriverQueues?.value || operations.activeDriverQueues, queuedDrivers || number(queueSeries[queueSeries.length - 1]))
+  const previousDriverQueues = comparisonPrevious(kpiComparisons, 'activeDriverQueues', number(queueSeries[queueSeries.length - 2], activeDriverQueues))
   const forecastRows = Array.isArray(data.demandForecastSummary?.rows) ? data.demandForecastSummary.rows : []
   const avgForecastWait = averageNumber(forecastRows.map((row: any) => row.avgWaitMinutes))
-  const waitSeries = kpis.avgWaitTime?.sparkline || [34, 32, 31, 29, 30, 28, 26]
-  const avgWaitMinutes = number(kpis.avgWaitTime?.value || operations.avgWaitMinutes, avgForecastWait || number(waitSeries[waitSeries.length - 1], 26))
-  const previousAvgWaitMinutes = number(waitSeries[waitSeries.length - 2], avgWaitMinutes + 2)
+  const waitSeries = kpis.avgWaitTime?.sparkline || []
+  const avgWaitMinutes = number(kpis.avgWaitTime?.value || operations.avgWaitMinutes, avgForecastWait || number(waitSeries[waitSeries.length - 1]))
+  const previousAvgWaitMinutes = comparisonPrevious(kpiComparisons, 'avgWaitTime', number(waitSeries[waitSeries.length - 2], avgWaitMinutes))
+  const fuelSupplyRows = Array.isArray(data.fuelDeliveryLogs?.items) ? data.fuelDeliveryLogs.items : []
+  const caseRows = Array.isArray(data.flags?.items) ? data.flags.items : []
+  const enforcementRows = Array.isArray(data.enforcementActions?.items)
+    ? data.enforcementActions.items
+    : Array.isArray(data.enforcementActions)
+      ? data.enforcementActions
+      : []
+  const complaintRows = Array.isArray(data.complaints?.items) ? data.complaints.items : []
+  const districtStressRows = Array.isArray(data.districtShortages) ? data.districtShortages : []
 
   const kpiCards = [
     {
@@ -3317,7 +4187,7 @@ export function NationalDashboard() {
       value: activeStations.toLocaleString(),
       delta: formatKpiDelta(activeStations, previousActiveStations),
       deltaTone: activeStations >= previousActiveStations ? 'good' : 'bad',
-      accent: '#2563eb',
+      accent: '#185FA5',
       icon: Gauge,
       sparkline: stationSeries,
       drilldown: {
@@ -3333,7 +4203,7 @@ export function NationalDashboard() {
       value: `${reserveDays.toFixed(1)} days`,
       delta: formatKpiDelta(reserveDays, previousReserveDays, 'd', 1),
       deltaTone: reserveDays >= previousReserveDays ? 'good' : 'bad',
-      accent: '#10b981',
+      accent: '#1D9E75',
       icon: Fuel,
       sparkline: reserveSeries,
       drilldown: {
@@ -3349,7 +4219,7 @@ export function NationalDashboard() {
       value: activeDriverQueues.toLocaleString(),
       delta: formatKpiDelta(activeDriverQueues, previousDriverQueues),
       deltaTone: activeDriverQueues <= previousDriverQueues ? 'good' : 'bad',
-      accent: '#f59e0b',
+      accent: '#EF9F27',
       icon: Truck,
       sparkline: queueSeries,
     },
@@ -3358,7 +4228,7 @@ export function NationalDashboard() {
       value: `${Math.round(avgWaitMinutes)} min`,
       delta: formatKpiDelta(avgWaitMinutes, previousAvgWaitMinutes, ' min'),
       deltaTone: avgWaitMinutes <= previousAvgWaitMinutes ? 'good' : 'bad',
-      accent: '#64748b',
+      accent: '#185FA5',
       icon: Clock3,
       sparkline: waitSeries,
       drilldown: {
@@ -3388,7 +4258,7 @@ export function NationalDashboard() {
       onCopyTab: copyTabConfig,
       onPinTab: togglePinnedTab,
       onRefresh: refreshDashboard,
-      loading: availabilityLoading,
+      loading: availabilityLoading || packetStatus?.nationalOperations === 'loading',
       lastSync: chromeLastSync,
     })
   }, [
@@ -3406,12 +4276,13 @@ export function NationalDashboard() {
     refreshDashboard,
     setDashboardChrome,
     togglePinnedTab,
+    packetStatus?.nationalOperations,
   ])
 
   useEffect(() => clearDashboardChrome, [clearDashboardChrome])
 
   return (
-    <div className="h-full overflow-y-auto overflow-x-hidden bg-[#f4f5f7] px-3 pb-3 pt-3 text-[#111827]">
+    <div className="h-full overflow-y-auto overflow-x-hidden bg-[#f9fafb] px-3 pb-3 pt-3 text-[#111827]">
       <div className="mx-auto flex max-w-[1920px] flex-col gap-3">
         {activeTabId === 'builtin-national-overview' ? (
           <NationalOverviewDashboard
@@ -3420,21 +4291,75 @@ export function NationalDashboard() {
             activeDriverQueues={activeDriverQueues}
             complianceRiskCount={complianceRiskCount}
             kpiCards={kpiCards}
-            totalStations={totalStations || activeStations || 1248}
-            onlineStations={stationsOnline || activeStations || 1210}
-            criticalAlerts={criticalAlerts || 37}
+            totalStations={totalStations || activeStations}
+            onlineStations={stationsOnline || activeStations}
+            criticalAlerts={criticalAlerts}
             incidentItems={incidentItems}
+            mapStations={mapStations}
+            deliveryRows={fuelSupplyRows}
+            caseRows={caseRows}
+            inspectionRows={inspectionRows}
+            complaintRows={complaintRows}
+            districtRows={districtStressRows}
             onOpenKpi={setDrilldown}
+          />
+        ) : activeTabId === 'builtin-tasks' ? (
+          <RegulatorTasksDashboardView
+            title="Tasks"
+            subtitle="System-generated regulatory tasks from risk, complaints, delivery, price, inspection, notice, evidence, and overdue case engines."
+            rows={allTaskRows}
+            onOpenTask={(task) => navigate(`/tasks/${task.taskNumber || task.publicId || task.public_id || task.id || ''}`)}
+            onOpenAll={() => navigate('/tasks')}
+          />
+        ) : activeTabId === 'builtin-my-tasks' ? (
+          <RegulatorTasksDashboardView
+            title="My Tasks"
+            subtitle="Assigned MERA work for the signed-in officer with status, severity, district, category, due today, and overdue filters."
+            rows={assignedTaskRows.length ? assignedTaskRows : allTaskRows}
+            filterable
+            onOpenTask={(task) => navigate(`/tasks/${task.taskNumber || task.publicId || task.public_id || task.id || ''}`)}
+            onOpenAll={() => navigate('/tasks/my')}
+          />
+        ) : activeTabId === 'builtin-views' ? (
+          <SavedViewsDashboardView
+            customViews={customViews}
+            pinnedTabIds={pinnedTabIds}
+            onCreate={openCreateView}
+            onOpen={handleTabChange}
+            onEdit={openEditView}
+            onDuplicate={duplicateCustomView}
+            onDelete={deleteCustomView}
+          />
+        ) : activeTabId === 'builtin-compliance-watch' ? (
+          <ComplianceWatchCommand
+            incidentItems={incidentItems}
+            riskRows={stationRiskRows}
+            priceVarianceRows={priceVarianceRows}
+            complianceMatrixRows={complianceMatrixRows}
+            caseRows={caseRows}
+            inspectionRows={inspectionRows}
+            complaintRows={complaintRows}
+            onOpenRoute={navigate}
+          />
+        ) : activeTabId === 'builtin-enforcement' ? (
+          <EnforcementWatchCommand
+            enforcementRows={enforcementRows}
+            riskRows={stationRiskRows}
+            incidentItems={incidentItems}
+            caseRows={caseRows}
+            onOpenRoute={navigate}
           />
         ) : activeCustomView || activeBuiltinView ? (
           <CustomDashboardView
             view={(activeCustomView || activeBuiltinView)!}
             kpiCards={kpiCards}
-            totalStations={totalStations || activeStations || 1248}
-            onlineStations={stationsOnline || activeStations || 1210}
-            criticalAlerts={criticalAlerts || 37}
+            totalStations={totalStations || activeStations}
+            onlineStations={stationsOnline || activeStations}
+            criticalAlerts={criticalAlerts}
             incidentItems={incidentItems}
             riskRows={stationRiskRows}
+            priceVarianceRows={priceVarianceRows}
+            complianceMatrixRows={complianceMatrixRows}
             editable={Boolean(activeCustomView)}
             onEdit={activeCustomView ? () => openEditView(activeCustomView.id) : undefined}
             onDuplicate={!activeCustomView && activeBuiltinView ? () => duplicateCustomView(activeBuiltinView.id) : undefined}
@@ -3446,17 +4371,17 @@ export function NationalDashboard() {
             </div>
 
             {data.taskStats ? (
-              <div className="overflow-hidden rounded-[6px] border border-[#e2e8f0] bg-white shadow-sm">
+              <div className="overflow-hidden rounded-md border border-[#e2e8f0] bg-white shadow-sm">
                 <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#e2e8f0] px-4 py-3">
                   <div>
-                    <h3 className="text-[12px] font-bold uppercase tracking-[0.08em] text-[#111827]">{taskPanelTitle}</h3>
+                    <h3 className="text-[12px] font-medium uppercase tracking-[0.08em] text-[#111827]">{taskPanelTitle}</h3>
                     <p className="mt-1 text-[11px] text-[#6b7280]">Assigned work, escalations, and overdue regulatory actions</p>
                   </div>
                   <div className="flex gap-2">
-                    <button type="button" onClick={() => navigate('/tasks/my')} className="h-8 rounded-[4px] border border-[#e2e8f0] bg-white px-3 text-[12px] font-semibold text-[#374151] hover:bg-[#f9fafb]">
+                    <button type="button" onClick={() => navigate('/tasks/my')} className="h-8 rounded-md border border-[#e2e8f0] bg-white px-3 text-[12px] font-medium text-[#6b7280] hover:bg-[#f9fafb]">
                       My Tasks
                     </button>
-                    <button type="button" onClick={() => navigate('/tasks')} className="h-8 rounded-[4px] bg-[#111827] px-3 text-[12px] font-semibold text-white hover:bg-[#1f2937]">
+                    <button type="button" onClick={() => navigate('/tasks')} className="h-8 rounded-md bg-[#111827] px-3 text-[12px] font-medium text-white hover:bg-[#111827]">
                       View All
                     </button>
                   </div>
@@ -3469,19 +4394,19 @@ export function NationalDashboard() {
                       onClick={() => setDrilldown({ title: item.label, value: Number(item.value || 0), subtitle: 'Task records represented by this KPI.', rows: item.rows, columns: taskKpiColumns })}
                       className="border-r border-[#e2e8f0] px-4 py-3 text-left last:border-r-0 hover:bg-[#f9fafb]"
                     >
-                      <div className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#6b7280]">{item.label}</div>
-                      <div className={`mt-1 text-xl font-semibold ${['Overdue', 'Critical'].includes(String(item.label)) ? 'text-[#b91c1c]' : 'text-[#111827]'}`}>{Number(item.value || 0)}</div>
+                      <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-[#6b7280]">{item.label}</div>
+                      <div className={`mt-1 text-xl font-medium ${['Overdue', 'Critical'].includes(String(item.label)) ? 'text-[#dc2626]' : 'text-[#111827]'}`}>{Number(item.value || 0)}</div>
                     </button>
                   ))}
                 </div>
                 <div className="divide-y divide-[#e2e8f0]">
                   {dashboardTaskRows.length ? dashboardTaskRows.map((task: any) => (
                     <button key={task.taskNumber} type="button" onClick={() => navigate(`/tasks/${task.taskNumber}`)} className="grid w-full gap-2 px-4 py-3 text-left text-[12px] hover:bg-[#f9fafb] md:grid-cols-[120px_minmax(0,1fr)_110px_110px_130px]">
-                      <span className="font-semibold text-[#111827]">{task.taskNumber}</span>
-                      <span className="min-w-0 truncate text-[#374151]">{task.title}</span>
-                      <span className={task.priority === 'CRITICAL' ? 'font-semibold text-[#b91c1c]' : 'text-[#4b5563]'}>{task.priority}</span>
-                      <span className="text-[#4b5563]">{task.status}</span>
-                      <span className={task.isOverdue ? 'font-semibold text-[#b91c1c]' : 'text-[#6b7280]'}>{task.dueAt ? new Date(task.dueAt).toLocaleDateString() : 'No due date'}</span>
+                      <span className="font-medium text-[#111827]">{task.taskNumber}</span>
+                      <span className="min-w-0 truncate text-[#6b7280]">{task.title}</span>
+                      <span className={task.priority === 'CRITICAL' ? 'font-medium text-[#dc2626]' : 'text-[#6b7280]'}>{task.priority}</span>
+                      <span className="text-[#6b7280]">{task.status}</span>
+                      <span className={task.isOverdue ? 'font-medium text-[#dc2626]' : 'text-[#6b7280]'}>{task.dueAt ? new Date(task.dueAt).toLocaleDateString() : 'No due date'}</span>
                     </button>
                   )) : (
                     <div className="px-4 py-6 text-center text-[12px] text-[#6b7280]">No assigned task activity.</div>
@@ -3492,9 +4417,9 @@ export function NationalDashboard() {
 
             <div className="grid gap-3 xl:grid-cols-[minmax(0,1.55fr)_minmax(360px,0.85fr)]">
               <NationalSupplyCommandPanel
-                totalStations={totalStations || activeStations || 1248}
-                onlineStations={stationsOnline || activeStations || 1210}
-                criticalAlerts={criticalAlerts || 37}
+                totalStations={totalStations || activeStations}
+                onlineStations={stationsOnline || activeStations}
+                criticalAlerts={criticalAlerts}
               />
               <FuelReserveStatusPanel />
             </div>

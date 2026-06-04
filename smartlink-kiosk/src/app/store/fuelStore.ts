@@ -5,6 +5,7 @@ export type FuelType = "petrol" | "diesel"
 export type QueueStatus = "READY" | "ARRIVED" | "NO-SHOW"
 export type SessionStatus = "waiting" | "dispensing" | "completed" | "error"
 export type PumpStatus = "idle" | "dispensing" | "offline"
+export type RealtimeMode = "disabled" | "connecting" | "websocket" | "polling"
 export type WalletOrderPresence = "at_station" | "near_pump"
 export type SessionPaymentMethod = "wallet" | "smartpay" | "pay_at_pump"
 export type WalletOrderStatus =
@@ -82,6 +83,14 @@ export interface Pump {
   nozzles: PumpNozzle[]
 }
 
+export interface KioskAssignedPump {
+  internalId?: number | null
+  id?: string | null
+  pumpNumber?: number | null
+  displayName?: string | null
+  currentMode?: string | null
+}
+
 export interface HybridPilotQueueState {
   enabled: boolean
   pilotPumpPublicId?: string | null
@@ -103,7 +112,7 @@ export interface HybridPilotQueueState {
 export interface LivePumpSession {
   publicId: string
   sessionReference?: string | null
-  status: "CREATED" | "STARTED" | "DISPENSING"
+  status: "CREATED" | "STARTED" | "DISPENSING" | "COMPLETED" | "FAILED" | "CANCELLED"
   pumpPublicId?: string | null
   pumpNumber?: number | null
   nozzlePublicId?: string | null
@@ -185,9 +194,13 @@ interface FuelStoreState {
   dieselPricePerLitre: number
   isOnline: boolean
   isApiMode: boolean
+  realtimeMode: RealtimeMode
   isHydrating: boolean
   hasLoaded: boolean
   syncError: string | null
+  kioskAssignedPump: KioskAssignedPump | null
+  kioskConfigError: string | null
+  pumpMode: string | null
   completedSessionExpiresAt: number | null
   addToQueue: (item: Omit<QueueItem, "id" | "position" | "timestamp">) => void
   selectCustomer: (id: string) => void
@@ -203,8 +216,10 @@ interface FuelStoreState {
   updatePumpStatus: (pumpId: number, status: PumpStatus) => void
   setSessionContext: (payload: { attendantName?: string | null; attendantRole?: string | null }) => void
   setApiMode: (enabled: boolean) => void
+  setRealtimeMode: (mode: RealtimeMode) => void
   setHydrating: (loading: boolean) => void
   setSyncError: (message: string | null) => void
+  setKioskContext: (payload: { assignedPump?: KioskAssignedPump | null; configurationMessage?: string | null }) => void
   holdCompletedSession: (durationMs?: number) => void
   hydrateFromServer: (payload: { kioskData: Record<string, any>; attendantDashboard?: Record<string, any> | null }) => void
 }
@@ -374,6 +389,66 @@ function toPositiveNumber(value: unknown) {
   return numeric
 }
 
+const TERMINAL_PUMP_SESSION_STATUSES = new Set(["COMPLETED", "FAILED", "CANCELLED"])
+const KNOWN_PUMP_SESSION_STATUSES = new Set([
+  "CREATED",
+  "STARTED",
+  "DISPENSING",
+  "COMPLETED",
+  "FAILED",
+  "CANCELLED",
+])
+
+function normalizePumpSessionStatus(value: unknown) {
+  const normalized = String(value || "").trim().toUpperCase()
+  if (!normalized) return null
+  if (normalized === "DISPENSING_STOPPED" || normalized === "DISPENSE_COMPLETED") {
+    return "COMPLETED"
+  }
+  if (KNOWN_PUMP_SESSION_STATUSES.has(normalized)) return normalized
+  if (normalized.includes("COMPLETE")) return "COMPLETED"
+  if (normalized.includes("FAIL") || normalized.includes("ERROR")) return "FAILED"
+  if (normalized.includes("CANCEL")) return "CANCELLED"
+  if (normalized.includes("DISPENS")) return "DISPENSING"
+  return null
+}
+
+function mergePumpSessionStatus(current: unknown, incoming: unknown) {
+  const currentStatus = normalizePumpSessionStatus(current)
+  const incomingStatus = normalizePumpSessionStatus(incoming)
+  if (incomingStatus && TERMINAL_PUMP_SESSION_STATUSES.has(incomingStatus)) return incomingStatus
+  if (currentStatus && TERMINAL_PUMP_SESSION_STATUSES.has(currentStatus)) return currentStatus
+  return incomingStatus || currentStatus || null
+}
+
+function telemetryStatusForActiveFlow(
+  item: AttendantPumpSessionSnapshot | null | undefined,
+  { allowTerminal }: { allowTerminal: boolean },
+) {
+  const pumpSessionStatus = normalizePumpSessionStatus(item?.pumpSessionStatus)
+  if (pumpSessionStatus) {
+    if (allowTerminal || !TERMINAL_PUMP_SESSION_STATUSES.has(pumpSessionStatus)) {
+      return pumpSessionStatus
+    }
+    return null
+  }
+
+  const rawStatus = String(item?.status || "").trim().toLowerCase()
+  if (rawStatus === "dispensing") return "DISPENSING"
+  if (!allowTerminal) return null
+  if (rawStatus === "completed") return "COMPLETED"
+  if (rawStatus === "failed") return "FAILED"
+  if (rawStatus === "cancelled") return "CANCELLED"
+  return null
+}
+
+function maxLiveLitres(...values: unknown[]) {
+  const litres = values
+    .map((value) => toPositiveNumber(value))
+    .filter((value): value is number => typeof value === "number")
+  return litres.length ? Math.max(...litres) : 0
+}
+
 function extractPumpFuelTypes(pump: Record<string, any>): FuelType[] {
   const collected = new Set<FuelType>()
 
@@ -490,7 +565,7 @@ function mapQueueItems(queueSnapshot: Record<string, any>, attendantDashboard?: 
       selectedNozzleNumber: String(order?.selectedPump?.nozzleNumber || "").trim() || null,
       pumpSessionPublicId: String(order?.workflow?.pumpSession?.publicId || "").trim() || null,
       pumpSessionReference: String(order?.workflow?.pumpSession?.sessionReference || "").trim() || null,
-      pumpSessionStatus: String(order?.workflow?.pumpSession?.status || "").trim().toUpperCase() || null,
+      pumpSessionStatus: normalizePumpSessionStatus(order?.workflow?.pumpSession?.status),
       completedTransactionPublicId: String(order?.transaction?.publicId || "").trim() || null,
       completedReceiptVerificationRef:
         String(order?.transaction?.receiptVerificationRef || "").trim() || null,
@@ -521,15 +596,23 @@ function mapNearbyWalletOrders(items: Array<Record<string, any>>) {
 
 function mapLivePumpSession(session: Record<string, any> | null): LivePumpSession | null {
   if (!session?.publicId) return null
+  const status = normalizePumpSessionStatus(session.status) || "CREATED"
   return {
     publicId: String(session.publicId),
     sessionReference: String(session.sessionReference || "").trim() || null,
-    status: String(session.status || "CREATED").trim().toUpperCase() as LivePumpSession["status"],
+    status: status as LivePumpSession["status"],
     pumpPublicId: String(session.pumpPublicId || "").trim() || null,
     pumpNumber: Number(session.pumpNumber || 0) || null,
     nozzlePublicId: String(session.nozzlePublicId || "").trim() || null,
     nozzleNumber: String(session.nozzleNumber || "").trim() || null,
-    dispensedLitres: Number(session.dispensedLitres || 0) || 0,
+    dispensedLitres: maxLiveLitres(
+      session.dispensedLitres,
+      session.dispensed_litres,
+      session.currentLiveLitres,
+      session.current_live_litres,
+      session.litresValue,
+      session.litersValue,
+    ),
     fuelOrderPublicId: String(session.fuelOrderPublicId || "").trim() || null,
     fuelType: session.fuelType ? normalizeFuelType(session.fuelType) : null,
     customerName: String(session.customerName || "").trim() || null,
@@ -608,14 +691,15 @@ function mapAttendantPumpSessions(attendantDashboard: Record<string, any> | null
   const rows = Array.isArray(attendantDashboard?.activePumpSessions) ? attendantDashboard.activePumpSessions : []
   return rows.map((item: Record<string, any>) => {
     const rawStatus = String(item?.status || "").trim().toLowerCase()
+    const pumpSessionStatus = normalizePumpSessionStatus(item?.pumpSessionStatus || item?.sessionStatus)
     const status =
-      rawStatus === "completed"
+      pumpSessionStatus === "COMPLETED"
         ? "completed"
-        : rawStatus === "failed"
+        : pumpSessionStatus === "FAILED"
           ? "failed"
-          : rawStatus === "cancelled"
+          : pumpSessionStatus === "CANCELLED"
             ? "cancelled"
-            : rawStatus === "dispensing"
+            : pumpSessionStatus === "DISPENSING" || rawStatus === "dispensing"
               ? "dispensing"
               : "reserved"
 
@@ -627,8 +711,18 @@ function mapAttendantPumpSessions(attendantDashboard: Record<string, any> | null
       pumpNumber: Number(item?.pumpNumber || 0) || null,
       nozzlePublicId: String(item?.nozzlePublicId || "").trim() || null,
       status,
-      pumpSessionStatus: String(item?.pumpSessionStatus || "").trim().toUpperCase() || null,
-      currentLiveLitres: Number(item?.currentLiveLitres || 0) || 0,
+      pumpSessionStatus,
+      currentLiveLitres: maxLiveLitres(
+        item?.currentLiveLitres,
+        item?.current_live_litres,
+        item?.dispensedLitres,
+        item?.dispensed_litres,
+        item?.litresDispensed,
+        item?.litres_dispensed,
+        item?.litresValue,
+        item?.litersValue,
+        item?.telemetry?.litresValue,
+      ),
       linkedOrder: item?.linkedOrder
         ? {
             orderType: String(item.linkedOrder.orderType || "").trim() || null,
@@ -639,25 +733,29 @@ function mapAttendantPumpSessions(attendantDashboard: Record<string, any> | null
   })
 }
 
-function findTelemetryPumpSessionForLiveSession(
+function findStrictTelemetryPumpSessionForLiveSession(
   livePumpSession: LivePumpSession | null,
   telemetrySessions: AttendantPumpSessionSnapshot[]
 ) {
   if (!livePumpSession) return null
-  return (
-    telemetrySessions.find(
-      (item) =>
-        (item.pumpSessionPublicId && item.pumpSessionPublicId === livePumpSession.publicId)
-        || (item.pumpSessionReference && item.pumpSessionReference === livePumpSession.sessionReference)
-    )
-    || telemetrySessions.find(
-      (item) =>
-        (item.nozzlePublicId && item.nozzlePublicId === livePumpSession.nozzlePublicId)
-        || (item.pumpPublicId && item.pumpPublicId === livePumpSession.pumpPublicId)
-        || (item.pumpNumber && item.pumpNumber === livePumpSession.pumpNumber)
-    )
-    || null
-  )
+  return telemetrySessions.find(
+    (item) =>
+      (item.pumpSessionPublicId && item.pumpSessionPublicId === livePumpSession.publicId)
+      || (item.pumpSessionReference && item.pumpSessionReference === livePumpSession.sessionReference)
+  ) || null
+}
+
+function findFallbackTelemetryPumpSessionForLiveSession(
+  livePumpSession: LivePumpSession | null,
+  telemetrySessions: AttendantPumpSessionSnapshot[]
+) {
+  if (!livePumpSession) return null
+  return telemetrySessions.find(
+    (item) =>
+      (item.nozzlePublicId && item.nozzlePublicId === livePumpSession.nozzlePublicId)
+      || (item.pumpPublicId && item.pumpPublicId === livePumpSession.pumpPublicId)
+      || (item.pumpNumber && item.pumpNumber === livePumpSession.pumpNumber)
+  ) || null
 }
 
 function applyTelemetryToLivePumpSession(
@@ -665,13 +763,20 @@ function applyTelemetryToLivePumpSession(
   telemetrySessions: AttendantPumpSessionSnapshot[]
 ) {
   if (!livePumpSession) return null
-  const telemetrySession = findTelemetryPumpSessionForLiveSession(livePumpSession, telemetrySessions)
+  const strictTelemetrySession = findStrictTelemetryPumpSessionForLiveSession(livePumpSession, telemetrySessions)
+  const telemetrySession =
+    strictTelemetrySession
+    || findFallbackTelemetryPumpSessionForLiveSession(livePumpSession, telemetrySessions)
   if (!telemetrySession) return livePumpSession
-  const currentLiveLitres = Number(telemetrySession.currentLiveLitres || 0) || 0
+  const incomingStatus = telemetryStatusForActiveFlow(telemetrySession, {
+    allowTerminal: Boolean(strictTelemetrySession),
+  })
+  const nextStatus = mergePumpSessionStatus(livePumpSession.status, incomingStatus)
+  const currentLiveLitres = maxLiveLitres(telemetrySession.currentLiveLitres, livePumpSession.dispensedLitres)
   return {
     ...livePumpSession,
-    status: telemetrySession.status === "dispensing" ? "DISPENSING" : livePumpSession.status,
-    dispensedLitres: currentLiveLitres > 0 ? currentLiveLitres : livePumpSession.dispensedLitres,
+    status: (nextStatus || livePumpSession.status) as LivePumpSession["status"],
+    dispensedLitres: currentLiveLitres,
   }
 }
 
@@ -681,13 +786,16 @@ function applyTelemetryToActiveSession(
 ) {
   if (!session) return null
 
+  const exactTelemetrySession =
+    telemetrySessions.find(
+      (item) =>
+        (session.pumpSessionPublicId && item.pumpSessionPublicId === session.pumpSessionPublicId)
+        || (session.pumpSessionReference && item.pumpSessionReference === session.pumpSessionReference)
+    ) || null
+
   const linkedQueueTelemetrySession =
     session.kind === "queue_draft"
-      ? telemetrySessions.find(
-          (item) =>
-            (session.pumpSessionPublicId && item.pumpSessionPublicId === session.pumpSessionPublicId)
-            || (session.pumpSessionReference && item.pumpSessionReference === session.pumpSessionReference)
-        ) || telemetrySessions.find(
+      ? exactTelemetrySession || telemetrySessions.find(
           (item) =>
             item.linkedOrder?.orderType?.toLowerCase() === "queue"
             && item.linkedOrder?.orderPublicId
@@ -711,7 +819,7 @@ function applyTelemetryToActiveSession(
   const telemetrySession =
     session.kind === "queue_draft"
       ? linkedQueueTelemetrySession || fallbackQueueTelemetrySession
-      : telemetrySessions.find(
+      : exactTelemetrySession || telemetrySessions.find(
           (item) =>
             (item.nozzlePublicId && item.nozzlePublicId === session.assignedNozzlePublicId)
             || (item.pumpPublicId && item.pumpPublicId === session.assignedPumpPublicId)
@@ -720,28 +828,37 @@ function applyTelemetryToActiveSession(
 
   if (!telemetrySession) return session
 
-  const currentLiveLitres = Number(telemetrySession.currentLiveLitres || 0) || 0
-  const pumpSessionStatus =
-    telemetrySession.pumpSessionStatus
-    || (telemetrySession.status === "completed" ? "COMPLETED" : null)
-    || (telemetrySession.status === "failed" ? "FAILED" : null)
-    || (telemetrySession.status === "cancelled" ? "CANCELLED" : null)
+  const currentLiveLitres = maxLiveLitres(telemetrySession.currentLiveLitres, session.litresDispensed)
+  const telemetrySessionIsStrict =
+    session.kind === "queue_draft"
+      ? Boolean(linkedQueueTelemetrySession && telemetrySession === linkedQueueTelemetrySession)
+      : Boolean(exactTelemetrySession && telemetrySession === exactTelemetrySession)
+  const telemetryStatus = telemetryStatusForActiveFlow(telemetrySession, {
+    allowTerminal: telemetrySessionIsStrict,
+  })
+  const pumpSessionStatus = mergePumpSessionStatus(session.pumpSessionStatus, telemetryStatus)
+  const telemetryShowsDispensing =
+    telemetrySession.status === "dispensing"
+    || telemetryStatus === "DISPENSING"
+    || currentLiveLitres > 0
 
   return {
     ...session,
     status:
       session.status === "completed"
         ? session.status
-        : telemetrySession.status === "dispensing"
+        : telemetryShowsDispensing
           ? "dispensing"
           : session.status,
-    pumpSessionStatus: pumpSessionStatus || session.pumpSessionStatus || null,
-    litresDispensed: currentLiveLitres > 0 ? currentLiveLitres : session.litresDispensed,
+    pumpSessionStatus,
+    litresDispensed: currentLiveLitres,
   }
 }
 
 function mapActiveSessionFromLiveSession(livePumpSession: LivePumpSession, fuelOrder: Record<string, any> | null): ActiveSession | null {
   if (!livePumpSession?.fuelOrderPublicId || !fuelOrder?.publicId) return null
+  const dispensedLitres = maxLiveLitres(livePumpSession.dispensedLitres)
+  const pumpSessionStatus = normalizePumpSessionStatus(livePumpSession.status)
   return {
     kind: "live_manual_wallet",
     customerId: String(fuelOrder.publicId),
@@ -758,11 +875,15 @@ function mapActiveSessionFromLiveSession(livePumpSession: LivePumpSession, fuelO
     assignedPumpPublicId: livePumpSession.pumpPublicId || null,
     assignedNozzlePublicId: livePumpSession.nozzlePublicId || null,
     assignedNozzleLabel: livePumpSession.nozzleNumber || null,
-    status: livePumpSession.status === "DISPENSING" ? "dispensing" : "waiting",
-    litresDispensed: Number(livePumpSession.dispensedLitres || 0) || 0,
+    status:
+      livePumpSession.status === "DISPENSING"
+      || (pumpSessionStatus && TERMINAL_PUMP_SESSION_STATUSES.has(pumpSessionStatus) && dispensedLitres > 0)
+        ? "dispensing"
+        : "waiting",
+    litresDispensed: dispensedLitres,
     pumpSessionPublicId: livePumpSession.publicId,
     pumpSessionReference: livePumpSession.sessionReference || null,
-    pumpSessionStatus: livePumpSession.status || null,
+    pumpSessionStatus,
     fuelOrderPublicId: livePumpSession.fuelOrderPublicId || null,
   }
 }
@@ -850,6 +971,15 @@ function refreshQueueDraftFromQueueItem(
 
   const refreshedDraft = buildQueueDraft(nextQueueItem, pumps, hybridPilotQueue)
   if (!refreshedDraft) return null
+  const isPumpFlowActive = session.status === "dispensing" || session.status === "completed"
+  const mergedPumpSessionStatus = mergePumpSessionStatus(
+    session.pumpSessionStatus,
+    refreshedDraft.pumpSessionStatus,
+  )
+  const mergedLitresDispensed = maxLiveLitres(
+    session.litresDispensed,
+    refreshedDraft.litresDispensed,
+  )
   const refreshedHasAssignment =
     Boolean(String(refreshedDraft.assignedPumpPublicId || "").trim())
     || (Number(refreshedDraft.assignedPump || 0) > 0)
@@ -871,16 +1001,16 @@ function refreshQueueDraftFromQueueItem(
     ...refreshedDraft,
     ...assignmentFallback,
     status:
-      session.status === "dispensing" || session.status === "completed"
+      isPumpFlowActive
         ? session.status
         : refreshedDraft.status,
     litresDispensed:
-      session.status === "dispensing" || session.status === "completed"
-        ? session.litresDispensed
+      isPumpFlowActive
+        ? mergedLitresDispensed
         : refreshedDraft.litresDispensed,
     pumpSessionStatus:
-      session.status === "dispensing" || session.status === "completed"
-        ? session.pumpSessionStatus || refreshedDraft.pumpSessionStatus || null
+      isPumpFlowActive
+        ? mergedPumpSessionStatus
         : refreshedDraft.pumpSessionStatus || null,
   }
 }
@@ -910,9 +1040,13 @@ export const useFuelStore = create<FuelStoreState>((set) => ({
   dieselPricePerLitre: 4980,
   isOnline: true,
   isApiMode: true,
+  realtimeMode: "disabled",
   isHydrating: false,
   hasLoaded: false,
   syncError: null,
+  kioskAssignedPump: null,
+  kioskConfigError: null,
+  pumpMode: null,
   completedSessionExpiresAt: null,
 
   addToQueue: (item) => set((state) => {
@@ -1127,11 +1261,24 @@ export const useFuelStore = create<FuelStoreState>((set) => ({
   })),
 
   setApiMode: (enabled) => set(() => ({ isApiMode: enabled })),
+  setRealtimeMode: (mode) => set(() => ({ realtimeMode: mode })),
   setHydrating: (loading) => set(() => ({ isHydrating: loading })),
   setSyncError: (message) => set(() => ({
     syncError: message,
     isOnline: !message,
   })),
+  setKioskContext: (payload) => set((state) => {
+    const assignedPump = payload.assignedPump === undefined ? state.kioskAssignedPump : payload.assignedPump
+    const configurationMessage =
+      payload.configurationMessage === undefined ? state.kioskConfigError : payload.configurationMessage
+    return {
+      kioskAssignedPump: assignedPump || null,
+      kioskConfigError: configurationMessage || null,
+      pumpMode: assignedPump?.currentMode || state.pumpMode || null,
+      syncError: configurationMessage || state.syncError,
+      isOnline: !configurationMessage && state.isOnline,
+    }
+  }),
 
   holdCompletedSession: (durationMs = 60000) => set((state) => {
     if (!state.activeSession) return state
@@ -1194,6 +1341,12 @@ export const useFuelStore = create<FuelStoreState>((set) => ({
       stationPublicId: String(kioskData?.stationPublicId || state.stationPublicId || "").trim() || null,
       stationName: String(kioskData?.stationName || state.stationName),
       stationTimezone: String(kioskData?.stationTimezone || state.stationTimezone || "Africa/Blantyre"),
+      kioskAssignedPump: state.kioskAssignedPump,
+      kioskConfigError: state.kioskConfigError,
+      pumpMode:
+        state.kioskAssignedPump?.currentMode
+        || String(kioskData?.mainQueue?.pumps?.[0]?.currentMode || state.pumpMode || "").trim()
+        || null,
       petrolPricePerLitre: prices.petrol,
       dieselPricePerLitre: prices.diesel,
       signalLabel: "Good",

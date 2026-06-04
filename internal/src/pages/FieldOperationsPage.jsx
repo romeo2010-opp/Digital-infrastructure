@@ -7,7 +7,7 @@ import MetricGrid from "../components/MetricGrid"
 import StatusPill from "../components/StatusPill"
 import CursorActionMenu from "../components/CursorActionMenu"
 import ExistingManagerDetailModal from "../components/ExistingManagerDetailModal"
-import { formatDateTime, formatNumber } from "../utils/display"
+import { formatCodeLabel, formatDateTime, formatNumber } from "../utils/display"
 import { createEmptyStaffDraft, formatManagerCandidateLabel } from "../utils/staffAssignment"
 import { useInternalAuth } from "../auth/AuthContext"
 
@@ -31,7 +31,7 @@ function normalizeChecklistItems(value) {
       const status = typeof item === "object" && item?.status ? item.status : (item?.completed ? "COMPLETED" : "PENDING")
       return {
         id: item?.id || item?.key || `check-${index}`,
-        label: String(label || "").replace(/_/g, " "),
+        label: formatCodeLabel(label),
         status,
       }
     })
@@ -40,7 +40,7 @@ function normalizeChecklistItems(value) {
   if (value && typeof value === "object") {
     return Object.entries(value).map(([key, complete], index) => ({
       id: key || `check-${index}`,
-      label: String(key || `Checklist item ${index + 1}`).replace(/_/g, " "),
+      label: formatCodeLabel(key || `Checklist item ${index + 1}`),
       status: complete ? "COMPLETED" : "PENDING",
     }))
   }

@@ -1,8 +1,9 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react"
-import { authApi } from "../api/authApi"
 import { AUTH_EXPIRED_EVENT } from "../api/httpClient"
+import { kioskAuthApi } from "../api/kioskAuthApi"
 import {
   clearAuthSession,
+  getKioskSessionId,
   getSessionMeta,
   getTokenClaims,
   setAccessToken,
@@ -14,25 +15,16 @@ const AuthContext = createContext<null | {
   isAuthenticated: boolean
   session: ReturnType<typeof getSessionMeta>
   isApiMode: boolean
+  completeKioskAuthorization: (kioskSession: Record<string, any>) => void
   login: (credentials: { email?: string; phone?: string; password: string }) => Promise<void>
   logout: () => Promise<void>
   switchStation: (stationPublicId: string) => Promise<void>
 }>(null)
 
-const STAFF_ROLES = new Set(["MANAGER", "ATTENDANT", "VIEWER"])
 const TOKEN_REFRESH_LEAD_MS = 2 * 60 * 1000
 const TOKEN_REFRESH_MIN_DELAY_MS = 30 * 1000
-
-function assertStaffSession(me: {
-  role?: string | null
-  station?: { publicId?: string | null } | null
-}) {
-  const role = String(me?.role || "").trim().toUpperCase()
-  const stationPublicId = String(me?.station?.publicId || "").trim()
-  if (!stationPublicId || !STAFF_ROLES.has(role)) {
-    throw new Error("This account is not a station staff account.")
-  }
-}
+const KIOSK_IDLE_TIMEOUT_MS = Number(import.meta.env.VITE_KIOSK_IDLE_TIMEOUT_MINUTES || 30) * 60 * 1000
+const KIOSK_HEARTBEAT_MS = Math.max(10_000, Number(import.meta.env.VITE_KIOSK_HEARTBEAT_SECONDS || 20) * 1000)
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const dataSource = String(import.meta.env.VITE_DATA_SOURCE || "api").toLowerCase()
@@ -41,11 +33,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isAuthenticated, setIsAuthenticated] = useState(false)
   const [session, setSession] = useState(getSessionMeta())
   const refreshTimerRef = useRef<number>(0)
+  const heartbeatTimerRef = useRef<number>(0)
+  const lastActivityRef = useRef(Date.now())
 
   function clearRefreshTimer() {
     if (refreshTimerRef.current) {
       window.clearTimeout(refreshTimerRef.current)
       refreshTimerRef.current = 0
+    }
+  }
+
+  function clearHeartbeatTimer() {
+    if (heartbeatTimerRef.current) {
+      window.clearInterval(heartbeatTimerRef.current)
+      heartbeatTimerRef.current = 0
     }
   }
 
@@ -63,19 +64,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       user: payload?.user || null,
       station: payload?.station || null,
       role: payload?.role || null,
+      kiosk: payload?.kiosk || null,
       stationMemberships: Array.isArray(payload?.stationMemberships) ? payload.stationMemberships : [],
     }
     setSessionMeta(nextSession)
     setSession(nextSession)
     setIsAuthenticated(true)
-    scheduleTokenRefresh()
+    if (!nextSession.kiosk) {
+      scheduleTokenRefresh()
+    }
   }
 
   async function refreshSessionSilently() {
-    if (!isApiMode) return null
-    const refreshed = await authApi.refresh()
-    setAccessToken(refreshed.accessToken)
-    return refreshed
+    return null
   }
 
   function scheduleTokenRefresh() {
@@ -113,25 +114,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return
     }
 
-    authApi.refresh()
-      .then(async (refreshed) => {
-        setAccessToken(refreshed.accessToken)
-        const me = await authApi.me(refreshed.accessToken)
-        assertStaffSession(me)
-        applySessionState(me)
-      })
-      .catch(() => {
-        clearAuthSession()
-        setSession(getSessionMeta())
-        setIsAuthenticated(false)
-      })
-      .finally(() => setLoading(false))
+    clearAuthSession()
+    setSession(getSessionMeta())
+    setIsAuthenticated(false)
+    setLoading(false)
   }, [isApiMode])
 
   useEffect(() => {
     if (typeof window === "undefined") return undefined
     const handleAuthExpired = () => {
       clearRefreshTimer()
+      clearHeartbeatTimer()
       clearAuthSession()
       setSession(getSessionMeta())
       setIsAuthenticated(false)
@@ -142,42 +135,93 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   useEffect(() => () => clearRefreshTimer(), [])
+  useEffect(() => () => clearHeartbeatTimer(), [])
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined
+    const markActivity = () => {
+      lastActivityRef.current = Date.now()
+    }
+    window.addEventListener("click", markActivity)
+    window.addEventListener("keydown", markActivity)
+    window.addEventListener("touchstart", markActivity)
+    window.addEventListener("pointerdown", markActivity)
+    return () => {
+      window.removeEventListener("click", markActivity)
+      window.removeEventListener("keydown", markActivity)
+      window.removeEventListener("touchstart", markActivity)
+      window.removeEventListener("pointerdown", markActivity)
+    }
+  }, [])
+
+  useEffect(() => {
+    clearHeartbeatTimer()
+    if (!isAuthenticated || !isApiMode || typeof window === "undefined") return
+    const sessionId = getKioskSessionId()
+    if (!sessionId) return
+
+    heartbeatTimerRef.current = window.setInterval(async () => {
+      if (Date.now() - lastActivityRef.current > KIOSK_IDLE_TIMEOUT_MS) {
+        await logout()
+        return
+      }
+
+      try {
+        const result = await kioskAuthApi.heartbeat(sessionId)
+        if (String(result?.status || "").toLowerCase() !== "active") {
+          throw new Error("Kiosk session is no longer active")
+        }
+      } catch {
+        clearAuthSession()
+        setSession(getSessionMeta())
+        setIsAuthenticated(false)
+        clearHeartbeatTimer()
+      }
+    }, KIOSK_HEARTBEAT_MS)
+  }, [isAuthenticated, isApiMode, session?.kiosk?.sessionId])
 
   async function login(credentials: { email?: string; phone?: string; password: string }) {
-    const data = await authApi.login(credentials)
-    setAccessToken(data.accessToken)
-    const me = await authApi.me(data.accessToken)
-    assertStaffSession(me)
-    applySessionState({
-      user: me.user || data.user,
-      station: me.station || data.station,
-      role: me.role || data.role,
-      stationMemberships: me.stationMemberships || data.stationMemberships,
-    })
+    void credentials
+    throw new Error("This kiosk uses QR authorization. Scan the kiosk code with a staff phone.")
   }
 
   async function switchStation(stationPublicId: string) {
-    const switched = await authApi.switchStation({ stationPublicId })
-    setAccessToken(switched.accessToken)
-    const me = await authApi.me(switched.accessToken)
-    assertStaffSession(me)
+    void stationPublicId
+    throw new Error("Station switching is not available in kiosk mode.")
+  }
+
+  function completeKioskAuthorization(kioskSession: Record<string, any>) {
+    setAccessToken(String(kioskSession?.accessToken || ""))
+    lastActivityRef.current = Date.now()
     applySessionState({
-      user: me.user || session?.user,
-      station: me.station || switched.station,
-      role: me.role || switched.role,
-      stationMemberships: me.stationMemberships || switched.stationMemberships,
+      user: {
+        publicId: kioskSession?.approvedBy?.userPublicId || null,
+        fullName: kioskSession?.approvedBy?.fullName || "Station Staff",
+      },
+      station: kioskSession?.station || null,
+      role: kioskSession?.roleScope || "ATTENDANT",
+      kiosk: {
+        sessionId: kioskSession?.sessionId || null,
+        kioskName: kioskSession?.kiosk?.name || "Station kiosk",
+        locationLabel: kioskSession?.kiosk?.locationLabel || null,
+        permissions: Array.isArray(kioskSession?.permissions) ? kioskSession.permissions : [],
+        expiresAt: kioskSession?.expiresAt || null,
+      },
+      stationMemberships: [],
     })
   }
 
   async function logout() {
-    if (isApiMode) {
+    const sessionId = getKioskSessionId()
+    if (isApiMode && sessionId) {
       try {
-        await authApi.logout()
+        await kioskAuthApi.revoke(sessionId)
       } catch {
         // noop
       }
     }
     clearRefreshTimer()
+    clearHeartbeatTimer()
     clearAuthSession()
     setSession(getSessionMeta())
     setIsAuthenticated(false)
@@ -189,6 +233,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       isAuthenticated,
       session,
       isApiMode,
+      completeKioskAuthorization,
       login,
       logout,
       switchStation,

@@ -5,6 +5,7 @@ import { Toolbar } from '../components/Toolbar'
 import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
 import { ModalShell } from '../components/ModalShell'
+import { FieldShell, ToolbarField } from '../components/FieldLabel'
 import { PortalTable } from '../components/PortalTable'
 import { SectionCard } from '../components/SectionCard'
 import { SectionKpiStrip } from '../components/SectionKpiStrip'
@@ -13,7 +14,7 @@ import { MERA_PERMISSIONS } from '../lib/access'
 import { usePortal } from '../lib/portalContext'
 import { normalizeDate, normalizeRows, renderPill } from '../lib/portalUtils'
 
-const fieldClass = 'h-9 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700'
+const fieldClass = 'h-9 rounded-md border border-[#e2e8f0] bg-white px-3 text-sm text-[#111827]'
 
 function extractEvidenceName(mediaUrl: string) {
   const assetUrl = resolvePortalAssetUrl(mediaUrl)
@@ -48,7 +49,7 @@ function renderEvidencePreview(mediaUrl: string) {
       <img
         src={url}
         alt="Complaint evidence"
-        className="max-h-full max-w-full rounded-2xl border border-white/60 bg-white/80 object-contain shadow-[0_20px_60px_-24px_rgba(15,23,42,0.55)]"
+        className="max-h-full max-w-full rounded-lg border border-white/60 bg-white/80 object-contain shadow-none"
       />
     )
   }
@@ -58,31 +59,31 @@ function renderEvidencePreview(mediaUrl: string) {
       <video
         src={url}
         controls
-        className="max-h-full max-w-full rounded-2xl border border-slate-700/60 bg-slate-950 shadow-[0_20px_60px_-24px_rgba(15,23,42,0.8)]"
+        className="max-h-full max-w-full rounded-lg border border-[#e2e8f0] bg-[#111827] shadow-none"
       />
     )
   }
 
   if (/\.(mp3|wav|m4a|aac|oga)(\?|$)/.test(lower)) {
     return (
-      <div className="flex min-h-[18rem] w-full items-center justify-center rounded-[1.75rem] border border-white/60 bg-white/85 p-8 shadow-[0_20px_60px_-24px_rgba(15,23,42,0.45)] backdrop-blur">
+      <div className="flex min-h-[18rem] w-full items-center justify-center rounded-md border border-white/60 bg-white/85 p-8 shadow-none backdrop-blur">
         <audio src={url} controls className="w-full max-w-2xl" />
       </div>
     )
   }
 
   return (
-    <div className="flex h-full min-h-[18rem] w-full flex-col items-center justify-center rounded-[1.75rem] border border-dashed border-slate-300/80 bg-white/75 p-8 text-center shadow-[0_20px_60px_-24px_rgba(15,23,42,0.35)] backdrop-blur">
-      <div className="flex size-14 items-center justify-center rounded-2xl bg-slate-900 text-white shadow-lg">
+    <div className="flex h-full min-h-[18rem] w-full flex-col items-center justify-center rounded-md border border-dashed border-[#e2e8f0] bg-white/75 p-8 text-center shadow-none backdrop-blur">
+      <div className="flex size-14 items-center justify-center rounded-lg bg-[#111827] text-white shadow-lg">
         <FileImage className="size-7" />
       </div>
-      <p className="mt-4 text-sm font-semibold text-slate-800">Preview unavailable in portal</p>
-      <p className="mt-1 max-w-sm text-xs leading-5 text-slate-500">Open the original evidence file in a separate tab for full inspection.</p>
+      <p className="mt-4 text-sm font-medium text-[#111827]">Preview unavailable in portal</p>
+      <p className="mt-1 max-w-sm text-xs leading-5 text-[#6b7280]">Open the original evidence file in a separate tab for full inspection.</p>
       <a
         href={url}
         target="_blank"
         rel="noreferrer"
-        className="mt-5 inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-blue-700 shadow-sm transition hover:border-blue-200 hover:bg-blue-50"
+        className="mt-5 inline-flex items-center gap-2 rounded-full border border-[#e2e8f0] bg-white px-4 py-2 text-xs font-medium text-[#2563eb] shadow-sm transition hover:border-[#e2e8f0] hover:bg-[#eff6ff]"
       >
         <ExternalLink className="size-3.5" />
         Open Evidence
@@ -144,8 +145,8 @@ export function ComplaintsCenter() {
     <div className="flex h-full flex-col gap-4 overflow-y-auto p-4">
       <Toolbar>
         {canAssign || canTriage || canEscalate || canClose ? (
-          <Button type="button" size="sm" className="bg-blue-700 hover:bg-blue-800" onClick={() => setIntakeOpen(true)}>
-            <Plus className="size-4" />
+          <Button type="button" size="sm" className="bg-[#111827] hover:bg-[#1f232e]" onClick={() => setIntakeOpen(true)}>
+            <Plus className="size-4 " />
             New Complaint Intake
           </Button>
         ) : null}
@@ -158,17 +159,21 @@ export function ComplaintsCenter() {
           <option value="SUSPICIOUS_QUEUE_MANIPULATION">Queue Manipulation</option>
           <option value="OTHER">Other</option>
         </select>
-        <label className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700">
-          <input type="checkbox" checked={unresolvedOnly} onChange={(event) => setUnresolvedOnly(event.target.checked)} />
-          Unresolved only
-        </label>
+       <label className="inline-flex h-9 items-center gap-2 rounded-md border border-[#e2e8f0] bg-white px-3 text-sm text-[#111827]">
+            <input type="checkbox" checked={unresolvedOnly} onChange={(event) => setUnresolvedOnly(event.target.checked)} />
+            Unresolved only
+          </label>
+        
         <select className={fieldClass} value={officerFilter} onChange={(event) => setOfficerFilter(event.target.value)}>
           <option value="">All Officers</option>
-          {normalizeRows(data.users).map((user: any) => (
-            <option key={user.public_id} value={user.public_id}>
-              {user.full_name}
+          {normalizeRows(data.users).map((user: any, index) => {
+            const publicId = user.public_id || user.publicId || user.id || user.email || `officer-${index}`
+            return (
+            <option key={publicId} value={publicId}>
+              {user.full_name || user.fullName || user.name || user.email || 'MERA officer'}
             </option>
-          ))}
+            )
+          })}
         </select>
         <Button type="button" variant="outline" size="sm">
           <Download className="size-4" />
@@ -179,10 +184,10 @@ export function ComplaintsCenter() {
       <SectionKpiStrip
         columns={complaintColumns}
         items={[
-          { label: 'Total Complaints', value: rows.length, rows, accent: '#2563eb' },
-          { label: 'Open Complaints', value: openRows.length, rows: openRows, tone: openRows.length ? 'warn' : 'good', accent: '#f59e0b' },
-          { label: 'Under Investigation', value: investigationRows.length, rows: investigationRows, tone: investigationRows.length ? 'bad' : 'neutral', accent: '#dc2626' },
-          { label: 'With Evidence', value: evidenceQueue.length, rows: evidenceQueue, tone: evidenceQueue.length ? 'good' : 'neutral', accent: '#10b981' },
+          { label: 'Total Complaints', value: rows.length, rows, accent: '#185FA5' },
+          { label: 'Open Complaints', value: openRows.length, rows: openRows, tone: openRows.length ? 'warn' : 'good', accent: '#EF9F27' },
+          { label: 'Under Investigation', value: investigationRows.length, rows: investigationRows, tone: investigationRows.length ? 'bad' : 'neutral', accent: '#E24B4A' },
+          { label: 'With Evidence', value: evidenceQueue.length, rows: evidenceQueue, tone: evidenceQueue.length ? 'good' : 'neutral', accent: '#1D9E75' },
         ]}
       />
 
@@ -212,7 +217,7 @@ export function ComplaintsCenter() {
                     {canAssign ? (
                       <button
                         type="button"
-                        className="text-[11px] font-medium text-blue-700"
+                        className="text-[11px] font-medium text-[#2563eb]"
                         onClick={(event) => {
                           event.stopPropagation()
                           setSelectedComplaint(row)
@@ -226,7 +231,7 @@ export function ComplaintsCenter() {
                     {canTriage || canEscalate || canClose ? (
                       <button
                         type="button"
-                        className="text-[11px] font-medium text-blue-700"
+                        className="text-[11px] font-medium text-[#2563eb]"
                         onClick={(event) => {
                           event.stopPropagation()
                           setSelectedComplaint(row)
@@ -240,7 +245,7 @@ export function ComplaintsCenter() {
                     {canCreateTask ? (
                       <button
                         type="button"
-                        className="text-[11px] font-medium text-blue-700"
+                        className="text-[11px] font-medium text-[#2563eb]"
                         onClick={(event) => {
                           event.stopPropagation()
                           const params = new URLSearchParams({
@@ -263,7 +268,7 @@ export function ComplaintsCenter() {
                     {row.mediaUrl ? (
                       <button
                         type="button"
-                        className="text-[11px] font-medium text-blue-700"
+                        className="text-[11px] font-medium text-[#2563eb]"
                         onClick={(event) => {
                           event.stopPropagation()
                           navigate(`/documents/complaint-media/${row.publicId}`)
@@ -283,17 +288,17 @@ export function ComplaintsCenter() {
           <div className="grid gap-3 px-4 py-3 md:grid-cols-2 xl:grid-cols-4">
             {evidenceQueue.length ? (
               evidenceQueue.map((item: any) => (
-                <div key={item.publicId} className="rounded-md border border-slate-200 bg-slate-50 p-3 text-xs">
-                  <div className="flex items-center gap-2 text-slate-700">
-                    <FileImage className="size-4 text-blue-700" />
+                <div key={item.publicId} className="rounded-md border border-[#e2e8f0] bg-[#f9fafb] p-3 text-xs">
+                  <div className="flex items-center gap-2 text-[#111827]">
+                    <FileImage className="size-4 text-[#2563eb]" />
                     <span className="font-medium">{item.publicId}</span>
                   </div>
-                  <div className="mt-2 text-slate-600">{item.station?.name || '-'}</div>
-                  <div className="mt-1 truncate text-slate-500">{extractEvidenceName(item.mediaUrl)}</div>
-                  <div className="mt-1 text-slate-500">{normalizeDate(item.createdAt)}</div>
+                  <div className="mt-2 text-[#6b7280]">{item.station?.name || '-'}</div>
+                  <div className="mt-1 truncate text-[#6b7280]">{extractEvidenceName(item.mediaUrl)}</div>
+                  <div className="mt-1 text-[#6b7280]">{normalizeDate(item.createdAt)}</div>
                   <button
                     type="button"
-                    className="mt-2 inline-block text-blue-700 underline"
+                    className="mt-2 inline-block text-[#2563eb] underline"
                     onClick={() => {
                       navigate(`/documents/complaint-media/${item.publicId}`)
                     }}
@@ -303,7 +308,7 @@ export function ComplaintsCenter() {
                 </div>
               ))
             ) : (
-              <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 p-3 text-slate-500">
+              <div className="rounded-md border border-dashed border-[#e2e8f0] bg-[#f9fafb] p-3 text-[#6b7280]">
                 No recent citizen evidence is attached to complaint records.
               </div>
             )}
@@ -316,7 +321,7 @@ export function ComplaintsCenter() {
         onOpenChange={setEvidenceOpen}
         title={selectedComplaint ? `Evidence Review - ${selectedComplaint.publicId}` : 'Evidence Review'}
         description="Review submitted media and the linked complaint details."
-        className="max-h-[92vh] overflow-y-auto border-slate-200/90 bg-white/95 sm:max-w-5xl"
+        className="max-h-[92vh] overflow-y-auto border-[#e2e8f0] bg-white/95 sm:max-w-5xl"
         footer={
           <>
             <Button type="button" variant="outline" onClick={() => setEvidenceOpen(false)}>Close</Button>
@@ -325,7 +330,7 @@ export function ComplaintsCenter() {
                 href={selectedEvidenceUrl}
                 target="_blank"
                 rel="noreferrer"
-                className="inline-flex h-9 items-center gap-2 rounded-md bg-blue-700 px-4 text-sm font-medium text-white hover:bg-blue-800"
+                className="inline-flex h-9 items-center gap-2 rounded-md bg-accent-primary px-4 text-sm font-medium text-white hover:bg-accent-primary"
               >
                 <ExternalLink className="size-4" />
                 Open Original
@@ -336,14 +341,14 @@ export function ComplaintsCenter() {
       >
         {selectedComplaint ? (
           <div className="space-y-5">
-            <div className="rounded-[1.5rem] border border-slate-200 bg-linear-to-br from-slate-50 via-white to-blue-50 px-5 py-4 text-xs text-slate-700">
+            <div className="rounded-md border border-[#e2e8f0] bg-linear-to-br from-slate-50 via-white to-blue-50 px-5 py-4 text-xs text-[#111827]">
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div>
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-blue-700">Complaint Evidence</p>
-                  <div className="mt-2 text-lg font-semibold text-slate-900">{selectedComplaint.station?.name || '-'}</div>
-                  <div className="mt-1 text-slate-500">{normalizeDate(selectedComplaint.createdAt)}</div>
-                  <div className="mt-2 text-sm text-slate-600">
-                    Filed by <span className="font-semibold text-slate-800">{getComplainantName(selectedComplaint)}</span>
+                  <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-[#2563eb]">Complaint Evidence</p>
+                  <div className="mt-2 text-lg font-medium text-[#111827]">{selectedComplaint.station?.name || '-'}</div>
+                  <div className="mt-1 text-[#6b7280]">{normalizeDate(selectedComplaint.createdAt)}</div>
+                  <div className="mt-2 text-sm text-[#6b7280]">
+                    Filed by <span className="font-medium text-[#111827]">{getComplainantName(selectedComplaint)}</span>
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-2">
@@ -351,12 +356,12 @@ export function ComplaintsCenter() {
                   {renderPill(selectedComplaint.complaintStatus)}
                 </div>
               </div>
-              <div className="mt-4 flex flex-wrap items-center gap-x-6 gap-y-2 border-t border-slate-200/80 pt-4">
+              <div className="mt-4 flex flex-wrap items-center gap-x-6 gap-y-2 border-t border-[#e2e8f0] pt-4">
                 <div>
-                  <span className="text-slate-500">File:</span> <span className="font-medium text-slate-700">{selectedEvidenceName || 'Unnamed evidence file'}</span>
+                  <span className="text-[#6b7280]">File:</span> <span className="font-medium text-[#111827]">{selectedEvidenceName || 'Unnamed evidence file'}</span>
                 </div>
                 <div>
-                  <span className="text-slate-500">District:</span> <span className="font-medium text-slate-700">{selectedComplaint.station?.city || '-'}</span>
+                  <span className="text-[#6b7280]">District:</span> <span className="font-medium text-[#111827]">{selectedComplaint.station?.city || '-'}</span>
                 </div>
               </div>
             </div>
@@ -365,15 +370,15 @@ export function ComplaintsCenter() {
               <div className="space-y-3">
                 <div className="flex items-center justify-between gap-3">
                   <div>
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Evidence Preview</p>
-                    <p className="mt-1 text-xs text-slate-500">A clearer review surface for submitted complaint media.</p>
+                    <p className="text-[11px] font-medium uppercase tracking-[0.12em] text-[#6b7280]">Evidence Preview</p>
+                    <p className="mt-1 text-xs text-[#6b7280]">A clearer review surface for submitted complaint media.</p>
                   </div>
                   {selectedComplaint.mediaUrl ? (
                     <a
                       href={selectedEvidenceUrl}
                       target="_blank"
                       rel="noreferrer"
-                      className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-blue-700 shadow-sm transition hover:border-blue-200 hover:bg-blue-50"
+                      className="inline-flex items-center gap-2 rounded-full border border-[#e2e8f0] bg-white px-3 py-2 text-xs font-medium text-[#2563eb] shadow-sm transition hover:border-[#e2e8f0] hover:bg-[#eff6ff]"
                     >
                       <ExternalLink className="size-3.5" />
                       Open full file
@@ -381,10 +386,10 @@ export function ComplaintsCenter() {
                   ) : null}
                 </div>
 
-                <div className="relative overflow-hidden rounded-[1.75rem] border border-slate-200 bg-[radial-gradient(circle_at_top,_rgba(59,130,246,0.18),_transparent_38%),linear-gradient(145deg,_#f8fafc_0%,_#e2e8f0_100%)] p-3 shadow-[0_30px_80px_-36px_rgba(15,23,42,0.35)]">
-                  <div className="flex min-h-[24rem] items-center justify-center overflow-hidden rounded-[1.35rem] border border-white/70 bg-slate-100/70 px-4 py-4 md:min-h-[30rem]">
+                <div className="relative overflow-hidden rounded-md border border-[#e2e8f0] bg-[#f9fafb] p-3 shadow-none">
+                  <div className="flex min-h-[24rem] items-center justify-center overflow-hidden rounded-md border border-white/70 bg-[#f9fafb]/70 px-4 py-4 md:min-h-[30rem]">
                     {selectedComplaint.mediaUrl ? renderEvidencePreview(selectedComplaint.mediaUrl) : (
-                      <div className="flex h-full min-h-[18rem] w-full items-center justify-center rounded-[1.35rem] border border-dashed border-slate-300 bg-white/80 text-sm text-slate-500">
+                      <div className="flex h-full min-h-[18rem] w-full items-center justify-center rounded-md border border-dashed border-[#e2e8f0] bg-white/80 text-sm text-[#6b7280]">
                         No evidence file attached to this complaint.
                       </div>
                     )}
@@ -393,20 +398,20 @@ export function ComplaintsCenter() {
               </div>
 
               <div className="grid gap-4">
-                <div className="rounded-[1.5rem] border border-slate-200 bg-white p-4 shadow-sm">
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Complaint Details</p>
-                  <div className="mt-4 space-y-3 text-sm text-slate-700">
-                    <div><span className="text-slate-500">Complaint ID:</span> {selectedComplaint.publicId}</div>
-                    <div><span className="text-slate-500">Filed By:</span> {getComplainantName(selectedComplaint)}</div>
-                    <div><span className="text-slate-500">Source:</span> {selectedComplaint.complainant?.publicId ? 'USER APP' : 'PUBLIC PORTAL'}</div>
-                    <div><span className="text-slate-500">Assigned Officer:</span> {selectedComplaint.assignedOfficer?.fullName || 'Unassigned'}</div>
-                    <div><span className="text-slate-500">Station:</span> {selectedComplaint.station?.name || '-'}</div>
+                <div className="rounded-md border border-[#e2e8f0] bg-white p-4 shadow-sm">
+                  <p className="text-[11px] font-medium uppercase tracking-[0.12em] text-[#6b7280]">Complaint Details</p>
+                  <div className="mt-4 space-y-3 text-sm text-[#111827]">
+                    <div><span className="text-[#6b7280]">Complaint ID:</span> {selectedComplaint.publicId}</div>
+                    <div><span className="text-[#6b7280]">Filed By:</span> {getComplainantName(selectedComplaint)}</div>
+                    <div><span className="text-[#6b7280]">Source:</span> {selectedComplaint.complainant?.publicId ? 'USER APP' : 'PUBLIC PORTAL'}</div>
+                    <div><span className="text-[#6b7280]">Assigned Officer:</span> {selectedComplaint.assignedOfficer?.fullName || 'Unassigned'}</div>
+                    <div><span className="text-[#6b7280]">Station:</span> {selectedComplaint.station?.name || '-'}</div>
                   </div>
                 </div>
 
-                <div className="rounded-[1.5rem] border border-slate-200 bg-white p-4 shadow-sm">
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Complaint Narrative</p>
-                  <p className="mt-4 text-sm leading-6 text-slate-700">{selectedComplaint.description || 'No narrative provided.'}</p>
+                <div className="rounded-md border border-[#e2e8f0] bg-white p-4 shadow-sm">
+                  <p className="text-[11px] font-medium uppercase tracking-[0.12em] text-[#6b7280]">Complaint Narrative</p>
+                  <p className="mt-4 text-sm leading-6 text-[#111827]">{selectedComplaint.description || 'No narrative provided.'}</p>
                 </div>
               </div>
             </div>
@@ -424,7 +429,7 @@ export function ComplaintsCenter() {
             <Button type="button" variant="outline" onClick={() => setIntakeOpen(false)}>Cancel</Button>
             <Button
               type="button"
-              className="bg-blue-700 hover:bg-blue-800"
+              className="bg-accent-primary hover:bg-accent-primary"
               onClick={async () => {
                 await runAction(() => api.createComplaint(intakeForm))
                 setIntakeOpen(false)
@@ -436,28 +441,38 @@ export function ComplaintsCenter() {
         }
       >
         <div className="grid gap-3">
-          <select className={fieldClass} value={intakeForm.stationPublicId} onChange={(event) => setIntakeForm({ ...intakeForm, stationPublicId: event.target.value })}>
-            <option value="">Select station</option>
-            {normalizeRows(data.profiles).map((station: any) => (
-              <option key={station.public_id} value={station.public_id}>
-                {station.name} {station.city ? `- ${station.city}` : ''}
-              </option>
-            ))}
-          </select>
-          <select className={fieldClass} value={intakeForm.complaintType} onChange={(event) => setIntakeForm({ ...intakeForm, complaintType: event.target.value })}>
-            <option value="HOARDING">Hoarding</option>
-            <option value="REFUSAL_TO_SELL">Refusal To Sell</option>
-            <option value="OVERPRICING">Overpricing</option>
-            <option value="ILLEGAL_VENDING">Illegal Vending</option>
-            <option value="SUSPICIOUS_QUEUE_MANIPULATION">Queue Manipulation</option>
-            <option value="OTHER">Other</option>
-          </select>
-          <textarea
-            className="min-h-28 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700"
-            value={intakeForm.complaintDescription}
-            onChange={(event) => setIntakeForm({ ...intakeForm, complaintDescription: event.target.value })}
-            placeholder="Complaint narrative..."
-          />
+          <FieldShell label="Station" hint="Choose the station named in the complaint. Example: the outlet where a citizen reported refusal to sell fuel.">
+            <select className={`${fieldClass} w-full`} value={intakeForm.stationPublicId} onChange={(event) => setIntakeForm({ ...intakeForm, stationPublicId: event.target.value })}>
+              <option value="">Select station</option>
+              {normalizeRows(data.profiles).map((station: any, index) => {
+                const publicId = station.public_id || station.publicId || station.id || station.station_id || station.stationId || `station-${index}`
+                const stationName = station.name || station.station_name || station.stationName || 'Station'
+                return (
+                <option key={publicId} value={publicId}>
+                  {stationName} {station.city ? `- ${station.city}` : ''}
+                </option>
+                )
+              })}
+            </select>
+          </FieldShell>
+          <FieldShell label="Complaint type" hint="Classify the reported issue for routing. Example: OVERPRICING for a pump price above the official MERA price.">
+            <select className={`${fieldClass} w-full`} value={intakeForm.complaintType} onChange={(event) => setIntakeForm({ ...intakeForm, complaintType: event.target.value })}>
+              <option value="HOARDING">Hoarding</option>
+              <option value="REFUSAL_TO_SELL">Refusal To Sell</option>
+              <option value="OVERPRICING">Overpricing</option>
+              <option value="ILLEGAL_VENDING">Illegal Vending</option>
+              <option value="SUSPICIOUS_QUEUE_MANIPULATION">Queue Manipulation</option>
+              <option value="OTHER">Other</option>
+            </select>
+          </FieldShell>
+          <FieldShell label="Complaint narrative" hint="Summarize what was reported, when it happened, and any evidence. Example: customer saw petrol sold to cans while pump queue was refused.">
+            <textarea
+              className="min-h-28 w-full rounded-md border border-[#e2e8f0] px-3 py-2 text-sm text-[#111827]"
+              value={intakeForm.complaintDescription}
+              onChange={(event) => setIntakeForm({ ...intakeForm, complaintDescription: event.target.value })}
+              placeholder="Complaint narrative..."
+            />
+          </FieldShell>
         </div>
       </ModalShell>
 
@@ -471,7 +486,7 @@ export function ComplaintsCenter() {
             <Button type="button" variant="outline" onClick={() => setAssignOpen(false)}>Cancel</Button>
             <Button
               type="button"
-              className="bg-blue-700 hover:bg-blue-800"
+              className="bg-accent-primary hover:bg-accent-primary"
               onClick={async () => {
                 if (!selectedComplaint) return
                 await runAction(() => api.assignComplaint(token, selectedComplaint.publicId, assignOfficerPublicId))
@@ -483,14 +498,19 @@ export function ComplaintsCenter() {
           </>
         }
       >
-        <select className={fieldClass} value={assignOfficerPublicId} onChange={(event) => setAssignOfficerPublicId(event.target.value)}>
-          <option value="">Select officer</option>
-          {normalizeRows(data.users).map((user: any) => (
-            <option key={user.public_id} value={user.public_id}>
-              {user.full_name} • {user.role_display_name || user.role_code}
-            </option>
-          ))}
-        </select>
+        <FieldShell label="Assigned officer" hint="Route this complaint to the officer responsible for investigation. Example: assign to the district field compliance officer.">
+          <select className={`${fieldClass} w-full`} value={assignOfficerPublicId} onChange={(event) => setAssignOfficerPublicId(event.target.value)}>
+            <option value="">Select officer</option>
+            {normalizeRows(data.users).map((user: any, index) => {
+              const publicId = user.public_id || user.publicId || user.id || user.email || `officer-${index}`
+              return (
+              <option key={publicId} value={publicId}>
+                {user.full_name || user.fullName || user.name || user.email || 'MERA officer'} - {user.role_display_name || user.roleDisplayName || user.role_code || user.role || 'Officer'}
+              </option>
+              )
+            })}
+          </select>
+        </FieldShell>
       </ModalShell>
 
       <ModalShell
@@ -503,7 +523,7 @@ export function ComplaintsCenter() {
             <Button type="button" variant="outline" onClick={() => setStatusOpen(false)}>Cancel</Button>
             <Button
               type="button"
-              className="bg-blue-700 hover:bg-blue-800"
+              className="bg-accent-primary hover:bg-accent-primary"
               onClick={async () => {
                 if (!selectedComplaint) return
                 await runAction(() => api.updateComplaintStatus(token, selectedComplaint.publicId, statusValue))
@@ -516,17 +536,19 @@ export function ComplaintsCenter() {
           </>
         }
       >
-        <select className={fieldClass} value={statusValue} onChange={(event) => setStatusValue(event.target.value)}>
-          {canTriage ? <option value="NEW">New</option> : null}
-          {canTriage ? <option value="REVIEWING">Reviewing</option> : null}
-          {canTriage ? <option value="VERIFIED">Verified</option> : null}
-          {canTriage ? <option value="TRIAGED">Triaged</option> : null}
-          {canTriage ? <option value="UNDER_INVESTIGATION">Under Investigation</option> : null}
-          {canEscalate ? <option value="ESCALATED">Escalated</option> : null}
-          {canClose ? <option value="RESOLVED">Resolved</option> : null}
-          {canClose ? <option value="REJECTED">Rejected</option> : null}
-          {canClose ? <option value="DISMISSED">Dismissed</option> : null}
-        </select>
+        <FieldShell label="Complaint status" hint="Move the complaint through the workflow. Example: Verified after evidence checks, Escalated when enforcement review is needed.">
+          <select className={`${fieldClass} w-full`} value={statusValue} onChange={(event) => setStatusValue(event.target.value)}>
+            {canTriage ? <option value="NEW">New</option> : null}
+            {canTriage ? <option value="REVIEWING">Reviewing</option> : null}
+            {canTriage ? <option value="VERIFIED">Verified</option> : null}
+            {canTriage ? <option value="TRIAGED">Triaged</option> : null}
+            {canTriage ? <option value="UNDER_INVESTIGATION">Under Investigation</option> : null}
+            {canEscalate ? <option value="ESCALATED">Escalated</option> : null}
+            {canClose ? <option value="RESOLVED">Resolved</option> : null}
+            {canClose ? <option value="REJECTED">Rejected</option> : null}
+            {canClose ? <option value="DISMISSED">Dismissed</option> : null}
+          </select>
+        </FieldShell>
       </ModalShell>
     </div>
   )

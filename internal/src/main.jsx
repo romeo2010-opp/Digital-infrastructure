@@ -5,7 +5,10 @@ import App from "./App"
 import { InternalAuthProvider } from "./auth/AuthContext"
 import { AppShellProvider } from "./layout/AppShellContext"
 import { InternalApprovalRequestsProvider } from "./notifications/InternalApprovalRequestsContext"
+import { applyInternalLightTheme } from "./utils/internalTheme"
 import "./styles.css"
+
+applyInternalLightTheme()
 
 ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>

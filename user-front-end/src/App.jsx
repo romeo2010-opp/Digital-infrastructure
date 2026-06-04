@@ -20,9 +20,13 @@ import { MoreScreen } from "./mobile/screens/MoreScreen";
 import { AlertsScreen } from "./mobile/screens/AlertsScreen";
 import { HelpScreen } from "./mobile/screens/HelpScreen";
 import { SettingsScreen } from "./mobile/screens/SettingsScreen";
+import { VehiclesScreen } from "./mobile/screens/VehiclesScreen";
+import { VehicleSelectorScreen } from "./mobile/screens/VehicleSelectorScreen";
 import { MeraReportScreen } from "./mobile/screens/mera/MeraReportScreen";
 import { MeraReportSuccessScreen } from "./mobile/screens/mera/MeraReportSuccessScreen";
 import { AssistantScreen } from "./features/assistant/AssistantScreen";
+import { FleetApp } from "./features/fleet/FleetApp";
+import { FleetDriverMode } from "./features/fleet/FleetDriverMode";
 import { userQueueApi } from "./mobile/api/userQueueApi";
 import { userAuthApi } from "./mobile/api/userAuthApi";
 import { stationsApi } from "./mobile/api/stationsApi";
@@ -133,6 +137,7 @@ function sameStringList(left, right) {
 function matchMobileRoute(pathname) {
   if (pathname === "/m/login") return { name: "login", params: {} };
   if (pathname === "/m/home") return { name: "home", params: {} };
+  if (pathname === "/m/fleet") return { name: "fleet-driver", params: {} };
   if (pathname === "/m/map") return { name: "orders", params: {} };
   if (pathname === "/m/orders") return { name: "orders", params: {} };
   if (pathname === "/m/activity") return { name: "activity", params: {} };
@@ -144,6 +149,16 @@ function matchMobileRoute(pathname) {
   if (pathname === "/m/alerts") return { name: "alerts", params: {} };
   if (pathname === "/m/help") return { name: "help", params: {} };
   if (pathname === "/m/settings") return { name: "settings", params: {} };
+  if (pathname === "/m/vehicles") return { name: "vehicles", params: {} };
+  if (pathname === "/vehicles") return { name: "vehicles", params: {} };
+  if (pathname === "/m/vehicles/create" || pathname === "/vehicles/create")
+    return { name: "vehicles", params: {} };
+  const vehicleEditMatch = pathname.match(/^\/(?:m\/)?vehicles\/([^/]+)\/edit$/);
+  if (vehicleEditMatch) {
+    return { name: "vehicles", params: {} };
+  }
+  if (pathname === "/m/queue/select-vehicle")
+    return { name: "queue-select-vehicle", params: {} };
   if (pathname === "/m/account") return { name: "account", params: {} };
   if (pathname === "/m/assistant") return { name: "assistant", params: {} };
   if (pathname === "/m/saved") return { name: "saved", params: {} };
@@ -203,7 +218,10 @@ function activeTabForRoute(routeName) {
     routeName === "alerts" ||
     routeName === "help" ||
     routeName === "settings" ||
+    routeName === "vehicles" ||
+    routeName === "queue-select-vehicle" ||
     routeName === "account" ||
+    routeName === "fleet-driver" ||
     routeName === "mera-report" ||
     routeName === "mera-report-success"
   ) {
@@ -229,10 +247,13 @@ function titleForRoute(routeName) {
     alerts: "Alerts",
     help: "Help",
     settings: "Settings",
+    vehicles: "Vehicles",
+    "queue-select-vehicle": "Select Vehicle",
     assistant: "Assistant",
     wallet: "Wallet",
     "send-credit": "Send Credit",
     account: "Account",
+    "fleet-driver": "Fleet Mode",
     "mera-report": "Report to MERA",
     "mera-report-success": "MERA Report Sent",
   };
@@ -858,10 +879,12 @@ function MobileApp({ theme = "light", onThemeChange }) {
 
       const response = await queueData.joinQueue({
         stationPublicId,
+        vehicleId: options.vehicleId,
         fuelType: options.fuelType || "PETROL",
         maskedPlate: options.maskedPlate,
         requestedLiters: options.requestedLiters,
         prepay: options.prepay,
+        fleetFunding: options.fleetFunding,
       });
 
       const queueJoinId =
@@ -881,11 +904,12 @@ function MobileApp({ theme = "light", onThemeChange }) {
             station?.name || station?.stationName || "Unknown station",
           ).trim() || "Unknown station",
         fuelType:
-          String(options.fuelType || "PETROL")
+          String(options.fuelType || response?.status?.vehicle?.fuelType || "PETROL")
             .trim()
             .toUpperCase() || "PETROL",
+        vehicleId: options.vehicleId || response?.status?.vehicle?.id || null,
         requestedLiters: options.requestedLiters,
-        paymentMode: options.prepay ? "PREPAY" : "PAY_AT_PUMP",
+        paymentMode: options.fleetFunding ? "FLEET_WALLET" : options.prepay ? "PREPAY" : "PAY_AT_PUMP",
         queueStatus:
           String(response?.status?.queueStatus || "WAITING")
             .trim()
@@ -1109,8 +1133,6 @@ function MobileApp({ theme = "light", onThemeChange }) {
           return;
         }
 
-        previousStationsSnapshotRef.current = [];
-        setStationsData([]);
         setStationsError(error?.message || "Unable to load stations from API.");
       } finally {
         if (!cancelled) {
@@ -1699,6 +1721,7 @@ function MobileApp({ theme = "light", onThemeChange }) {
   const showStationBootstrap =
     stationsApi.isApiMode() &&
     route.name !== "login" &&
+    route.name !== "fleet-driver" &&
     route.name !== "queue-status";
   const showAppLoader =
     !bootReady ||
@@ -1887,12 +1910,26 @@ function MobileApp({ theme = "light", onThemeChange }) {
         onReserve={createReservationFromStation}
         onGetReservationSlots={getReservationSlotsForStation}
         onConnectReservationRealtime={connectReservationSlotRealtime}
+        onManageVehicles={() => navigate("/m/vehicles")}
         isFavorite={Boolean(station && favoriteStationIds.includes(station.id))}
         onToggleFavorite={toggleFavoriteStation}
         autoOpenJoinModal={Boolean(
           station && pendingJoinStationId === station.id,
         )}
         onAutoOpenJoinConsumed={() => setPendingJoinStationId("")}
+      />
+    );
+  } else if (route.name === "vehicles") {
+    screen = (
+      <VehiclesScreen
+        onBack={() => navigate("/m/more")}
+      />
+    );
+  } else if (route.name === "queue-select-vehicle") {
+    screen = (
+      <VehicleSelectorScreen
+        onBack={() => navigate("/m/activity")}
+        onSelectVehicle={() => navigate("/m/stations")}
       />
     );
   } else if (route.name === "saved") {
@@ -1941,6 +1978,10 @@ function MobileApp({ theme = "light", onThemeChange }) {
         stations={stationsData}
         onBack={() => navigate("/m/wallet")}
       />
+    );
+  } else if (route.name === "fleet-driver") {
+    screen = (
+      <FleetDriverMode layout="mobile" onBack={() => navigate("/m/more")} />
     );
   } else if (route.name === "more") {
     screen = (
@@ -2041,6 +2082,7 @@ function App() {
   const [theme, setTheme] = useState(() => getStoredThemePreference());
   const normalizedPath = String(pathname || "").trim();
   const isPublicEntryRoute = isPublicMarketingPath(normalizedPath);
+  const isFleetRoute = normalizedPath === "/fleet" || normalizedPath.startsWith("/fleet/");
   const handleThemeChange = useCallback((nextTheme) => {
     const normalizedTheme = nextTheme === "dark" ? "dark" : "light";
     setStoredThemePreference(normalizedTheme);
@@ -2074,7 +2116,9 @@ function App() {
     };
   }, [isPublicEntryRoute, theme]);
 
-  if (isPublicEntryRoute) {
+  if (isFleetRoute) {
+    content = <FleetApp theme={theme} onThemeChange={handleThemeChange} />;
+  } else if (isPublicEntryRoute) {
     const loginPath = isMobile ? "/m/login" : "/d/login";
     content = (
       <PublicMarketingSite

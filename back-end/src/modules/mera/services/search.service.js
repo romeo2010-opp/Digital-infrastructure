@@ -29,11 +29,27 @@ const malawiRegions = {
 const navigationEntries = [
   {
     id: "nav-dashboard",
-    title: "Dashboard",
-    subtitle: "Open MERA national operations dashboard",
+    title: "Command Centre",
+    subtitle: "Open MERA national command centre",
     route: "/dashboard",
     permissions: [MERA_PERMISSIONS.DASHBOARD_VIEW_NATIONAL, MERA_PERMISSIONS.DASHBOARD_VIEW_DISTRICT],
-    keywords: ["dashboard", "national operations", "home", "overview", "command"],
+    keywords: ["dashboard", "national operations", "home", "overview", "command", "command centre", "command center"],
+  },
+  {
+    id: "nav-live-map",
+    title: "Live Map",
+    subtitle: "Open Malawi live fuel map and heat layers",
+    route: "/national-heat-intelligence-map",
+    permissions: [MERA_PERMISSIONS.HEATMAP_VIEW, MERA_PERMISSIONS.VIEW_MAP],
+    keywords: ["live map", "fuel map", "heatmap", "map", "district stress"],
+  },
+  {
+    id: "nav-fuel-supply",
+    title: "Fuel Supply",
+    subtitle: "Open delivery-to-sale monitoring",
+    route: "/fuel-deliveries",
+    permissions: [MERA_PERMISSIONS.DELIVERIES_VIEW],
+    keywords: ["fuel supply", "delivery", "deliveries", "tanker", "depot"],
   },
   {
     id: "nav-task-operations",
@@ -54,9 +70,9 @@ const navigationEntries = [
   {
     id: "nav-cases",
     title: "Cases",
-    subtitle: "Open compliance flags and enforcement cases",
+    subtitle: "Open regulatory case management",
     route: "/compliance-flags",
-    permissions: [MERA_PERMISSIONS.FLAGS_VIEW, MERA_PERMISSIONS.ENFORCEMENT_VIEW],
+    permissions: [MERA_PERMISSIONS.FLAGS_VIEW, MERA_PERMISSIONS.ENFORCEMENT_VIEW, MERA_PERMISSIONS.MANAGE_CASES],
     keywords: ["case", "cases", "regulatory cases", "compliance case", "investigation", "review"],
   },
   {
@@ -69,7 +85,7 @@ const navigationEntries = [
   },
   {
     id: "nav-stations",
-    title: "Station Registry",
+    title: "Stations",
     subtitle: "Open station management and regulatory profiles",
     route: "/station-regulatory-profiles",
     permissions: [MERA_PERMISSIONS.STATIONS_VIEW, MERA_PERMISSIONS.STATIONS_VIEW_DISTRICT],
@@ -103,14 +119,14 @@ const navigationEntries = [
     id: "nav-price-compliance",
     title: "Price Compliance",
     subtitle: "Open price and market compliance intelligence",
-    route: "/reports-intelligence",
-    permissions: [MERA_PERMISSIONS.REPORTS_VIEW],
+    route: "/price-compliance",
+    permissions: [MERA_PERMISSIONS.MANAGE_PRICE_COMPLIANCE, MERA_PERMISSIONS.REPORTS_VIEW],
     keywords: ["price", "pricing", "overpricing", "price compliance", "price violation", "market price"],
   },
   {
     id: "nav-hoarding",
-    title: "Hoarding Investigations",
-    subtitle: "Open hoarding risk watchlist",
+    title: "Risk Watchlist",
+    subtitle: "Open risk and intelligence alert watchlist",
     route: "/hoarding-watchlist",
     permissions: [MERA_PERMISSIONS.FLAGS_VIEW, MERA_PERMISSIONS.AVAILABILITY_AUDIT],
     keywords: ["hoarding", "hoarding investigation", "shortage", "dry station", "refusal to sell"],
@@ -124,12 +140,36 @@ const navigationEntries = [
     keywords: ["report", "reports", "documents", "intelligence", "analytics", "exports", "monthly report"],
   },
   {
+    id: "nav-public-notices",
+    title: "Public Notices",
+    subtitle: "Open MERA public communications workflow",
+    route: "/public-notices",
+    permissions: [MERA_PERMISSIONS.PUBLIC_NOTICES_VIEW, MERA_PERMISSIONS.CREATE_PUBLIC_NOTICE, MERA_PERMISSIONS.APPROVE_PUBLIC_NOTICE, MERA_PERMISSIONS.PUBLISH_PUBLIC_NOTICE],
+    keywords: ["public notices", "notice", "notices", "communication", "advisory", "publish"],
+  },
+  {
+    id: "nav-analytics",
+    title: "Analytics",
+    subtitle: "Open fuel stress analytics",
+    route: "/analytics",
+    permissions: [MERA_PERMISSIONS.ANALYTICS_VIEW, MERA_PERMISSIONS.REPORTS_VIEW],
+    keywords: ["analytics", "fuel stress", "trends", "stress index"],
+  },
+  {
     id: "nav-users",
-    title: "Users",
+    title: "Users & Roles",
     subtitle: "Open MERA officer administration",
-    route: "/user-administration",
+    route: "/settings/users",
     permissions: [MERA_PERMISSIONS.USERS_VIEW],
     keywords: ["users", "officers", "user administration", "roles", "access"],
+  },
+  {
+    id: "nav-audit-logs",
+    title: "Audit Logs",
+    subtitle: "Open MERA audit log",
+    route: "/audit-trail",
+    permissions: [MERA_PERMISSIONS.AUDIT_VIEW, MERA_PERMISSIONS.VIEW_AUDIT_LOGS],
+    keywords: ["audit", "audit logs", "logs", "oversight log"],
   },
   {
     id: "nav-settings",
@@ -2209,9 +2249,16 @@ export async function getUserDetail(publicId, auth) {
           LIMIT 30
         `
       : Promise.resolve([]),
-    hasAnyPermission(auth, [MERA_PERMISSIONS.TASKS_VIEW_ALL, MERA_PERMISSIONS.TASKS_VIEW_ASSIGNED, MERA_PERMISSIONS.TASKS_VIEW_EXECUTIVE])
+    hasAnyPermission(auth, [
+      MERA_PERMISSIONS.TASKS_VIEW_ALL,
+      MERA_PERMISSIONS.TASKS_VIEW_ASSIGNED,
+      MERA_PERMISSIONS.TASKS_VIEW_EXECUTIVE,
+      MERA_PERMISSIONS.TASKS_WORK,
+      MERA_PERMISSIONS.USERS_VIEW,
+      MERA_PERMISSIONS.MANAGE_USERS,
+    ])
       ? prisma.$queryRaw`
-          SELECT task_number, title, type, priority, status, due_at, created_at
+          SELECT task_number, title, type, priority, status, due_at, completed_at, assigned_to_user_id, assigned_by_user_id, created_at
           FROM regulator_tasks
           WHERE assigned_to_user_id = (
             SELECT id FROM mera_users WHERE public_id = ${publicId} LIMIT 1

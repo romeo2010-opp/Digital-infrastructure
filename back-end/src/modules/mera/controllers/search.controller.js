@@ -1,12 +1,26 @@
 import { ok } from "../../../utils/http.js"
 import * as searchService from "../services/search.service.js"
+import * as commandCentreService from "../services/commandCentre.service.js"
+import * as globalSearchService from "../services/meraGlobalSearch.service.js"
 
 export async function quickSearch(req, res) {
-  return ok(res, await searchService.quickSearch(req.query, req.meraAuth))
+  const payload = await searchService.quickSearch(req.query, req.meraAuth)
+  return ok(res, await globalSearchService.augmentSearchResponse(payload, req.query?.q || req.query?.query, req.meraAuth))
 }
 
 export async function fullSearch(req, res) {
-  return ok(res, await searchService.fullSearch(req.query, req.meraAuth))
+  const payload = await searchService.fullSearch(req.query, req.meraAuth)
+  const augmented = await globalSearchService.augmentSearchResponse(payload, req.query?.q || req.query?.query, req.meraAuth, {
+    limit: Math.min(Number(req.query?.limit || 20), 20),
+  })
+  const results = augmented.groups.flatMap((group) =>
+    (group.results || []).map((result) => ({ ...result, groupType: group.type, groupLabel: group.label }))
+  )
+  return ok(res, { ...augmented, results, total: results.length })
+}
+
+export async function suggestions(req, res) {
+  return ok(res, await globalSearchService.searchSuggestions(req.query, req.meraAuth))
 }
 
 export async function getLicenseDetail(req, res) {
@@ -31,6 +45,8 @@ export async function getComplaintDetail(req, res) {
 }
 
 export async function getCaseDetail(req, res) {
+  const commandCase = await commandCentreService.getCaseRecordDetail(req.params.caseId, req.meraAuth).catch(() => null)
+  if (commandCase?.case?.caseId) return ok(res, commandCase)
   return ok(res, await searchService.getCaseDetail(req.params.caseId, req.meraAuth))
 }
 

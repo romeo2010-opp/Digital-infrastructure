@@ -31,6 +31,7 @@ import { notifyUserOfCashbackAward } from "../promotions/transactionPricing.serv
 import { getPromotionPricingPreview } from "../promotions/service.js"
 import {
   completePumpSessionBinding,
+  derivePumpSessionStatusFromTelemetryEvent,
   ensurePumpSessionBinding,
 } from "../monitoring/monitoring.service.js"
 import {
@@ -85,6 +86,7 @@ const attendantWriteRole = requireRole(["MANAGER", "ATTENDANT"])
 const ATTENDANT_SETTLEMENT_TRANSACTION_MAX_WAIT_MS = 10_000
 const ATTENDANT_SETTLEMENT_TRANSACTION_TIMEOUT_MS = 20_000
 const TERMINAL_PUMP_SESSION_DASHBOARD_LOOKBACK_MINUTES = 10
+const TERMINAL_PUMP_SESSION_STATUSES = new Set(["COMPLETED", "FAILED", "CANCELLED"])
 const SCAN_AND_GO_QR_PREFIX = "smartlink:scan-go"
 
 router.use("/stations/:stationPublicId/attendant", requireStationScope)
@@ -890,7 +892,18 @@ async function notifyUserOfQueueServiceRequestUpdate({
   return alert
 }
 
-async function listLiveQueueRows(stationId) {
+function resolveKioskAssignedPumpScope(auth) {
+  if (auth?.sessionType !== "KIOSK") return null
+  const assignedPumpId = Number(auth?.assignedPumpId || 0) || null
+  if (!assignedPumpId) {
+    const error = new Error("This kiosk is not assigned to a pump. Ask manager to configure it.")
+    error.status = 400
+    throw error
+  }
+  return assignedPumpId
+}
+
+async function listLiveQueueRows(stationId, { assignedPumpId = null } = {}) {
   return prisma.$queryRaw`
     SELECT
       qe.id,
@@ -907,6 +920,10 @@ async function listLiveQueueRows(stationId) {
       qe.served_at,
       qe.cancelled_at,
       qe.metadata,
+      qe.assigned_pump_id,
+      qe.pump_assignment_status,
+      qe.assignment_reason,
+      qe.assignment_confidence,
       ft.code AS fuel_code,
       u.public_id AS user_public_id,
       u.full_name AS user_name
@@ -914,6 +931,7 @@ async function listLiveQueueRows(stationId) {
     LEFT JOIN fuel_types ft ON ft.id = qe.fuel_type_id
     LEFT JOIN users u ON u.id = qe.user_id
     WHERE qe.station_id = ${stationId}
+      AND (${assignedPumpId} IS NULL OR qe.assigned_pump_id = ${assignedPumpId})
       AND qe.status IN ('WAITING', 'CALLED', 'LATE')
     ORDER BY qe.position ASC, qe.joined_at ASC, qe.id ASC
   `
@@ -978,7 +996,7 @@ async function listRecentTransactions(stationId) {
   `
 }
 
-async function listActivePumpSessionRows(stationId) {
+async function listActivePumpSessionRows(stationId, { assignedPumpId = null } = {}) {
   return optionalRows(prisma.$queryRaw`
     SELECT
       ps.id,
@@ -1005,6 +1023,7 @@ async function listActivePumpSessionRows(stationId) {
     LEFT JOIN pump_nozzles pn ON pn.id = ps.nozzle_id
     LEFT JOIN fuel_types ft ON ft.id = pn.fuel_type_id
     WHERE ps.station_id = ${stationId}
+      AND (${assignedPumpId} IS NULL OR ps.pump_id = ${assignedPumpId})
       AND (
         ps.session_status IN ('CREATED', 'STARTED', 'DISPENSING')
         OR (
@@ -1032,6 +1051,7 @@ async function listRecentTelemetryRows(stationId) {
       ptl.id,
       ptl.pump_id,
       ptl.nozzle_id,
+      ptl.pump_session_id,
       ptl.telemetry_correlation_id,
       ptl.event_type,
       ptl.severity,
@@ -1131,15 +1151,20 @@ function buildTransactionIndexes(rows) {
 }
 
 function buildTelemetryIndexes(rows) {
+  const byPumpSessionId = new Map()
+  const byTelemetryCorrelationId = new Map()
   const byNozzlePublicId = new Map()
   const byPumpPublicId = new Map()
+  const byPumpSessionIdWithLitres = new Map()
+  const byTelemetryCorrelationIdWithLitres = new Map()
   const byNozzlePublicIdWithLitres = new Map()
   const byPumpPublicIdWithLitres = new Map()
-  const stopSeenByNozzlePublicId = new Set()
-  const stopSeenByPumpPublicId = new Set()
+  const terminalByPumpSessionId = new Map()
+  const terminalByTelemetryCorrelationId = new Map()
 
   for (const row of rows || []) {
     const item = {
+      pumpSessionId: Number(row.pump_session_id || 0) || null,
       eventType: String(row.event_type || "").trim().toUpperCase() || null,
       severity: String(row.severity || "").trim().toUpperCase() || null,
       litresValue: toNumberOrNull(row.litres_value),
@@ -1149,6 +1174,15 @@ function buildTelemetryIndexes(rows) {
     }
     const nozzlePublicId = String(row.nozzle_public_id || "").trim()
     const pumpPublicId = String(row.pump_public_id || "").trim()
+    const pumpSessionKey = item.pumpSessionId ? String(item.pumpSessionId) : ""
+    const telemetryCorrelationId = item.telemetryCorrelationId || ""
+
+    if (pumpSessionKey && !byPumpSessionId.has(pumpSessionKey)) {
+      byPumpSessionId.set(pumpSessionKey, item)
+    }
+    if (telemetryCorrelationId && !byTelemetryCorrelationId.has(telemetryCorrelationId)) {
+      byTelemetryCorrelationId.set(telemetryCorrelationId, item)
+    }
 
     if (nozzlePublicId && !byNozzlePublicId.has(nozzlePublicId)) {
       byNozzlePublicId.set(nozzlePublicId, item)
@@ -1157,38 +1191,80 @@ function buildTelemetryIndexes(rows) {
       byPumpPublicId.set(pumpPublicId, item)
     }
 
-    const isDispensingStopped = item.eventType === "DISPENSING_STOPPED"
+    const telemetryPumpSessionStatus = item.eventType
+      ? derivePumpSessionStatusFromTelemetryEvent(item.eventType)
+      : null
+    const isTerminalTelemetry = TERMINAL_PUMP_SESSION_STATUSES.has(telemetryPumpSessionStatus)
 
-    if (isDispensingStopped) {
-      if (nozzlePublicId) stopSeenByNozzlePublicId.add(nozzlePublicId)
-      if (pumpPublicId) stopSeenByPumpPublicId.add(pumpPublicId)
-      continue
+    if (isTerminalTelemetry) {
+      if (pumpSessionKey && !terminalByPumpSessionId.has(pumpSessionKey)) {
+        terminalByPumpSessionId.set(pumpSessionKey, item)
+      }
+      if (telemetryCorrelationId && !terminalByTelemetryCorrelationId.has(telemetryCorrelationId)) {
+        terminalByTelemetryCorrelationId.set(telemetryCorrelationId, item)
+      }
     }
 
     if (item.litresValue !== null) {
       if (
+        pumpSessionKey
+        && !byPumpSessionIdWithLitres.has(pumpSessionKey)
+      ) {
+        byPumpSessionIdWithLitres.set(pumpSessionKey, item)
+      }
+      if (
+        telemetryCorrelationId
+        && !byTelemetryCorrelationIdWithLitres.has(telemetryCorrelationId)
+      ) {
+        byTelemetryCorrelationIdWithLitres.set(telemetryCorrelationId, item)
+      }
+      if (
         nozzlePublicId
-        && !stopSeenByNozzlePublicId.has(nozzlePublicId)
         && !byNozzlePublicIdWithLitres.has(nozzlePublicId)
       ) {
         byNozzlePublicIdWithLitres.set(nozzlePublicId, item)
       }
       if (
         pumpPublicId
-        && !stopSeenByPumpPublicId.has(pumpPublicId)
         && !byPumpPublicIdWithLitres.has(pumpPublicId)
       ) {
         byPumpPublicIdWithLitres.set(pumpPublicId, item)
       }
     }
+
+    if (isTerminalTelemetry) {
+      continue
+    }
   }
 
   return {
+    byPumpSessionId,
+    byTelemetryCorrelationId,
     byNozzlePublicId,
     byPumpPublicId,
+    byPumpSessionIdWithLitres,
+    byTelemetryCorrelationIdWithLitres,
     byNozzlePublicIdWithLitres,
     byPumpPublicIdWithLitres,
+    terminalByPumpSessionId,
+    terminalByTelemetryCorrelationId,
   }
+}
+
+function pickFreshTelemetryWithLitres(candidates, floorValue) {
+  const floorIso = toIsoOrNull(floorValue)
+  if (!floorIso) return null
+  const floorMs = Date.parse(floorIso)
+  if (!Number.isFinite(floorMs)) return null
+
+  for (const item of candidates || []) {
+    if (!item || item.litresValue === null || item.litresValue === undefined) continue
+    const happenedAtMs = Date.parse(String(item.happenedAt || ""))
+    if (!Number.isFinite(happenedAtMs)) continue
+    if (happenedAtMs >= floorMs) return item
+  }
+
+  return null
 }
 
 function buildPumpSessionIndex(rows) {
@@ -1233,8 +1309,14 @@ function resolveAssignmentFromMetadata(metadata = {}, fuelCode = "") {
     metadata?.serviceRequest && typeof metadata.serviceRequest === "object"
       ? metadata.serviceRequest
       : {}
+  const smartPumpAssignment =
+    metadata?.smartPumpAssignment && typeof metadata.smartPumpAssignment === "object"
+      ? metadata.smartPumpAssignment
+      : {}
 
-  const pumpPublicId = String(lastPumpScan?.pumpPublicId || serviceRequest?.pumpPublicId || "").trim()
+  const pumpPublicId = String(
+    lastPumpScan?.pumpPublicId || serviceRequest?.pumpPublicId || smartPumpAssignment?.pumpPublicId || ""
+  ).trim()
   if (!pumpPublicId) return null
 
   return {
@@ -1243,8 +1325,8 @@ function resolveAssignmentFromMetadata(metadata = {}, fuelCode = "") {
     nozzlePublicId: String(lastPumpScan?.nozzlePublicId || serviceRequest?.nozzlePublicId || "").trim() || null,
     nozzleNumber: String(lastPumpScan?.nozzleNumber || "").trim() || null,
     fuelType: String(lastPumpScan?.fuelType || fuelCode || "").trim().toUpperCase() || null,
-    confirmedAt: String(lastPumpScan?.scannedAt || "").trim() || null,
-    source: "USER_VERIFIED_PUMP",
+    confirmedAt: String(lastPumpScan?.scannedAt || smartPumpAssignment?.updatedAt || "").trim() || null,
+    source: lastPumpScan?.pumpPublicId ? "USER_VERIFIED_PUMP" : "SMART_PUMP_ASSIGNMENT",
   }
 }
 
@@ -1442,13 +1524,51 @@ function buildSyntheticPumpSessions({ pumps, orders, activePumpSessions, telemet
   for (const session of activePumpSessions || []) {
     const key = `${session.pump_public_id || ""}:${session.nozzle_public_id || ""}`
     const normalizedSessionStatus = String(session.session_status || "").trim().toUpperCase()
-    const isTerminalSession = ["COMPLETED", "FAILED", "CANCELLED"].includes(normalizedSessionStatus)
-    const telemetry = telemetryIndex.byNozzlePublicId.get(String(session.nozzle_public_id || "").trim()) || null
+    const pumpSessionKey = Number(session.id || 0) ? String(Number(session.id || 0)) : ""
+    const sessionTelemetryCorrelationId = String(session.telemetry_correlation_id || "").trim()
+    const nozzlePublicId = String(session.nozzle_public_id || "").trim()
+    const pumpPublicId = String(session.pump_public_id || "").trim()
+    const strictTelemetry =
+      (pumpSessionKey ? telemetryIndex.byPumpSessionId.get(pumpSessionKey) : null)
+      || (sessionTelemetryCorrelationId ? telemetryIndex.byTelemetryCorrelationId.get(sessionTelemetryCorrelationId) : null)
+      || null
+    const telemetry =
+      strictTelemetry
+      || telemetryIndex.byNozzlePublicId.get(nozzlePublicId)
+      || telemetryIndex.byPumpPublicId.get(pumpPublicId)
+      || null
+    const terminalTelemetry =
+      (pumpSessionKey ? telemetryIndex.terminalByPumpSessionId.get(pumpSessionKey) : null)
+      || (sessionTelemetryCorrelationId ? telemetryIndex.terminalByTelemetryCorrelationId.get(sessionTelemetryCorrelationId) : null)
+      || null
+    const terminalTelemetryStatus = terminalTelemetry?.eventType
+      ? derivePumpSessionStatusFromTelemetryEvent(terminalTelemetry.eventType)
+      : null
+    const effectiveSessionStatus =
+      TERMINAL_PUMP_SESSION_STATUSES.has(normalizedSessionStatus)
+        ? normalizedSessionStatus
+        : TERMINAL_PUMP_SESSION_STATUSES.has(terminalTelemetryStatus)
+          ? terminalTelemetryStatus
+          : normalizedSessionStatus
+    const isTerminalSession = TERMINAL_PUMP_SESSION_STATUSES.has(effectiveSessionStatus)
+    const strictTelemetryWithLitres =
+      (pumpSessionKey ? telemetryIndex.byPumpSessionIdWithLitres.get(pumpSessionKey) : null)
+      || (sessionTelemetryCorrelationId ? telemetryIndex.byTelemetryCorrelationIdWithLitres.get(sessionTelemetryCorrelationId) : null)
+      || null
+    const fallbackTelemetryWithLitres = pickFreshTelemetryWithLitres(
+      [
+        telemetryIndex.byNozzlePublicIdWithLitres.get(nozzlePublicId),
+        telemetryIndex.byPumpPublicIdWithLitres.get(pumpPublicId),
+      ],
+      session.start_time,
+    )
     const telemetryWithLitres =
-      telemetryIndex.byNozzlePublicIdWithLitres.get(String(session.nozzle_public_id || "").trim())
+      strictTelemetryWithLitres
+      || fallbackTelemetryWithLitres
       || null
     const currentLiveLitres = Math.max(
       toNumberOrNull(session.dispensed_litres) ?? 0,
+      toNumberOrNull(terminalTelemetry?.litresValue) ?? 0,
       toNumberOrNull(telemetryWithLitres?.litresValue) ?? 0,
     )
     const matchedOrder = orderedCandidates.find((order) => {
@@ -1469,9 +1589,9 @@ function buildSyntheticPumpSessions({ pumps, orders, activePumpSessions, telemet
       id: `SESSION:${session.public_id}`,
       pumpSessionPublicId: String(session.public_id || "").trim() || null,
       pumpSessionReference: String(session.session_reference || "").trim() || null,
-      pumpPublicId: String(session.pump_public_id || "").trim() || null,
+      pumpPublicId: pumpPublicId || null,
       pumpNumber: Number(session.pump_number || 0) || null,
-      nozzlePublicId: String(session.nozzle_public_id || "").trim() || null,
+      nozzlePublicId: nozzlePublicId || null,
       nozzleNumber: String(session.nozzle_number || "").trim() || null,
       fuelType: String(session.fuel_code || "").trim().toUpperCase() || null,
       linkedOrder: matchedOrder
@@ -1481,15 +1601,15 @@ function buildSyntheticPumpSessions({ pumps, orders, activePumpSessions, telemet
             customerName: matchedOrder.customerName,
           }
         : null,
-      pumpSessionStatus: normalizedSessionStatus || null,
+      pumpSessionStatus: effectiveSessionStatus || null,
       status:
-        normalizedSessionStatus === "COMPLETED"
+        effectiveSessionStatus === "COMPLETED"
           ? "completed"
-          : normalizedSessionStatus === "FAILED"
+          : effectiveSessionStatus === "FAILED"
             ? "failed"
-            : normalizedSessionStatus === "CANCELLED"
+            : effectiveSessionStatus === "CANCELLED"
               ? "cancelled"
-              : normalizedSessionStatus === "DISPENSING" || currentLiveLitres > 0
+              : effectiveSessionStatus === "DISPENSING" || currentLiveLitres > 0
                 ? "dispensing"
                 : "reserved",
       currentLiveLitres: currentLiveLitres > 0 ? currentLiveLitres : null,
@@ -1513,18 +1633,58 @@ function buildSyntheticPumpSessions({ pumps, orders, activePumpSessions, telemet
 
     const pump = (pumps || []).find((item) => item.public_id === pumpAssignment.pumpPublicId)
     const nozzle = (pump?.nozzles || []).find((item) => item.public_id === pumpAssignment.nozzlePublicId)
-    const telemetry = telemetryIndex.byNozzlePublicId.get(String(pumpAssignment.nozzlePublicId || "").trim()) || null
-    const telemetryWithLitres =
-      telemetryIndex.byNozzlePublicIdWithLitres.get(String(pumpAssignment.nozzlePublicId || "").trim())
+    const nozzlePublicId = String(pumpAssignment.nozzlePublicId || "").trim()
+    const pumpPublicId = String(pumpAssignment.pumpPublicId || "").trim()
+    const sessionTelemetryCorrelationId = String(order.workflow?.pumpSession?.telemetryCorrelationId || "").trim()
+    const serviceStartedAt =
+      order.workflow?.serviceStartedAt
+      || order.workflow?.pumpAssignment?.confirmedAt
+      || order.workflow?.acceptedAt
       || null
+    const strictTelemetry =
+      sessionTelemetryCorrelationId
+        ? telemetryIndex.byTelemetryCorrelationId.get(sessionTelemetryCorrelationId) || null
+        : null
+    const telemetry =
+      strictTelemetry
+      || telemetryIndex.byNozzlePublicId.get(nozzlePublicId)
+      || telemetryIndex.byPumpPublicId.get(pumpPublicId)
+      || null
+    const strictTelemetryWithLitres =
+      sessionTelemetryCorrelationId
+        ? telemetryIndex.byTelemetryCorrelationIdWithLitres.get(sessionTelemetryCorrelationId) || null
+        : null
+    const fallbackTelemetryWithLitres = pickFreshTelemetryWithLitres(
+      [
+        telemetryIndex.byNozzlePublicIdWithLitres.get(nozzlePublicId),
+        telemetryIndex.byPumpPublicIdWithLitres.get(pumpPublicId),
+      ],
+      serviceStartedAt,
+    )
+    const telemetryWithLitres =
+      strictTelemetryWithLitres
+      || fallbackTelemetryWithLitres
+      || null
+    const terminalTelemetry =
+      sessionTelemetryCorrelationId
+        ? telemetryIndex.terminalByTelemetryCorrelationId.get(sessionTelemetryCorrelationId) || null
+        : null
+    const terminalTelemetryStatus = terminalTelemetry?.eventType
+      ? derivePumpSessionStatusFromTelemetryEvent(terminalTelemetry.eventType)
+      : null
+    const currentLiveLitres = Math.max(
+      toNumberOrNull(terminalTelemetry?.litresValue) ?? 0,
+      toNumberOrNull(telemetryWithLitres?.litresValue) ?? 0,
+      toNumberOrNull(order.workflow?.lastManualEntry?.litres) ?? 0,
+    )
 
     rows.push({
       id: `${order.orderType}:${order.orderPublicId}`,
       pumpSessionPublicId: String(order.workflow?.pumpSession?.publicId || "").trim() || null,
       pumpSessionReference: String(order.workflow?.pumpSession?.sessionReference || "").trim() || null,
-      pumpPublicId: pumpAssignment.pumpPublicId,
+      pumpPublicId,
       pumpNumber: pumpAssignment.pumpNumber || Number(pump?.pump_number || 0) || null,
-      nozzlePublicId: pumpAssignment.nozzlePublicId,
+      nozzlePublicId,
       nozzleNumber: pumpAssignment.nozzleNumber || String(nozzle?.nozzle_number || "").trim() || null,
       fuelType: pumpAssignment.fuelType || String(nozzle?.fuel_code || "").trim().toUpperCase() || null,
       linkedOrder: {
@@ -1532,15 +1692,23 @@ function buildSyntheticPumpSessions({ pumps, orders, activePumpSessions, telemet
         orderPublicId: order.orderPublicId,
         customerName: order.customerName,
       },
-      pumpSessionStatus: null,
-      status: order.state === ATTENDANT_ORDER_STATES.DISPENSING ? "dispensing" : "reserved",
-      currentLiveLitres: telemetryWithLitres?.litresValue ?? order.workflow?.lastManualEntry?.litres ?? null,
-      elapsedTimeStartedAt:
-        order.workflow?.serviceStartedAt
-        || order.workflow?.pumpAssignment?.confirmedAt
-        || order.workflow?.acceptedAt
-        || null,
-      telemetryStatus: order.telemetryStatus,
+      pumpSessionStatus: TERMINAL_PUMP_SESSION_STATUSES.has(terminalTelemetryStatus) ? terminalTelemetryStatus : null,
+      status:
+        terminalTelemetryStatus === "COMPLETED"
+          ? "completed"
+          : terminalTelemetryStatus === "FAILED"
+            ? "failed"
+            : terminalTelemetryStatus === "CANCELLED"
+              ? "cancelled"
+              : order.state === ATTENDANT_ORDER_STATES.DISPENSING || currentLiveLitres > 0
+                ? "dispensing"
+                : "reserved",
+      currentLiveLitres: currentLiveLitres > 0 ? currentLiveLitres : null,
+      elapsedTimeStartedAt: serviceStartedAt,
+      telemetryStatus: deriveTelemetryStatus({
+        hasActivePumpSession: false,
+        telemetryUpdatedAt: telemetry?.happenedAt || null,
+      }) || order.telemetryStatus,
     })
   }
 
@@ -1577,6 +1745,7 @@ function buildExceptionList(orders = []) {
 
 async function buildAttendantDashboardSnapshot(station, auth) {
   const stationId = Number(station?.id || 0)
+  const assignedPumpId = resolveKioskAssignedPumpScope(auth)
   const [
     queueRows,
     reservationRows,
@@ -1587,11 +1756,11 @@ async function buildAttendantDashboardSnapshot(station, auth) {
     refundRows,
     refundEvidenceRows,
   ] = await Promise.all([
-    listLiveQueueRows(stationId),
+    listLiveQueueRows(stationId, { assignedPumpId }),
     listLiveReservationRows(stationId),
     listRecentTransactions(stationId),
     listStationPumpsWithNozzles(stationId, { includeInactive: true }),
-    listActivePumpSessionRows(stationId),
+    listActivePumpSessionRows(stationId, { assignedPumpId }),
     listRecentTelemetryRows(stationId),
     listRecentRefundRows(stationId),
     listRefundEvidenceRows(stationId),
@@ -1600,6 +1769,17 @@ async function buildAttendantDashboardSnapshot(station, auth) {
   const transactionIndex = buildTransactionIndexes(transactionsRows)
   const telemetryIndex = buildTelemetryIndexes(telemetryRows)
   const activeSessionIndex = buildPumpSessionIndex(activePumpSessions)
+
+  const scopedPumpPublicIds = assignedPumpId
+    ? new Set(
+        (activePumpSessions || [])
+          .map((session) => String(session.pump_public_id || "").trim())
+          .filter(Boolean)
+      )
+    : null
+  const scopedPumps = scopedPumpPublicIds
+    ? (pumps || []).filter((pump) => scopedPumpPublicIds.has(String(pump.public_id || "").trim()))
+    : pumps
 
   const liveOrders = [
     ...(queueRows || []).map((row) =>
@@ -1681,14 +1861,14 @@ async function buildAttendantDashboardSnapshot(station, auth) {
     },
     liveOrders,
     activePumpSessions: buildSyntheticPumpSessions({
-      pumps,
+      pumps: scopedPumps,
       orders: liveOrders,
       activePumpSessions,
       telemetryIndex,
     }),
     exceptions: buildExceptionList(liveOrders),
     refundRequests,
-    pumps: (pumps || []).map((pump) => ({
+    pumps: (scopedPumps || []).map((pump) => ({
       pumpPublicId: pump.public_id,
       pumpNumber: pump.pump_number,
       status: String(pump.status || "").trim().toLowerCase(),
@@ -1708,7 +1888,7 @@ async function buildAttendantDashboardSnapshot(station, auth) {
   }
 }
 
-async function loadAttendantOrder(stationId, orderType, orderPublicId) {
+async function loadAttendantOrder(stationId, orderType, orderPublicId, auth = null) {
   const normalizedType = normalizeAttendantOrderType(orderType)
   if (!normalizedType) throw badRequest("Unsupported order type")
 
@@ -1738,6 +1918,14 @@ async function loadAttendantOrder(stationId, orderType, orderPublicId) {
       ORDER BY occurred_at DESC, id DESC
       LIMIT 1
     `
+    if (auth?.sessionType === "KIOSK") {
+      const assignedPumpId = resolveKioskAssignedPumpScope(auth)
+      if (String(row.assigned_pump_id || "") !== String(assignedPumpId || "")) {
+        const error = new Error("Kiosk cannot act on another pump's ticket")
+        error.status = 403
+        throw error
+      }
+    }
     return {
       orderType: normalizedType,
       row: {
@@ -1958,7 +2146,7 @@ router.get(
   asyncHandler(async (req, res) => {
     const station = await resolveStationContext(req.params.stationPublicId)
     const { orderType, orderPublicId } = orderParamsSchema.parse(req.params || {})
-    const order = await loadAttendantOrder(station.id, orderType, orderPublicId)
+    const order = await loadAttendantOrder(station.id, orderType, orderPublicId, req.auth || {})
     const orderKeys = buildOrderMatchKeys(order.orderType, orderPublicId, {
       reservationPublicId: order.orderType === ATTENDANT_ORDER_TYPES.QUEUE ? order.row?.reservation_public_id : null,
       sourceQueueEntryPublicId: order.row?.source_queue_entry_public_id,
@@ -2004,7 +2192,7 @@ router.post(
     const { orderType, orderPublicId } = orderParamsSchema.parse(req.params || {})
     const body = updateServiceRequestBodySchema.parse(req.body || {})
     const actor = await resolveActorContext(station.id, req.auth?.userId, req.auth?.userPublicId)
-    const order = await loadAttendantOrder(station.id, orderType, orderPublicId)
+    const order = await loadAttendantOrder(station.id, orderType, orderPublicId, req.auth || {})
     const rawMetadata = parseReservationMetadata(order.row.metadata)
     const existingAssignment = resolveAssignmentFromMetadata(rawMetadata, order.row.fuel_code)
     const currentState = deriveAttendantOrderState({
@@ -2319,7 +2507,7 @@ router.post(
     const station = await resolveStationContext(req.params.stationPublicId)
     const { orderType, orderPublicId } = orderParamsSchema.parse(req.params || {})
     const actor = await resolveActorContext(station.id, req.auth?.userId, req.auth?.userPublicId)
-    const order = await loadAttendantOrder(station.id, orderType, orderPublicId)
+    const order = await loadAttendantOrder(station.id, orderType, orderPublicId, req.auth || {})
     const rawMetadata = parseReservationMetadata(order.row.metadata)
     const existingAssignment = resolveAssignmentFromMetadata(rawMetadata, order.row.fuel_code)
     const existingPumpSession = resolveStoredPumpSessionIdentity(rawMetadata)
@@ -2374,7 +2562,7 @@ router.post(
     }
 
     const actor = await resolveActorContext(station.id, req.auth?.userId, req.auth?.userPublicId)
-    const order = await loadAttendantOrder(station.id, orderType, orderPublicId)
+    const order = await loadAttendantOrder(station.id, orderType, orderPublicId, req.auth || {})
     const rawMetadata = parseReservationMetadata(order.row.metadata)
     const existingAssignment = resolveAssignmentFromMetadata(rawMetadata, order.row.fuel_code)
     const currentState = deriveAttendantOrderState({
@@ -2455,7 +2643,7 @@ router.post(
     const { orderType, orderPublicId } = orderParamsSchema.parse(req.params || {})
     customerArrivedBodySchema.parse(req.body || {})
     const actor = await resolveActorContext(station.id, req.auth?.userId, req.auth?.userPublicId)
-    const order = await loadAttendantOrder(station.id, orderType, orderPublicId)
+    const order = await loadAttendantOrder(station.id, orderType, orderPublicId, req.auth || {})
     const rawMetadata = parseReservationMetadata(order.row.metadata)
     const currentState = deriveAttendantOrderState({
       orderType: order.orderType,
@@ -2513,7 +2701,7 @@ router.post(
     const { orderType, orderPublicId } = orderParamsSchema.parse(req.params || {})
     const body = assignPumpBodySchema.parse(req.body || {})
     const actor = await resolveActorContext(station.id, req.auth?.userId, req.auth?.userPublicId)
-    const order = await loadAttendantOrder(station.id, orderType, orderPublicId)
+    const order = await loadAttendantOrder(station.id, orderType, orderPublicId, req.auth || {})
     const rawMetadata = parseReservationMetadata(order.row.metadata)
     const currentState = deriveAttendantOrderState({
       orderType: order.orderType,
@@ -2632,7 +2820,7 @@ router.post(
     const { orderType, orderPublicId } = orderParamsSchema.parse(req.params || {})
     const body = startServiceBodySchema.parse(req.body || {})
     const actor = await resolveActorContext(station.id, req.auth?.userId, req.auth?.userPublicId)
-    const order = await loadAttendantOrder(station.id, orderType, orderPublicId)
+    const order = await loadAttendantOrder(station.id, orderType, orderPublicId, req.auth || {})
     const rawMetadata = parseReservationMetadata(order.row.metadata)
     const existingAssignment = resolveAssignmentFromMetadata(rawMetadata, order.row.fuel_code)
     const existingPumpSession = resolveStoredPumpSessionIdentity(rawMetadata)
@@ -2779,7 +2967,7 @@ router.post(
     const { orderType, orderPublicId } = orderParamsSchema.parse(req.params || {})
     const body = completeServiceBodySchema.parse(req.body || {})
     const actor = await resolveActorContext(station.id, req.auth?.userId, req.auth?.userPublicId)
-    const order = await loadAttendantOrder(station.id, orderType, orderPublicId)
+    const order = await loadAttendantOrder(station.id, orderType, orderPublicId, req.auth || {})
     const rawMetadata = parseReservationMetadata(order.row.metadata)
     const existingAssignment = resolveAssignmentFromMetadata(rawMetadata, order.row.fuel_code)
     const currentState = deriveAttendantOrderState({
@@ -3096,7 +3284,7 @@ router.post(
     }
 
     const actor = await resolveActorContext(station.id, req.auth?.userId, req.auth?.userPublicId)
-    const order = await loadAttendantOrder(station.id, orderType, orderPublicId)
+    const order = await loadAttendantOrder(station.id, orderType, orderPublicId, req.auth || {})
     const rawMetadata = parseReservationMetadata(order.row.metadata)
     const currentState = deriveAttendantOrderState({
       orderType: order.orderType,
@@ -3171,7 +3359,7 @@ router.post(
     }
 
     const actor = await resolveActorContext(station.id, req.auth?.userId, req.auth?.userPublicId)
-    const order = await loadAttendantOrder(station.id, orderType, orderPublicId)
+    const order = await loadAttendantOrder(station.id, orderType, orderPublicId, req.auth || {})
     const rawMetadata = parseReservationMetadata(order.row.metadata)
     const currentState = deriveAttendantOrderState({
       orderType: order.orderType,

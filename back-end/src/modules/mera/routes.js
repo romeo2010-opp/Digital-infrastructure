@@ -1,5 +1,4 @@
 import { Router } from "express"
-import rateLimit from "express-rate-limit"
 import { asyncHandler } from "../../utils/asyncHandler.js"
 import { requireDistrictScope, requireMeraAuth, requireMeraPermission } from "./middleware/auth.js"
 import {
@@ -9,6 +8,7 @@ import {
   inspectionEvidenceUpload,
 } from "./middleware/upload.js"
 import * as authController from "./controllers/auth.controller.js"
+import * as commandCentreController from "./controllers/commandCentre.controller.js"
 import * as portalController from "./controllers/portal.controller.js"
 import * as searchController from "./controllers/search.controller.js"
 import * as taskController from "./controllers/task.controller.js"
@@ -44,6 +44,7 @@ import {
   meraPreferencesPatchSchema,
   meraProfilePatchSchema,
   meraUserCreateSchema,
+  meraUserPermissionPatchSchema,
   meraUserStatusSchema,
   paginationQuerySchema,
   publicIdParamSchema,
@@ -62,17 +63,6 @@ import {
   verifyRoleQuerySchema,
 } from "./schemas.js"
 import { MERA_PERMISSIONS } from "./permissions.js"
-
-const loginLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 6,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: {
-    ok: false,
-    error: "Too many MERA login attempts. Try again later.",
-  },
-})
 
 function rememberUploadedFile(req, _res, next) {
   req.uploadedFileUrl = buildUploadedFileUrl(req.file, req)
@@ -128,7 +118,6 @@ meraPublicRouter.get(
 
 meraPublicRouter.post(
   "/api/mera/auth/login",
-  loginLimiter,
   asyncHandler(async (req, res) => {
     req.body = meraLoginSchema.parse(req.body || {})
     return authController.login(req, res)
@@ -137,7 +126,6 @@ meraPublicRouter.post(
 
 meraPublicRouter.post(
   "/api/mera/auth/login/verify",
-  loginLimiter,
   asyncHandler(async (req, res) => {
     req.body = meraLoginCodeVerifySchema.parse(req.body || {})
     return authController.verifyLoginCode(req, res)
@@ -146,7 +134,6 @@ meraPublicRouter.post(
 
 meraPublicRouter.post(
   "/api/mera/auth/login/resend",
-  loginLimiter,
   asyncHandler(async (req, res) => {
     req.body = meraLoginCodeResendSchema.parse(req.body || {})
     return authController.resendLoginCode(req, res)
@@ -207,7 +194,18 @@ meraProtectedRouter.get(
 )
 
 meraProtectedRouter.get("/snapshot", asyncHandler(portalController.snapshot))
+meraProtectedRouter.get(
+  "/packets/:key",
+  asyncHandler(portalController.packet)
+)
 
+meraProtectedRouter.get(
+  "/search/suggestions",
+  asyncHandler(async (req, res) => {
+    req.query = searchQuerySchema.parse(req.query || {})
+    return searchController.suggestions(req, res)
+  })
+)
 meraProtectedRouter.get(
   "/search",
   asyncHandler(async (req, res) => {
@@ -233,11 +231,77 @@ meraProtectedRouter.get(
 )
 meraProtectedRouter.get(
   "/cases/:caseId",
-  requireMeraPermission([MERA_PERMISSIONS.FLAGS_VIEW, MERA_PERMISSIONS.ENFORCEMENT_VIEW]),
+  requireMeraPermission([MERA_PERMISSIONS.FLAGS_VIEW, MERA_PERMISSIONS.ENFORCEMENT_VIEW, MERA_PERMISSIONS.MANAGE_CASES]),
   requireDistrictScope,
   asyncHandler(async (req, res) => {
     req.params = caseIdParamSchema.parse(req.params || {})
     return searchController.getCaseDetail(req, res)
+  })
+)
+meraProtectedRouter.get(
+  "/cases",
+  requireMeraPermission([MERA_PERMISSIONS.FLAGS_VIEW, MERA_PERMISSIONS.ENFORCEMENT_VIEW, MERA_PERMISSIONS.MANAGE_CASES]),
+  requireDistrictScope,
+  asyncHandler(commandCentreController.listCases)
+)
+meraProtectedRouter.post(
+  "/cases",
+  requireMeraPermission([MERA_PERMISSIONS.MANAGE_CASES, MERA_PERMISSIONS.FLAGS_CREATE, MERA_PERMISSIONS.ENFORCEMENT_CREATE_WARNING]),
+  requireDistrictScope,
+  asyncHandler(commandCentreController.createCase)
+)
+meraProtectedRouter.patch(
+  "/cases/:caseId",
+  requireMeraPermission([MERA_PERMISSIONS.MANAGE_CASES, MERA_PERMISSIONS.FLAGS_RESOLVE, MERA_PERMISSIONS.ENFORCEMENT_UPDATE_STATUS]),
+  requireDistrictScope,
+  asyncHandler(async (req, res) => {
+    req.params = caseIdParamSchema.parse(req.params || {})
+    return commandCentreController.patchCase(req, res)
+  })
+)
+meraProtectedRouter.post(
+  "/cases/:caseId/notes",
+  requireMeraPermission([MERA_PERMISSIONS.MANAGE_CASES, MERA_PERMISSIONS.FLAGS_VIEW, MERA_PERMISSIONS.ENFORCEMENT_VIEW]),
+  requireDistrictScope,
+  asyncHandler(async (req, res) => {
+    req.params = caseIdParamSchema.parse(req.params || {})
+    return commandCentreController.addCaseNote(req, res)
+  })
+)
+meraProtectedRouter.post(
+  "/cases/:caseId/evidence",
+  requireMeraPermission([MERA_PERMISSIONS.MANAGE_CASES, MERA_PERMISSIONS.EVIDENCE_UPLOAD]),
+  requireDistrictScope,
+  asyncHandler(async (req, res) => {
+    req.params = caseIdParamSchema.parse(req.params || {})
+    return commandCentreController.addCaseEvidence(req, res)
+  })
+)
+meraProtectedRouter.post(
+  "/cases/:caseId/escalate",
+  requireMeraPermission([MERA_PERMISSIONS.MANAGE_CASES, MERA_PERMISSIONS.FLAGS_ESCALATE, MERA_PERMISSIONS.ENFORCEMENT_UPDATE_STATUS]),
+  requireDistrictScope,
+  asyncHandler(async (req, res) => {
+    req.params = caseIdParamSchema.parse(req.params || {})
+    return commandCentreController.escalateCase(req, res)
+  })
+)
+meraProtectedRouter.post(
+  "/cases/:caseId/close",
+  requireMeraPermission([MERA_PERMISSIONS.MANAGE_CASES, MERA_PERMISSIONS.ENFORCEMENT_UPDATE_STATUS]),
+  requireDistrictScope,
+  asyncHandler(async (req, res) => {
+    req.params = caseIdParamSchema.parse(req.params || {})
+    return commandCentreController.closeCase(req, res)
+  })
+)
+meraProtectedRouter.get(
+  "/cases/:caseId/evidence-pack",
+  requireMeraPermission([MERA_PERMISSIONS.MANAGE_CASES, MERA_PERMISSIONS.REPORTS_EXPORT, MERA_PERMISSIONS.REPORTS_VIEW]),
+  requireDistrictScope,
+  asyncHandler(async (req, res) => {
+    req.params = caseIdParamSchema.parse(req.params || {})
+    return commandCentreController.exportCaseEvidencePack(req, res)
   })
 )
 meraProtectedRouter.get(
@@ -459,6 +523,79 @@ meraProtectedRouter.get(
   requireDistrictScope,
   asyncHandler(portalController.nationalOperationsDashboard)
 )
+meraProtectedRouter.get(
+  "/national-consumption",
+  requireMeraPermission([MERA_PERMISSIONS.DASHBOARD_VIEW_NATIONAL, MERA_PERMISSIONS.DASHBOARD_VIEW_DISTRICT]),
+  requireDistrictScope,
+  asyncHandler(portalController.nationalConsumption)
+)
+
+meraProtectedRouter.get(
+  "/risk/summary",
+  requireMeraPermission([MERA_PERMISSIONS.RISK_VIEW, MERA_PERMISSIONS.FLAGS_VIEW, MERA_PERMISSIONS.AVAILABILITY_AUDIT]),
+  requireDistrictScope,
+  asyncHandler(commandCentreController.riskSummary)
+)
+meraProtectedRouter.get(
+  "/risk/watchlist",
+  requireMeraPermission([MERA_PERMISSIONS.RISK_VIEW, MERA_PERMISSIONS.FLAGS_VIEW, MERA_PERMISSIONS.AVAILABILITY_AUDIT]),
+  requireDistrictScope,
+  asyncHandler(commandCentreController.riskWatchlist)
+)
+meraProtectedRouter.get(
+  "/risk/stations/:stationId",
+  requireMeraPermission([MERA_PERMISSIONS.RISK_VIEW, MERA_PERMISSIONS.FLAGS_VIEW, MERA_PERMISSIONS.AVAILABILITY_AUDIT]),
+  requireDistrictScope,
+  asyncHandler(commandCentreController.riskStation)
+)
+meraProtectedRouter.get(
+  "/risk/stations",
+  requireMeraPermission([MERA_PERMISSIONS.RISK_VIEW, MERA_PERMISSIONS.FLAGS_VIEW, MERA_PERMISSIONS.AVAILABILITY_AUDIT]),
+  requireDistrictScope,
+  asyncHandler(commandCentreController.riskStations)
+)
+meraProtectedRouter.post(
+  "/risk/recalculate",
+  requireMeraPermission([MERA_PERMISSIONS.RISK_RECALCULATE, MERA_PERMISSIONS.FLAGS_ESCALATE, MERA_PERMISSIONS.REPORTS_GENERATE]),
+  requireDistrictScope,
+  asyncHandler(commandCentreController.recalculateRisk)
+)
+meraProtectedRouter.get(
+  "/alerts",
+  requireMeraPermission([MERA_PERMISSIONS.ALERTS_VIEW, MERA_PERMISSIONS.FLAGS_VIEW]),
+  requireDistrictScope,
+  asyncHandler(commandCentreController.listAlerts)
+)
+meraProtectedRouter.get(
+  "/alerts/:id",
+  requireMeraPermission([MERA_PERMISSIONS.ALERTS_VIEW, MERA_PERMISSIONS.FLAGS_VIEW]),
+  requireDistrictScope,
+  asyncHandler(commandCentreController.getAlert)
+)
+meraProtectedRouter.post(
+  "/alerts/:id/acknowledge",
+  requireMeraPermission([MERA_PERMISSIONS.ALERTS_MANAGE, MERA_PERMISSIONS.FLAGS_ASSIGN, MERA_PERMISSIONS.FLAGS_RESOLVE]),
+  requireDistrictScope,
+  asyncHandler(commandCentreController.acknowledgeAlert)
+)
+meraProtectedRouter.post(
+  "/alerts/:id/dismiss",
+  requireMeraPermission([MERA_PERMISSIONS.ALERTS_MANAGE, MERA_PERMISSIONS.FLAGS_RESOLVE]),
+  requireDistrictScope,
+  asyncHandler(commandCentreController.dismissAlert)
+)
+meraProtectedRouter.post(
+  "/alerts/:id/open-case",
+  requireMeraPermission([MERA_PERMISSIONS.MANAGE_CASES, MERA_PERMISSIONS.FLAGS_CREATE, MERA_PERMISSIONS.ENFORCEMENT_CREATE_WARNING]),
+  requireDistrictScope,
+  asyncHandler(commandCentreController.openCaseFromAlert)
+)
+meraProtectedRouter.post(
+  "/alerts/:id/assign-inspection",
+  requireMeraPermission([MERA_PERMISSIONS.ASSIGN_INSPECTIONS, MERA_PERMISSIONS.INSPECTIONS_ASSIGN, MERA_PERMISSIONS.INSPECTIONS_CREATE]),
+  requireDistrictScope,
+  asyncHandler(commandCentreController.assignInspectionFromAlert)
+)
 
 meraProtectedRouter.get(
   "/hoarding-watchlist",
@@ -486,6 +623,27 @@ meraProtectedRouter.get(
   asyncHandler(async (req, res) => {
     req.query = complaintListQuerySchema.parse(req.query || {})
     return portalController.listComplaints(req, res)
+  })
+)
+meraProtectedRouter.get(
+  "/complaints/clusters",
+  requireMeraPermission(MERA_PERMISSIONS.COMPLAINTS_VIEW),
+  requireDistrictScope,
+  asyncHandler(commandCentreController.complaintClusters)
+)
+meraProtectedRouter.get(
+  "/complaints/trends",
+  requireMeraPermission(MERA_PERMISSIONS.COMPLAINTS_VIEW),
+  requireDistrictScope,
+  asyncHandler(commandCentreController.complaintTrends)
+)
+meraProtectedRouter.post(
+  "/complaints/:publicId/link-case",
+  requireMeraPermission([MERA_PERMISSIONS.COMPLAINTS_ESCALATE, MERA_PERMISSIONS.MANAGE_CASES, MERA_PERMISSIONS.FLAGS_CREATE]),
+  requireDistrictScope,
+  asyncHandler(async (req, res) => {
+    req.params = publicIdParamSchema.parse(req.params || {})
+    return commandCentreController.linkComplaintCase(req, res)
   })
 )
 meraProtectedRouter.get(
@@ -548,6 +706,30 @@ meraProtectedRouter.get(
     req.query = inspectionListQuerySchema.parse(req.query || {})
     return portalController.listInspections(req, res)
   })
+)
+meraProtectedRouter.get(
+  "/inspections/recommended",
+  requireMeraPermission([MERA_PERMISSIONS.INSPECTIONS_VIEW, MERA_PERMISSIONS.ASSIGN_INSPECTIONS, MERA_PERMISSIONS.INSPECTIONS_ASSIGN]),
+  requireDistrictScope,
+  asyncHandler(commandCentreController.recommendedInspections)
+)
+meraProtectedRouter.get(
+  "/inspections/:id",
+  requireMeraPermission(MERA_PERMISSIONS.INSPECTIONS_VIEW),
+  requireDistrictScope,
+  asyncHandler(commandCentreController.getInspection)
+)
+meraProtectedRouter.patch(
+  "/inspections/:id",
+  requireMeraPermission([MERA_PERMISSIONS.ASSIGN_INSPECTIONS, MERA_PERMISSIONS.INSPECTIONS_ASSIGN, MERA_PERMISSIONS.INSPECTIONS_REVIEW]),
+  requireDistrictScope,
+  asyncHandler(commandCentreController.patchInspection)
+)
+meraProtectedRouter.post(
+  "/inspections/:id/complete",
+  requireMeraPermission([MERA_PERMISSIONS.COMPLETE_INSPECTIONS, MERA_PERMISSIONS.INSPECTIONS_CREATE, MERA_PERMISSIONS.INSPECTIONS_REVIEW]),
+  requireDistrictScope,
+  asyncHandler(commandCentreController.completeInspection)
 )
 meraProtectedRouter.get(
   "/stations/:publicId/inspections",
@@ -686,6 +868,36 @@ meraProtectedRouter.get(
     return portalController.listFuelDeliveryLogs(req, res)
   })
 )
+meraProtectedRouter.get(
+  "/fuel-supply/deliveries",
+  requireMeraPermission(MERA_PERMISSIONS.DELIVERIES_VIEW),
+  requireDistrictScope,
+  asyncHandler(commandCentreController.fuelSupplyDeliveries)
+)
+meraProtectedRouter.post(
+  "/fuel-supply/deliveries",
+  requireMeraPermission([MERA_PERMISSIONS.DELIVERIES_CREATE, MERA_PERMISSIONS.DELIVERIES_VERIFY]),
+  requireDistrictScope,
+  asyncHandler(commandCentreController.createFuelSupplyDelivery)
+)
+meraProtectedRouter.patch(
+  "/fuel-supply/deliveries/:id",
+  requireMeraPermission([MERA_PERMISSIONS.DELIVERIES_VERIFY, MERA_PERMISSIONS.DELIVERIES_CREATE]),
+  requireDistrictScope,
+  asyncHandler(commandCentreController.patchFuelSupplyDelivery)
+)
+meraProtectedRouter.get(
+  "/fuel-supply/timeline",
+  requireMeraPermission(MERA_PERMISSIONS.DELIVERIES_VIEW),
+  requireDistrictScope,
+  asyncHandler(commandCentreController.fuelSupplyTimeline)
+)
+meraProtectedRouter.get(
+  "/fuel-supply/stations/:stationId",
+  requireMeraPermission(MERA_PERMISSIONS.DELIVERIES_VIEW),
+  requireDistrictScope,
+  asyncHandler(commandCentreController.stationFuelSupply)
+)
 
 meraProtectedRouter.post(
   "/availability-reports",
@@ -713,6 +925,124 @@ meraProtectedRouter.post(
     req.body = fuelPriceReportSchema.parse(req.body || {})
     return portalController.createFuelPriceReport(req, res)
   })
+)
+
+meraProtectedRouter.get(
+  "/prices/official",
+  requireMeraPermission([MERA_PERMISSIONS.MANAGE_PRICE_COMPLIANCE, MERA_PERMISSIONS.REPORTS_VIEW]),
+  requireDistrictScope,
+  asyncHandler(commandCentreController.officialPrices)
+)
+meraProtectedRouter.post(
+  "/prices/official",
+  requireMeraPermission([MERA_PERMISSIONS.MANAGE_PRICE_COMPLIANCE, MERA_PERMISSIONS.REPORTS_GENERATE]),
+  requireDistrictScope,
+  asyncHandler(commandCentreController.createOfficialPrice)
+)
+meraProtectedRouter.get(
+  "/prices/compliance",
+  requireMeraPermission([MERA_PERMISSIONS.MANAGE_PRICE_COMPLIANCE, MERA_PERMISSIONS.REPORTS_VIEW]),
+  requireDistrictScope,
+  asyncHandler(commandCentreController.priceCompliance)
+)
+meraProtectedRouter.get(
+  "/prices/violations",
+  requireMeraPermission([MERA_PERMISSIONS.MANAGE_PRICE_COMPLIANCE, MERA_PERMISSIONS.REPORTS_VIEW]),
+  requireDistrictScope,
+  asyncHandler(commandCentreController.priceViolations)
+)
+meraProtectedRouter.get(
+  "/reports/types",
+  requireMeraPermission(MERA_PERMISSIONS.REPORTS_VIEW),
+  asyncHandler(commandCentreController.reportTypes)
+)
+meraProtectedRouter.post(
+  "/reports/generate",
+  requireMeraPermission([MERA_PERMISSIONS.GENERATE_REPORTS, MERA_PERMISSIONS.REPORTS_GENERATE]),
+  requireDistrictScope,
+  asyncHandler(commandCentreController.generateReport)
+)
+meraProtectedRouter.get(
+  "/reports",
+  requireMeraPermission(MERA_PERMISSIONS.REPORTS_VIEW),
+  requireDistrictScope,
+  asyncHandler(commandCentreController.listReports)
+)
+meraProtectedRouter.get(
+  "/reports/:id/download",
+  requireMeraPermission([MERA_PERMISSIONS.REPORTS_EXPORT, MERA_PERMISSIONS.REPORTS_VIEW]),
+  requireDistrictScope,
+  asyncHandler(commandCentreController.downloadReport)
+)
+meraProtectedRouter.get(
+  "/reports/:id",
+  requireMeraPermission(MERA_PERMISSIONS.REPORTS_VIEW),
+  requireDistrictScope,
+  asyncHandler(commandCentreController.getReport)
+)
+meraProtectedRouter.get(
+  "/public-notices",
+  requireMeraPermission([MERA_PERMISSIONS.PUBLIC_NOTICES_VIEW, MERA_PERMISSIONS.CREATE_PUBLIC_NOTICE, MERA_PERMISSIONS.APPROVE_PUBLIC_NOTICE, MERA_PERMISSIONS.PUBLISH_PUBLIC_NOTICE]),
+  asyncHandler(commandCentreController.listPublicNotices)
+)
+meraProtectedRouter.post(
+  "/public-notices",
+  requireMeraPermission(MERA_PERMISSIONS.CREATE_PUBLIC_NOTICE),
+  asyncHandler(commandCentreController.createPublicNotice)
+)
+meraProtectedRouter.patch(
+  "/public-notices/:id",
+  requireMeraPermission([MERA_PERMISSIONS.CREATE_PUBLIC_NOTICE, MERA_PERMISSIONS.APPROVE_PUBLIC_NOTICE]),
+  asyncHandler(commandCentreController.patchPublicNotice)
+)
+meraProtectedRouter.post(
+  "/public-notices/:id/submit",
+  requireMeraPermission(MERA_PERMISSIONS.CREATE_PUBLIC_NOTICE),
+  asyncHandler(commandCentreController.submitPublicNotice)
+)
+meraProtectedRouter.post(
+  "/public-notices/:id/approve",
+  requireMeraPermission(MERA_PERMISSIONS.APPROVE_PUBLIC_NOTICE),
+  asyncHandler(commandCentreController.approvePublicNotice)
+)
+meraProtectedRouter.post(
+  "/public-notices/:id/reject",
+  requireMeraPermission(MERA_PERMISSIONS.APPROVE_PUBLIC_NOTICE),
+  asyncHandler(commandCentreController.rejectPublicNotice)
+)
+meraProtectedRouter.post(
+  "/public-notices/:id/publish",
+  requireMeraPermission(MERA_PERMISSIONS.PUBLISH_PUBLIC_NOTICE),
+  asyncHandler(commandCentreController.publishPublicNotice)
+)
+meraProtectedRouter.get(
+  "/public-notices/:id/history",
+  requireMeraPermission([MERA_PERMISSIONS.PUBLIC_NOTICES_VIEW, MERA_PERMISSIONS.CREATE_PUBLIC_NOTICE, MERA_PERMISSIONS.APPROVE_PUBLIC_NOTICE]),
+  asyncHandler(commandCentreController.publicNoticeHistory)
+)
+meraProtectedRouter.get(
+  "/analytics/fuel-stress",
+  requireMeraPermission([MERA_PERMISSIONS.ANALYTICS_VIEW, MERA_PERMISSIONS.REPORTS_VIEW]),
+  requireDistrictScope,
+  asyncHandler(commandCentreController.fuelStressAnalytics)
+)
+meraProtectedRouter.get(
+  "/analytics/districts",
+  requireMeraPermission([MERA_PERMISSIONS.ANALYTICS_VIEW, MERA_PERMISSIONS.REPORTS_VIEW]),
+  requireDistrictScope,
+  asyncHandler(commandCentreController.districtAnalytics)
+)
+meraProtectedRouter.get(
+  "/analytics/stations",
+  requireMeraPermission([MERA_PERMISSIONS.ANALYTICS_VIEW, MERA_PERMISSIONS.REPORTS_VIEW]),
+  requireDistrictScope,
+  asyncHandler(commandCentreController.stationAnalytics)
+)
+meraProtectedRouter.get(
+  "/analytics/trends",
+  requireMeraPermission([MERA_PERMISSIONS.ANALYTICS_VIEW, MERA_PERMISSIONS.REPORTS_VIEW]),
+  requireDistrictScope,
+  asyncHandler(commandCentreController.trendAnalytics)
 )
 
 meraProtectedRouter.get(
@@ -789,6 +1119,23 @@ meraProtectedRouter.patch(
     req.params = publicIdParamSchema.parse(req.params || {})
     req.body = meraUserStatusSchema.parse(req.body || {})
     return portalController.updateUserStatus(req, res)
+  })
+)
+meraProtectedRouter.patch(
+  "/users/:publicId/permissions",
+  requireMeraPermission([MERA_PERMISSIONS.USERS_UPDATE, MERA_PERMISSIONS.MANAGE_USERS]),
+  asyncHandler(async (req, res) => {
+    req.params = publicIdParamSchema.parse(req.params || {})
+    req.body = meraUserPermissionPatchSchema.parse(req.body || {})
+    return portalController.updateUserPermissions(req, res)
+  })
+)
+meraProtectedRouter.post(
+  "/users/:publicId/sessions/revoke",
+  requireMeraPermission([MERA_PERMISSIONS.USERS_UPDATE, MERA_PERMISSIONS.USERS_DISABLE, MERA_PERMISSIONS.MANAGE_USERS]),
+  asyncHandler(async (req, res) => {
+    req.params = publicIdParamSchema.parse(req.params || {})
+    return portalController.revokeUserSessions(req, res)
   })
 )
 

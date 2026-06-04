@@ -1,8 +1,9 @@
 import bcrypt from "bcryptjs"
 import crypto from "crypto"
 import jwt from "jsonwebtoken"
+import net from "node:net"
 import { prisma } from "../../../db/prisma.js"
-import { badRequest, notFound } from "../../../utils/http.js"
+import { badRequest, notFound, tooManyRequests } from "../../../utils/http.js"
 import { createPublicId } from "../../common/db.js"
 import { normalizePermissionList } from "../permissions.js"
 import { logMeraAudit } from "./audit.service.js"
@@ -11,6 +12,10 @@ import { sendMeraLoginCodeEmail } from "./email.service.js"
 const MERA_ACCESS_TOKEN_TTL_MIN = Number(process.env.MERA_ACCESS_TOKEN_TTL_MIN || 480)
 const MERA_LOGIN_CODE_RESEND_COOLDOWN_SECONDS = Number(process.env.MERA_LOGIN_CODE_RESEND_COOLDOWN_SECONDS || 60)
 export const MERA_TRUSTED_DEVICE_COOKIE = "mera_trusted_device"
+const AUTH_RISK_SCOPE_IDENTIFIER = "IDENTIFIER"
+const AUTH_RISK_SCOPE_USER = "MERA_USER"
+const AUTH_RISK_SCOPE_IP = "IP"
+const AUTH_RISK_SCOPE_SUBNET = "SUBNET"
 
 function getMeraJwtSecret() {
   return process.env.JWT_MERA_ACCESS_SECRET || process.env.JWT_ACCESS_SECRET || ""
@@ -45,6 +50,22 @@ export function getMeraLoginCodeMaxAttempts() {
   return Math.max(1, Number(process.env.MERA_LOGIN_CODE_MAX_ATTEMPTS || 5))
 }
 
+export function getMeraAuthLockoutPolicy() {
+  const maxFailedAttempts = Math.max(1, Number(process.env.MERA_AUTH_MAX_FAILED_ATTEMPTS || 5))
+  const ipMaxFailedAttempts = Math.max(maxFailedAttempts, Number(process.env.MERA_AUTH_IP_MAX_FAILED_ATTEMPTS || 10))
+  const subnetFlagFailedAttempts = Math.max(ipMaxFailedAttempts, Number(process.env.MERA_AUTH_SUBNET_FLAG_FAILED_ATTEMPTS || ipMaxFailedAttempts))
+  const failureWindowMinutes = Math.max(1, Number(process.env.MERA_AUTH_FAILURE_WINDOW_MIN || 15))
+  const lockoutMinutes = Math.max(1, Number(process.env.MERA_AUTH_LOCKOUT_MIN || 15))
+
+  return {
+    maxFailedAttempts,
+    ipMaxFailedAttempts,
+    subnetFlagFailedAttempts,
+    failureWindowMinutes,
+    lockoutMinutes,
+  }
+}
+
 function getMeraTrustedDeviceDays() {
   return Math.max(1, Number(process.env.MERA_TRUSTED_DEVICE_DAYS || 30))
 }
@@ -55,6 +76,56 @@ function getRequestIp(req) {
 
 function getRequestUserAgent(req) {
   return req.header("user-agent")?.slice(0, 255) || null
+}
+
+function normalizeRequestIpAddress(ipAddress) {
+  let scopedIp = String(ipAddress || "").trim()
+  if (!scopedIp) return null
+
+  const bracketed = scopedIp.match(/^\[([^\]]+)\](?::\d+)?$/)
+  if (bracketed?.[1]) scopedIp = bracketed[1]
+  const ipv4WithPort = scopedIp.match(/^(\d{1,3}(?:\.\d{1,3}){3}):\d+$/)
+  if (ipv4WithPort?.[1]) scopedIp = ipv4WithPort[1]
+  scopedIp = scopedIp.replace(/%.+$/, "")
+
+  if (scopedIp.toLowerCase().startsWith("::ffff:")) {
+    const mappedIpv4 = scopedIp.slice(7)
+    if (net.isIP(mappedIpv4) === 4) return mappedIpv4
+  }
+
+  return net.isIP(scopedIp) ? scopedIp.toLowerCase() : scopedIp.slice(0, 64)
+}
+
+function expandIpv6(ipAddress) {
+  const scopedIp = String(ipAddress || "").toLowerCase()
+  if (net.isIP(scopedIp) !== 6) return []
+
+  const [leftRaw = "", rightRaw = ""] = scopedIp.split("::")
+  const left = leftRaw ? leftRaw.split(":").filter(Boolean) : []
+  const right = rightRaw ? rightRaw.split(":").filter(Boolean) : []
+  const missing = Math.max(0, 8 - left.length - right.length)
+  const parts = [...left, ...Array.from({ length: missing }, () => "0"), ...right]
+
+  return parts.slice(0, 8).map((part) => Number.parseInt(part || "0", 16).toString(16).padStart(4, "0"))
+}
+
+export function deriveMeraIpSubnet(ipAddress) {
+  const scopedIp = normalizeRequestIpAddress(ipAddress)
+  if (!scopedIp) return null
+
+  if (net.isIP(scopedIp) === 4) {
+    const octets = scopedIp.split(".")
+    if (octets.length !== 4) return null
+    return `${octets.slice(0, 3).join(".")}.0/24`
+  }
+
+  if (net.isIP(scopedIp) === 6) {
+    const expanded = expandIpv6(scopedIp)
+    if (expanded.length !== 8) return null
+    return `${expanded.slice(0, 4).join(":")}::/64`
+  }
+
+  return null
 }
 
 function readBoolean(value) {
@@ -72,6 +143,331 @@ function buildTrustedDeviceCookieOptions() {
     path: "/api/mera/auth",
     maxAge,
     ...(domain ? { domain } : {}),
+  }
+}
+
+function toDateOrNull(value) {
+  const date = value ? new Date(value) : null
+  return date && !Number.isNaN(date.getTime()) ? date : null
+}
+
+function isMissingMeraAuthRiskStore(error) {
+  const message = String(error?.message || "")
+  return message.includes("mera_auth_risk_signals") && /does not exist|doesn't exist|no such table/i.test(message)
+}
+
+async function withMeraAuthRiskStore(operation, fallback = null) {
+  try {
+    return await operation()
+  } catch (error) {
+    if (isMissingMeraAuthRiskStore(error)) return fallback
+    throw error
+  }
+}
+
+function getMeraAuthRequestContext(req) {
+  const ipAddress = normalizeRequestIpAddress(getRequestIp(req))
+  return {
+    ipAddress,
+    subnet: deriveMeraIpSubnet(ipAddress),
+    userAgent: getRequestUserAgent(req),
+  }
+}
+
+function normalizeLoginIdentifier(value) {
+  return String(value || "").trim().toLowerCase().slice(0, 190) || null
+}
+
+function getMeraUserScopeValue(user) {
+  if (user?.publicId) return String(user.publicId).trim().slice(0, 190)
+  if (user?.public_id) return String(user.public_id).trim().slice(0, 190)
+  if (user?.id || user?.mera_user_id) return `id:${Number(user.id || user.mera_user_id)}`.slice(0, 190)
+  return null
+}
+
+function buildMeraAuthLockoutScopes({ identifier = null, user = null, req = null } = {}) {
+  const scopes = []
+  const seen = new Set()
+  const requestContext = req ? getMeraAuthRequestContext(req) : null
+
+  const addScope = (scopeType, scopeValue) => {
+    const normalizedValue = String(scopeValue || "").trim().slice(0, 190)
+    if (!scopeType || !normalizedValue) return
+    const key = `${scopeType}:${normalizedValue}`
+    if (seen.has(key)) return
+    seen.add(key)
+    scopes.push({ scopeType, scopeValue: normalizedValue })
+  }
+
+  addScope(AUTH_RISK_SCOPE_IDENTIFIER, normalizeLoginIdentifier(identifier))
+  addScope(AUTH_RISK_SCOPE_USER, getMeraUserScopeValue(user))
+  addScope(AUTH_RISK_SCOPE_IP, requestContext?.ipAddress)
+
+  return scopes
+}
+
+function secondsUntil(date) {
+  const lockedUntil = toDateOrNull(date)
+  if (!lockedUntil) return 0
+  return Math.max(0, Math.ceil((lockedUntil.getTime() - Date.now()) / 1000))
+}
+
+function throwMeraAuthLockout(lockout) {
+  const retryAfterSeconds = secondsUntil(lockout?.locked_until || lockout?.lockedUntil)
+  const retryMinutes = Math.max(1, Math.ceil(retryAfterSeconds / 60))
+  throw tooManyRequests(
+    `Too many failed MERA login attempts. Try again in ${retryMinutes} minute${retryMinutes === 1 ? "" : "s"}.`,
+    retryAfterSeconds || 60
+  )
+}
+
+async function findActiveMeraAuthLockout(context = {}) {
+  const scopes = buildMeraAuthLockoutScopes(context)
+  let activeLockout = null
+
+  for (const scope of scopes) {
+    const row = await withMeraAuthRiskStore(async () => {
+      const rows = await prisma.$queryRaw`
+        SELECT scope_type, scope_value, locked_until
+        FROM mera_auth_risk_signals
+        WHERE scope_type = ${scope.scopeType}
+          AND scope_value = ${scope.scopeValue}
+          AND locked_until IS NOT NULL
+          AND locked_until > CURRENT_TIMESTAMP(3)
+        LIMIT 1
+      `
+      return rows?.[0] || null
+    })
+
+    if (!row?.locked_until) continue
+    const rowLockedUntil = toDateOrNull(row.locked_until)
+    const activeLockedUntil = toDateOrNull(activeLockout?.locked_until)
+    if (!activeLockout || (rowLockedUntil && activeLockedUntil && rowLockedUntil > activeLockedUntil)) {
+      activeLockout = row
+    }
+  }
+
+  return activeLockout
+}
+
+async function assertMeraAuthNotLocked(context = {}) {
+  const lockout = await findActiveMeraAuthLockout(context)
+  if (lockout?.locked_until) throwMeraAuthLockout(lockout)
+}
+
+async function registerMeraAuthFailureScope({
+  scopeType,
+  scopeValue,
+  threshold,
+  lockoutMinutes,
+  flagOnly = false,
+  reason,
+  requestContext,
+}) {
+  const normalizedScopeValue = String(scopeValue || "").trim().slice(0, 190)
+  if (!scopeType || !normalizedScopeValue) return null
+
+  const policy = getMeraAuthLockoutPolicy()
+  const scopedThreshold = Math.max(1, Number(threshold || policy.maxFailedAttempts))
+  const scopedLockoutMinutes = Math.max(0, Number(lockoutMinutes || 0))
+  const now = new Date()
+  const windowStart = new Date(now.getTime() - policy.failureWindowMinutes * 60 * 1000)
+
+  return withMeraAuthRiskStore(async () => {
+    return prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`
+        INSERT INTO mera_auth_risk_signals (
+          scope_type,
+          scope_value,
+          ip_address,
+          subnet,
+          last_user_agent
+        )
+        VALUES (
+          ${scopeType},
+          ${normalizedScopeValue},
+          ${requestContext?.ipAddress || null},
+          ${requestContext?.subnet || null},
+          ${requestContext?.userAgent || null}
+        )
+        ON DUPLICATE KEY UPDATE updated_at = updated_at
+      `
+
+      const rows = await tx.$queryRaw`
+        SELECT
+          id,
+          failure_count,
+          first_failure_at,
+          locked_until,
+          flagged_at
+        FROM mera_auth_risk_signals
+        WHERE scope_type = ${scopeType}
+          AND scope_value = ${normalizedScopeValue}
+        LIMIT 1
+        FOR UPDATE
+      `
+      const row = rows?.[0] || null
+      if (!row?.id) return null
+
+      const previousLockedUntil = toDateOrNull(row.locked_until)
+      if (previousLockedUntil && previousLockedUntil > now) {
+        return {
+          scopeType,
+          scopeValue: normalizedScopeValue,
+          failureCount: Number(row.failure_count || 0),
+          lockedUntil: previousLockedUntil,
+          newlyLocked: false,
+          newlyFlagged: false,
+        }
+      }
+
+      const previousFirstFailureAt = toDateOrNull(row.first_failure_at)
+      const resetWindow =
+        !previousFirstFailureAt ||
+        previousFirstFailureAt < windowStart ||
+        (previousLockedUntil && previousLockedUntil <= now)
+      const nextFailureCount = resetWindow ? 1 : Number(row.failure_count || 0) + 1
+      const nextFirstFailureAt = resetWindow ? now : previousFirstFailureAt
+      const shouldFlag = nextFailureCount >= scopedThreshold
+      const shouldLock = shouldFlag && !flagOnly && scopedLockoutMinutes > 0
+      const nextLockedUntil = shouldLock ? new Date(now.getTime() + scopedLockoutMinutes * 60 * 1000) : null
+      const previousFlaggedAt = toDateOrNull(row.flagged_at)
+      const nextFlaggedAt = shouldFlag ? previousFlaggedAt || now : previousFlaggedAt
+      const metadataJson = JSON.stringify({
+        threshold: scopedThreshold,
+        failureWindowMinutes: policy.failureWindowMinutes,
+        lockoutMinutes: scopedLockoutMinutes,
+        flagOnly: Boolean(flagOnly),
+      })
+
+      await tx.$executeRaw`
+        UPDATE mera_auth_risk_signals
+        SET
+          failure_count = ${nextFailureCount},
+          first_failure_at = ${nextFirstFailureAt},
+          last_failure_at = ${now},
+          locked_until = ${nextLockedUntil},
+          flagged_at = ${nextFlaggedAt},
+          flag_reason = ${shouldFlag ? reason : null},
+          last_failure_reason = ${reason},
+          last_user_agent = ${requestContext?.userAgent || null},
+          ip_address = ${requestContext?.ipAddress || null},
+          subnet = ${requestContext?.subnet || null},
+          metadata_json = ${metadataJson},
+          updated_at = CURRENT_TIMESTAMP(3)
+        WHERE id = ${row.id}
+      `
+
+      return {
+        scopeType,
+        scopeValue: normalizedScopeValue,
+        failureCount: nextFailureCount,
+        lockedUntil: nextLockedUntil,
+        newlyLocked: Boolean(shouldLock),
+        newlyFlagged: Boolean(shouldFlag && !previousFlaggedAt),
+      }
+    })
+  })
+}
+
+async function logMeraAuthRiskOutcome(outcome, requestContext, reason) {
+  if (!outcome?.newlyLocked && !outcome?.newlyFlagged) return
+
+  const actionType = outcome.newlyLocked ? "MERA_AUTH_LOCKOUT_APPLIED" : "MERA_AUTH_RISK_FLAGGED"
+  const actionDescription = outcome.newlyLocked
+    ? `MERA authentication lockout applied to ${outcome.scopeType} after repeated failed login attempts.`
+    : `MERA authentication risk flagged for ${outcome.scopeType} after repeated failed login attempts.`
+
+  await logMeraAudit({
+    actorRole: "UNKNOWN",
+    permissionUsed: "AUTH_LOCKOUT",
+    actionType,
+    actionDescription,
+    affectedEntity: `${outcome.scopeType}:${outcome.scopeValue}`,
+    ipAddress: requestContext?.ipAddress || null,
+    deviceInfo: requestContext?.userAgent || null,
+  }).catch(() => {})
+}
+
+async function recordMeraAuthFailure({ identifier = null, user = null, req, reason = "failed_login" }) {
+  const policy = getMeraAuthLockoutPolicy()
+  const requestContext = getMeraAuthRequestContext(req)
+  const outcomes = []
+  const identifierValue = normalizeLoginIdentifier(identifier)
+  const userScopeValue = getMeraUserScopeValue(user)
+
+  if (identifierValue) {
+    outcomes.push(await registerMeraAuthFailureScope({
+      scopeType: AUTH_RISK_SCOPE_IDENTIFIER,
+      scopeValue: identifierValue,
+      threshold: policy.maxFailedAttempts,
+      lockoutMinutes: policy.lockoutMinutes,
+      reason,
+      requestContext,
+    }))
+  }
+
+  if (userScopeValue) {
+    outcomes.push(await registerMeraAuthFailureScope({
+      scopeType: AUTH_RISK_SCOPE_USER,
+      scopeValue: userScopeValue,
+      threshold: policy.maxFailedAttempts,
+      lockoutMinutes: policy.lockoutMinutes,
+      reason,
+      requestContext,
+    }))
+  }
+
+  if (requestContext.ipAddress) {
+    outcomes.push(await registerMeraAuthFailureScope({
+      scopeType: AUTH_RISK_SCOPE_IP,
+      scopeValue: requestContext.ipAddress,
+      threshold: policy.ipMaxFailedAttempts,
+      lockoutMinutes: policy.lockoutMinutes,
+      reason,
+      requestContext,
+    }))
+  }
+
+  if (requestContext.subnet) {
+    outcomes.push(await registerMeraAuthFailureScope({
+      scopeType: AUTH_RISK_SCOPE_SUBNET,
+      scopeValue: requestContext.subnet,
+      threshold: policy.subnetFlagFailedAttempts,
+      lockoutMinutes: 0,
+      flagOnly: true,
+      reason,
+      requestContext,
+    }))
+  }
+
+  for (const outcome of outcomes.filter(Boolean)) {
+    await logMeraAuthRiskOutcome(outcome, requestContext, reason)
+  }
+
+  return outcomes
+    .filter((outcome) => outcome?.lockedUntil && secondsUntil(outcome.lockedUntil) > 0)
+    .sort((left, right) => secondsUntil(right.lockedUntil) - secondsUntil(left.lockedUntil))[0] || null
+}
+
+async function resetMeraAuthFailureScopes({ identifier = null, user = null } = {}) {
+  const scopes = buildMeraAuthLockoutScopes({ identifier, user })
+
+  for (const scope of scopes) {
+    await withMeraAuthRiskStore(async () => {
+      await prisma.$executeRaw`
+        UPDATE mera_auth_risk_signals
+        SET
+          failure_count = 0,
+          first_failure_at = NULL,
+          last_failure_at = NULL,
+          locked_until = NULL,
+          last_failure_reason = NULL,
+          updated_at = CURRENT_TIMESTAMP(3)
+        WHERE scope_type = ${scope.scopeType}
+          AND scope_value = ${scope.scopeValue}
+      `
+    })
   }
 }
 
@@ -369,17 +765,20 @@ async function createLoginChallenge({ user, req }) {
 async function getLoginChallenge(challengeId) {
   const rows = await prisma.$queryRaw`
     SELECT
-      id,
-      public_id,
-      mera_user_id,
-      code_hash,
-      attempt_count,
-      resend_count,
-      expires_at,
-      resend_available_at,
-      consumed_at
-    FROM mera_login_challenges
-    WHERE public_id = ${String(challengeId || "").trim()}
+      mlc.id,
+      mlc.public_id,
+      mlc.mera_user_id,
+      mlc.code_hash,
+      mlc.attempt_count,
+      mlc.resend_count,
+      mlc.expires_at,
+      mlc.resend_available_at,
+      mlc.consumed_at,
+      mu.public_id AS user_public_id,
+      mu.email AS user_email
+    FROM mera_login_challenges mlc
+    INNER JOIN mera_users mu ON mu.id = mlc.mera_user_id
+    WHERE mlc.public_id = ${String(challengeId || "").trim()}
     LIMIT 1
   `
   return rows?.[0] || null
@@ -426,22 +825,40 @@ async function createTrustedDevice({ meraUserId, req }) {
   }
 }
 
-async function authenticateMeraLogin(payload) {
+async function authenticateMeraLogin(payload, req) {
   const email = String(payload?.email || "").trim().toLowerCase()
   const password = String(payload?.password || "")
   if (!email || !password) throw badRequest("Email and password are required")
 
+  await assertMeraAuthNotLocked({ identifier: email, req })
+
   const user = await getMeraUserAccessByEmail(email)
-  if (!user?.id || !user.password_hash) throw badRequest("Invalid MERA credentials")
+  if (user?.id) await assertMeraAuthNotLocked({ user })
+
+  if (!user?.id || !user.password_hash) {
+    const lockout = await recordMeraAuthFailure({ identifier: email, req, reason: "invalid_password" })
+    if (lockout?.lockedUntil) throwMeraAuthLockout(lockout)
+    throw badRequest("Invalid MERA credentials")
+  }
 
   const matches = await bcrypt.compare(password, String(user.password_hash || ""))
-  if (!matches) throw badRequest("Invalid MERA credentials")
+  if (!matches) {
+    const lockout = await recordMeraAuthFailure({ identifier: email, user, req, reason: "invalid_password" })
+    if (lockout?.lockedUntil) throwMeraAuthLockout(lockout)
+    throw badRequest("Invalid MERA credentials")
+  }
+
+  if (String(user.accountStatus || "").toUpperCase() !== "ACTIVE") {
+    throw badRequest("MERA account is not active")
+  }
+
+  await resetMeraAuthFailureScopes({ identifier: email, user })
 
   return user
 }
 
 export async function login({ payload, req }) {
-  const user = await authenticateMeraLogin(payload)
+  const user = await authenticateMeraLogin(payload, req)
   const trustedDevice = await getTrustedDeviceForRequest(user.id, req)
   if (trustedDevice?.public_id) return buildMeraAuthPayload(user, req)
 
@@ -451,6 +868,12 @@ export async function login({ payload, req }) {
 export async function verifyLoginCode({ payload, req }) {
   const challenge = await getLoginChallenge(payload?.challengeId)
   assertChallengeUsable(challenge)
+  const challengeUser = {
+    id: challenge.mera_user_id,
+    publicId: challenge.user_public_id,
+    email: challenge.user_email,
+  }
+  await assertMeraAuthNotLocked({ user: challengeUser, req })
 
   const maxAttempts = getMeraLoginCodeMaxAttempts()
   if (Number(challenge.attempt_count || 0) >= maxAttempts) {
@@ -468,6 +891,13 @@ export async function verifyLoginCode({ payload, req }) {
         updated_at = CURRENT_TIMESTAMP(3)
       WHERE id = ${challenge.id}
     `
+    const lockout = await recordMeraAuthFailure({
+      identifier: challenge.user_email,
+      user: challengeUser,
+      req,
+      reason: "invalid_login_code",
+    })
+    if (lockout?.lockedUntil) throwMeraAuthLockout(lockout)
     throw badRequest("Invalid login code")
   }
 
@@ -483,6 +913,7 @@ export async function verifyLoginCode({ payload, req }) {
   if (!user?.id) throw badRequest("MERA user was not found")
 
   const session = await buildMeraAuthPayload(user, req)
+  await resetMeraAuthFailureScopes({ identifier: challenge.user_email, user })
   const trustedDeviceCookie = payload?.trustDevice
     ? await createTrustedDevice({ meraUserId: user.id, req })
     : null
@@ -501,6 +932,7 @@ export async function resendLoginCode({ payload, req }) {
 
   const user = await getMeraUserAccessById(Number(challenge.mera_user_id))
   if (!user?.id) throw badRequest("MERA user was not found")
+  await assertMeraAuthNotLocked({ user, req })
 
   const code = generateMeraLoginCode()
   const codeHash = hashToken(code)

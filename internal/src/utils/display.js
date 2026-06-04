@@ -42,6 +42,20 @@ export function formatRelative(value) {
   return `${diffDays} day${diffDays === 1 ? "" : "s"} ago`
 }
 
+export function formatCodeLabel(value) {
+  if (value === null || value === undefined || value === "") return "-"
+  const text = String(value).trim()
+  if (!text) return "-"
+  const hasCodeShape = /_/.test(text) || /^[A-Z0-9_]+$/.test(text)
+  if (!hasCodeShape) return text
+  return text
+    .replace(/_/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase()
+    .replace(/(^|\s|[-/])([a-z])/g, (match) => match.toUpperCase())
+}
+
 export function normalizeTone(value) {
   const raw = String(value || "").toUpperCase()
   if (["CRITICAL", "HIGH", "HELD", "REJECTED", "OVERDUE", "OFFLINE", "FROZEN", "ESCALATED", "DEGRADED"].includes(raw)) return "danger"

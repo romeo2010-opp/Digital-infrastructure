@@ -4,6 +4,7 @@ import { Toolbar } from '../components/Toolbar'
 import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
 import { ModalShell } from '../components/ModalShell'
+import { FieldShell, ToolbarField } from '../components/FieldLabel'
 import { PortalTable } from '../components/PortalTable'
 import { SectionCard } from '../components/SectionCard'
 import { SectionKpiStrip } from '../components/SectionKpiStrip'
@@ -72,10 +73,13 @@ export function UserAdministration() {
             Create User
           </Button>
         ) : null}
-        <div className="flex min-w-[280px] flex-1 items-center gap-2">
+        <ToolbarField label="Search officers" hint="Find MERA users by name, email, role, district, or status. Example: search licensing officer. " className="min-w-[280px] flex-1">
+        <div className="flex items-center gap-2">
           <Search className="size-4 text-slate-400" />
           <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search officers..." />
         </div>
+        </ToolbarField>
+        <ToolbarField label="Role filter" hint="Filter the officer register by role. Example: Regional Compliance Supervisor.">
         <select className={fieldClass} value={role} onChange={(event) => setRole(event.target.value)}>
           <option value="">All Roles</option>
           <option value="SUPER_ADMIN">Super Admin</option>
@@ -88,6 +92,8 @@ export function UserAdministration() {
           <option value="MARKET_SUPPLY_ANALYST">Market / Fuel Supply Analyst</option>
           <option value="EXECUTIVE_VIEWER">Executive Viewer</option>
         </select>
+        </ToolbarField>
+        <ToolbarField label="District filter" hint="Filter users by district scope. Example: Lilongwe district-scoped users only.">
         <select className={fieldClass} value={district} onChange={(event) => setDistrict(event.target.value)}>
           <option value="">All Districts</option>
           {Array.from(new Set(rows.map((row: any) => row.district_scope).filter(Boolean))).map((value) => (
@@ -96,6 +102,7 @@ export function UserAdministration() {
             </option>
           ))}
         </select>
+        </ToolbarField>
         <Button type="button" variant="outline" size="sm">
           <Download className="size-4" />
           Export
@@ -221,29 +228,45 @@ export function UserAdministration() {
         }
       >
         <div className="grid gap-3">
-          <Input value={form.fullName} onChange={(event) => setForm({ ...form, fullName: event.target.value })} placeholder="Officer full name" />
-          <Input value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} placeholder="Email address" />
-          <Input value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} placeholder="Phone number" />
-          <Input value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} type="password" placeholder="Temporary password" />
-          <select className={fieldClass} value={form.roleName} onChange={(event) => setForm({ ...form, roleName: event.target.value })}>
-            <option value="SUPER_ADMIN">Super Admin</option>
-            <option value="NATIONAL_OPERATIONS_ANALYST">National Operations Analyst</option>
-            <option value="REGIONAL_COMPLIANCE_SUPERVISOR">Regional Compliance Supervisor</option>
-            <option value="FIELD_COMPLIANCE_OFFICER">Field Compliance Officer</option>
-            <option value="PUBLIC_COMPLAINTS_ANALYST">Public Complaints Analyst</option>
-            <option value="LEGAL_ENFORCEMENT_OFFICER">Legal & Enforcement Officer</option>
-            <option value="LICENSING_OFFICER">Licensing Officer</option>
-            <option value="MARKET_SUPPLY_ANALYST">Market / Fuel Supply Analyst</option>
-            <option value="EXECUTIVE_VIEWER">Executive Viewer</option>
-          </select>
-          <Input value={form.districtScope} onChange={(event) => setForm({ ...form, districtScope: event.target.value })} placeholder="District scope" />
-          <Input value={form.regionScope} onChange={(event) => setForm({ ...form, regionScope: event.target.value })} placeholder="Region scope" />
-          <select className={fieldClass} value={form.accountStatus} onChange={(event) => setForm({ ...form, accountStatus: event.target.value })}>
-            <option value="ACTIVE">Active</option>
-            <option value="INVITED">Invited</option>
-            <option value="SUSPENDED">Suspended</option>
-            <option value="DISABLED">Disabled</option>
-          </select>
+          <FieldShell label="Officer full name" hint="Enter the name shown in task assignments, audits, and notifications. Example: Thoko Banda.">
+            <Input value={form.fullName} onChange={(event) => setForm({ ...form, fullName: event.target.value })} placeholder="Officer full name" />
+          </FieldShell>
+          <FieldShell label="Email address" hint="Use the officer's MERA login email. Example: thoko.banda@mera.mw.">
+            <Input value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} placeholder="Email address" />
+          </FieldShell>
+          <FieldShell label="Phone number" hint="Optional contact number for follow-up. Example: +265 999 000 000.">
+            <Input value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} placeholder="Phone number" />
+          </FieldShell>
+          <FieldShell label="Temporary password" hint="Set a one-time starter password the officer should change after first sign-in. Example: a secure temporary phrase.">
+            <Input value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} type="password" placeholder="Temporary password" />
+          </FieldShell>
+          <FieldShell label="Role" hint="Choose the role that determines permissions. Example: Field Compliance Officer can work inspections and assigned tasks.">
+            <select className={`${fieldClass} w-full`} value={form.roleName} onChange={(event) => setForm({ ...form, roleName: event.target.value })}>
+              <option value="SUPER_ADMIN">Super Admin</option>
+              <option value="NATIONAL_OPERATIONS_ANALYST">National Operations Analyst</option>
+              <option value="REGIONAL_COMPLIANCE_SUPERVISOR">Regional Compliance Supervisor</option>
+              <option value="FIELD_COMPLIANCE_OFFICER">Field Compliance Officer</option>
+              <option value="PUBLIC_COMPLAINTS_ANALYST">Public Complaints Analyst</option>
+              <option value="LEGAL_ENFORCEMENT_OFFICER">Legal & Enforcement Officer</option>
+              <option value="LICENSING_OFFICER">Licensing Officer</option>
+              <option value="MARKET_SUPPLY_ANALYST">Market / Fuel Supply Analyst</option>
+              <option value="EXECUTIVE_VIEWER">Executive Viewer</option>
+            </select>
+          </FieldShell>
+          <FieldShell label="District scope" hint="Limit access to a district when needed. Example: Lilongwe for a district officer, blank for national scope.">
+            <Input value={form.districtScope} onChange={(event) => setForm({ ...form, districtScope: event.target.value })} placeholder="District scope" />
+          </FieldShell>
+          <FieldShell label="Region scope" hint="Optional regional grouping for oversight. Example: Central Region, Northern Region, or leave blank.">
+            <Input value={form.regionScope} onChange={(event) => setForm({ ...form, regionScope: event.target.value })} placeholder="Region scope" />
+          </FieldShell>
+          <FieldShell label="Account status" hint="Set whether the account can sign in. Example: Active for enabled users, Disabled for removed access.">
+            <select className={`${fieldClass} w-full`} value={form.accountStatus} onChange={(event) => setForm({ ...form, accountStatus: event.target.value })}>
+              <option value="ACTIVE">Active</option>
+              <option value="INVITED">Invited</option>
+              <option value="SUSPENDED">Suspended</option>
+              <option value="DISABLED">Disabled</option>
+            </select>
+          </FieldShell>
         </div>
       </ModalShell>
 
@@ -269,12 +292,14 @@ export function UserAdministration() {
           </>
         }
       >
-        <select className={fieldClass} value={statusValue} onChange={(event) => setStatusValue(event.target.value)}>
-          <option value="ACTIVE">Active</option>
-          <option value="INVITED">Invited</option>
-          <option value="SUSPENDED">Suspended</option>
-          <option value="DISABLED">Disabled</option>
-        </select>
+        <FieldShell label="Account status" hint="Update login access for this officer. Example: Suspended during review, Disabled when access is removed.">
+          <select className={`${fieldClass} w-full`} value={statusValue} onChange={(event) => setStatusValue(event.target.value)}>
+            <option value="ACTIVE">Active</option>
+            <option value="INVITED">Invited</option>
+            <option value="SUSPENDED">Suspended</option>
+            <option value="DISABLED">Disabled</option>
+          </select>
+        </FieldShell>
       </ModalShell>
     </div>
   )

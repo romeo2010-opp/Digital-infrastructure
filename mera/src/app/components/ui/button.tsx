@@ -5,19 +5,19 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "./utils";
 
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-full text-sm font-medium transition-[background-color,color,box-shadow,transform,border-color] duration-200 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-4 shrink-0 [&_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/40 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive active:scale-[0.99]",
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-full text-sm font-medium transition-[background-color,color,box-shadow,transform,border-color] duration-200 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-4 shrink-0 [&_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/40 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 aria-invalid:border-destructive active:scale-[0.99]",
   {
     variants: {
       variant: {
         default: "border border-[var(--mera-button-border)] bg-[var(--mera-button-bg)] text-[var(--mera-button-text)] shadow-[0_6px_14px_-10px_rgba(0,0,0,0.45)] hover:border-[#1f2937] hover:bg-[#1f2937]",
         destructive:
-          "bg-destructive text-white hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 dark:bg-destructive/60",
+          "bg-destructive text-white hover:bg-destructive/90 focus-visible:ring-destructive/20",
         outline:
-          "border border-[var(--mera-panel-border)] bg-[var(--mera-panel)] text-[var(--mera-panel-text-soft)] shadow-[0_1px_2px_rgba(15,23,42,0.04)] hover:bg-[var(--mera-panel-muted)] hover:text-[var(--mera-panel-text)] dark:bg-input/30 dark:border-input dark:hover:bg-input/50",
+          "border border-[var(--mera-panel-border)] bg-[var(--mera-panel)] text-[var(--mera-panel-text-soft)] shadow-[0_1px_2px_rgba(15,23,42,0.04)] hover:bg-[var(--mera-panel-muted)] hover:text-[var(--mera-panel-text)]",
         secondary:
           "bg-[var(--mera-panel-muted)] text-[var(--mera-panel-text)] hover:opacity-90",
         ghost:
-          "hover:bg-[var(--mera-panel-muted)] hover:text-[var(--mera-panel-text)] dark:hover:bg-accent/50",
+          "hover:bg-[var(--mera-panel-muted)] hover:text-[var(--mera-panel-text)]",
         link: "text-primary underline-offset-4 hover:underline",
       },
       size: {

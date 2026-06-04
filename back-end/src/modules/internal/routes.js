@@ -116,6 +116,16 @@ import {
 import { requireAnyInternalPermission, requireInternalPermission } from "./middleware.js"
 import { INTERNAL_PERMISSIONS } from "./permissions.js"
 import {
+  approveRegistrationChallengeSchema,
+  registrationChallengeParamsSchema,
+} from "../kiosk/kiosk.schemas.js"
+import {
+  approveRegistrationChallenge as approveKioskRegistrationChallenge,
+  denyRegistrationChallenge as denyKioskRegistrationChallenge,
+  getRegistrationChallengeForInternal,
+  listStationsForKioskRegistration,
+} from "../kiosk/kiosk.service.js"
+import {
   nozzleCreateSchema,
   nozzlePatchSchema,
   pumpCreateSchema,
@@ -704,6 +714,68 @@ router.post(
         actor: req.internalAuth,
         stationPublicId: String(req.params.stationPublicId || "").trim(),
         note: body.note || "",
+      })
+    )
+  })
+)
+
+router.get(
+  "/kiosks/registration-stations",
+  requireInternalPermission(INTERNAL_PERMISSIONS.KIOSK_REGISTER),
+  asyncHandler(async (req, res) =>
+    ok(
+      res,
+      await listStationsForKioskRegistration({
+        internalAuth: req.internalAuth,
+      })
+    )
+  )
+)
+
+router.get(
+  "/kiosks/registration-challenges/:challengeId",
+  requireInternalPermission(INTERNAL_PERMISSIONS.KIOSK_REGISTER),
+  asyncHandler(async (req, res) => {
+    req.params = registrationChallengeParamsSchema.parse(req.params || {})
+    return ok(
+      res,
+      await getRegistrationChallengeForInternal({
+        challengeId: req.params.challengeId,
+        internalAuth: req.internalAuth,
+      })
+    )
+  })
+)
+
+router.post(
+  "/kiosks/registration-challenges/:challengeId/approve",
+  requireInternalPermission(INTERNAL_PERMISSIONS.KIOSK_REGISTER),
+  asyncHandler(async (req, res) => {
+    req.params = registrationChallengeParamsSchema.parse(req.params || {})
+    const body = approveRegistrationChallengeSchema.parse(req.body || {})
+    return ok(
+      res,
+      await approveKioskRegistrationChallenge({
+        challengeId: req.params.challengeId,
+        payload: body,
+        internalAuth: req.internalAuth,
+        req,
+      })
+    )
+  })
+)
+
+router.post(
+  "/kiosks/registration-challenges/:challengeId/deny",
+  requireInternalPermission(INTERNAL_PERMISSIONS.KIOSK_REGISTER),
+  asyncHandler(async (req, res) => {
+    req.params = registrationChallengeParamsSchema.parse(req.params || {})
+    return ok(
+      res,
+      await denyKioskRegistrationChallenge({
+        challengeId: req.params.challengeId,
+        internalAuth: req.internalAuth,
+        req,
       })
     )
   })

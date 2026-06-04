@@ -280,7 +280,7 @@ function startQueueTicker(queueJoinId) {
 }
 
 export const queueMockService = {
-  async joinQueue({ stationPublicId, fuelType = 'PETROL', requestedLiters, prepay } = {}) {
+  async joinQueue({ stationPublicId, fuelType = 'PETROL', requestedLiters, prepay, fleetFunding } = {}) {
     await sleep(160)
 
     const station = resolveStation(stationPublicId)
@@ -311,7 +311,7 @@ export const queueMockService = {
         Number.isFinite(Number(requestedLiters)) && Number(requestedLiters) > 0
           ? Number(requestedLiters)
           : null,
-      paymentMode: prepay ? 'PREPAY' : 'PAY_AT_PUMP',
+      paymentMode: fleetFunding ? 'FLEET_WALLET' : prepay ? 'PREPAY' : 'PAY_AT_PUMP',
       guarantee: {
         state: 'none',
         fuelRemainingLiters: null,

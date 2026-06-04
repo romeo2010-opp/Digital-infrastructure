@@ -1,4 +1,4 @@
-import { getRoleCode, getStationPublicId } from "../auth/authSession"
+import { getKioskPermissions, getRoleCode, getStationPublicId } from "../auth/authSession"
 import { httpClient } from "./httpClient"
 
 const STATION_READ_ROLES = new Set(["MANAGER", "ATTENDANT", "VIEWER"])
@@ -26,25 +26,58 @@ function assertWriteAccess() {
   }
 }
 
+function assertKioskPermission(permission: string) {
+  const permissions = getKioskPermissions()
+  if (permissions.length > 0 && !permissions.includes(permission)) {
+    throw new Error("Forbidden: this kiosk session does not allow that action.")
+  }
+}
+
 export const kioskApi = {
+  getMe() {
+    return httpClient.get("/api/kiosk/me")
+  },
+  getPumpHome() {
+    assertReadAccess()
+    assertKioskPermission("VIEW_QUEUE")
+    return httpClient.get("/api/kiosk/pump-home")
+  },
+  getPumpQueue() {
+    assertReadAccess()
+    assertKioskPermission("VIEW_QUEUE")
+    return httpClient.get("/api/kiosk/queue")
+  },
+  updatePumpMode(mode: "OPEN_WALKIN" | "CLEARING_FOR_SMARTLINK" | "SMARTLINK_ONLY" | "PAUSED" | "MAINTENANCE", reason?: string) {
+    assertWriteAccess()
+    return httpClient.patch("/api/kiosk/pump-mode", { mode, reason })
+  },
+  performTicketAction(ticketId: string, action: "mark-arrived" | "start-fueling" | "complete" | "no-show" | "skip" | "dispute" | "blocked-lane", payload: { reason?: string; note?: string } = {}) {
+    assertWriteAccess()
+    return httpClient.post(`/api/kiosk/tickets/${encodeURIComponent(ticketId)}/${action}`, payload)
+  },
   getOperationsKioskData() {
     assertReadAccess()
+    assertKioskPermission("VIEW_QUEUE")
     return httpClient.get(`/api/stations/${stationPublicIdOrThrow()}/operations/kiosk-data`)
   },
   joinQueue(payload: { fuelType: "PETROL" | "DIESEL"; maskedPlate?: string; userPublicId?: string }) {
     assertWriteAccess()
+    assertKioskPermission("START_SERVICE")
     return httpClient.post(`/api/stations/${stationPublicIdOrThrow()}/queue/join`, payload)
   },
   attachFuelOrderToPumpSession(sessionId: string, payload: { fuelOrderId: string; forceReattach?: boolean; note?: string }) {
     assertWriteAccess()
+    assertKioskPermission("START_SERVICE")
     return httpClient.post(`/api/pump-sessions/${encodeURIComponent(sessionId)}/attach-fuel-order`, payload)
   },
   startFuelOrderDispensing(sessionId: string) {
     assertWriteAccess()
+    assertKioskPermission("START_SERVICE")
     return httpClient.post(`/api/pump-sessions/${encodeURIComponent(sessionId)}/start-dispensing`, {})
   },
   finalizeFuelOrder(sessionId: string, payload: { dispensedLitres?: number; amountMwk?: number; note?: string }) {
     assertWriteAccess()
+    assertKioskPermission("START_SERVICE")
     return httpClient.post(`/api/pump-sessions/${encodeURIComponent(sessionId)}/finalize-fuel-order`, payload)
   },
 }

@@ -1,9 +1,10 @@
 self.addEventListener("install", () => {
-  self.skipWaiting()
+  // Let the currently open app keep running. The new worker activates on the
+  // next app start so in-progress user data is not interrupted.
 })
 
 self.addEventListener("activate", (event) => {
-  event.waitUntil(self.clients.claim())
+  event.waitUntil(Promise.resolve())
 })
 
 self.addEventListener("push", (event) => {

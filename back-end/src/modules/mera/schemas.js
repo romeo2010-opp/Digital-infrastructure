@@ -6,6 +6,17 @@ const complaintTypes = [
   "OVERPRICING",
   "REFUSAL_TO_SELL",
   "SUSPICIOUS_QUEUE_MANIPULATION",
+  "STATION_SAYS_NO_FUEL",
+  "LONG_QUEUE",
+  "SUSPECTED_HOARDING",
+  "PRICE_ISSUE",
+  "ATTENDANT_CORRUPTION",
+  "FAVOURITISM",
+  "ILLEGAL_SELLING",
+  "PAYMENT_DISPUTE",
+  "QUEUE_MANIPULATION",
+  "UNSAFE_CROWDING",
+  "FALSE_AVAILABILITY",
   "OTHER",
 ]
 
@@ -261,6 +272,12 @@ export const meraUserCreateSchema = z.object({
   password: z.string().min(8).max(120),
   roleName: z.enum([
     "SUPER_ADMIN",
+    "MERA_ADMIN",
+    "MERA_SUPERVISOR",
+    "MERA_ANALYST",
+    "MERA_INSPECTOR",
+    "MERA_PUBLIC_COMMUNICATIONS",
+    "MERA_VIEWER",
     "NATIONAL_OPERATIONS_ANALYST",
     "REGIONAL_COMPLIANCE_SUPERVISOR",
     "FIELD_COMPLIANCE_OFFICER",
@@ -277,6 +294,29 @@ export const meraUserCreateSchema = z.object({
 
 export const meraUserStatusSchema = z.object({
   accountStatus: z.enum(["ACTIVE", "INVITED", "SUSPENDED", "DISABLED"]),
+})
+
+export const meraUserPermissionPatchSchema = z.object({
+  roleName: z.enum([
+    "SUPER_ADMIN",
+    "MERA_ADMIN",
+    "MERA_SUPERVISOR",
+    "MERA_ANALYST",
+    "MERA_INSPECTOR",
+    "MERA_PUBLIC_COMMUNICATIONS",
+    "MERA_VIEWER",
+    "NATIONAL_OPERATIONS_ANALYST",
+    "REGIONAL_COMPLIANCE_SUPERVISOR",
+    "FIELD_COMPLIANCE_OFFICER",
+    "PUBLIC_COMPLAINTS_ANALYST",
+    "LEGAL_ENFORCEMENT_OFFICER",
+    "LICENSING_OFFICER",
+    "MARKET_SUPPLY_ANALYST",
+    "EXECUTIVE_VIEWER",
+  ]).optional(),
+  districtScope: z.string().trim().max(80).optional().nullable(),
+  regionScope: z.string().trim().max(80).optional().nullable(),
+  accountStatus: z.enum(["ACTIVE", "INVITED", "SUSPENDED", "DISABLED"]).optional(),
 })
 
 export const taskNumberParamSchema = z.object({
@@ -374,7 +414,20 @@ export const meraPreferencesPatchSchema = z
   .object({
     appearance: z.enum(["light", "system", "dark", "black-white"]).optional(),
     density: z.enum(["comfortable", "compact"]).optional(),
-    landingPage: z.enum(["dashboard", "complaints", "hoarding", "audit"]).optional(),
+    landingPage: z.enum([
+      "dashboard",
+      "tasks",
+      "complaints",
+      "hoarding",
+      "riskWatchlist",
+      "inspections",
+      "enforcement",
+      "priceCompliance",
+      "reports",
+      "audit",
+      "users",
+      "profile",
+    ]).optional(),
     compactTables: z.coerce.boolean().optional(),
     shortageAlerts: z.coerce.boolean().optional(),
     complaintsAlerts: z.coerce.boolean().optional(),

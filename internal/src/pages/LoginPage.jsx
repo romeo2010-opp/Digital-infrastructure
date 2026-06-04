@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react"
-import { useNavigate } from "react-router-dom"
+import { useLocation, useNavigate } from "react-router-dom"
 import { useInternalAuth } from "../auth/AuthContext"
 
 const NETWORK_POINT_COUNT = 200
@@ -27,10 +27,12 @@ function buildNetworkPoints(width, height) {
 export default function LoginPage() {
   const { login } = useInternalAuth()
   const navigate = useNavigate()
+  const location = useLocation()
   const canvasRef = useRef(null)
   const pointerRef = useRef({ x: 0, y: 0, active: false })
   const [form, setForm] = useState({ email: "", password: "" })
   const [loading, setLoading] = useState(false)
+  const [accessApproved, setAccessApproved] = useState(false)
   const [error, setError] = useState("")
 
   useEffect(() => {
@@ -189,12 +191,36 @@ export default function LoginPage() {
     setError("")
     try {
       await login(form)
-      navigate("/", { replace: true })
+      const returnTo = String(location.state?.returnTo || "").trim()
+      const safeReturnTo = returnTo.startsWith("/") && !returnTo.startsWith("//") ? returnTo : "/"
+      setAccessApproved(true)
+      window.setTimeout(() => {
+        navigate(safeReturnTo, { replace: true })
+      }, 1500)
     } catch (err) {
       setError(err?.message || "Unable to sign in")
     } finally {
       setLoading(false)
     }
+  }
+
+  if (accessApproved) {
+    return (
+      <main className="internal-access-approved" aria-label="Internal workspace loading">
+        <section className="internal-access-approved__surface">
+          <div className="internal-login-mark">SL</div>
+          <div className="internal-access-loader" aria-hidden="true">
+            <span />
+            <span />
+            <span />
+          </div>
+          <div>
+            <h1>Access approved</h1>
+            <p>Preparing the SmartLink internal command workspace.</p>
+          </div>
+        </section>
+      </main>
+    )
   }
 
   return (

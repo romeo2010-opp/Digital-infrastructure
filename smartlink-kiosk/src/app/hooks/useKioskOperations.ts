@@ -47,6 +47,7 @@ export function useKioskOperations() {
     setHydrating,
     setSyncError,
     setSessionContext,
+    setKioskContext,
   } = useFuelStore()
 
   const refreshData = useCallback(async (options?: { silent?: boolean }) => {
@@ -61,6 +62,17 @@ export function useKioskOperations() {
         attendantName: session?.user?.fullName || "Station Attendant",
         attendantRole: session?.role || "Attendant",
       })
+
+      const kioskMe = await kioskApi.getMe()
+      setKioskContext({
+        assignedPump: kioskMe?.assignedPump || null,
+        configurationMessage: kioskMe?.configurationMessage || null,
+      })
+      if (kioskMe?.configurationRequired) {
+        const message = kioskMe.configurationMessage || "This kiosk is not assigned to a pump. Ask manager to configure it."
+        setSyncError(message)
+        return
+      }
 
       const [kioskResult, attendantResult] = await Promise.allSettled([
         kioskApi.getOperationsKioskData(),
@@ -87,7 +99,7 @@ export function useKioskOperations() {
         setHydrating(false)
       }
     }
-  }, [hydrateFromServer, session, setHydrating, setSessionContext, setSyncError])
+  }, [hydrateFromServer, session, setHydrating, setKioskContext, setSessionContext, setSyncError])
 
   const attachNearbyWalletOrder = useCallback(async (fuelOrderId: string) => {
     const sessionId = livePumpSession?.publicId

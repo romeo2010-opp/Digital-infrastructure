@@ -1,0 +1,47 @@
+# Fleet QA Checklist
+
+- [ ] Existing user login still works.
+- [ ] Existing user app still loads.
+- [ ] Existing station dashboard still loads.
+- [ ] Existing MERA dashboard still loads.
+- [ ] Existing admin/internal dashboard still loads.
+- [ ] Fleet login works.
+- [ ] Fleet workspace selector works.
+- [ ] Fleet dashboard loads only for owner/admin/finance/dispatcher/auditor.
+- [ ] Driver-only users cannot access manager dashboard.
+- [ ] Fleet owner can invite members.
+- [ ] Fleet owner can invite an existing user by SmartLink ID.
+- [ ] Invited existing user receives an app alert and can accept the fleet invite.
+- [ ] Fleet manager can see pending invites with delivery state, assigned vehicle, sent time, and expiry.
+- [ ] Fleet owner can add vehicles.
+- [ ] Fleet owner can assign driver to vehicle.
+- [ ] Driver can create fuel request.
+- [ ] Admin can approve/reject request.
+- [ ] Transaction history displays correctly.
+- [ ] Fleet financial ops dashboard shows DB-backed monthly fuel cost, cost/km, budget variance, invoices, route activity, live vehicle states, and map markers.
+- [ ] Fleet financial ops empty states render when budgets/invoices/maintenance/route/live-state records are absent.
+- [ ] Fleet Manager overview visually matches `docs/design-reference/fleet-dashboard-reference.png`: navy fixed sidebar, blue active nav, light canvas, five KPI cards, allocation donut, spend trend, right operational column, transaction table, and bottom value strip.
+- [ ] `/fleet/dashboard` redirects to `/fleet/dashboard/overview`.
+- [ ] All `/fleet/dashboard/*` routes render and preserve active sidebar state.
+- [ ] Fuel Allocations page shows fleet, department, vehicle, driver, card, trip, and emergency reserve allocations where records exist.
+- [ ] Top-up-to-cap rollover preview calculates `monthly cap - remaining balance`.
+- [ ] Reset-no-carryover rollover preview clears unused balance and resets to monthly cap.
+- [ ] Carryover-with-cap rollover preview caps unused balance at the configured maximum.
+- [ ] Manual-review rollover creates a reviewable preview without automatic balance mutation.
+- [ ] Driver mode defaults to Personal Wallet unless the driver explicitly selects Fleet Account.
+- [ ] Driver mode shows assigned fleet vehicle, department, fuel type, monthly allocation, used allocation, remaining allocation, daily available amount, and odometer input.
+- [ ] Fuel Now succeeds only when allocation, odometer, assignment, vehicle, policy, payment source, and fuel type checks pass.
+- [ ] Fuel Now returns a clear reason and `request_extra_fuel` suggestion when allocation is insufficient.
+- [ ] Fuel Now completion creates a fleet transaction, allocation transaction, audit log, threshold alerts where relevant, and updates vehicle odometer atomically.
+- [ ] Request Extra Fuel remains available for exceptions.
+- [ ] Fuel Cards page shows manual MyFuel/API-not-connected provider states without pretending to sync with MyFuel.
+- [ ] Shared department card records show linked department, linked driver/vehicle where applicable, daily/monthly caps, and last reconciliation state.
+- [ ] Fuel card statement import placeholder records an import attempt but does not fake parsing.
+- [ ] Fuel card reconciliation can mark matched/manual review/flagged states.
+- [ ] Allocation report API returns export-ready records.
+- [ ] Fuel card reconciliation report API returns export-ready records.
+- [ ] Wallet balance cannot go negative.
+- [ ] Suspended driver cannot request fuel.
+- [ ] Removed driver history remains visible.
+- [ ] Unauthorized users cannot access fleet APIs.
+- [ ] Existing routes are not broken.

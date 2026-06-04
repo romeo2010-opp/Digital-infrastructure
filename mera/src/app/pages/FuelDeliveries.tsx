@@ -4,6 +4,7 @@ import { Toolbar } from '../components/Toolbar'
 import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
 import { ModalShell } from '../components/ModalShell'
+import { FieldShell, ToolbarField } from '../components/FieldLabel'
 import { PortalTable } from '../components/PortalTable'
 import { SectionCard } from '../components/SectionCard'
 import { KpiDrilldownCard, KpiDrilldownDrawer, type DrilldownConfig } from '../components/KpiDrilldown'
@@ -26,7 +27,7 @@ function sumVolume(rows: any[]) {
 }
 
 export function FuelDeliveries() {
-  const { data, runAction, api, token, hasPermission, liveDataLoading, actionLoading } = usePortal()
+  const { data, runAction, api, token, hasPermission, packetStatus, actionLoading } = usePortal()
   const [search, setSearch] = useState('')
   const [modalOpen, setModalOpen] = useState(false)
   const [drilldown, setDrilldown] = useState<DrilldownConfig | null>(null)
@@ -44,7 +45,7 @@ export function FuelDeliveries() {
     () => allRows.filter((row: any) => matchesSearch(row, search)),
     [allRows, search],
   )
-  const isInitialLoading = liveDataLoading && !allRows.length
+  const isInitialLoading = packetStatus.fuelDeliveryLogs === 'loading' && data.fuelDeliveryLogs === undefined
   const delayedRows = rows.filter((row: any) => /DELAY|PENDING|REVIEW/i.test(String(row.verificationStatus || '')))
   const verifiedRows = rows.filter((row: any) => /VERIFIED|MATCHED|APPROVED/i.test(String(row.verificationStatus || '')))
   const recentRows = rows.slice(0, 8)
@@ -135,12 +136,18 @@ export function FuelDeliveries() {
                 Log Delivery
               </Button>
             ) : null}
-            <div className="flex min-w-[260px] flex-1 items-center gap-2">
+            <ToolbarField label="Search deliveries" hint="Filter tanker logs by station, district, fuel product, source, or reporter. Example: search Lilongwe diesel. " className="min-w-[260px] flex-1">
+            <div className="flex items-center gap-2">
               <Search className="size-4 text-[#9ca3af]" />
               <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Filter by station or district..." />
             </div>
-            <input type="date" className={fieldClass} />
-            <select className={fieldClass}><option>All Districts</option></select>
+            </ToolbarField>
+            <ToolbarField label="Delivery date" hint="Filter delivery logs by delivery date. Example: review tankers received today.">
+              <input type="date" className={fieldClass} />
+            </ToolbarField>
+            <ToolbarField label="District" hint="Limit delivery records to one district. Example: All Districts for national reconciliation.">
+              <select className={fieldClass}><option>All Districts</option></select>
+            </ToolbarField>
             <Button type="button" variant="outline" size="sm">
               <Download className="size-4" />
               Export
@@ -221,19 +228,31 @@ export function FuelDeliveries() {
         }
       >
         <div className="grid gap-3">
-          <select className={fieldClass} value={form.stationPublicId} onChange={(event) => setForm({ ...form, stationPublicId: event.target.value })}>
-            <option value="">Select station</option>
-            {normalizeRows(data.profiles).map((station: any) => (
-              <option key={station.public_id} value={station.public_id}>
-                {station.name} {station.city ? `- ${station.city}` : ''}
-              </option>
-            ))}
-          </select>
-          <input type="datetime-local" className={fieldClass} value={form.deliveryTime} onChange={(event) => setForm({ ...form, deliveryTime: event.target.value })} />
-          <Input value={form.fuelType} onChange={(event) => setForm({ ...form, fuelType: event.target.value })} placeholder="Fuel type" />
-          <Input value={form.estimatedVolume} onChange={(event) => setForm({ ...form, estimatedVolume: event.target.value })} placeholder="Estimated volume in litres" />
-          <Input value={form.sourceType} onChange={(event) => setForm({ ...form, sourceType: event.target.value })} placeholder="Source type" />
-          <Input value={form.reportedBy} onChange={(event) => setForm({ ...form, reportedBy: event.target.value })} placeholder="Reported by" />
+          <FieldShell label="Station" hint="Choose the destination station for this delivery. Example: the station receiving the tanker load.">
+            <select className={`${fieldClass} w-full`} value={form.stationPublicId} onChange={(event) => setForm({ ...form, stationPublicId: event.target.value })}>
+              <option value="">Select station</option>
+              {normalizeRows(data.profiles).map((station: any) => (
+                <option key={station.public_id} value={station.public_id}>
+                  {station.name} {station.city ? `- ${station.city}` : ''}
+                </option>
+              ))}
+            </select>
+          </FieldShell>
+          <FieldShell label="Delivery time" hint="Record when the delivery was reported, dispatched, or received. Example: 2026-05-27 14:30.">
+            <input type="datetime-local" className={`${fieldClass} w-full`} value={form.deliveryTime} onChange={(event) => setForm({ ...form, deliveryTime: event.target.value })} />
+          </FieldShell>
+          <FieldShell label="Fuel type" hint="Enter the delivered product. Example: Petrol, Diesel, Paraffin.">
+            <Input value={form.fuelType} onChange={(event) => setForm({ ...form, fuelType: event.target.value })} placeholder="Fuel type" />
+          </FieldShell>
+          <FieldShell label="Estimated volume" hint="Enter the expected volume in litres. Example: 36000 for a full tanker compartment delivery.">
+            <Input value={form.estimatedVolume} onChange={(event) => setForm({ ...form, estimatedVolume: event.target.value })} placeholder="Estimated volume in litres" />
+          </FieldShell>
+          <FieldShell label="Source type" hint="Identify where the delivery record came from. Example: depot dispatch, station confirmation, inspector report.">
+            <Input value={form.sourceType} onChange={(event) => setForm({ ...form, sourceType: event.target.value })} placeholder="Source type" />
+          </FieldShell>
+          <FieldShell label="Reported by" hint="Record the person, station, or system that supplied this delivery information. Example: Depot clerk, station manager, MERA inspector.">
+            <Input value={form.reportedBy} onChange={(event) => setForm({ ...form, reportedBy: event.target.value })} placeholder="Reported by" />
+          </FieldShell>
         </div>
       </ModalShell>
     </div>

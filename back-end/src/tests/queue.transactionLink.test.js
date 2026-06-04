@@ -334,25 +334,42 @@ test("createQueueServiceTransaction allows manually selected SmartPay completion
     $queryRaw: async (strings) => {
       const queryText = Array.isArray(strings) ? strings.join("?") : String(strings || "")
 
-      if (queryText.includes("FROM transactions")) {
-        transactionLookupCount += 1
-        return []
+      if (queryText.includes("FROM stations")) {
+        return [{
+          id: 15,
+          public_id: "SL-MW-BT-TEST001",
+          name: "Test Station",
+          city: "Blantyre",
+          address: "Test",
+          timezone: "Africa/Blantyre",
+          prices_json: JSON.stringify([{ fuelType: "PETROL", pricePerLitre: 4500 }]),
+        }]
       }
 
       if (queryText.includes("FROM fuel_types")) {
-        return [{ id: 1 }]
+        return [{ id: 1, code: "PETROL" }]
+      }
+
+      if (queryText.includes("FROM promotion_campaigns")) {
+        return []
+      }
+
+      if (queryText.includes("FROM transactions") && queryText.includes("WHERE public_id")) {
+        return [{ id: 321 }]
+      }
+
+      if (queryText.includes("FROM transactions")) {
+        transactionLookupCount += 1
+        return []
       }
 
       if (queryText.includes("FROM pump_nozzles")) {
         return []
       }
 
-      if (queryText.includes("INSERT INTO transactions")) {
-        return { insertId: 321 }
-      }
-
       throw new Error(`Unexpected query in test: ${queryText}`)
     },
+    $executeRaw: async () => ({ count: 1 }),
   }
 
   const transaction = await createQueueServiceTransaction(db, {

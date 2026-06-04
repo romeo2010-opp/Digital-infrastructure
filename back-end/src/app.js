@@ -25,8 +25,11 @@ import promotionsRoutes from "./modules/promotions/routes.js"
 import attendantRoutes from "./modules/attendant/routes.js"
 import assistantRoutes, { publicAssistantRouter } from "./modules/assistant/routes.js"
 import fuelOrdersRoutes, { fuelOrderGatewayRoutes } from "./modules/fuelOrders/routes.js"
+import fleetRoutes from "./modules/fleet/routes.js"
+import vehiclesRoutes from "./modules/vehicles/routes.js"
 import transactionPublicRoutes from "./modules/transactions/public.routes.js"
 import briefingRoutes from "./modules/briefing/routes.js"
+import kioskRoutes from "./modules/kiosk/routes.js"
 import authRouter from "./modules/auth/auth.router.js"
 import authApiRouter from "./modules/auth/auth.api.router.js"
 import internalAuthRoutes from "./modules/internal/auth.routes.js"
@@ -34,6 +37,7 @@ import internalChatRoutes from "./modules/internal/chat.routes.js"
 import internalRoutes from "./modules/internal/routes.js"
 import { requireInternalAuth } from "./modules/internal/middleware.js"
 import { meraProtectedRouter, meraPublicRouter } from "./modules/mera/routes.js"
+import { createUploadFileServer } from "./files/uploadFileServer.js"
 
 export const app = express()
 app.set("trust proxy", 1)
@@ -45,6 +49,7 @@ const frontendDistPath = process.env.FRONTEND_DIST_PATH
   : path.resolve(__dirname, "../../front-end/dist")
 const frontendIndexPath = path.join(frontendDistPath, "index.html")
 const hasFrontendBuild = fs.existsSync(frontendIndexPath)
+const meraUploadDir = path.resolve(process.cwd(), process.env.MERA_UPLOAD_DIR || "tmp/mera-uploads")
 
 function captureRawBody(req, _res, buffer) {
   if (!buffer?.length) return
@@ -66,7 +71,7 @@ app.use(express.urlencoded({ extended: false, verify: captureRawBody }))
 app.use(express.json({ limit: "6mb", verify: captureRawBody }))
 app.use(cookieParser())
 app.use(morgan("dev"))
-app.use("/uploads/mera", express.static(path.resolve(process.cwd(), process.env.MERA_UPLOAD_DIR || "tmp/mera-uploads")))
+app.use("/uploads/mera", createUploadFileServer({ rootDir: meraUploadDir }))
 
 app.get("/health", (_req, res) => {
   res.json({
@@ -84,6 +89,7 @@ app.use(fuelOrderGatewayRoutes)
 app.use(monitoringGatewayRoutes)
 app.use(publicAssistantRouter)
 app.use(meraPublicRouter)
+app.use("/api/kiosk", kioskRoutes)
 
 const apiRouter = express.Router()
 apiRouter.use(stationsRoutes)
@@ -102,6 +108,8 @@ apiRouter.use(promotionsRoutes)
 apiRouter.use(attendantRoutes)
 apiRouter.use(assistantRoutes)
 apiRouter.use(fuelOrdersRoutes)
+apiRouter.use(fleetRoutes)
+apiRouter.use(vehiclesRoutes)
 apiRouter.use(briefingRoutes)
 apiRouter.use(authApiRouter)
 

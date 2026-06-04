@@ -20,6 +20,13 @@ export function KioskSidebar() {
   const pilotPump = pumps.find((pump) => pump.publicId === hybridPilotQueue?.pilotPumpPublicId) || null;
   const pilotPumpQrImage = String(pilotPump?.qrImageDataUrl || "").trim() || null;
   const pilotPumpQrPayload = String(pilotPump?.qrPayload || "").trim() || null;
+  const sessionExpiry = session?.kiosk?.expiresAt
+    ? new Date(session.kiosk.expiresAt).toLocaleTimeString("en-US", {
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      })
+    : null;
 
   return (
     <aside
@@ -43,6 +50,9 @@ export function KioskSidebar() {
         <div className={`mt-1 text-xs ${isNightTheme ? "text-[#8ea1b5]" : "text-[#64748b]"}`}>
           {session?.station?.name || "Station scope"}
         </div>
+        <div className={`mt-2 text-xs ${isNightTheme ? "text-[#9ab0c5]" : "text-[#475569]"}`}>
+          {sessionExpiry ? `Session expires ${sessionExpiry}` : "Limited kiosk session"}
+        </div>
         <button
           type="button"
           onClick={() => void logout()}
@@ -52,7 +62,7 @@ export function KioskSidebar() {
               : "border-[#d7dee7] bg-white text-[#475569] hover:bg-[#f8fafc]"
           }`}
         >
-          Sign Out
+          Lock Kiosk
         </button>
       </div>
 

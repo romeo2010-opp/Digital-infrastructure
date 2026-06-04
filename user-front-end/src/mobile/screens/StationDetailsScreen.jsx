@@ -8,7 +8,10 @@ import {
   ToolsIcon,
 } from "../icons";
 import { stationsApi } from "../api/stationsApi";
+import { fleetApi } from "../api/fleetApi";
+import { vehiclesApi } from "../api/vehiclesApi";
 import { formatTime } from "../dateTime";
+import { displayEnum } from "../vehicleCatalog";
 
 const facilityIconMap = {
   Car: CarIcon,
@@ -263,6 +266,7 @@ export function StationDetailsScreen({
   onReserve,
   onGetReservationSlots,
   onConnectReservationRealtime,
+  onManageVehicles,
   isFavorite = false,
   onToggleFavorite,
   autoOpenJoinModal = false,
@@ -279,6 +283,14 @@ export function StationDetailsScreen({
   );
   const [customFuelLiters, setCustomFuelLiters] = useState("");
   const [queuePaymentMode, setQueuePaymentMode] = useState("PAY_AT_PUMP");
+  const [fleetSummary, setFleetSummary] = useState(null);
+  const [fleetSummaryLoading, setFleetSummaryLoading] = useState(false);
+  const [fleetSummaryError, setFleetSummaryError] = useState("");
+  const [selectedFleetRequestId, setSelectedFleetRequestId] = useState("");
+  const [vehicles, setVehicles] = useState([]);
+  const [vehiclesLoading, setVehiclesLoading] = useState(false);
+  const [vehicleError, setVehicleError] = useState("");
+  const [selectedVehicleId, setSelectedVehicleId] = useState("");
   const [apiFuelStatuses, setApiFuelStatuses] = useState([]);
   const [fuelStatusLoading, setFuelStatusLoading] = useState(false);
   const [fuelStatusResolved, setFuelStatusResolved] = useState(false);
@@ -311,6 +323,26 @@ export function StationDetailsScreen({
   const usesApiFuelStatus = stationsApi.isApiMode();
   const queuePlanEnabled = station?.queuePlanEnabled ?? true;
   const reservationPlanEnabled = station?.reservationPlanEnabled ?? true;
+
+  const approvedFleetRequests = useMemo(() => {
+    const requests = Array.isArray(fleetSummary?.requests) ? fleetSummary.requests : [];
+    const selectedFuel = String(selectedFuelType || "").trim().toLowerCase();
+    return requests.filter((request) => {
+      if (String(request?.status || "").toLowerCase() !== "approved") return false;
+      const requestStationId = String(request?.station?.publicId || "").trim();
+      if (requestStationId && stationPublicId && requestStationId !== stationPublicId) return false;
+      const vehicleFuelType = String(request?.vehicle?.fuelType || "").trim().toLowerCase();
+      if (vehicleFuelType && !["mixed", "unknown"].includes(vehicleFuelType) && vehicleFuelType !== selectedFuel) return false;
+      return Boolean(request?.fleet?.publicId && request?.vehicle?.publicId && request?.publicId);
+    });
+  }, [fleetSummary?.requests, selectedFuelType, stationPublicId]);
+
+  const selectedFleetRequest = useMemo(() => {
+    return approvedFleetRequests.find((request) => request.publicId === selectedFleetRequestId) || approvedFleetRequests[0] || null;
+  }, [approvedFleetRequests, selectedFleetRequestId]);
+  const selectedVehicle = useMemo(() => {
+    return vehicles.find((vehicle) => vehicle.id === selectedVehicleId) || vehicles.find((vehicle) => vehicle.isDefault) || vehicles[0] || null;
+  }, [selectedVehicleId, vehicles]);
 
   const refreshReservationSlots = useCallback(
     async ({ showLoader = false, clearError = false } = {}) => {
@@ -350,6 +382,61 @@ export function StationDetailsScreen({
     },
     [onGetReservationSlots, reservationFuelType, showReservationModal, station],
   );
+
+  useEffect(() => {
+    if (!showIdentifierModal) return undefined;
+    let active = true;
+    setVehiclesLoading(true);
+    setVehicleError("");
+    vehiclesApi
+      .list()
+      .then((payload) => {
+        if (!active) return;
+        const items = Array.isArray(payload) ? payload : [];
+        setVehicles(items);
+        const nextVehicle = items.find((item) => item.isDefault) || items[0] || null;
+        setSelectedVehicleId((current) => current || nextVehicle?.id || "");
+        if (nextVehicle?.fuelType) {
+          setSelectedFuelType(nextVehicle.fuelType);
+          setSelectedPresetLiters(fuelPresetOptions(nextVehicle.fuelType)[1]);
+        }
+        if (nextVehicle?.numberPlate) {
+          setQueueIdentifier(nextVehicle.numberPlate);
+        }
+      })
+      .catch((error) => {
+        if (!active) return;
+        setVehicles([]);
+        setVehicleError(error?.message || "Unable to load vehicles.");
+      })
+      .finally(() => {
+        if (active) setVehiclesLoading(false);
+      });
+    setFleetSummaryLoading(true);
+    setFleetSummaryError("");
+    fleetApi.driverSummary()
+      .then((payload) => {
+        if (!active) return;
+        setFleetSummary(payload || null);
+      })
+      .catch((error) => {
+        if (!active) return;
+        setFleetSummary(null);
+        setFleetSummaryError(error?.message || "Fleet funds are unavailable right now.");
+      })
+      .finally(() => {
+        if (active) setFleetSummaryLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [showIdentifierModal]);
+
+  useEffect(() => {
+    if (queuePaymentMode !== "FLEET_WALLET") return;
+    if (selectedFleetRequestId && approvedFleetRequests.some((request) => request.publicId === selectedFleetRequestId)) return;
+    setSelectedFleetRequestId(approvedFleetRequests[0]?.publicId || "");
+  }, [approvedFleetRequests, queuePaymentMode, selectedFleetRequestId]);
 
   useEffect(() => {
     if (!showReservationModal) return;
@@ -835,7 +922,7 @@ export function StationDetailsScreen({
       return;
     }
 
-    const normalizedIdentifier = String(queueIdentifier || "")
+    const normalizedIdentifier = String(selectedVehicle?.numberPlate || queueIdentifier || "")
       .trim()
       .toUpperCase();
     if (!normalizedIdentifier) {
@@ -866,6 +953,7 @@ export function StationDetailsScreen({
     try {
       await onJoinQueue(station, {
         fuelType: selectedFuelType,
+        vehicleId: selectedVehicle?.id || "",
         maskedPlate: normalizedIdentifier.slice(0, 32),
         requestedLiters: parsedFuelLiters,
         prepay: queuePaymentMode === "PREPAY",
@@ -1405,10 +1493,62 @@ export function StationDetailsScreen({
               </button>
             </header>
 
+            <section className="queue-vehicle-panel">
+              <div className="queue-vehicle-panel-head">
+                <span>Vehicle</span>
+                {vehicles.length ? (
+                  <button type="button" onClick={() => onManageVehicles?.()}>
+                    View
+                  </button>
+                ) : null}
+              </div>
+              {vehiclesLoading ? (
+                <p className="queue-info-text">Loading saved vehicles...</p>
+              ) : vehicles.length ? (
+                <>
+                  <select
+                    className="queue-vehicle-select"
+                    value={selectedVehicle?.id || ""}
+                    onChange={(event) => {
+                      const vehicle = vehicles.find((item) => item.id === event.target.value);
+                      setSelectedVehicleId(event.target.value);
+                      if (vehicle?.fuelType) {
+                        setSelectedFuelType(vehicle.fuelType);
+                        setSelectedPresetLiters(fuelPresetOptions(vehicle.fuelType)[1]);
+                      }
+                      if (vehicle?.numberPlate) {
+                        setQueueIdentifier(vehicle.numberPlate);
+                      }
+                      setJoinError("");
+                    }}
+                  >
+                    {vehicles.map((vehicle) => (
+                      <option key={vehicle.id} value={vehicle.id}>
+                        {vehicle.make} {vehicle.model} · {vehicle.numberPlate}
+                      </option>
+                    ))}
+                  </select>
+                  {selectedVehicle ? (
+                    <div className="queue-selected-vehicle-card">
+                      <strong>{selectedVehicle.make} {selectedVehicle.model} · {selectedVehicle.numberPlate}</strong>
+                      <small>{displayEnum(selectedVehicle.fuelType)} · Tank: {displayEnum(selectedVehicle.tankSide)} · {displayEnum(selectedVehicle.tankSideConfidence)}</small>
+                    </div>
+                  ) : null}
+                </>
+              ) : (
+                <div className="queue-selected-vehicle-card is-empty">
+                  <strong>Pilot mode active</strong>
+                  <small>Vehicle setup is paused for now. Enter a plate, phone or user code below to join the queue.</small>
+                </div>
+              )}
+              {vehicleError ? <p className="details-inline-error">{vehicleError}</p> : null}
+            </section>
+
             <label className="queue-modal-input">
               <span>Fuel type</span>
               <select
                 value={selectedFuelType}
+                disabled={Boolean(selectedVehicle?.fuelType)}
                 onChange={(event) => {
                   const nextFuelType = event.target.value;
                   setSelectedFuelType(nextFuelType);
@@ -1484,10 +1624,11 @@ export function StationDetailsScreen({
               <span>Identifier (plate, phone or user code)</span>
               <input
                 type="text"
-                value={queueIdentifier}
+                value={selectedVehicle?.numberPlate || queueIdentifier}
                 maxLength={32}
                 autoComplete="off"
                 placeholder="e.g. BT1234"
+                disabled={Boolean(selectedVehicle?.numberPlate)}
                 onChange={(event) => {
                   setQueueIdentifier(event.target.value);
                   if (identifierError) setIdentifierError("");

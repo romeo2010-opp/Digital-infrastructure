@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
+import { useNavigate } from "react-router-dom"
 import { internalApi } from "../api/internalApi"
 import InternalShell from "../components/InternalShell"
 import PreviewTablePanel from "../components/PreviewTablePanel"
@@ -6,7 +7,7 @@ import MetricGrid from "../components/MetricGrid"
 import StatusPill from "../components/StatusPill"
 import CursorActionMenu from "../components/CursorActionMenu"
 import ExistingManagerDetailModal from "../components/ExistingManagerDetailModal"
-import { formatDateTime, formatNumber } from "../utils/display"
+import { formatCodeLabel, formatDateTime, formatNumber } from "../utils/display"
 import { createEmptyStaffDraft, formatManagerCandidateLabel } from "../utils/staffAssignment"
 import { useInternalAuth } from "../auth/AuthContext"
 import { useInternalApprovalRequests } from "../notifications/InternalApprovalRequestsContext"
@@ -87,7 +88,7 @@ function normalizeChecklistItems(value) {
   if (value && typeof value === "object") {
     return Object.entries(value).map(([key, completed], index) => ({
       id: key || `check-${index}`,
-      label: String(key || `Checklist item ${index + 1}`).replace(/_/g, " "),
+      label: formatCodeLabel(key || `Checklist item ${index + 1}`),
       status: completed ? "COMPLETED" : "PENDING",
       note: "",
     }))
@@ -1392,6 +1393,7 @@ function StationSetupModal({ stationPublicId, mode, canConfigure, onClose, onSav
 }
 
 export default function StationsPage() {
+  const navigate = useNavigate()
   const { hasPermission, session } = useInternalAuth()
   const { refreshRequests, openRequest } = useInternalApprovalRequests()
   const [data, setData] = useState(null)
@@ -1549,6 +1551,13 @@ export default function StationsPage() {
             label: "Actions",
             render: (row) => (
               <div className="inline-action-group inline-action-group--row">
+                <button
+                  type="button"
+                  className="secondary-action"
+                  onClick={() => navigate(`/stations/${encodeURIComponent(row.public_id)}`)}
+                >
+                  Open
+                </button>
                 {canConfigureStations ? (
                   <button
                     type="button"
@@ -1558,7 +1567,7 @@ export default function StationsPage() {
                       setSetupMode("edit")
                     }}
                   >
-                    Open
+                    Configure
                   </button>
                 ) : null}
                 {hasPermission("stations:activate") ? (

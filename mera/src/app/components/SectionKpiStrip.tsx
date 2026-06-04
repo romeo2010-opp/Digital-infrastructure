@@ -1,5 +1,5 @@
 import { useMemo, useState, type ReactNode } from 'react'
-import { KpiDrilldownCard, KpiDrilldownDrawer, renderDrilldownValue, type DrilldownColumn, type DrilldownConfig } from './KpiDrilldown'
+import { accentForKpiTone, KpiDrilldownCard, KpiDrilldownDrawer, renderDrilldownValue, type DrilldownColumn, type DrilldownConfig } from './KpiDrilldown'
 
 export type SectionKpiItem = {
   label: string
@@ -35,6 +35,38 @@ function defaultColumns(rows: any[] = []): DrilldownColumn[] {
     : [{ key: 'record', label: 'Record', render: (row: any) => renderDrilldownValue(row) }]
 }
 
+function numericKpiValue(value: ReactNode) {
+  if (typeof value === 'number') return value
+  if (typeof value !== 'string') return null
+  const parsed = Number(value.replace(/,/g, '').match(/-?\d+(\.\d+)?/)?.[0])
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+function deriveKpiTone(item: SectionKpiItem): NonNullable<SectionKpiItem['tone']> {
+  if (item.tone) return item.tone
+  const value = numericKpiValue(item.value)
+  const label = `${item.label} ${item.helper || ''} ${item.delta || ''}`.toLowerCase()
+  const riskSignal = /(critical|violation|breach|overdue|expired|revoked|suspended|mismatch|anomal|risk|shortage|complaint|open|pending|flag)/.test(label)
+  const positiveSignal = /(compliant|resolved|closed|active|complete|available|approved|uptime|healthy)/.test(label)
+
+  if (value !== null && value <= 0 && riskSignal) return 'good'
+  if (value !== null && value > 0 && /(critical|violation|breach|overdue|expired|revoked|suspended|mismatch|anomal)/.test(label)) return 'bad'
+  if (value !== null && value > 0 && riskSignal) return 'warn'
+  if (positiveSignal) return 'good'
+  return 'neutral'
+}
+
+function fallbackRowsForItem(item: SectionKpiItem, rows: any[]) {
+  if (rows.length) return rows
+  const value = numericKpiValue(item.value)
+  if (value === null || value <= 0) return rows
+  return [{
+    metric: item.label,
+    value: renderDrilldownValue(item.value),
+    status: renderDrilldownValue(item.delta || item.helper || 'Computed KPI'),
+  }]
+}
+
 export function SectionKpiStrip({
   items,
   columns,
@@ -51,16 +83,18 @@ export function SectionKpiStrip({
     <>
       <div className={`grid gap-3 md:grid-cols-2 xl:grid-cols-4 ${className}`}>
         {safeItems.map((item) => {
-          const rows = item.rows || []
+          const sourceRows = item.rows || []
+          const rows = fallbackRowsForItem(item, sourceRows)
+          const tone = deriveKpiTone(item)
           return (
             <KpiDrilldownCard
               key={item.label}
               label={item.label}
               value={item.value}
               helper={item.helper || 'records'}
-              delta={item.delta ?? `${rows.length} rows`}
-              tone={item.tone || 'neutral'}
-              accent={item.accent || '#111827'}
+              delta={item.delta ?? `${sourceRows.length || rows.length} rows`}
+              tone={tone}
+              accent={item.accent || accentForKpiTone(tone)}
               onClick={() =>
                 setDrilldown({
                   title: item.label,

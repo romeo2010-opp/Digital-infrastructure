@@ -92,4 +92,7 @@ export const httpClient = {
   post(path: string, body?: Record<string, unknown>) {
     return requestWithRefresh("POST", path, body)
   },
+  patch(path: string, body?: Record<string, unknown>) {
+    return requestWithRefresh("PATCH", path, body)
+  },
 }

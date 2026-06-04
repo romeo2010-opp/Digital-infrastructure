@@ -1,5 +1,6 @@
-import InternalNavbar from "./InternalNavbar"
-import InternalSidebar from "./InternalSidebar"
+import InternalPageHeader from "./InternalPageHeader"
+import InternalMeraSidebar from "./InternalMeraSidebar"
+import InternalDashboardViewStrip from "./InternalDashboardViewStrip"
 import { useAppShell } from "../layout/AppShellContext"
 
 export default function InternalShell({
@@ -13,22 +14,38 @@ export default function InternalShell({
 }) {
   const { isMobile, isSidebarOpen } = useAppShell()
   const mainOverflowY = fullBleed ? "hidden" : "auto"
+
+  if (hideNavbar) {
+    return (
+      <div className={`internal-shell ${hideSidebar ? "internal-shell--no-sidebar" : ""} ${fullBleed ? "internal-shell--fullbleed" : ""}`}>
+        <div className="internal-shell__body">
+          {!hideSidebar ? <InternalMeraSidebar /> : null}
+          <main
+            className={`app-main app-main--auth ${isMobile && isSidebarOpen ? "app-main--nav-open" : ""} ${fullBleed ? "app-main--fullbleed" : ""}`}
+            style={{ flex: 1, overflowY: mainOverflowY, overflowX: "hidden", scrollbarGutter: "stable both-edges" }}
+          >
+            <div className={`internal-page-standalone ${fullBleed ? "internal-page-standalone--fullbleed" : ""}`}>{children}</div>
+          </main>
+        </div>
+      </div>
+    )
+  }
+
   return (
-    <div className={`internal-shell ${hideSidebar ? "internal-shell--no-sidebar" : ""}`}>
-      {!hideSidebar ? <InternalSidebar /> : null}
-      <main
-        className={`app-main app-main--auth ${isMobile && isSidebarOpen ? "app-main--nav-open" : ""} ${fullBleed ? "app-main--fullbleed" : ""}`}
-        style={{ flex: 1, overflowY: mainOverflowY, overflowX: "hidden", scrollbarGutter: "stable both-edges", gridColumn: "auto" }}
-      >
-        {hideNavbar ? (
-          <div className={`internal-page-standalone ${fullBleed ? "internal-page-standalone--fullbleed" : ""}`}>{children}</div>
-        ) : (
+    <div className={`internal-shell ${hideSidebar ? "internal-shell--no-sidebar" : ""} ${fullBleed ? "internal-shell--fullbleed" : ""}`}>
+      <InternalPageHeader title={title} alerts={alerts} />
+      {!hideSidebar ? <InternalDashboardViewStrip /> : null}
+      <div className="internal-shell__body">
+        {!hideSidebar ? <InternalMeraSidebar /> : null}
+        <main
+          className={`app-main app-main--auth ${isMobile && isSidebarOpen ? "app-main--nav-open" : ""} ${fullBleed ? "app-main--fullbleed" : ""}`}
+          style={{ flex: 1, overflowY: mainOverflowY, overflowX: "hidden", scrollbarGutter: "stable both-edges" }}
+        >
           <div className="dashboard internal-dashboard">
-            <InternalNavbar pagetitle={title} alerts={alerts} />
             <div className={`dashboard-replica internal-page-inner ${contentClassName}`.trim()}>{children}</div>
           </div>
-        )}
-      </main>
+        </main>
+      </div>
     </div>
   )
 }

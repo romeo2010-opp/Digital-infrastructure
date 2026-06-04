@@ -4,85 +4,9 @@ import InternalShell from "../components/InternalShell"
 import { DataTable, Panel } from "../components/PanelTable"
 import PreviewListPanel from "../components/PreviewListPanel"
 import StatusPill from "../components/StatusPill"
-import { formatDateTime, formatMoney, formatNumber, formatRelative } from "../utils/display"
+import { formatCodeLabel, formatDateTime, formatMoney, formatNumber, formatRelative } from "../utils/display"
 import { useInternalAuth } from "../auth/AuthContext"
-
-function SummaryIcon({ type }) {
-  if (type === "check") {
-    return (
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <circle cx="12" cy="12" r="10" />
-        <path d="m8 12 2.6 2.8L16 9.5" />
-      </svg>
-    )
-  }
-
-  if (type === "alert") {
-    return (
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <path d="m12 3 10 18H2L12 3Z" />
-        <path d="M12 9v5" />
-        <circle cx="12" cy="17" r="1" />
-      </svg>
-    )
-  }
-
-  if (type === "wallet") {
-    return (
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <rect x="3" y="6" width="18" height="13" rx="2" />
-        <path d="M3 10h18" />
-        <circle cx="16" cy="14" r="1" />
-      </svg>
-    )
-  }
-
-  if (type === "car") {
-    return (
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M5 13h14l-1.2-4H6.2L5 13Z" />
-        <circle cx="8" cy="16.5" r="1.5" />
-        <circle cx="16" cy="16.5" r="1.5" />
-      </svg>
-    )
-  }
-
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <rect x="6" y="3" width="12" height="18" rx="2" />
-      <path d="M9 8h6M9 12h6M9 16h6" />
-    </svg>
-  )
-}
-
-function resolveSummaryTone(tone = "neutral") {
-  switch (tone) {
-    case "success":
-      return "green"
-    case "warning":
-      return "teal"
-    case "danger":
-      return "red"
-    case "neutral":
-    default:
-      return "indigo"
-  }
-}
-
-function SummaryTile({ label, value, tone = "neutral", icon = "fuel" }) {
-  const resolvedTone = resolveSummaryTone(tone)
-  return (
-    <article className="kpi-card">
-      <div className={`kpi-icon ${resolvedTone}`}>
-        <SummaryIcon type={icon} />
-      </div>
-      <div className="kpi-copy">
-        <div className="kpi-value">{value}</div>
-        <p>{label}</p>
-      </div>
-    </article>
-  )
-}
+import { InternalKpiDrilldownCard, InternalKpiDrilldownDrawer } from "../components/InternalKpiDrilldown"
 
 function SnapshotList({ items, emptyLabel = "No items available." }) {
   if (!items?.length) return <p className="empty-cell">{emptyLabel}</p>
@@ -92,7 +16,7 @@ function SnapshotList({ items, emptyLabel = "No items available." }) {
         <article key={item.publicId || `${item.title}-${item.createdAt}`} className="timeline-item">
           <div>
             <strong>{item.title || item.summary || item.actionType || item.stationName}</strong>
-            <p>{item.summary || item.note || item.targetPublicId || item.stationName || "-"}</p>
+            <p>{formatCodeLabel(item.summary || item.note || item.targetPublicId || item.stationName || "-")}</p>
           </div>
           <div className="timeline-meta">
             {item.severity ? <StatusPill value={item.severity} /> : null}
@@ -113,7 +37,7 @@ function AuditActivityList({ items, emptyLabel = "No audit activity available." 
         <article key={item.publicId} className="timeline-item">
           <div>
             <strong>{item.summary}</strong>
-            <p>{item.actorName} · {item.actionType}</p>
+            <p>{item.actorName} · {formatCodeLabel(item.actionType)}</p>
           </div>
           <div className="timeline-meta">
             <StatusPill value={item.severity} />
@@ -133,7 +57,7 @@ function RecentChangesList({ items, emptyLabel = "No recent changes available." 
         <article key={item.publicId} className="timeline-item">
           <div>
             <strong>{item.summary}</strong>
-            <p>{item.actionType} · {item.targetType}</p>
+            <p>{formatCodeLabel(item.actionType)} · {formatCodeLabel(item.targetType)}</p>
           </div>
           <div className="timeline-meta">
             <StatusPill value={item.severity} />
@@ -150,6 +74,8 @@ export default function OverviewPage() {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
+  const [activeSummary, setActiveSummary] = useState(null)
+  const [showAllSummary, setShowAllSummary] = useState(false)
 
   useEffect(() => {
     let canceled = false
@@ -194,6 +120,8 @@ export default function OverviewPage() {
       icon: "check",
     },
   ]
+  const summaryLimit = 6
+  const visibleSummaryItems = showAllSummary ? summaryItems : summaryItems.slice(0, summaryLimit)
 
   const panelRegistry = useMemo(() => {
     if (!data) return []
@@ -361,10 +289,33 @@ export default function OverviewPage() {
       ) : (
         <div className="overview-page overview-page--classic">
           <section className="internal-summary-strip">
-            {summaryItems.map((item) => (
-              <SummaryTile key={item.label} {...item} />
+            {visibleSummaryItems.map((item) => (
+              <InternalKpiDrilldownCard
+                key={item.label}
+                label={item.label}
+                value={item.value}
+                helper="overview metric"
+                delta={item.tone === "danger" ? "Watch" : item.tone === "warning" ? "Review" : "OK"}
+                tone={item.tone}
+                onClick={() => setActiveSummary(item)}
+              />
             ))}
           </section>
+          {summaryItems.length > summaryLimit ? (
+            <button type="button" className="metric-grid-view-all" onClick={() => setShowAllSummary((prev) => !prev)}>
+              {showAllSummary ? "Show less" : `View all ${summaryItems.length}`}
+            </button>
+          ) : null}
+          <InternalKpiDrilldownDrawer
+            open={Boolean(activeSummary)}
+            onOpenChange={(open) => !open && setActiveSummary(null)}
+            drilldown={activeSummary ? {
+              title: activeSummary.label,
+              value: activeSummary.value,
+              subtitle: "Live overview metric from the internal command workspace.",
+              note: "Use the related workspace panels below the KPI strip for the operational records behind this value.",
+            } : null}
+          />
 
           <div className="dashboard-grid internal-overview-layout">
             <div className="col-left internal-dashboard-column">

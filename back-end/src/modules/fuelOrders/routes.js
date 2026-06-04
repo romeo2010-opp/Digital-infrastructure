@@ -140,6 +140,7 @@ router.get(
   asyncHandler(async (req, res) => {
     const payload = await getStationOperationsKioskData({
       stationPublicId: req.params.stationPublicId,
+      auth: req.auth,
     })
     return ok(res, payload)
   })

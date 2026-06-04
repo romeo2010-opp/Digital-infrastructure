@@ -1,6 +1,7 @@
 import jwt from "jsonwebtoken"
 import { hasMeraPermission, MERA_PERMISSIONS } from "../modules/mera/permissions.js"
 import { getMeraJwtSecretForMiddleware, getMeraUserAccessById } from "../modules/mera/services/auth.service.js"
+import { loadMeraPacketResult, normalizeMeraPacketKeys, MERA_PACKET_KEYS } from "../modules/mera/services/packetRegistry.service.js"
 import { prisma } from "../db/prisma.js"
 import { subscribeMeraDashboard } from "./meraDashboardHub.js"
 
@@ -44,6 +45,10 @@ function closeUnauthorized(ws, reason = "Unauthorized") {
   } catch {
     // noop
   }
+}
+
+function packetParams(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {}
 }
 
 function buildMeraAuth(payload, sessionPublicId, access) {
@@ -134,11 +139,13 @@ export async function attachMeraDashboardWebSocket(server) {
       }
 
       const auth = buildMeraAuth(tokenPayload, activeSession.public_id, access)
-      const canViewDashboard =
+      const canOpenPortalSocket =
+        Boolean(Array.isArray(auth.permissions) && auth.permissions.length) ||
         hasMeraPermission(auth, MERA_PERMISSIONS.DASHBOARD_VIEW_NATIONAL) ||
-        hasMeraPermission(auth, MERA_PERMISSIONS.DASHBOARD_VIEW_DISTRICT)
+        hasMeraPermission(auth, MERA_PERMISSIONS.DASHBOARD_VIEW_DISTRICT) ||
+        hasMeraPermission(auth, MERA_PERMISSIONS.VIEW_COMMAND_CENTRE)
 
-      if (!canViewDashboard) {
+      if (!canOpenPortalSocket) {
         closeUnauthorized(ws, "Forbidden")
         return
       }
@@ -148,7 +155,7 @@ export async function attachMeraDashboardWebSocket(server) {
       })
 
       safeSend(ws, {
-        type: "mera_dashboard_ready",
+        type: "mera_portal_packets_ready",
         at: new Date().toISOString(),
         districtScope: auth.districtScope || null,
       })
@@ -159,6 +166,64 @@ export async function attachMeraDashboardWebSocket(server) {
           const message = text ? JSON.parse(text) : null
           if (message?.type === "ping") {
             safeSend(ws, { type: "pong", at: new Date().toISOString() })
+            return
+          }
+
+          if (message?.type === "mera_portal_packets_request") {
+            const requestId = String(message.requestId || `packet-${Date.now()}`)
+            const paramsByKey = packetParams(message.paramsByKey)
+            const requestedKeys = normalizeMeraPacketKeys(message.keys)
+            const unknownKeys = requestedKeys.filter((key) => !MERA_PACKET_KEYS.includes(key))
+            const effectiveKeys = requestedKeys.length
+              ? requestedKeys.filter((key) => MERA_PACKET_KEYS.includes(key))
+              : MERA_PACKET_KEYS
+
+            if (requestedKeys.length && !effectiveKeys.length) {
+              safeSend(ws, {
+                type: "mera_portal_packets_complete",
+                requestId,
+                at: new Date().toISOString(),
+                keys: [],
+                errors: unknownKeys.map((key) => ({ key, status: "error", error: `Unknown MERA packet: ${key}` })),
+                forbidden: [],
+              })
+              return
+            }
+
+            Promise.all(
+              effectiveKeys.map(async (key) => {
+                const result = await loadMeraPacketResult(key, auth, packetParams(paramsByKey[key]))
+                safeSend(ws, {
+                  type: "mera_portal_packet",
+                  requestId,
+                  at: new Date().toISOString(),
+                  ...result,
+                })
+                return result
+              })
+            )
+              .then((results) => {
+                safeSend(ws, {
+                  type: "mera_portal_packets_complete",
+                  requestId,
+                  at: new Date().toISOString(),
+                  keys: effectiveKeys,
+                  errors: [
+                    ...unknownKeys.map((key) => ({ key, status: "error", error: `Unknown MERA packet: ${key}` })),
+                    ...results.filter((result) => result.status === "error"),
+                  ],
+                  forbidden: results.filter((result) => result.status === "forbidden").map((result) => result.key),
+                })
+              })
+              .catch((error) => {
+                safeSend(ws, {
+                  type: "mera_portal_packets_complete",
+                  requestId,
+                  at: new Date().toISOString(),
+                  keys: effectiveKeys,
+                  errors: [{ message: error?.message || "Unable to stream MERA packets" }],
+                })
+              })
           }
         } catch {
           // Ignore malformed client messages.

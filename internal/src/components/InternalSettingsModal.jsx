@@ -3,6 +3,7 @@ import { authApi } from "../api/authApi"
 import { internalApi } from "../api/internalApi"
 import { formatDateTime, formatNumber } from "../utils/display"
 import { useInternalAuth } from "../auth/AuthContext"
+import MetricGrid from "./MetricGrid"
 
 function SectionIcon({ name }) {
   const common = {
@@ -24,6 +25,8 @@ function SectionIcon({ name }) {
       return <svg {...common}><rect x="3" y="4" width="7" height="7" rx="1.5" /><rect x="14" y="4" width="7" height="7" rx="1.5" /><rect x="3" y="15" width="7" height="7" rx="1.5" /><rect x="14" y="15" width="7" height="7" rx="1.5" /></svg>
     case "security":
       return <svg {...common}><path d="M12 3 5 6v6c0 4.9 3.1 8.2 7 9 3.9-.8 7-4.1 7-9V6l-7-3Z" /><path d="M12 11v3" /><circle cx="12" cy="8.5" r=".8" fill="currentColor" stroke="none" /></svg>
+    case "sync":
+      return <svg {...common}><path d="M21 12a9 9 0 0 1-15.4 6.4L3 16" /><path d="M3 16v5h5" /><path d="M3 12A9 9 0 0 1 18.4 5.6L21 8" /><path d="M21 8V3h-5" /></svg>
     case "account":
       return <svg {...common}><circle cx="12" cy="8" r="3.5" /><path d="M5 20c1.5-3.2 4.1-4.8 7-4.8s5.5 1.6 7 4.8" /></svg>
     case "controls":
@@ -34,10 +37,15 @@ function SectionIcon({ name }) {
 }
 
 const BASE_SETTINGS_SECTIONS = [
-  { key: "general", label: "General", description: "Name, phone, and your internal identity.", icon: "general" },
-  { key: "workspace", label: "Workspace", description: "Roles, permissions, and visible modules.", icon: "workspace" },
+  { key: "profile", label: "Profile", description: "Name, phone, and your internal identity.", icon: "account" },
+  { key: "preferences", label: "Preferences", description: "Visible modules and workspace presentation.", icon: "workspace" },
+  { key: "notifications", label: "Notifications", description: "Internal alert delivery and approval request visibility.", icon: "general" },
   { key: "security", label: "Security", description: "Session details and account protection.", icon: "security" },
-  { key: "account", label: "Account", description: "Read-only account metadata.", icon: "account" },
+  { key: "users", label: "Users & Roles", description: "Roles, permissions, and access scope for this account.", icon: "workspace" },
+  { key: "audit", label: "Audit", description: "Read-only session and profile audit metadata.", icon: "sync" },
+  { key: "organization", label: "Organization", description: "Workspace identity and account metadata.", icon: "account" },
+  { key: "integrations", label: "Integrations", description: "Connected services and operational integration posture.", icon: "controls" },
+  { key: "data", label: "Data Controls", description: "Sync workspace data and manage governance controls.", icon: "controls" },
 ]
 
 const OWNER_CONTROL_SPECS = [
@@ -61,14 +69,16 @@ function SettingsRow({ label, description = "", control }) {
   )
 }
 
-export default function InternalSettingsModal({ onClose }) {
+export default function InternalSettingsModal({ onClose = () => {}, embedded = false, section = "profile" }) {
   const { session, refreshProfile, logout } = useInternalAuth()
-  const [activeSection, setActiveSection] = useState("general")
+  const [activeSection, setActiveSection] = useState(section || "profile")
   const [draft, setDraft] = useState({ fullName: "", phone: "" })
   const [controlDrafts, setControlDrafts] = useState({})
   const [settingsData, setSettingsData] = useState({ items: [], summary: {} })
   const [error, setError] = useState("")
   const [saving, setSaving] = useState(false)
+  const [syncing, setSyncing] = useState(false)
+  const [lastSyncAt, setLastSyncAt] = useState("")
   const [controlSavingKey, setControlSavingKey] = useState("")
   const [savedMessage, setSavedMessage] = useState("")
 
@@ -79,15 +89,16 @@ export default function InternalSettingsModal({ onClose }) {
   const navigation = profile.navigation || []
   const canViewInternalSettings = permissions.includes("settings:view")
   const canEditInternalSettings = permissions.includes("settings:edit")
-  const settingsSections = useMemo(
-    () =>
-      canViewInternalSettings
-        ? [...BASE_SETTINGS_SECTIONS, { key: "controls", label: "Controls", description: "Platform policy, system config, and governance settings.", icon: "controls" }]
-        : BASE_SETTINGS_SECTIONS,
-    [canViewInternalSettings]
-  )
+  const settingsSections = BASE_SETTINGS_SECTIONS
 
   useEffect(() => {
+    if (!section) return
+    setActiveSection(section)
+  }, [section])
+
+  useEffect(() => {
+    if (embedded) return undefined
+
     function handleKeyDown(event) {
       if (event.key === "Escape") onClose()
     }
@@ -100,7 +111,7 @@ export default function InternalSettingsModal({ onClose }) {
       document.body.style.overflow = previousOverflow
       document.removeEventListener("keydown", handleKeyDown)
     }
-  }, [onClose])
+  }, [embedded, onClose])
 
   useEffect(() => {
     setDraft({
@@ -147,6 +158,61 @@ export default function InternalSettingsModal({ onClose }) {
     () => Object.fromEntries((settingsData.items || []).map((item) => [item.settingKey, item])),
     [settingsData.items]
   )
+  const settingsKpis = useMemo(() => [
+    {
+      label: "Roles",
+      value: formatNumber(roles.length),
+      helper: roles[0]?.name || profile.primaryRole || "active role set",
+      drilldown: {
+        title: "Assigned Roles",
+        value: formatNumber(roles.length),
+        rows: roles,
+        columns: [
+          { key: "name", label: "Role", render: (row) => row.name || row.code || "-" },
+          { key: "code", label: "Code" },
+          { key: "department", label: "Department" },
+        ],
+      },
+    },
+    {
+      label: "Permissions",
+      value: formatNumber(permissions.length),
+      helper: "current account scope",
+      drilldown: {
+        title: "Permissions",
+        value: formatNumber(permissions.length),
+        rows: permissions.map((permission) => ({ permission })),
+        columns: [{ key: "permission", label: "Permission" }],
+      },
+    },
+    {
+      label: "Modules",
+      value: formatNumber(navigation.length),
+      helper: "visible sidebar areas",
+      drilldown: {
+        title: "Visible Modules",
+        value: formatNumber(navigation.length),
+        rows: navigation.map((moduleKey) => ({ moduleKey })),
+        columns: [{ key: "moduleKey", label: "Module" }],
+      },
+    },
+    {
+      label: "Controls",
+      value: canViewInternalSettings ? formatNumber(settingsData.summary?.editableSettings || settingsData.items?.length || 0) : "No access",
+      helper: canEditInternalSettings ? "editable governance settings" : "read-only or unavailable",
+      tone: canEditInternalSettings ? "warning" : "neutral",
+      drilldown: canViewInternalSettings ? {
+        title: "Internal Controls",
+        value: formatNumber(settingsData.summary?.editableSettings || settingsData.items?.length || 0),
+        rows: settingsData.items || [],
+        columns: [
+          { key: "settingKey", label: "Setting" },
+          { key: "settingValue", label: "Value" },
+          { key: "updatedAt", label: "Updated", render: (row) => formatDateTime(row.updatedAt) },
+        ],
+      } : null,
+    },
+  ], [canEditInternalSettings, canViewInternalSettings, navigation, permissions, profile.primaryRole, roles, settingsData.items, settingsData.summary?.editableSettings])
 
   async function saveControl(settingKey) {
     setControlSavingKey(settingKey)
@@ -165,15 +231,44 @@ export default function InternalSettingsModal({ onClose }) {
     }
   }
 
+  async function syncWorkspaceData() {
+    setSyncing(true)
+    setError("")
+    setSavedMessage("")
+    try {
+      await refreshProfile()
+      if (canViewInternalSettings) {
+        const payload = await internalApi.getSettings()
+        setSettingsData(payload)
+        setControlDrafts(Object.fromEntries((payload?.items || []).map((item) => [item.settingKey, String(item.settingValue ?? "")])))
+      }
+      const syncedAt = new Date().toISOString()
+      setLastSyncAt(syncedAt)
+      setSavedMessage("Workspace data synced.")
+    } catch (syncError) {
+      setError(syncError?.message || "Failed to sync workspace data")
+    } finally {
+      setSyncing(false)
+    }
+  }
+
   return (
-    <div className="internal-modal-backdrop" role="dialog" aria-modal="true" aria-label="Settings" onClick={onClose}>
-      <div className="settings-modal-shell" onClick={(event) => event.stopPropagation()}>
-        <aside className="settings-modal-sidebar">
-          <button type="button" className="settings-modal-close" aria-label="Close settings" onClick={onClose}>
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M6 6l12 12M18 6 6 18" />
-            </svg>
-          </button>
+    <div
+      className={embedded ? "settings-modal-page-host" : "internal-modal-backdrop"}
+      role={embedded ? undefined : "dialog"}
+      aria-modal={embedded ? undefined : "true"}
+      aria-label="Settings"
+      onClick={embedded ? undefined : onClose}
+    >
+      <div className={`settings-modal-shell ${embedded ? "settings-modal-shell--page" : ""}`} onClick={(event) => event.stopPropagation()}>
+        {!embedded ? <aside className="settings-modal-sidebar">
+          {!embedded ? (
+            <button type="button" className="settings-modal-close" aria-label="Close settings" onClick={onClose}>
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M6 6l12 12M18 6 6 18" />
+              </svg>
+            </button>
+          ) : null}
 
           <nav className="settings-modal-nav" role="tablist" aria-label="Settings sections">
             {settingsSections.map((section) => {
@@ -193,7 +288,7 @@ export default function InternalSettingsModal({ onClose }) {
               )
             })}
           </nav>
-        </aside>
+        </aside> : null}
 
         <div className="settings-modal-content">
           <header className="settings-modal-header">
@@ -206,7 +301,18 @@ export default function InternalSettingsModal({ onClose }) {
           </header>
 
           <div className="settings-modal-body">
-            {activeSection === "general" ? (
+            <section className="settings-command-summary">
+              <header>
+                <div>
+                  <span>Command Settings</span>
+                  <h3>{activeMeta.label} control centre</h3>
+                  <p>Account scope, access posture, module visibility, and governance controls for this internal workspace.</p>
+                </div>
+              </header>
+              <MetricGrid items={settingsKpis} />
+            </section>
+
+            {activeSection === "profile" ? (
               <>
                 <div className="settings-modal-banner">
                   <div>
@@ -238,24 +344,8 @@ export default function InternalSettingsModal({ onClose }) {
               </>
             ) : null}
 
-            {activeSection === "workspace" ? (
+            {activeSection === "preferences" ? (
               <>
-                <SettingsRow
-                  label="Primary role"
-                  description="Your default internal role in this workspace."
-                  control={<div className="settings-modal-value">{roles[0]?.name || profile.primaryRole || "-"}</div>}
-                />
-
-                <div className="settings-modal-row settings-modal-row--stacked">
-                  <div className="settings-modal-row-copy">
-                    <strong>Assigned roles</strong>
-                    <p>Roles attached to this internal account.</p>
-                  </div>
-                  <div className="settings-chip-row">
-                    {assignedRoleNames.length ? assignedRoleNames.map((role) => <span key={role} className="settings-chip">{role}</span>) : <span className="settings-chip">No roles</span>}
-                  </div>
-                </div>
-
                 <div className="settings-modal-row settings-modal-row--stacked">
                   <div className="settings-modal-row-copy">
                     <strong>Visible modules</strong>
@@ -267,9 +357,24 @@ export default function InternalSettingsModal({ onClose }) {
                 </div>
 
                 <SettingsRow
-                  label="Permissions"
-                  description="Total internal permissions attached to your active role set."
-                  control={<div className="settings-modal-value">{formatNumber(permissions.length)}</div>}
+                  label="Display density"
+                  description="Internal follows the comfortable MERA density for this shell port."
+                  control={<div className="settings-modal-value">Comfortable</div>}
+                />
+              </>
+            ) : null}
+
+            {activeSection === "notifications" ? (
+              <>
+                <SettingsRow
+                  label="Approval requests"
+                  description="Actionable approval, support escalation, and wallet operation requests appear in the notification drawer."
+                  control={<div className="settings-modal-value">Enabled</div>}
+                />
+                <SettingsRow
+                  label="Notification drawer"
+                  description="Notifications open in the MERA-style right drawer with list and detail views."
+                  control={<div className="settings-modal-value">Right drawer</div>}
                 />
               </>
             ) : null}
@@ -303,18 +408,130 @@ export default function InternalSettingsModal({ onClose }) {
               </>
             ) : null}
 
-            {activeSection === "account" ? (
+            {activeSection === "users" ? (
               <>
                 <SettingsRow
-                  label="Public ID"
-                  description="Stable account identifier used internally."
-                  control={<div className="settings-modal-value">{user.publicId || "-"}</div>}
+                  label="Primary role"
+                  description="Your default internal role in this workspace."
+                  control={<div className="settings-modal-value">{roles[0]?.name || profile.primaryRole || "-"}</div>}
+                />
+
+                <div className="settings-modal-row settings-modal-row--stacked">
+                  <div className="settings-modal-row-copy">
+                    <strong>Assigned roles</strong>
+                    <p>Roles attached to this internal account.</p>
+                  </div>
+                  <div className="settings-chip-row">
+                    {assignedRoleNames.length ? assignedRoleNames.map((role) => <span key={role} className="settings-chip">{role}</span>) : <span className="settings-chip">No roles</span>}
+                  </div>
+                </div>
+
+                <SettingsRow
+                  label="Permissions"
+                  description="Total internal permissions attached to your active role set."
+                  control={<div className="settings-modal-value">{formatNumber(permissions.length)}</div>}
+                />
+              </>
+            ) : null}
+
+            {activeSection === "data" ? (
+              <>
+                <div className="settings-modal-banner settings-modal-banner--plain">
+                  <div>
+                    <strong>Manage data sync</strong>
+                    <p>Refresh your internal profile, roles, permissions, visible modules, and available control settings without changing access rules.</p>
+                  </div>
+                  <button type="button" className="secondary-action" disabled={syncing} onClick={syncWorkspaceData}>
+                    {syncing ? "Syncing..." : "Sync now"}
+                  </button>
+                </div>
+
+                <SettingsRow
+                  label="Profile and permissions"
+                  description="Reloads your authenticated profile and active permission map."
+                  control={<div className="settings-modal-value">{syncing ? "Refreshing" : "Ready"}</div>}
+                />
+
+                <SettingsRow
+                  label="Control settings"
+                  description="Refreshes governance controls when your role has settings access."
+                  control={<div className="settings-modal-value">{canViewInternalSettings ? "Included" : "No access"}</div>}
+                />
+
+                <SettingsRow
+                  label="Last manual sync"
+                  description="Most recent sync triggered from this settings panel."
+                  control={<div className="settings-modal-value">{lastSyncAt ? formatDateTime(lastSyncAt) : "Not synced yet"}</div>}
+                />
+
+                {canViewInternalSettings ? (
+                  <>
+                    <div className="settings-modal-banner settings-modal-banner--plain">
+                      <div>
+                        <strong>Internal system config</strong>
+                        <p>Owner-facing controls for governance, security posture, and exceptional platform operations.</p>
+                      </div>
+                    </div>
+
+                    {OWNER_CONTROL_SPECS.map((control) => {
+                      const item = settingsMap[control.key]
+                      return (
+                        <SettingsRow
+                          key={control.key}
+                          label={control.label}
+                          description={control.description}
+                          control={
+                            <div className="settings-modal-control-stack">
+                              <input
+                                value={controlDrafts[control.key] ?? ""}
+                                onChange={(event) => setControlDrafts((prev) => ({ ...prev, [control.key]: event.target.value }))}
+                                disabled={!canEditInternalSettings}
+                              />
+                              {canEditInternalSettings ? (
+                                <button
+                                  type="button"
+                                  className="secondary-action"
+                                  disabled={controlSavingKey === control.key}
+                                  onClick={() => saveControl(control.key)}
+                                >
+                                  {controlSavingKey === control.key ? "Saving..." : "Update"}
+                                </button>
+                              ) : null}
+                              <small className="settings-modal-inline-note">
+                                {item?.updatedAt ? `Updated ${formatDateTime(item.updatedAt)}` : "Not yet updated"}
+                              </small>
+                            </div>
+                          }
+                        />
+                      )
+                    })}
+                  </>
+                ) : null}
+              </>
+            ) : null}
+
+            {activeSection === "audit" ? (
+              <>
+                <SettingsRow
+                  label="Session public ID"
+                  description="Identifier for your current internal session."
+                  control={<div className="settings-modal-value">{profile.sessionPublicId || "-"}</div>}
                 />
 
                 <SettingsRow
                   label="Last updated"
                   description="Most recent profile change timestamp."
                   control={<div className="settings-modal-value">{formatDateTime(user.updatedAt)}</div>}
+                />
+              </>
+            ) : null}
+
+            {activeSection === "organization" ? (
+              <>
+                <SettingsRow
+                  label="Public ID"
+                  description="Stable account identifier used internally."
+                  control={<div className="settings-modal-value">{user.publicId || "-"}</div>}
                 />
 
                 <SettingsRow
@@ -325,52 +542,17 @@ export default function InternalSettingsModal({ onClose }) {
               </>
             ) : null}
 
-            {activeSection === "controls" && canViewInternalSettings ? (
+            {activeSection === "integrations" ? (
               <>
-                <div className="settings-modal-banner settings-modal-banner--plain">
-                  <div>
-                    <strong>Internal system config</strong>
-                    <p>Owner-facing controls for governance, security posture, and exceptional platform operations.</p>
-                  </div>
-                </div>
-
-                {OWNER_CONTROL_SPECS.map((control) => {
-                  const item = settingsMap[control.key]
-                  return (
-                    <SettingsRow
-                      key={control.key}
-                      label={control.label}
-                      description={control.description}
-                      control={
-                        <div className="settings-modal-control-stack">
-                          <input
-                            value={controlDrafts[control.key] ?? ""}
-                            onChange={(event) => setControlDrafts((prev) => ({ ...prev, [control.key]: event.target.value }))}
-                            disabled={!canEditInternalSettings}
-                          />
-                          {canEditInternalSettings ? (
-                            <button
-                              type="button"
-                              className="secondary-action"
-                              disabled={controlSavingKey === control.key}
-                              onClick={() => saveControl(control.key)}
-                            >
-                              {controlSavingKey === control.key ? "Saving..." : "Update"}
-                            </button>
-                          ) : null}
-                          <small className="settings-modal-inline-note">
-                            {item?.updatedAt ? `Updated ${formatDateTime(item.updatedAt)}` : "Not yet updated"}
-                          </small>
-                        </div>
-                      }
-                    />
-                  )
-                })}
-
+                <SettingsRow
+                  label="Integration posture"
+                  description="Internal integrations continue to use existing SmartLink backend services."
+                  control={<div className="settings-modal-value">Operational</div>}
+                />
                 <SettingsRow
                   label="Editable internal settings"
-                  description="Total internal settings currently available to this workspace."
-                  control={<div className="settings-modal-value">{formatNumber(settingsData.summary?.editableSettings)}</div>}
+                  description="Total internal governance settings available to this workspace."
+                  control={<div className="settings-modal-value">{canViewInternalSettings ? formatNumber(settingsData.summary?.editableSettings) : "No access"}</div>}
                 />
               </>
             ) : null}

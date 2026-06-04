@@ -55,6 +55,25 @@ export const MERA_PERMISSIONS = {
   TASKS_WORK: 'TASKS_WORK',
   TASKS_ADD_EVIDENCE: 'TASKS_ADD_EVIDENCE',
   TASKS_STATS_VIEW: 'TASKS_STATS_VIEW',
+  VIEW_COMMAND_CENTRE: 'VIEW_COMMAND_CENTRE',
+  VIEW_MAP: 'VIEW_MAP',
+  VIEW_STATION_PROFILE: 'VIEW_STATION_PROFILE',
+  MANAGE_CASES: 'MANAGE_CASES',
+  ASSIGN_INSPECTIONS: 'ASSIGN_INSPECTIONS',
+  COMPLETE_INSPECTIONS: 'COMPLETE_INSPECTIONS',
+  MANAGE_PRICE_COMPLIANCE: 'MANAGE_PRICE_COMPLIANCE',
+  GENERATE_REPORTS: 'GENERATE_REPORTS',
+  CREATE_PUBLIC_NOTICE: 'CREATE_PUBLIC_NOTICE',
+  APPROVE_PUBLIC_NOTICE: 'APPROVE_PUBLIC_NOTICE',
+  PUBLISH_PUBLIC_NOTICE: 'PUBLISH_PUBLIC_NOTICE',
+  MANAGE_USERS: 'MANAGE_USERS',
+  VIEW_AUDIT_LOGS: 'VIEW_AUDIT_LOGS',
+  ALERTS_VIEW: 'ALERTS_VIEW',
+  ALERTS_MANAGE: 'ALERTS_MANAGE',
+  RISK_VIEW: 'RISK_VIEW',
+  RISK_RECALCULATE: 'RISK_RECALCULATE',
+  PUBLIC_NOTICES_VIEW: 'PUBLIC_NOTICES_VIEW',
+  ANALYTICS_VIEW: 'ANALYTICS_VIEW',
 } as const
 
 export type MeraPermission = (typeof MERA_PERMISSIONS)[keyof typeof MERA_PERMISSIONS]
@@ -79,7 +98,11 @@ export function isReadOnlyExecutive(user: any) {
 export const routePermissions = [
   {
     path: '/dashboard',
-    permissions: [MERA_PERMISSIONS.DASHBOARD_VIEW_NATIONAL, MERA_PERMISSIONS.DASHBOARD_VIEW_DISTRICT],
+    permissions: [MERA_PERMISSIONS.DASHBOARD_VIEW_NATIONAL, MERA_PERMISSIONS.DASHBOARD_VIEW_DISTRICT, MERA_PERMISSIONS.VIEW_COMMAND_CENTRE],
+  },
+  {
+    path: '/command-centre',
+    permissions: [MERA_PERMISSIONS.DASHBOARD_VIEW_NATIONAL, MERA_PERMISSIONS.DASHBOARD_VIEW_DISTRICT, MERA_PERMISSIONS.VIEW_COMMAND_CENTRE],
   },
   {
     path: '/tasks/my',
@@ -116,7 +139,7 @@ export const routePermissions = [
   },
   {
     path: '/cases',
-    permissions: [MERA_PERMISSIONS.FLAGS_VIEW, MERA_PERMISSIONS.ENFORCEMENT_VIEW],
+    permissions: [MERA_PERMISSIONS.FLAGS_VIEW, MERA_PERMISSIONS.ENFORCEMENT_VIEW, MERA_PERMISSIONS.MANAGE_CASES],
   },
   {
     path: '/complaints',
@@ -128,14 +151,26 @@ export const routePermissions = [
   },
   {
     path: '/national-heat-intelligence-map',
-    permissions: [MERA_PERMISSIONS.HEATMAP_VIEW],
+    permissions: [MERA_PERMISSIONS.HEATMAP_VIEW, MERA_PERMISSIONS.VIEW_MAP],
+  },
+  {
+    path: '/live-map',
+    permissions: [MERA_PERMISSIONS.HEATMAP_VIEW, MERA_PERMISSIONS.VIEW_MAP],
   },
   {
     path: '/hoarding-watchlist',
-    permissions: [MERA_PERMISSIONS.FLAGS_VIEW, MERA_PERMISSIONS.AVAILABILITY_AUDIT],
+    permissions: [MERA_PERMISSIONS.FLAGS_VIEW, MERA_PERMISSIONS.AVAILABILITY_AUDIT, MERA_PERMISSIONS.RISK_VIEW, MERA_PERMISSIONS.ALERTS_VIEW],
+  },
+  {
+    path: '/risk-watchlist',
+    permissions: [MERA_PERMISSIONS.FLAGS_VIEW, MERA_PERMISSIONS.AVAILABILITY_AUDIT, MERA_PERMISSIONS.RISK_VIEW, MERA_PERMISSIONS.ALERTS_VIEW],
   },
   {
     path: '/fuel-deliveries',
+    permissions: [MERA_PERMISSIONS.DELIVERIES_VIEW],
+  },
+  {
+    path: '/fuel-supply',
     permissions: [MERA_PERMISSIONS.DELIVERIES_VIEW],
   },
   {
@@ -148,11 +183,15 @@ export const routePermissions = [
   },
   {
     path: '/compliance-flags',
-    permissions: [MERA_PERMISSIONS.FLAGS_VIEW],
+    permissions: [MERA_PERMISSIONS.FLAGS_VIEW, MERA_PERMISSIONS.MANAGE_CASES],
   },
   {
     path: '/field-inspections',
-    permissions: [MERA_PERMISSIONS.INSPECTIONS_VIEW],
+    permissions: [MERA_PERMISSIONS.INSPECTIONS_VIEW, MERA_PERMISSIONS.ASSIGN_INSPECTIONS, MERA_PERMISSIONS.COMPLETE_INSPECTIONS],
+  },
+  {
+    path: '/inspections',
+    permissions: [MERA_PERMISSIONS.INSPECTIONS_VIEW, MERA_PERMISSIONS.ASSIGN_INSPECTIONS, MERA_PERMISSIONS.COMPLETE_INSPECTIONS],
   },
   {
     path: '/enforcement-actions',
@@ -160,7 +199,7 @@ export const routePermissions = [
   },
   {
     path: '/station-regulatory-profiles',
-    permissions: [MERA_PERMISSIONS.STATIONS_VIEW, MERA_PERMISSIONS.STATIONS_VIEW_DISTRICT],
+    permissions: [MERA_PERMISSIONS.STATIONS_VIEW, MERA_PERMISSIONS.STATIONS_VIEW_DISTRICT, MERA_PERMISSIONS.VIEW_STATION_PROFILE],
   },
   {
     path: '/license-registry',
@@ -168,15 +207,36 @@ export const routePermissions = [
   },
   {
     path: '/reports-intelligence',
-    permissions: [MERA_PERMISSIONS.REPORTS_VIEW],
+    permissions: [MERA_PERMISSIONS.REPORTS_VIEW, MERA_PERMISSIONS.GENERATE_REPORTS],
   },
   {
-    path: '/user-administration',
-    permissions: [MERA_PERMISSIONS.USERS_VIEW],
+    path: '/reports',
+    permissions: [MERA_PERMISSIONS.REPORTS_VIEW, MERA_PERMISSIONS.GENERATE_REPORTS],
   },
   {
-    path: '/audit-trail',
-    permissions: [MERA_PERMISSIONS.AUDIT_VIEW],
+    path: '/price-compliance',
+    permissions: [MERA_PERMISSIONS.MANAGE_PRICE_COMPLIANCE, MERA_PERMISSIONS.REPORTS_VIEW],
+  },
+  {
+    path: '/public-notices',
+    permissions: [
+      MERA_PERMISSIONS.PUBLIC_NOTICES_VIEW,
+      MERA_PERMISSIONS.CREATE_PUBLIC_NOTICE,
+      MERA_PERMISSIONS.APPROVE_PUBLIC_NOTICE,
+      MERA_PERMISSIONS.PUBLISH_PUBLIC_NOTICE,
+    ],
+  },
+  {
+    path: '/analytics',
+    permissions: [MERA_PERMISSIONS.ANALYTICS_VIEW, MERA_PERMISSIONS.REPORTS_VIEW],
+  },
+  {
+    path: '/settings/users',
+    permissions: [MERA_PERMISSIONS.USERS_VIEW, MERA_PERMISSIONS.MANAGE_USERS],
+  },
+  {
+    path: '/settings/audit',
+    permissions: [MERA_PERMISSIONS.AUDIT_VIEW, MERA_PERMISSIONS.VIEW_AUDIT_LOGS],
   },
 ]
 

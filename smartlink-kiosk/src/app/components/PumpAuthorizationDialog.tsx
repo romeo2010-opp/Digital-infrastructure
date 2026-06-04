@@ -196,6 +196,8 @@ export function PumpAuthorizationDialog() {
     completeSession,
     updateActiveSession,
     holdCompletedSession,
+    isApiMode,
+    realtimeMode,
   } = useFuelStore();
   const { startCurrentSession, finalizeCurrentSession, refreshData } =
     useKioskOperations();
@@ -233,6 +235,7 @@ export function PumpAuthorizationDialog() {
     activeSession?.status,
     activeSession?.fuelType,
     activeSession?.litresDispensed,
+    activeSession?.pumpSessionStatus,
     isOpen,
   ]);
 
@@ -327,10 +330,21 @@ export function PumpAuthorizationDialog() {
 
   const amountValue = Math.round(target.amountMwk);
   const targetLitres = target.litres;
-  const progressPercent =
+  const sessionPumpSessionStatus = String(session.pumpSessionStatus || "")
+    .trim()
+    .toUpperCase();
+  const pumpSessionCompleted = sessionPumpSessionStatus === "COMPLETED";
+  const sessionHasCompletionReference = Boolean(
+    session.completedTransactionPublicId ||
+      session.completedReceiptVerificationRef ||
+      session.completedPaymentReference,
+  );
+  const calculatedProgressPercent =
     targetLitres > 0
       ? Math.min(100, Math.round((liveLitres / targetLitres) * 100))
       : 0;
+  const progressPercent =
+    pumpSessionCompleted && liveLitres > 0 ? 100 : calculatedProgressPercent;
   const liveAmount = Math.round(liveLitres * target.pricePerLitre);
   const paymentLabel =
     session.paymentMethod === "wallet"
@@ -345,10 +359,6 @@ export function PumpAuthorizationDialog() {
   const requiresPaymentMethodSelection =
     session.kind === "queue_draft" && session.queueUserType === "walkin";
   const sessionCompletionKey = `${session.customerId}:${session.pumpSessionPublicId || session.backendOrderPublicId || "draft"}`;
-  const sessionPumpSessionStatus = String(session.pumpSessionStatus || "")
-    .trim()
-    .toUpperCase();
-  const pumpSessionCompleted = sessionPumpSessionStatus === "COMPLETED";
   const assignedPump =
     pumps.find(
       (pump) => pump.publicId && pump.publicId === session.assignedPumpPublicId,
@@ -417,6 +427,12 @@ export function PumpAuthorizationDialog() {
       effectiveCompletionSummary?.transaction?.paymentReference ||
       scanAndGoCode,
   );
+  const dialogWidthClass =
+    screen === "complete"
+      ? "!max-w-[1120px] sm:!max-w-[1120px]"
+      : screen === "payment"
+        ? "!max-w-[760px] sm:!max-w-[760px]"
+        : "!max-w-[680px] sm:!max-w-[680px]";
 
   useEffect(() => {
     if (
@@ -432,6 +448,9 @@ export function PumpAuthorizationDialog() {
     if (autoFinalizeTriggeredRef.current === sessionCompletionKey) {
       return;
     }
+    if (isApiMode && !pumpSessionCompleted && !sessionHasCompletionReference) {
+      return;
+    }
 
     autoFinalizeTriggeredRef.current = sessionCompletionKey;
     if (requiresPaymentMethodSelection) {
@@ -444,9 +463,12 @@ export function PumpAuthorizationDialog() {
     activeSession,
     displaySession,
     isOpen,
+    isApiMode,
     liveLitres,
+    pumpSessionCompleted,
     requiresPaymentMethodSelection,
     screen,
+    sessionHasCompletionReference,
     sessionCompletionKey,
   ]);
 
@@ -583,7 +605,11 @@ export function PumpAuthorizationDialog() {
     }
 
     if (isSubmitting || liveLitres <= 0) return;
-    if (!pumpSessionCompleted && progressPercent < 100) return;
+    const canAutoFinalize =
+      isApiMode
+        ? pumpSessionCompleted
+        : pumpSessionCompleted || progressPercent >= 100;
+    if (!canAutoFinalize) return;
     if (autoFinalizeTriggeredRef.current === sessionCompletionKey) return;
 
     autoFinalizeTriggeredRef.current = sessionCompletionKey;
@@ -595,6 +621,7 @@ export function PumpAuthorizationDialog() {
     void finalizeAndShowComplete(liveLitres);
   }, [
     isSubmitting,
+    isApiMode,
     liveLitres,
     pumpSessionCompleted,
     progressPercent,
@@ -605,6 +632,7 @@ export function PumpAuthorizationDialog() {
 
   useEffect(() => {
     if (!isOpen || screen !== "dispensing" || !activeSession) return undefined;
+    if (isApiMode) return undefined;
 
     const intervalId = window.setInterval(() => {
       void refreshData({ silent: true });
@@ -613,10 +641,11 @@ export function PumpAuthorizationDialog() {
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [activeSession, isOpen, refreshData, screen]);
+  }, [activeSession, isApiMode, isOpen, refreshData, screen]);
 
   useEffect(() => {
     if (!isOpen || !showCustomerUnlockScreen) return undefined;
+    if (isApiMode) return undefined;
 
     const intervalId = window.setInterval(() => {
       void refreshData({ silent: true });
@@ -625,7 +654,7 @@ export function PumpAuthorizationDialog() {
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [isOpen, refreshData, showCustomerUnlockScreen]);
+  }, [isApiMode, isOpen, refreshData, showCustomerUnlockScreen]);
 
   const handleStartDispense = async () => {
     if (requiresCustomerUnlock && !customerUnlockReady) {
@@ -742,7 +771,7 @@ export function PumpAuthorizationDialog() {
         </button>
       </DialogTrigger>
       <DialogContent
-        className={`max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] ${screen === "complete" ? "max-w-5xl" : "max-w-xl"} overflow-y-auto border shadow-[0_24px_60px_rgba(15,23,42,0.22)] sm:w-full ${
+        className={`max-h-[calc(100dvh-1rem)] w-[calc(100vw-1rem)] ${dialogWidthClass} overflow-y-auto border p-4 shadow-[0_24px_60px_rgba(15,23,42,0.22)] sm:w-full sm:p-6 ${
           isNightTheme
             ? "border-[#213243] bg-[#0b1621] text-[#ecf3fb]"
             : "border-[#d7dee7] bg-[#f8fafc] text-[#0f172a]"
@@ -1107,7 +1136,12 @@ export function PumpAuthorizationDialog() {
               <div
                 className={`mt-1 text-sm ${isNightTheme ? "text-[#8ea1b5]" : "text-[#64748b]"}`}
               >
-                Pump authorized · live values from telemetry logs
+                Pump authorized · live values from{" "}
+                {isApiMode
+                  ? realtimeMode === "polling"
+                    ? "polling fallback"
+                    : "WebSocket telemetry"
+                  : "telemetry logs"}
               </div>
             </div>
 
@@ -1392,7 +1426,7 @@ export function PumpAuthorizationDialog() {
                     >
                       Transaction Refs
                     </div>
-                    <div className="grid gap-2 sm:grid-cols-2">
+                    <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
                       <ReferenceDetail
                         label="Receipt Ref"
                         value={

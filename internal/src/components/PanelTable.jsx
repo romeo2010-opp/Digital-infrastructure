@@ -1,3 +1,5 @@
+import { formatCodeLabel } from "../utils/display"
+
 export function Panel({ title, subtitle, actions = null, children }) {
   return (
     <section className="panel">
@@ -16,7 +18,7 @@ export function Panel({ title, subtitle, actions = null, children }) {
 function renderCellValue(value) {
   if (value === null || value === undefined || value === "") return "-"
   if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-    return String(value)
+    return typeof value === "string" ? formatCodeLabel(value) : String(value)
   }
   if (Array.isArray(value)) {
     return value

@@ -5,7 +5,7 @@ import { Panel } from "../components/PanelTable"
 import PreviewTablePanel from "../components/PreviewTablePanel"
 import MetricGrid from "../components/MetricGrid"
 import StatusPill from "../components/StatusPill"
-import { formatDateTime, formatNumber } from "../utils/display"
+import { formatCodeLabel, formatDateTime, formatNumber } from "../utils/display"
 import { useInternalAuth } from "../auth/AuthContext"
 
 function OnboardingDetailModal({ record, canManageOnboarding, canActivateStation, onAction, onClose }) {
@@ -61,7 +61,7 @@ function OnboardingDetailModal({ record, canManageOnboarding, canActivateStation
                 {pendingItems.map((item) => (
                   <article key={item} className="timeline-item">
                     <div>
-                      <strong>{item.replace(/_/g, " ")}</strong>
+                      <strong>{formatCodeLabel(item)}</strong>
                       <p>Still requires completion before activation can be fully cleared.</p>
                     </div>
                   </article>

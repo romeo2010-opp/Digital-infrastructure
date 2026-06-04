@@ -158,6 +158,31 @@ model pumps {
   @@index([station_id, status], map: "idx_pumps_station_status")
 }
 
+model pump_configurations {
+  id                           BigInt                              @id @default(autoincrement()) @db.UnsignedBigInt
+  station_id                   BigInt                              @db.UnsignedBigInt
+  pump_id                      BigInt                              @unique(map: "uq_pump_configurations_pump") @db.UnsignedBigInt
+  kiosk_id                     BigInt?                             @db.UnsignedBigInt
+  display_name                 String                              @db.VarChar(120)
+  fuel_types_supported_json    String?                             @db.LongText
+  lane_side_supported          pump_configurations_lane_side_supported @default(BOTH_SIDES)
+  supported_vehicle_types_json String?                             @db.LongText
+  max_vehicle_size             pump_configurations_max_vehicle_size @default(LARGE)
+  entry_direction              String?                             @db.VarChar(120)
+  exit_direction               String?                             @db.VarChar(120)
+  is_smartlink_enabled         Boolean                             @default(false)
+  is_active                    Boolean                             @default(true)
+  accepts_walkins_when_idle    Boolean                             @default(true)
+  max_standby_walkins          Int                                 @default(1) @db.UnsignedInt
+  clear_lane_buffer_minutes    Int                                 @default(7) @db.UnsignedInt
+  current_mode                 pump_configurations_current_mode     @default(OPEN_WALKIN)
+  created_at                   DateTime                            @default(now()) @db.Timestamp(3)
+  updated_at                   DateTime                            @default(now()) @db.Timestamp(3)
+
+  @@index([kiosk_id], map: "idx_pump_configurations_kiosk")
+  @@index([station_id, is_active, current_mode], map: "idx_pump_configurations_station_active")
+}
+
 model pump_nozzles {
   id                  BigInt                      @id @default(autoincrement()) @db.UnsignedBigInt
   station_id          BigInt                      @db.UnsignedBigInt
@@ -203,12 +228,24 @@ model queue_entries {
   cancelled_at     DateTime?            @db.Timestamp(3)
   last_moved_at    DateTime?            @db.Timestamp(3)
   metadata         String?              @db.LongText
+  vehicle_id       BigInt?              @db.UnsignedBigInt
+  assigned_pump_id BigInt?              @db.UnsignedBigInt
+  assigned_kiosk_id BigInt?             @db.UnsignedBigInt
+  pump_assignment_status queue_entries_pump_assignment_status @default(PENDING)
+  assignment_reason String?             @db.VarChar(500)
+  assignment_confidence queue_entries_assignment_confidence?
+  assignment_created_at DateTime?       @db.Timestamp(3)
+  assignment_updated_at DateTime?       @db.Timestamp(3)
+  assignment_locked_at DateTime?        @db.Timestamp(3)
   fuel_types       fuel_types           @relation(fields: [fuel_type_id], references: [id], onUpdate: Restrict, map: "fk_queue_fuel")
   stations         stations             @relation(fields: [station_id], references: [id], onUpdate: Restrict, map: "fk_queue_station")
   users            users?               @relation(fields: [user_id], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "fk_queue_user")
   transactions     transactions[]
 
   @@index([fuel_type_id], map: "fk_queue_fuel")
+  @@index([vehicle_id], map: "idx_queue_vehicle")
+  @@index([station_id, assigned_pump_id, status, position], map: "idx_queue_assigned_pump_status")
+  @@index([station_id, pump_assignment_status, joined_at], map: "idx_queue_assignment_status")
   @@index([user_id], map: "fk_queue_user")
   @@index([station_id, joined_at], map: "idx_queue_station_joined")
   @@index([station_id, status, position], map: "idx_queue_station_status_pos")
@@ -420,6 +457,57 @@ model users {
   transactions  transactions[]
 }
 
+model vehicles {
+  id                       BigInt                           @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id                String                           @unique(map: "public_id") @db.Char(26)
+  user_id                  BigInt                           @db.UnsignedBigInt
+  nickname                 String?                          @db.VarChar(120)
+  vehicle_type             vehicles_vehicle_type            @default(OTHER)
+  usage_type               vehicles_usage_type?
+  make                     String                           @db.VarChar(80)
+  model                    String                           @db.VarChar(120)
+  year                     Int?                             @db.UnsignedSmallInt
+  number_plate             String                           @db.VarChar(32)
+  fuel_type                vehicles_fuel_type               @default(PETROL)
+  tank_capacity_litres     Decimal?                         @db.Decimal(8, 2)
+  is_full_tank             Boolean                          @default(false)
+  tank_side                vehicles_tank_side               @default(UNKNOWN)
+  tank_side_source         vehicles_tank_side_source        @default(USER_CONFIRMED)
+  tank_side_confidence     vehicles_tank_side_confidence    @default(LOW)
+  visual_mockup_key        String?                          @db.VarChar(96)
+  is_default               Boolean                          @default(false)
+  verification_status      vehicles_verification_status     @default(UNVERIFIED)
+  archived_at              DateTime?                        @db.Timestamp(3)
+  created_at               DateTime                         @default(now()) @db.Timestamp(3)
+  updated_at               DateTime                         @default(now()) @db.Timestamp(3)
+
+  @@index([fuel_type], map: "idx_vehicles_fuel")
+  @@index([number_plate], map: "idx_vehicles_plate")
+  @@index([tank_side], map: "idx_vehicles_tank_side")
+  @@index([user_id, archived_at, is_default], map: "idx_vehicles_user_active")
+}
+
+model smartlink_operational_audit_logs {
+  id              BigInt                                   @id @default(autoincrement()) @db.UnsignedBigInt
+  actor_type      smartlink_operational_audit_logs_actor_type @default(SYSTEM)
+  actor_id        BigInt?                                  @db.UnsignedBigInt
+  station_id      BigInt?                                  @db.UnsignedBigInt
+  pump_id         BigInt?                                  @db.UnsignedBigInt
+  kiosk_id        BigInt?                                  @db.UnsignedBigInt
+  queue_ticket_id BigInt?                                  @db.UnsignedBigInt
+  vehicle_id      BigInt?                                  @db.UnsignedBigInt
+  action          String                                   @db.VarChar(96)
+  reason          String?                                  @db.VarChar(500)
+  metadata_json   String?                                  @db.LongText
+  created_at      DateTime                                 @default(now()) @db.Timestamp(3)
+
+  @@index([action, created_at], map: "idx_smartlink_audit_action")
+  @@index([pump_id, created_at], map: "idx_smartlink_audit_pump_time")
+  @@index([queue_ticket_id, created_at], map: "idx_smartlink_audit_queue")
+  @@index([station_id, created_at], map: "idx_smartlink_audit_station_time")
+  @@index([vehicle_id, created_at], map: "idx_smartlink_audit_vehicle")
+}
+
 model promotion_campaigns {
   id                    BigInt                           @id @default(autoincrement()) @db.UnsignedBigInt
   public_id             String                           @unique(map: "public_id") @db.Char(26)
@@ -626,6 +714,31 @@ model mera_trusted_devices {
   @@index([mera_user_id, expires_at], map: "idx_mera_trusted_devices_user_expiry")
 }
 
+model mera_auth_risk_signals {
+  id                  BigInt                             @id @default(autoincrement()) @db.UnsignedBigInt
+  scope_type          mera_auth_risk_signals_scope_type
+  scope_value         String                             @db.VarChar(190)
+  failure_count       Int                                @default(0) @db.UnsignedInt
+  first_failure_at    DateTime?                          @db.Timestamp(3)
+  last_failure_at     DateTime?                          @db.Timestamp(3)
+  locked_until        DateTime?                          @db.Timestamp(3)
+  flagged_at          DateTime?                          @db.Timestamp(3)
+  flag_reason         String?                            @db.VarChar(160)
+  last_failure_reason String?                            @db.VarChar(160)
+  last_user_agent     String?                            @db.VarChar(255)
+  ip_address          String?                            @db.VarChar(64)
+  subnet              String?                            @db.VarChar(80)
+  metadata_json       Json?
+  created_at          DateTime                           @default(now()) @db.Timestamp(3)
+  updated_at          DateTime                           @default(now()) @db.Timestamp(3)
+
+  @@unique([scope_type, scope_value], map: "uq_mera_auth_risk_scope")
+  @@index([locked_until], map: "idx_mera_auth_risk_locked")
+  @@index([flagged_at], map: "idx_mera_auth_risk_flagged")
+  @@index([ip_address, last_failure_at], map: "idx_mera_auth_risk_ip_time")
+  @@index([subnet, last_failure_at], map: "idx_mera_auth_risk_subnet_time")
+}
+
 model fuel_station_licenses {
   id                    BigInt                       @id @default(autoincrement()) @db.UnsignedBigInt
   station_id            BigInt                       @db.UnsignedBigInt
@@ -654,6 +767,7 @@ model public_complaints {
   geo_lng               Decimal?                           @db.Decimal(10, 7)
   complaint_status      public_complaints_complaint_status @default(NEW)
   assigned_officer_id   BigInt?                            @db.UnsignedBigInt
+  linked_case_id         String?                            @db.VarChar(96)
   created_at            DateTime                           @default(now()) @db.Timestamp(3)
   updated_at            DateTime                           @default(now()) @db.Timestamp(3)
   mera_users            mera_users?                        @relation("public_complaints_officer", fields: [assigned_officer_id], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "fk_public_complaints_officer")
@@ -671,6 +785,15 @@ model inspections {
   station_id               BigInt                        @db.UnsignedBigInt
   officer_id               BigInt                        @db.UnsignedBigInt
   inspection_type          inspections_inspection_type   @default(ROUTINE)
+  reason                   String?                       @db.Text
+  priority                 String                        @default("medium") @db.VarChar(32)
+  scheduled_at             DateTime?                     @db.Timestamp(3)
+  status                   String                        @default("scheduled") @db.VarChar(32)
+  checklist_json           Json?
+  findings_json            Json?
+  result                   String?                       @db.Text
+  linked_case_id           String?                       @db.VarChar(96)
+  completed_at             DateTime?                     @db.Timestamp(3)
   queue_length             Int?                          @db.UnsignedInt
   stock_visible            Boolean                       @default(true)
   pumps_active             Int?                          @db.UnsignedInt
@@ -904,6 +1027,11 @@ model audit_logs_mera {
   action_type        String      @db.VarChar(96)
   action_description String      @db.Text
   affected_entity    String?     @db.VarChar(255)
+  entity_type         String?     @db.VarChar(64)
+  entity_id           String?     @db.VarChar(96)
+  before_json         Json?
+  after_json          Json?
+  user_agent          String?     @db.VarChar(255)
   ip_address         String?     @db.VarChar(64)
   device_info        String?     @db.VarChar(255)
   created_at         DateTime    @default(now()) @db.Timestamp(3)
@@ -911,6 +1039,255 @@ model audit_logs_mera {
 
   @@index([action_type, created_at], map: "idx_audit_logs_mera_action_time")
   @@index([actor_id, created_at], map: "idx_audit_logs_mera_actor_time")
+}
+
+model fuel_delivery_logs {
+  id                           BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id                    String    @unique(map: "uq_fuel_delivery_logs_public_id") @db.VarChar(64)
+  station_id                   BigInt    @db.UnsignedBigInt
+  source_depot                 String?   @db.VarChar(120)
+  omc                          String?   @db.VarChar(120)
+  tanker_plate                 String?   @db.VarChar(64)
+  driver_name                  String?   @db.VarChar(120)
+  delivery_time                DateTime  @db.Timestamp(3)
+  fuel_type                    String    @db.VarChar(32)
+  litres_loaded                Decimal?  @db.Decimal(14, 2)
+  expected_arrival             DateTime? @db.Timestamp(3)
+  actual_arrival               DateTime? @db.Timestamp(3)
+  offloaded_quantity           Decimal?  @db.Decimal(14, 2)
+  station_confirmation_status  String?   @db.VarChar(64)
+  first_sale_after_delivery_at DateTime? @db.Timestamp(3)
+  sales_velocity_after_delivery Decimal? @db.Decimal(14, 2)
+  discrepancy_litres           Decimal?  @db.Decimal(14, 2)
+  status                       String    @default("pending_review") @db.VarChar(64)
+  estimated_volume             Decimal?  @db.Decimal(12, 2)
+  source_type                  String    @db.VarChar(64)
+  reported_by                  String?   @db.VarChar(120)
+  created_at                   DateTime  @default(now()) @db.Timestamp(3)
+
+  @@index([fuel_type, delivery_time], map: "idx_fuel_delivery_logs_fuel_time")
+  @@index([station_id, delivery_time], map: "idx_fuel_delivery_logs_station_time")
+}
+
+model mera_risk_scores {
+  id                BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  station_id        BigInt   @unique(map: "uq_mera_risk_scores_station") @db.UnsignedBigInt
+  risk_score        Int      @default(0) @db.UnsignedInt
+  risk_level        String   @default("Normal") @db.VarChar(32)
+  main_reasons_json Json?
+  evidence_json     Json?
+  recommended_action String? @db.VarChar(96)
+  generated_at      DateTime @default(now()) @db.Timestamp(3)
+  created_at        DateTime @default(now()) @db.Timestamp(3)
+  updated_at        DateTime @default(now()) @db.Timestamp(3)
+
+  @@index([risk_level, risk_score], map: "idx_mera_risk_scores_level_score")
+}
+
+model mera_alerts {
+  id                 BigInt               @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id          String               @unique @db.VarChar(64)
+  source_key         String?              @unique @db.VarChar(160)
+  type               String               @db.VarChar(64)
+  severity           mera_alerts_severity @default(medium)
+  station_id         BigInt?              @db.UnsignedBigInt
+  title              String               @db.VarChar(220)
+  description        String?              @db.Text
+  evidence_json      Json?
+  recommended_action String?              @db.VarChar(96)
+  status             mera_alerts_status   @default(new)
+  acknowledged_by    BigInt?              @db.UnsignedBigInt
+  acknowledged_at    DateTime?            @db.Timestamp(3)
+  dismissed_by       BigInt?              @db.UnsignedBigInt
+  dismissed_reason   String?              @db.Text
+  dismissed_at       DateTime?            @db.Timestamp(3)
+  linked_case_id     String?              @db.VarChar(96)
+  created_at         DateTime             @default(now()) @db.Timestamp(3)
+  updated_at         DateTime             @default(now()) @db.Timestamp(3)
+
+  @@index([status, severity, created_at], map: "idx_mera_alerts_status_severity")
+  @@index([station_id, created_at], map: "idx_mera_alerts_station")
+}
+
+model mera_cases {
+  id                  BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id           String   @unique @db.VarChar(96)
+  title               String   @db.VarChar(220)
+  type                String   @db.VarChar(96)
+  station_id          BigInt?  @db.UnsignedBigInt
+  district            String?  @db.VarChar(80)
+  severity            String   @default("medium") @db.VarChar(32)
+  assigned_officer_id BigInt?  @db.UnsignedBigInt
+  created_by          BigInt?  @db.UnsignedBigInt
+  source_alert_id     String?  @db.VarChar(160)
+  evidence_json       Json?
+  status              String   @default("New") @db.VarChar(64)
+  due_date            DateTime? @db.Timestamp(3)
+  final_outcome       String?  @db.Text
+  created_at          DateTime @default(now()) @db.Timestamp(3)
+  updated_at          DateTime @default(now()) @db.Timestamp(3)
+
+  @@index([assigned_officer_id, status], map: "idx_mera_cases_assigned")
+  @@index([district, status], map: "idx_mera_cases_district_status")
+  @@index([station_id, status, created_at], map: "idx_mera_cases_station_status")
+}
+
+model mera_case_notes {
+  id             BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id      String   @unique @db.VarChar(64)
+  case_id        BigInt   @db.UnsignedBigInt
+  author_user_id BigInt?  @db.UnsignedBigInt
+  note           String   @db.Text
+  visibility     String   @default("internal") @db.VarChar(32)
+  created_at     DateTime @default(now()) @db.Timestamp(3)
+  updated_at     DateTime @default(now()) @db.Timestamp(3)
+
+  @@index([case_id, created_at], map: "idx_mera_case_notes_case_time")
+}
+
+model mera_case_evidence {
+  id            BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id     String   @unique @db.VarChar(64)
+  case_id       BigInt   @db.UnsignedBigInt
+  evidence_type String   @default("document") @db.VarChar(64)
+  title         String   @db.VarChar(220)
+  description   String?  @db.Text
+  file_url      String?  @db.VarChar(1000)
+  metadata_json Json?
+  created_by    BigInt?  @db.UnsignedBigInt
+  created_at    DateTime @default(now()) @db.Timestamp(3)
+
+  @@index([case_id, created_at], map: "idx_mera_case_evidence_case_time")
+}
+
+model mera_case_timeline {
+  id                BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id         String   @unique @db.VarChar(64)
+  case_id           BigInt   @db.UnsignedBigInt
+  event_type        String   @db.VarChar(96)
+  event_title       String   @db.VarChar(220)
+  event_description String?  @db.Text
+  metadata_json     Json?
+  created_at        DateTime @default(now()) @db.Timestamp(3)
+
+  @@index([case_id, created_at], map: "idx_mera_case_timeline_case_time")
+}
+
+model mera_complaint_clusters {
+  id                 BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id          String   @unique @db.VarChar(64)
+  station_id         BigInt?  @db.UnsignedBigInt
+  district           String?  @db.VarChar(80)
+  category           String?  @db.VarChar(96)
+  fuel_type          String?  @db.VarChar(32)
+  keyword_json       Json?
+  complaint_ids_json Json?
+  severity           String   @default("medium") @db.VarChar(32)
+  first_seen_at      DateTime? @db.Timestamp(3)
+  last_seen_at       DateTime? @db.Timestamp(3)
+  status             String   @default("open") @db.VarChar(32)
+  linked_case_id     String?  @db.VarChar(96)
+  created_at         DateTime @default(now()) @db.Timestamp(3)
+  updated_at         DateTime @default(now()) @db.Timestamp(3)
+
+  @@index([station_id, status], map: "idx_mera_complaint_clusters_station")
+}
+
+model mera_official_prices {
+  id              BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id       String   @unique @db.VarChar(64)
+  fuel_type       String   @db.VarChar(32)
+  price_per_litre Decimal  @db.Decimal(12, 2)
+  effective_date  DateTime @db.Date
+  status          String   @default("active") @db.VarChar(32)
+  created_by      BigInt?  @db.UnsignedBigInt
+  created_at      DateTime @default(now()) @db.Timestamp(3)
+  updated_at      DateTime @default(now()) @db.Timestamp(3)
+
+  @@index([fuel_type, effective_date], map: "idx_mera_official_prices_fuel_date")
+}
+
+model public_notices {
+  id                       BigInt                @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id                String                @unique @db.VarChar(64)
+  title                    String                @db.VarChar(220)
+  message                  String                @db.Text
+  category                 String                @db.VarChar(96)
+  target_region            String?               @db.VarChar(80)
+  target_district          String?               @db.VarChar(80)
+  fuel_type                String?               @db.VarChar(32)
+  severity                 String                @default("medium") @db.VarChar(32)
+  status                   public_notices_status @default(draft)
+  created_by               BigInt?               @db.UnsignedBigInt
+  approved_by              BigInt?               @db.UnsignedBigInt
+  scheduled_at             DateTime?             @db.Timestamp(3)
+  approved_at              DateTime?             @db.Timestamp(3)
+  published_at             DateTime?             @db.Timestamp(3)
+  selected_channels_json   Json?
+  external_post_status_json Json?
+  external_post_id         String?               @db.VarChar(160)
+  external_error           String?               @db.Text
+  retry_count              Int                   @default(0) @db.UnsignedInt
+  created_at               DateTime              @default(now()) @db.Timestamp(3)
+  updated_at               DateTime              @default(now()) @db.Timestamp(3)
+
+  @@index([status, category], map: "idx_public_notices_status_category")
+  @@index([target_region, target_district], map: "idx_public_notices_target")
+}
+
+model public_notice_approvals {
+  id               BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  public_notice_id BigInt   @db.UnsignedBigInt
+  actor_id         BigInt?  @db.UnsignedBigInt
+  action           String   @db.VarChar(64)
+  note             String?  @db.Text
+  created_at       DateTime @default(now()) @db.Timestamp(3)
+
+  @@index([public_notice_id, created_at], map: "idx_public_notice_approvals_notice")
+}
+
+model external_social_posts {
+  id                BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  public_notice_id  BigInt   @db.UnsignedBigInt
+  channel           String   @db.VarChar(64)
+  status            String   @default("not_configured") @db.VarChar(64)
+  external_post_id  String?  @db.VarChar(160)
+  external_error    String?  @db.Text
+  retry_count       Int      @default(0) @db.UnsignedInt
+  last_attempt_at   DateTime? @db.Timestamp(3)
+  created_at        DateTime @default(now()) @db.Timestamp(3)
+  updated_at        DateTime @default(now()) @db.Timestamp(3)
+
+  @@index([public_notice_id, channel], map: "idx_external_social_posts_notice")
+}
+
+model mera_reports {
+  id              BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id       String   @unique @db.VarChar(96)
+  report_type     String   @db.VarChar(120)
+  title           String   @db.VarChar(220)
+  filters_json    Json?
+  status          String   @default("ready") @db.VarChar(32)
+  generated_by    BigInt?  @db.UnsignedBigInt
+  file_url        String?  @db.VarChar(1000)
+  download_format String?  @db.VarChar(32)
+  created_at      DateTime @default(now()) @db.Timestamp(3)
+  updated_at      DateTime @default(now()) @db.Timestamp(3)
+
+  @@index([report_type, created_at], map: "idx_mera_reports_type_time")
+}
+
+model mera_saved_views {
+  id            BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id     String   @unique @db.VarChar(64)
+  owner_user_id BigInt?  @db.UnsignedBigInt
+  name          String   @db.VarChar(160)
+  scope_type    String   @default("National") @db.VarChar(32)
+  config_json   Json
+  created_at    DateTime @default(now()) @db.Timestamp(3)
+  updated_at    DateTime @default(now()) @db.Timestamp(3)
+
+  @@index([owner_user_id], map: "idx_mera_saved_views_owner")
 }
 
 model auth_sessions {
@@ -934,6 +1311,130 @@ model auth_sessions {
   @@index([station_id], map: "fk_auth_sessions_station")
   @@index([expires_at], map: "idx_auth_sessions_expires")
   @@index([user_id], map: "idx_auth_sessions_user")
+}
+
+model KioskDevice {
+  id                BigInt             @id @default(autoincrement()) @db.UnsignedBigInt
+  publicId          String             @unique(map: "uq_kiosk_devices_public_id") @map("public_id") @db.Char(26)
+  kioskCode         String?            @map("kiosk_code") @db.VarChar(64)
+  stationId         BigInt             @map("station_id") @db.UnsignedBigInt
+  assignedPumpId    BigInt?            @map("assigned_pump_id") @db.UnsignedBigInt
+  name              String             @db.VarChar(120)
+  locationLabel     String?            @map("location_label") @db.VarChar(120)
+  deviceFingerprint String             @unique(map: "uq_kiosk_devices_fingerprint") @map("device_fingerprint") @db.VarChar(255)
+  status            KioskDeviceStatus  @default(ACTIVE)
+  allowedModesJson  String?            @map("allowed_modes_json") @db.LongText
+  lastSeenAt        DateTime?          @map("last_seen_at") @db.Timestamp(3)
+  createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamp(3)
+  updatedAt         DateTime           @updatedAt @map("updated_at") @db.Timestamp(3)
+
+  @@index([kioskCode], map: "idx_kiosk_devices_code")
+  @@index([stationId, assignedPumpId, status], map: "idx_kiosk_devices_assigned_pump")
+  @@index([stationId, status], map: "idx_kiosk_devices_station_status")
+  @@map("kiosk_devices")
+}
+
+model KioskRegistrationChallenge {
+  id                    BigInt                             @id @default(autoincrement()) @db.UnsignedBigInt
+  publicId              String                             @unique(map: "uq_kiosk_registration_challenges_public_id") @map("public_id") @db.Char(26)
+  displayCode           String                             @map("display_code") @db.VarChar(12)
+  challengeHash         String                             @map("challenge_hash") @db.Char(64)
+  deviceFingerprintHash String                             @map("device_fingerprint_hash") @db.Char(64)
+  status                KioskRegistrationChallengeStatus   @default(PENDING)
+  expiresAt             DateTime                           @map("expires_at") @db.Timestamp(3)
+  registeredKioskId     BigInt?                            @map("registered_kiosk_id") @db.UnsignedBigInt
+  approvedByUserId      BigInt?                            @map("approved_by_user_id") @db.UnsignedBigInt
+  approvedAt            DateTime?                          @map("approved_at") @db.Timestamp(3)
+  deniedAt              DateTime?                          @map("denied_at") @db.Timestamp(3)
+  ipAddress             String?                            @map("ip_address") @db.VarChar(64)
+  userAgent             String?                            @map("user_agent") @db.VarChar(255)
+  createdAt             DateTime                           @default(now()) @map("created_at") @db.Timestamp(3)
+
+  @@index([challengeHash], map: "idx_kiosk_registration_challenges_hash")
+  @@index([deviceFingerprintHash, status, expiresAt], map: "idx_kiosk_registration_challenges_fingerprint_status")
+  @@index([status, expiresAt], map: "idx_kiosk_registration_challenges_status")
+  @@index([registeredKioskId], map: "idx_kiosk_registration_challenges_registered_kiosk")
+  @@index([approvedByUserId], map: "idx_kiosk_registration_challenges_approved_by")
+  @@map("kiosk_registration_challenges")
+}
+
+model KioskLoginChallenge {
+  id               BigInt                     @id @default(autoincrement()) @db.UnsignedBigInt
+  publicId         String                     @unique(map: "uq_kiosk_login_challenges_public_id") @map("public_id") @db.Char(26)
+  kioskId          BigInt                     @map("kiosk_id") @db.UnsignedBigInt
+  stationId        BigInt                     @map("station_id") @db.UnsignedBigInt
+  displayCode      String                     @map("display_code") @db.VarChar(12)
+  challengeHash    String                     @map("challenge_hash") @db.Char(64)
+  status           KioskLoginChallengeStatus  @default(PENDING)
+  expiresAt        DateTime                   @map("expires_at") @db.Timestamp(3)
+  approvedByUserId BigInt?                    @map("approved_by_user_id") @db.UnsignedBigInt
+  approvedAt       DateTime?                  @map("approved_at") @db.Timestamp(3)
+  deniedAt         DateTime?                  @map("denied_at") @db.Timestamp(3)
+  ipAddress        String?                    @map("ip_address") @db.VarChar(64)
+  userAgent        String?                    @map("user_agent") @db.VarChar(255)
+  createdAt        DateTime                   @default(now()) @map("created_at") @db.Timestamp(3)
+
+  @@index([challengeHash], map: "idx_kiosk_login_challenges_hash")
+  @@index([kioskId, status, expiresAt], map: "idx_kiosk_login_challenges_kiosk_status")
+  @@index([stationId, status, expiresAt], map: "idx_kiosk_login_challenges_station_status")
+  @@index([approvedByUserId], map: "fk_kiosk_login_challenges_approved_by")
+  @@map("kiosk_login_challenges")
+}
+
+model KioskSession {
+  id                 BigInt               @id @default(autoincrement()) @db.UnsignedBigInt
+  publicId           String               @unique(map: "uq_kiosk_sessions_public_id") @map("public_id") @db.Char(26)
+  kioskId            BigInt               @map("kiosk_id") @db.UnsignedBigInt
+  stationId          BigInt               @map("station_id") @db.UnsignedBigInt
+  approvedByUserId   BigInt               @map("approved_by_user_id") @db.UnsignedBigInt
+  roleScope          KioskSessionRoleScope @map("role_scope")
+  permissionsJson    String               @map("permissions_json") @db.LongText
+  status             KioskSessionStatus    @default(ACTIVE)
+  startedAt          DateTime             @default(now()) @map("started_at") @db.Timestamp(3)
+  expiresAt          DateTime             @map("expires_at") @db.Timestamp(3)
+  lastHeartbeatAt    DateTime?            @map("last_heartbeat_at") @db.Timestamp(3)
+  revokedAt          DateTime?            @map("revoked_at") @db.Timestamp(3)
+  revokedByUserId    BigInt?              @map("revoked_by_user_id") @db.UnsignedBigInt
+  createdAt          DateTime             @default(now()) @map("created_at") @db.Timestamp(3)
+
+  @@index([stationId, status, expiresAt], map: "idx_kiosk_sessions_station_status")
+  @@index([kioskId, status, expiresAt], map: "idx_kiosk_sessions_kiosk_status")
+  @@index([approvedByUserId], map: "fk_kiosk_sessions_approved_by")
+  @@index([revokedByUserId], map: "fk_kiosk_sessions_revoked_by")
+  @@map("kiosk_sessions")
+}
+
+model StaffTrustedDevice {
+  id                BigInt                    @id @default(autoincrement()) @db.UnsignedBigInt
+  userId            BigInt                    @map("user_id") @db.UnsignedBigInt
+  deviceName        String?                   @map("device_name") @db.VarChar(120)
+  deviceFingerprint String                    @map("device_fingerprint") @db.VarChar(255)
+  phoneVerified     Boolean                   @default(false) @map("phone_verified")
+  status            StaffTrustedDeviceStatus  @default(ACTIVE)
+  lastUsedAt        DateTime?                 @map("last_used_at") @db.Timestamp(3)
+  createdAt         DateTime                  @default(now()) @map("created_at") @db.Timestamp(3)
+  updatedAt         DateTime                  @updatedAt @map("updated_at") @db.Timestamp(3)
+
+  @@unique([userId, deviceFingerprint], map: "uq_staff_trusted_devices_user_fingerprint")
+  @@index([userId, status], map: "idx_staff_trusted_devices_user_status")
+  @@map("staff_trusted_devices")
+}
+
+model AuditLog {
+  id           BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  actorId      BigInt?   @map("actor_id") @db.UnsignedBigInt
+  action       String    @db.VarChar(96)
+  entityType   String    @map("entity_type") @db.VarChar(64)
+  entityId     String?   @map("entity_id") @db.VarChar(96)
+  metadataJson String?   @map("metadata_json") @db.LongText
+  ipAddress    String?   @map("ip_address") @db.VarChar(64)
+  userAgent    String?   @map("user_agent") @db.VarChar(255)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamp(3)
+
+  @@index([actorId, createdAt], map: "idx_security_audit_actor_time")
+  @@index([entityType, entityId], map: "idx_security_audit_entity")
+  @@index([action, createdAt], map: "idx_security_audit_action_time")
+  @@map("security_audit_logs")
 }
 
 model IngestedEvent {
@@ -966,6 +1467,903 @@ model SupportTicket {
   @@index([stationId, createdAt], map: "idx_support_station_created")
   @@index([status], map: "idx_support_status")
   @@map("support_tickets")
+}
+
+model fleet_accounts {
+  id                    BigInt                @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id             String                @unique @db.Char(26)
+  name                  String                @db.VarChar(160)
+  business_type         String                @db.VarChar(80)
+  registration_number   String?               @db.VarChar(80)
+  owner_user_id         BigInt                @db.UnsignedBigInt
+  primary_contact_name  String                @db.VarChar(120)
+  primary_contact_phone String                @db.VarChar(32)
+  billing_email         String?               @db.VarChar(160)
+  status                fleet_accounts_status @default(active)
+  created_at            DateTime              @default(now()) @db.Timestamp(3)
+  updated_at            DateTime              @default(now()) @db.Timestamp(3)
+
+  @@index([owner_user_id, status], map: "idx_fleet_accounts_owner")
+  @@index([status, updated_at], map: "idx_fleet_accounts_status")
+}
+
+model fleet_members {
+  id                 BigInt               @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id          String               @unique @db.Char(26)
+  fleet_account_id   BigInt               @db.UnsignedBigInt
+  user_id            BigInt               @db.UnsignedBigInt
+  department_id      BigInt?              @db.UnsignedBigInt
+  role               fleet_members_role
+  status             fleet_members_status @default(pending)
+  invited_by_user_id BigInt?              @db.UnsignedBigInt
+  invited_at         DateTime?            @db.Timestamp(3)
+  accepted_at        DateTime?            @db.Timestamp(3)
+  last_accessed_at   DateTime?            @db.Timestamp(3)
+  created_at         DateTime             @default(now()) @db.Timestamp(3)
+  updated_at         DateTime             @default(now()) @db.Timestamp(3)
+
+  @@unique([fleet_account_id, user_id], map: "uq_fleet_members_fleet_user")
+  @@index([department_id, status], map: "idx_fleet_members_department")
+  @@index([fleet_account_id, role, status], map: "idx_fleet_members_fleet_role_status")
+  @@index([invited_by_user_id], map: "idx_fleet_members_invited_by")
+  @@index([user_id, status], map: "idx_fleet_members_user_status")
+}
+
+model fleet_invitations {
+  id                  BigInt                   @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id           String                   @unique @db.Char(26)
+  fleet_account_id    BigInt                   @db.UnsignedBigInt
+  invitee_name        String?                  @db.VarChar(120)
+  invitee_email       String?                  @db.VarChar(160)
+  invitee_phone       String?                  @db.VarChar(32)
+  role                fleet_members_role
+  status              fleet_invitations_status @default(pending)
+  invited_by_user_id  BigInt                   @db.UnsignedBigInt
+  accepted_by_user_id BigInt?                  @db.UnsignedBigInt
+  metadata_json       String?                  @db.LongText
+  expires_at          DateTime?                @db.Timestamp(3)
+  accepted_at         DateTime?                @db.Timestamp(3)
+  created_at          DateTime                 @default(now()) @db.Timestamp(3)
+  updated_at          DateTime                 @default(now()) @db.Timestamp(3)
+
+  @@index([accepted_by_user_id], map: "idx_fleet_invitations_accepted_by")
+  @@index([fleet_account_id, status, created_at], map: "idx_fleet_invitations_fleet_status")
+  @@index([invitee_email, invitee_phone, status], map: "idx_fleet_invitations_identity")
+  @@index([invited_by_user_id], map: "idx_fleet_invitations_invited_by")
+}
+
+model fleet_access_requests {
+  id            BigInt                       @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id     String                       @unique @db.Char(26)
+  user_id       BigInt                       @db.UnsignedBigInt
+  fleet_name    String?                      @db.VarChar(160)
+  contact_name  String?                      @db.VarChar(120)
+  contact_phone String?                      @db.VarChar(32)
+  contact_email String?                      @db.VarChar(160)
+  message       String?                      @db.VarChar(500)
+  status        fleet_access_requests_status @default(pending)
+  created_at    DateTime                     @default(now()) @db.Timestamp(3)
+  updated_at    DateTime                     @default(now()) @db.Timestamp(3)
+
+  @@index([status, created_at], map: "idx_fleet_access_requests_status")
+  @@index([user_id, status, created_at], map: "idx_fleet_access_requests_user_status")
+}
+
+model fleet_vehicles {
+  id                   BigInt                @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id            String                @unique @db.Char(26)
+  fleet_account_id     BigInt                @db.UnsignedBigInt
+  department_id        BigInt?               @db.UnsignedBigInt
+  plate_number         String                @db.VarChar(32)
+  vehicle_name         String?               @db.VarChar(120)
+  vehicle_type         String?               @db.VarChar(80)
+  fuel_type            fleet_fuel_type       @default(unknown)
+  tank_capacity_litres Decimal?              @db.Decimal(12, 2)
+  current_odometer     Decimal?              @db.Decimal(14, 1)
+  expected_km_per_litre Decimal?             @db.Decimal(10, 2)
+  status               fleet_vehicles_status @default(active)
+  created_at           DateTime              @default(now()) @db.Timestamp(3)
+  updated_at           DateTime              @default(now()) @db.Timestamp(3)
+
+  @@unique([fleet_account_id, plate_number], map: "uq_fleet_vehicles_plate")
+  @@index([fleet_account_id, department_id, status], map: "idx_fleet_vehicles_department_status")
+  @@index([fleet_account_id, status], map: "idx_fleet_vehicles_fleet_status")
+}
+
+model fleet_vehicle_assignments {
+  id                  BigInt                           @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id           String                           @unique @db.Char(26)
+  fleet_account_id    BigInt                           @db.UnsignedBigInt
+  vehicle_id          BigInt                           @db.UnsignedBigInt
+  user_id             BigInt                           @db.UnsignedBigInt
+  status              fleet_vehicle_assignments_status @default(active)
+  assigned_by_user_id BigInt?                          @db.UnsignedBigInt
+  assigned_at         DateTime                         @default(now()) @db.Timestamp(3)
+  removed_at          DateTime?                        @db.Timestamp(3)
+  created_at          DateTime                         @default(now()) @db.Timestamp(3)
+  updated_at          DateTime                         @default(now()) @db.Timestamp(3)
+
+  @@index([assigned_by_user_id], map: "idx_fleet_vehicle_assignments_assigned_by")
+  @@index([fleet_account_id, status], map: "idx_fleet_vehicle_assignments_fleet_status")
+  @@index([user_id, status], map: "idx_fleet_vehicle_assignments_user_status")
+  @@index([vehicle_id, status], map: "idx_fleet_vehicle_assignments_vehicle_status")
+}
+
+model fleet_wallets {
+  id               BigInt               @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id        String               @unique @db.Char(26)
+  fleet_account_id BigInt               @unique(map: "uq_fleet_wallets_account") @db.UnsignedBigInt
+  balance          Decimal              @default(0.00) @db.Decimal(18, 2)
+  reserved_balance Decimal              @default(0.00) @db.Decimal(18, 2)
+  currency         String               @default("MWK") @db.Char(3)
+  status           fleet_wallets_status @default(active)
+  created_at       DateTime             @default(now()) @db.Timestamp(3)
+  updated_at       DateTime             @default(now()) @db.Timestamp(3)
+
+  @@index([status], map: "idx_fleet_wallets_status")
+}
+
+model fleet_wallet_transactions {
+  id                  BigInt                           @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id           String                           @unique @db.Char(26)
+  fleet_wallet_id     BigInt                           @db.UnsignedBigInt
+  fleet_account_id    BigInt                           @db.UnsignedBigInt
+  type                fleet_wallet_transactions_type
+  status              fleet_wallet_transactions_status @default(posted)
+  amount              Decimal                          @db.Decimal(18, 2)
+  currency            String                           @default("MWK") @db.Char(3)
+  reference           String                           @unique(map: "uq_fleet_wallet_transactions_reference") @db.VarChar(96)
+  description         String?                          @db.VarChar(255)
+  related_entity_type String?                          @db.VarChar(64)
+  related_entity_id   String?                          @db.VarChar(96)
+  created_by_user_id  BigInt?                          @db.UnsignedBigInt
+  created_at          DateTime                         @default(now()) @db.Timestamp(3)
+
+  @@index([created_by_user_id], map: "idx_fleet_wallet_transactions_created_by")
+  @@index([fleet_account_id, created_at], map: "idx_fleet_wallet_transactions_account_time")
+  @@index([fleet_wallet_id, created_at], map: "idx_fleet_wallet_transactions_wallet_time")
+  @@index([type, status, created_at], map: "idx_fleet_wallet_transactions_type_status")
+}
+
+model fleet_policies {
+  id                             BigInt                         @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id                      String                         @unique @db.Char(26)
+  fleet_account_id               BigInt                         @db.UnsignedBigInt
+  name                           String                         @db.VarChar(140)
+  applies_to_type                fleet_policies_applies_to_type @default(fleet)
+  applies_to_id                  BigInt?                        @db.UnsignedBigInt
+  daily_amount_limit             Decimal?                       @db.Decimal(18, 2)
+  weekly_amount_limit            Decimal?                       @db.Decimal(18, 2)
+  monthly_amount_limit           Decimal?                       @db.Decimal(18, 2)
+  daily_litre_limit              Decimal?                       @db.Decimal(14, 3)
+  monthly_litre_limit            Decimal?                       @db.Decimal(14, 3)
+  allowed_fuel_type              fleet_fuel_type?
+  allowed_station_ids_json       String?                        @db.LongText
+  requires_approval_above_amount Decimal?                       @db.Decimal(18, 2)
+  active                         Boolean                        @default(true)
+  created_at                     DateTime                       @default(now()) @db.Timestamp(3)
+  updated_at                     DateTime                       @default(now()) @db.Timestamp(3)
+
+  @@index([fleet_account_id, active], map: "idx_fleet_policies_fleet_active")
+  @@index([fleet_account_id, applies_to_type, applies_to_id, active], map: "idx_fleet_policies_target")
+}
+
+model fleet_fuel_requests {
+  id                   BigInt                     @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id            String                     @unique @db.Char(26)
+  fleet_account_id     BigInt                     @db.UnsignedBigInt
+  requested_by_user_id BigInt                     @db.UnsignedBigInt
+  vehicle_id           BigInt                     @db.UnsignedBigInt
+  department_id        BigInt?                    @db.UnsignedBigInt
+  allocation_id        BigInt?                    @db.UnsignedBigInt
+  station_id           BigInt?                    @db.UnsignedBigInt
+  requested_amount     Decimal?                   @db.Decimal(18, 2)
+  approved_amount      Decimal?                   @db.Decimal(18, 2)
+  requested_litres     Decimal?                   @db.Decimal(14, 3)
+  approved_litres      Decimal?                   @db.Decimal(14, 3)
+  odometer_reading     Decimal?                   @db.Decimal(14, 1)
+  reason               String?                    @db.VarChar(255)
+  status               fleet_fuel_requests_status @default(pending)
+  approved_by_user_id  BigInt?                    @db.UnsignedBigInt
+  approved_at          DateTime?                  @db.Timestamp(3)
+  rejected_reason      String?                    @db.VarChar(255)
+  hold_amount          Decimal                    @default(0.00) @db.Decimal(18, 2)
+  hold_reference       String?                    @db.VarChar(96)
+  expires_at           DateTime?                  @db.Timestamp(3)
+  created_at           DateTime                   @default(now()) @db.Timestamp(3)
+  updated_at           DateTime                   @default(now()) @db.Timestamp(3)
+
+  @@index([approved_by_user_id], map: "idx_fleet_fuel_requests_approved_by")
+  @@index([allocation_id, status, created_at], map: "idx_fleet_fuel_requests_allocation")
+  @@index([department_id, status, created_at], map: "idx_fleet_fuel_requests_department")
+  @@index([fleet_account_id, status, created_at], map: "idx_fleet_fuel_requests_fleet_status")
+  @@index([requested_by_user_id, status, created_at], map: "idx_fleet_fuel_requests_driver_status")
+  @@index([station_id], map: "idx_fleet_fuel_requests_station")
+  @@index([vehicle_id, status, created_at], map: "idx_fleet_fuel_requests_vehicle_status")
+}
+
+model fleet_transactions {
+  id                           BigInt                         @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id                    String                         @unique @db.Char(26)
+  fleet_account_id             BigInt                         @db.UnsignedBigInt
+  department_id                BigInt?                        @db.UnsignedBigInt
+  vehicle_id                   BigInt                         @db.UnsignedBigInt
+  driver_user_id               BigInt                         @db.UnsignedBigInt
+  station_id                   BigInt?                        @db.UnsignedBigInt
+  pump_id                      BigInt?                        @db.UnsignedBigInt
+  nozzle_id                    BigInt?                        @db.UnsignedBigInt
+  fuel_request_id              BigInt?                        @db.UnsignedBigInt
+  allocation_id                BigInt?                        @db.UnsignedBigInt
+  fuel_card_id                 BigInt?                        @db.UnsignedBigInt
+  payment_context_type         fleet_payment_context_type      @default(fleet_wallet)
+  litres                       Decimal                        @db.Decimal(14, 3)
+  amount                       Decimal                        @db.Decimal(18, 2)
+  price_per_litre              Decimal                        @db.Decimal(14, 4)
+  fuel_type                    fleet_fuel_type
+  odometer_reading             Decimal?                       @db.Decimal(14, 1)
+  km_since_last_fuel           Decimal?                       @db.Decimal(14, 2)
+  km_per_litre                 Decimal?                       @db.Decimal(10, 3)
+  cost_per_km                  Decimal?                       @db.Decimal(18, 4)
+  status                       fleet_transactions_status      @default(completed)
+  risk_status                  fleet_transactions_risk_status @default(normal)
+  risk_reason                  String?                        @db.VarChar(255)
+  wallet_transaction_reference String?                        @db.VarChar(96)
+  created_at                   DateTime                       @default(now()) @db.Timestamp(3)
+  updated_at                   DateTime                       @default(now()) @db.Timestamp(3)
+
+  @@index([driver_user_id, created_at], map: "idx_fleet_transactions_driver_time")
+  @@index([department_id, created_at], map: "idx_fleet_transactions_department_time")
+  @@index([allocation_id, created_at], map: "idx_fleet_transactions_allocation_time")
+  @@index([fuel_card_id, created_at], map: "idx_fleet_transactions_fuel_card_time")
+  @@index([fleet_account_id, created_at], map: "idx_fleet_transactions_fleet_time")
+  @@index([fleet_account_id, payment_context_type, created_at], map: "idx_fleet_transactions_payment_context")
+  @@index([fleet_account_id, status, risk_status], map: "idx_fleet_transactions_status")
+  @@index([fuel_request_id], map: "idx_fleet_transactions_request")
+  @@index([nozzle_id], map: "idx_fleet_transactions_nozzle")
+  @@index([pump_id], map: "idx_fleet_transactions_pump")
+  @@index([station_id, created_at], map: "idx_fleet_transactions_station_time")
+  @@index([vehicle_id, created_at], map: "idx_fleet_transactions_vehicle_time")
+}
+
+model fleet_alerts {
+  id                  BigInt                @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id           String                @unique @db.Char(26)
+  fleet_account_id    BigInt                @db.UnsignedBigInt
+  type                String                @db.VarChar(64)
+  severity            fleet_alerts_severity @default(info)
+  title               String                @db.VarChar(160)
+  message             String                @db.VarChar(500)
+  related_entity_type String?               @db.VarChar(64)
+  related_entity_id   String?               @db.VarChar(96)
+  read_at             DateTime?             @db.Timestamp(3)
+  created_at          DateTime              @default(now()) @db.Timestamp(3)
+
+  @@index([fleet_account_id, created_at], map: "idx_fleet_alerts_fleet_time")
+  @@index([fleet_account_id, read_at, severity], map: "idx_fleet_alerts_unread")
+}
+
+model fleet_audit_logs {
+  id               BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id        String   @unique @db.Char(26)
+  fleet_account_id BigInt   @db.UnsignedBigInt
+  actor_user_id    BigInt?  @db.UnsignedBigInt
+  action           String   @db.VarChar(96)
+  entity_type      String   @db.VarChar(64)
+  entity_id        String?  @db.VarChar(96)
+  metadata_json    String?  @db.LongText
+  ip_address       String?  @db.VarChar(64)
+  created_at       DateTime @default(now()) @db.Timestamp(3)
+
+  @@index([actor_user_id, created_at], map: "idx_fleet_audit_logs_actor_time")
+  @@index([fleet_account_id, created_at], map: "idx_fleet_audit_logs_fleet_time")
+  @@index([fleet_account_id, entity_type, entity_id], map: "idx_fleet_audit_logs_entity")
+}
+
+model fleet_budgets {
+  id                  BigInt                 @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id           String                 @unique @db.Char(26)
+  fleet_account_id    BigInt                 @db.UnsignedBigInt
+  budget_month        DateTime               @db.Date
+  fuel_budget         Decimal                @default(0.00) @db.Decimal(18, 2)
+  maintenance_budget  Decimal                @default(0.00) @db.Decimal(18, 2)
+  other_budget        Decimal                @default(0.00) @db.Decimal(18, 2)
+  revenue_target      Decimal                @default(0.00) @db.Decimal(18, 2)
+  status              fleet_budgets_status   @default(active)
+  created_by_user_id  BigInt?                @db.UnsignedBigInt
+  created_at          DateTime               @default(now()) @db.Timestamp(3)
+  updated_at          DateTime               @default(now()) @db.Timestamp(3)
+
+  @@unique([fleet_account_id, budget_month], map: "uq_fleet_budgets_month")
+  @@index([created_by_user_id], map: "idx_fleet_budgets_created_by")
+  @@index([fleet_account_id, status, budget_month], map: "idx_fleet_budgets_fleet_status")
+}
+
+model fleet_invoices {
+  id                   BigInt                 @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id            String                 @unique @db.Char(26)
+  fleet_account_id     BigInt                 @db.UnsignedBigInt
+  invoice_number       String                 @db.VarChar(64)
+  billing_period_start DateTime?              @db.Date
+  billing_period_end   DateTime?              @db.Date
+  status               fleet_invoices_status  @default(pending)
+  subtotal             Decimal                @default(0.00) @db.Decimal(18, 2)
+  tax_amount           Decimal                @default(0.00) @db.Decimal(18, 2)
+  total_amount         Decimal                @default(0.00) @db.Decimal(18, 2)
+  paid_amount          Decimal                @default(0.00) @db.Decimal(18, 2)
+  due_at               DateTime?              @db.Timestamp(3)
+  paid_at              DateTime?              @db.Timestamp(3)
+  notes                String?                @db.VarChar(255)
+  created_at           DateTime               @default(now()) @db.Timestamp(3)
+  updated_at           DateTime               @default(now()) @db.Timestamp(3)
+
+  @@unique([fleet_account_id, invoice_number], map: "uq_fleet_invoices_number")
+  @@index([fleet_account_id, status, due_at], map: "idx_fleet_invoices_status_due")
+}
+
+model fleet_maintenance_records {
+  id                  BigInt                           @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id           String                           @unique @db.Char(26)
+  fleet_account_id    BigInt                           @db.UnsignedBigInt
+  vehicle_id          BigInt                           @db.UnsignedBigInt
+  record_type         fleet_maintenance_records_type   @default(service)
+  maintenance_type    String?                          @db.VarChar(64)
+  status              fleet_maintenance_records_status @default(due)
+  title               String                           @db.VarChar(140)
+  cost_estimate       Decimal                          @default(0.00) @db.Decimal(18, 2)
+  cost_actual         Decimal                          @default(0.00) @db.Decimal(18, 2)
+  odometer_reading    Decimal?                         @db.Decimal(14, 1)
+  last_service_odometer Decimal?                       @db.Decimal(14, 1)
+  next_service_odometer Decimal?                       @db.Decimal(14, 1)
+  last_service_date   DateTime?                        @db.Date
+  next_service_date   DateTime?                        @db.Date
+  due_at              DateTime?                        @db.Timestamp(3)
+  completed_at        DateTime?                        @db.Timestamp(3)
+  notes               String?                          @db.VarChar(500)
+  created_by_user_id  BigInt?                          @db.UnsignedBigInt
+  created_at          DateTime                         @default(now()) @db.Timestamp(3)
+  updated_at          DateTime                         @default(now()) @db.Timestamp(3)
+
+  @@index([created_by_user_id], map: "idx_fleet_maintenance_created_by")
+  @@index([fleet_account_id, status, due_at], map: "idx_fleet_maintenance_fleet_status")
+  @@index([fleet_account_id, next_service_date, status], map: "idx_fleet_maintenance_next_service")
+  @@index([vehicle_id, status, due_at], map: "idx_fleet_maintenance_vehicle_status")
+}
+
+model fleet_route_activity {
+  id                BigInt                      @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id         String                      @unique @db.Char(26)
+  fleet_account_id  BigInt                      @db.UnsignedBigInt
+  vehicle_id        BigInt?                     @db.UnsignedBigInt
+  driver_user_id    BigInt?                     @db.UnsignedBigInt
+  route_name        String                      @db.VarChar(140)
+  route_status      fleet_route_activity_status @default(planned)
+  distance_km       Decimal                     @default(0.00) @db.Decimal(14, 2)
+  fuel_cost         Decimal                     @default(0.00) @db.Decimal(18, 2)
+  other_cost        Decimal                     @default(0.00) @db.Decimal(18, 2)
+  revenue_amount    Decimal                     @default(0.00) @db.Decimal(18, 2)
+  started_at        DateTime?                   @db.Timestamp(3)
+  completed_at      DateTime?                   @db.Timestamp(3)
+  created_at        DateTime                    @default(now()) @db.Timestamp(3)
+  updated_at        DateTime                    @default(now()) @db.Timestamp(3)
+
+  @@index([driver_user_id, started_at], map: "idx_fleet_route_activity_driver_time")
+  @@index([fleet_account_id, route_status, started_at], map: "idx_fleet_route_activity_fleet_status")
+  @@index([vehicle_id, started_at], map: "idx_fleet_route_activity_vehicle_time")
+}
+
+model fleet_vehicle_live_states {
+  id                 BigInt                             @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id          String                             @unique @db.Char(26)
+  fleet_account_id   BigInt                             @db.UnsignedBigInt
+  vehicle_id         BigInt                             @db.UnsignedBigInt
+  fuel_percent       Decimal?                           @db.Decimal(5, 2)
+  operational_status fleet_vehicle_live_states_status   @default(offline)
+  location_label     String?                            @db.VarChar(160)
+  latitude           Decimal?                           @db.Decimal(10, 7)
+  longitude          Decimal?                           @db.Decimal(10, 7)
+  speed_kph          Decimal?                           @db.Decimal(8, 2)
+  last_seen_at       DateTime?                          @db.Timestamp(3)
+  created_at         DateTime                           @default(now()) @db.Timestamp(3)
+  updated_at         DateTime                           @default(now()) @db.Timestamp(3)
+
+  @@unique([fleet_account_id, vehicle_id], map: "uq_fleet_vehicle_live_state_vehicle")
+  @@index([fleet_account_id, operational_status, last_seen_at], map: "idx_fleet_vehicle_live_states_status")
+}
+
+model fleet_departments {
+  id               BigInt                    @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id        String                    @unique @db.Char(26)
+  fleet_account_id BigInt                    @db.UnsignedBigInt
+  name             String                    @db.VarChar(120)
+  code             String?                   @db.VarChar(32)
+  manager_user_id  BigInt?                   @db.UnsignedBigInt
+  status           fleet_departments_status  @default(active)
+  created_at       DateTime                  @default(now()) @db.Timestamp(3)
+  updated_at       DateTime                  @default(now()) @db.Timestamp(3)
+
+  @@unique([fleet_account_id, code], map: "uq_fleet_departments_code")
+  @@index([fleet_account_id, status, name], map: "idx_fleet_departments_fleet_status")
+  @@index([manager_user_id], map: "idx_fleet_departments_manager")
+}
+
+model fleet_fuel_card_providers {
+  id           BigInt                            @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id    String                            @unique @db.Char(26)
+  name         String                            @unique(map: "uq_fleet_fuel_card_providers_name") @db.VarChar(120)
+  type         fleet_fuel_card_providers_type    @default(manual)
+  supports_api Boolean                           @default(false)
+  status       fleet_fuel_card_providers_status  @default(active)
+  created_at   DateTime                          @default(now()) @db.Timestamp(3)
+  updated_at   DateTime                          @default(now()) @db.Timestamp(3)
+
+  @@index([type, status], map: "idx_fleet_fuel_card_providers_type_status")
+}
+
+model fleet_fuel_cards {
+  id                    BigInt                            @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id             String                            @unique @db.Char(26)
+  fleet_account_id      BigInt                            @db.UnsignedBigInt
+  provider_id           BigInt                            @db.UnsignedBigInt
+  department_id         BigInt?                           @db.UnsignedBigInt
+  linked_vehicle_id     BigInt?                           @db.UnsignedBigInt
+  linked_driver_user_id BigInt?                           @db.UnsignedBigInt
+  card_label            String                            @db.VarChar(120)
+  masked_card_number    String                            @db.VarChar(32)
+  status                fleet_fuel_cards_status           @default(active)
+  provider_status       fleet_fuel_cards_provider_status  @default(manual_tracking)
+  monthly_litre_limit   Decimal?                          @db.Decimal(14, 3)
+  monthly_money_limit   Decimal?                          @db.Decimal(18, 2)
+  daily_litre_limit     Decimal?                          @db.Decimal(14, 3)
+  daily_money_limit     Decimal?                          @db.Decimal(18, 2)
+  last_transaction_at   DateTime?                         @db.Timestamp(3)
+  last_reconciled_at    DateTime?                         @db.Timestamp(3)
+  created_at            DateTime                          @default(now()) @db.Timestamp(3)
+  updated_at            DateTime                          @default(now()) @db.Timestamp(3)
+
+  @@unique([fleet_account_id, card_label], map: "uq_fleet_fuel_cards_label")
+  @@index([fleet_account_id, status], map: "idx_fleet_fuel_cards_fleet_status")
+  @@index([provider_id, provider_status], map: "idx_fleet_fuel_cards_provider")
+  @@index([department_id, status], map: "idx_fleet_fuel_cards_department")
+  @@index([linked_vehicle_id, status], map: "idx_fleet_fuel_cards_vehicle")
+  @@index([linked_driver_user_id, status], map: "idx_fleet_fuel_cards_driver")
+}
+
+model fleet_allocations {
+  id                         BigInt                          @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id                  String                          @unique @db.Char(26)
+  fleet_account_id           BigInt                          @db.UnsignedBigInt
+  department_id              BigInt?                         @db.UnsignedBigInt
+  vehicle_id                 BigInt?                         @db.UnsignedBigInt
+  driver_user_id             BigInt?                         @db.UnsignedBigInt
+  fuel_card_id               BigInt?                         @db.UnsignedBigInt
+  allocation_target_type     fleet_allocation_target_type    @default(fleet)
+  allocation_unit            fleet_allocation_unit           @default(litres)
+  monthly_litre_cap          Decimal?                        @db.Decimal(14, 3)
+  monthly_money_cap          Decimal?                        @db.Decimal(18, 2)
+  current_litre_balance      Decimal                         @default(0.000) @db.Decimal(14, 3)
+  current_money_balance      Decimal                         @default(0.00) @db.Decimal(18, 2)
+  used_litres_current_period Decimal                         @default(0.000) @db.Decimal(14, 3)
+  used_money_current_period  Decimal                         @default(0.00) @db.Decimal(18, 2)
+  carry_over_litres          Decimal                         @default(0.000) @db.Decimal(14, 3)
+  carry_over_money           Decimal                         @default(0.00) @db.Decimal(18, 2)
+  rollover_policy            fleet_allocation_rollover_policy @default(top_up_to_cap)
+  max_carryover_litres       Decimal?                        @db.Decimal(14, 3)
+  max_carryover_money        Decimal?                        @db.Decimal(18, 2)
+  period_start               DateTime                        @db.Date
+  period_end                 DateTime                        @db.Date
+  status                     fleet_allocations_status        @default(active)
+  created_at                 DateTime                        @default(now()) @db.Timestamp(3)
+  updated_at                 DateTime                        @default(now()) @db.Timestamp(3)
+
+  @@index([fleet_account_id, status, allocation_target_type], map: "idx_fleet_allocations_fleet_status")
+  @@index([department_id, status], map: "idx_fleet_allocations_department")
+  @@index([vehicle_id, status], map: "idx_fleet_allocations_vehicle")
+  @@index([driver_user_id, status], map: "idx_fleet_allocations_driver")
+  @@index([fuel_card_id, status], map: "idx_fleet_allocations_card")
+  @@index([fleet_account_id, period_start, period_end], map: "idx_fleet_allocations_period")
+}
+
+model fleet_allocation_transactions {
+  id                           BigInt                                  @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id                    String                                  @unique @db.Char(26)
+  fleet_account_id             BigInt                                  @db.UnsignedBigInt
+  allocation_id                BigInt                                  @db.UnsignedBigInt
+  transaction_type             fleet_allocation_transactions_type      @default(adjustment)
+  litres                       Decimal?                                @db.Decimal(14, 3)
+  amount                       Decimal?                                @db.Decimal(18, 2)
+  reference                    String?                                 @db.VarChar(96)
+  related_fleet_transaction_id BigInt?                                 @db.UnsignedBigInt
+  created_by_user_id           BigInt?                                 @db.UnsignedBigInt
+  created_at                   DateTime                                @default(now()) @db.Timestamp(3)
+
+  @@index([fleet_account_id, created_at], map: "idx_fleet_allocation_tx_account_time")
+  @@index([allocation_id, created_at], map: "idx_fleet_allocation_tx_allocation_time")
+  @@index([related_fleet_transaction_id], map: "idx_fleet_allocation_tx_related")
+  @@index([created_by_user_id], map: "idx_fleet_allocation_tx_created_by")
+}
+
+model fleet_allocation_rollovers {
+  id                     BigInt                            @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id              String                            @unique @db.Char(26)
+  fleet_account_id       BigInt                            @db.UnsignedBigInt
+  allocation_id          BigInt                            @db.UnsignedBigInt
+  rollover_policy        fleet_allocation_rollover_policy
+  previous_litre_balance Decimal                           @default(0.000) @db.Decimal(14, 3)
+  previous_money_balance Decimal                           @default(0.00) @db.Decimal(18, 2)
+  top_up_litres          Decimal                           @default(0.000) @db.Decimal(14, 3)
+  top_up_amount          Decimal                           @default(0.00) @db.Decimal(18, 2)
+  new_litre_balance      Decimal                           @default(0.000) @db.Decimal(14, 3)
+  new_money_balance      Decimal                           @default(0.00) @db.Decimal(18, 2)
+  period_start           DateTime                          @db.Date
+  period_end             DateTime                          @db.Date
+  status                 fleet_allocation_rollovers_status @default(preview)
+  executed_by_user_id    BigInt?                           @db.UnsignedBigInt
+  executed_at            DateTime?                         @db.Timestamp(3)
+  created_at             DateTime                          @default(now()) @db.Timestamp(3)
+
+  @@index([fleet_account_id, created_at], map: "idx_fleet_allocation_rollovers_account_time")
+  @@index([allocation_id, status, period_start], map: "idx_fleet_allocation_rollovers_allocation")
+  @@index([executed_by_user_id], map: "idx_fleet_allocation_rollovers_executed_by")
+}
+
+model fleet_fueling_sessions {
+  id                   BigInt                         @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id            String                         @unique @db.Char(26)
+  fleet_account_id     BigInt                         @db.UnsignedBigInt
+  department_id        BigInt?                        @db.UnsignedBigInt
+  vehicle_id           BigInt                         @db.UnsignedBigInt
+  driver_user_id       BigInt                         @db.UnsignedBigInt
+  allocation_id        BigInt?                        @db.UnsignedBigInt
+  fuel_card_id         BigInt?                        @db.UnsignedBigInt
+  station_id           BigInt?                        @db.UnsignedBigInt
+  payment_context_type fleet_payment_context_type      @default(fleet_wallet)
+  authorized_litres    Decimal?                       @db.Decimal(14, 3)
+  authorized_amount    Decimal?                       @db.Decimal(18, 2)
+  odometer_reading     Decimal                        @db.Decimal(14, 1)
+  fuel_type            fleet_fuel_type                @default(unknown)
+  status               fleet_fueling_sessions_status  @default(authorized)
+  validation_json      String?                        @db.LongText
+  expires_at           DateTime?                      @db.Timestamp(3)
+  completed_at         DateTime?                      @db.Timestamp(3)
+  created_at           DateTime                       @default(now()) @db.Timestamp(3)
+  updated_at           DateTime                       @default(now()) @db.Timestamp(3)
+
+  @@index([fleet_account_id, status, created_at], map: "idx_fleet_fueling_sessions_account_status")
+  @@index([driver_user_id, status, created_at], map: "idx_fleet_fueling_sessions_driver_status")
+  @@index([vehicle_id, status, created_at], map: "idx_fleet_fueling_sessions_vehicle_status")
+  @@index([allocation_id, status], map: "idx_fleet_fueling_sessions_allocation")
+  @@index([fuel_card_id, status], map: "idx_fleet_fueling_sessions_card")
+  @@index([station_id, status], map: "idx_fleet_fueling_sessions_station")
+}
+
+model fleet_fuel_card_imports {
+  id                  BigInt                         @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id           String                         @unique @db.Char(26)
+  fleet_account_id    BigInt                         @db.UnsignedBigInt
+  provider_id         BigInt                         @db.UnsignedBigInt
+  fuel_card_id        BigInt?                        @db.UnsignedBigInt
+  file_name           String?                        @db.VarChar(180)
+  status              fleet_fuel_card_imports_status @default(pending)
+  imported_by_user_id BigInt?                        @db.UnsignedBigInt
+  rows_total          Int                            @default(0) @db.UnsignedInt
+  rows_matched        Int                            @default(0) @db.UnsignedInt
+  rows_unmatched      Int                            @default(0) @db.UnsignedInt
+  metadata_json       String?                        @db.LongText
+  created_at          DateTime                       @default(now()) @db.Timestamp(3)
+  updated_at          DateTime                       @default(now()) @db.Timestamp(3)
+
+  @@index([fleet_account_id, status, created_at], map: "idx_fleet_fuel_card_imports_account_status")
+  @@index([provider_id, status], map: "idx_fleet_fuel_card_imports_provider")
+  @@index([fuel_card_id, status], map: "idx_fleet_fuel_card_imports_card")
+  @@index([imported_by_user_id], map: "idx_fleet_fuel_card_imports_imported_by")
+}
+
+model fleet_fuel_card_transactions {
+  id                 BigInt                                  @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id          String                                  @unique @db.Char(26)
+  fleet_account_id   BigInt                                  @db.UnsignedBigInt
+  provider_id        BigInt                                  @db.UnsignedBigInt
+  fuel_card_id       BigInt                                  @db.UnsignedBigInt
+  external_reference String?                                 @db.VarChar(96)
+  transaction_date   DateTime                                @db.Timestamp(3)
+  station_name       String?                                 @db.VarChar(160)
+  station_id         BigInt?                                 @db.UnsignedBigInt
+  amount             Decimal?                                @db.Decimal(18, 2)
+  litres             Decimal?                                @db.Decimal(14, 3)
+  fuel_type          fleet_fuel_type?
+  odometer_reading   Decimal?                                @db.Decimal(14, 1)
+  raw_data_json      String?                                 @db.LongText
+  match_status       fleet_fuel_card_match_status            @default(unmatched)
+  risk_status        fleet_transactions_risk_status          @default(normal)
+  created_at         DateTime                                @default(now()) @db.Timestamp(3)
+  updated_at         DateTime                                @default(now()) @db.Timestamp(3)
+
+  @@unique([provider_id, external_reference], map: "uq_fleet_fuel_card_tx_external")
+  @@index([fleet_account_id, transaction_date], map: "idx_fleet_fuel_card_tx_account_time")
+  @@index([fuel_card_id, match_status, transaction_date], map: "idx_fleet_fuel_card_tx_card_status")
+  @@index([provider_id, transaction_date], map: "idx_fleet_fuel_card_tx_provider")
+  @@index([station_id, transaction_date], map: "idx_fleet_fuel_card_tx_station")
+}
+
+model fleet_fuel_card_reconciliation_matches {
+  id                    BigInt                       @id @default(autoincrement()) @db.UnsignedBigInt
+  public_id             String                       @unique @db.Char(26)
+  fleet_account_id      BigInt                       @db.UnsignedBigInt
+  card_transaction_id   BigInt                       @unique(map: "uq_fleet_fuel_card_recon_card_tx") @db.UnsignedBigInt
+  fleet_transaction_id  BigInt?                      @db.UnsignedBigInt
+  status                fleet_fuel_card_match_status @default(needs_review)
+  notes                 String?                      @db.VarChar(500)
+  matched_by_user_id    BigInt?                      @db.UnsignedBigInt
+  matched_at            DateTime?                    @db.Timestamp(3)
+  created_at            DateTime                     @default(now()) @db.Timestamp(3)
+  updated_at            DateTime                     @default(now()) @db.Timestamp(3)
+
+  @@index([fleet_account_id, status, created_at], map: "idx_fleet_fuel_card_recon_account_status")
+  @@index([fleet_transaction_id], map: "idx_fleet_fuel_card_recon_fleet_tx")
+  @@index([matched_by_user_id], map: "idx_fleet_fuel_card_recon_matched_by")
+}
+
+enum fleet_accounts_status {
+  active
+  suspended
+  archived
+}
+
+enum fleet_members_role {
+  owner
+  admin
+  finance
+  dispatcher
+  driver
+  auditor
+}
+
+enum fleet_members_status {
+  pending
+  active
+  suspended
+  removed
+}
+
+enum fleet_invitations_status {
+  pending
+  accepted
+  expired
+  cancelled
+}
+
+enum fleet_access_requests_status {
+  pending
+  reviewed
+  closed
+}
+
+enum fleet_fuel_type {
+  petrol
+  diesel
+  mixed
+  unknown
+}
+
+enum fleet_vehicles_status {
+  active
+  maintenance
+  suspended
+  archived
+}
+
+enum fleet_vehicle_assignments_status {
+  active
+  suspended
+  removed
+}
+
+enum fleet_wallets_status {
+  active
+  suspended
+  closed
+}
+
+enum fleet_wallet_transactions_type {
+  topup
+  debit
+  refund
+  adjustment
+  reservation_hold
+  hold_release
+}
+
+enum fleet_wallet_transactions_status {
+  pending
+  posted
+  failed
+  reversed
+  cancelled
+}
+
+enum fleet_policies_applies_to_type {
+  fleet
+  vehicle
+  driver
+}
+
+enum fleet_fuel_requests_status {
+  pending
+  approved
+  rejected
+  expired
+  cancelled
+  completed
+}
+
+enum fleet_transactions_status {
+  pending
+  completed
+  reversed
+  flagged
+}
+
+enum fleet_transactions_risk_status {
+  normal
+  suspicious
+  blocked
+}
+
+enum fleet_alerts_severity {
+  info
+  warning
+  critical
+}
+
+enum fleet_budgets_status {
+  active
+  locked
+  archived
+}
+
+enum fleet_invoices_status {
+  draft
+  pending
+  paid
+  overdue
+  cancelled
+}
+
+enum fleet_maintenance_records_type {
+  service
+  repair
+  inspection
+  tyres
+  other
+}
+
+enum fleet_maintenance_records_status {
+  due
+  scheduled
+  completed
+  overdue
+  cancelled
+}
+
+enum fleet_route_activity_status {
+  planned
+  active
+  completed
+  cancelled
+}
+
+enum fleet_vehicle_live_states_status {
+  active
+  idle
+  in_service
+  offline
+}
+
+enum fleet_departments_status {
+  active
+  suspended
+  archived
+}
+
+enum fleet_fuel_card_providers_type {
+  myfuel
+  totalenergies
+  manual
+  fleet_wallet
+  station_credit
+  other
+}
+
+enum fleet_fuel_card_providers_status {
+  active
+  inactive
+  archived
+}
+
+enum fleet_fuel_cards_status {
+  active
+  suspended
+  archived
+  blocked
+}
+
+enum fleet_fuel_cards_provider_status {
+  manual_tracking
+  synced
+  api_not_connected
+  blocked
+}
+
+enum fleet_allocation_target_type {
+  fleet
+  department
+  vehicle
+  driver
+  card
+  trip
+  emergency_reserve
+}
+
+enum fleet_allocation_unit {
+  litres
+  money
+  both
+}
+
+enum fleet_allocation_rollover_policy {
+  top_up_to_cap
+  reset_no_carryover
+  carryover_with_cap
+  manual_review
+}
+
+enum fleet_allocations_status {
+  active
+  paused
+  archived
+}
+
+enum fleet_allocation_transactions_type {
+  allocation_topup
+  fuel_usage
+  adjustment
+  carryover
+  reversal
+}
+
+enum fleet_allocation_rollovers_status {
+  preview
+  executed
+  cancelled
+}
+
+enum fleet_payment_context_type {
+  personal
+  fleet_wallet
+  fuel_card_manual
+  fuel_card_integrated
+  station_credit
+}
+
+enum fleet_fueling_sessions_status {
+  authorized
+  completed
+  cancelled
+  expired
+}
+
+enum fleet_fuel_card_imports_status {
+  pending
+  processed
+  failed
+}
+
+enum fleet_fuel_card_match_status {
+  unmatched
+  matched
+  suspicious
+  duplicate
+  needs_review
 }
 
 enum incidents_severity {
@@ -1006,6 +2404,107 @@ enum pump_nozzles_status {
   DISPENSING
 }
 
+enum vehicles_vehicle_type {
+  SEDAN
+  HATCHBACK
+  SUV
+  PICKUP
+  MINIBUS
+  TRUCK
+  MOTORCYCLE
+  OTHER
+}
+
+enum vehicles_usage_type {
+  PRIVATE
+  TAXI
+  FLEET
+  COMPANY
+  PUBLIC_TRANSPORT
+  OTHER
+}
+
+enum vehicles_fuel_type {
+  PETROL
+  DIESEL
+  PARAFFIN_KEROSENE
+  OTHER
+}
+
+enum vehicles_tank_side {
+  DRIVER_SIDE
+  PASSENGER_SIDE
+  UNKNOWN
+  BOTH_OR_CENTER
+}
+
+enum vehicles_tank_side_source {
+  USER_CONFIRMED
+  SYSTEM_SUGGESTED
+  ATTENDANT_CONFIRMED
+  FLEET_MANAGER_CONFIRMED
+}
+
+enum vehicles_tank_side_confidence {
+  LOW
+  MEDIUM
+  HIGH
+  VERIFIED
+}
+
+enum vehicles_verification_status {
+  UNVERIFIED
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+enum pump_configurations_lane_side_supported {
+  DRIVER_SIDE
+  PASSENGER_SIDE
+  BOTH_SIDES
+  MANUAL_ONLY
+}
+
+enum pump_configurations_max_vehicle_size {
+  SMALL
+  MEDIUM
+  LARGE
+  EXTRA_LARGE
+}
+
+enum pump_configurations_current_mode {
+  OPEN_WALKIN
+  CLEARING_FOR_SMARTLINK
+  SMARTLINK_ONLY
+  PAUSED
+  MAINTENANCE
+}
+
+enum queue_entries_pump_assignment_status {
+  PENDING
+  ASSIGNED
+  LOCKED
+  REASSIGNED
+  MANUAL_REVIEW_REQUIRED
+  FAILED
+}
+
+enum queue_entries_assignment_confidence {
+  LOW
+  MEDIUM
+  HIGH
+  VERIFIED
+}
+
+enum smartlink_operational_audit_logs_actor_type {
+  USER
+  KIOSK
+  ATTENDANT
+  MANAGER
+  SYSTEM
+}
+
 enum incidents_status {
   OPEN
   RESOLVED
@@ -1041,6 +2540,42 @@ enum transactions_settlement_impact_status {
   UNCHANGED
   ADJUSTED
   REVERSED
+}
+
+enum KioskDeviceStatus {
+  ACTIVE
+  DISABLED
+  REVOKED
+}
+
+enum KioskLoginChallengeStatus {
+  PENDING
+  APPROVED
+  DENIED
+  EXPIRED
+}
+
+enum KioskRegistrationChallengeStatus {
+  PENDING
+  APPROVED
+  DENIED
+  EXPIRED
+}
+
+enum KioskSessionRoleScope {
+  ATTENDANT
+  MANAGER
+}
+
+enum KioskSessionStatus {
+  ACTIVE
+  EXPIRED
+  REVOKED
+}
+
+enum StaffTrustedDeviceStatus {
+  ACTIVE
+  REVOKED
 }
 
 enum promotion_campaigns_promotion_kind {
@@ -1134,6 +2669,7 @@ enum mera_notifications_type {
   TASK_REASSIGNED
   TASK_DUE_SOON
   TASK_OVERDUE
+  TASK_STATUS_CHANGED
   TASK_ESCALATED
   TASK_COMPLETED
 }
@@ -1159,6 +2695,17 @@ enum public_complaints_complaint_type {
   OVERPRICING
   REFUSAL_TO_SELL
   SUSPICIOUS_QUEUE_MANIPULATION
+  STATION_SAYS_NO_FUEL
+  LONG_QUEUE
+  SUSPECTED_HOARDING
+  PRICE_ISSUE
+  ATTENDANT_CORRUPTION
+  FAVOURITISM
+  ILLEGAL_SELLING
+  PAYMENT_DISPUTE
+  QUEUE_MANIPULATION
+  UNSAFE_CROWDING
+  FALSE_AVAILABILITY
   OTHER
 }
 
@@ -1202,6 +2749,37 @@ enum compliance_flags_flag_type {
   MANUAL_REVIEW
   PRICE_ANOMALY
   LICENSE_RISK
+  POSSIBLE_HOARDING
+}
+
+enum mera_alerts_severity {
+  low
+  medium
+  high
+  critical
+}
+
+enum mera_alerts_status {
+  new
+  acknowledged
+  converted_to_case
+  dismissed
+}
+
+enum mera_auth_risk_signals_scope_type {
+  IDENTIFIER
+  MERA_USER
+  IP
+  SUBNET
+}
+
+enum public_notices_status {
+  draft
+  pending_approval
+  approved
+  scheduled
+  published
+  rejected
 }
 
 enum compliance_flags_severity {

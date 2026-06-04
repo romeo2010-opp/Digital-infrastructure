@@ -1,5 +1,11 @@
 export const MERA_ROLES = Object.freeze({
   SUPER_ADMIN: "SUPER_ADMIN",
+  MERA_ADMIN: "MERA_ADMIN",
+  MERA_SUPERVISOR: "MERA_SUPERVISOR",
+  MERA_ANALYST: "MERA_ANALYST",
+  MERA_INSPECTOR: "MERA_INSPECTOR",
+  MERA_PUBLIC_COMMUNICATIONS: "MERA_PUBLIC_COMMUNICATIONS",
+  MERA_VIEWER: "MERA_VIEWER",
   NATIONAL_OPERATIONS_ANALYST: "NATIONAL_OPERATIONS_ANALYST",
   REGIONAL_COMPLIANCE_SUPERVISOR: "REGIONAL_COMPLIANCE_SUPERVISOR",
   FIELD_COMPLIANCE_OFFICER: "FIELD_COMPLIANCE_OFFICER",
@@ -14,6 +20,30 @@ export const MERA_ROLE_METADATA = Object.freeze({
   [MERA_ROLES.SUPER_ADMIN]: {
     displayName: "Super Admin / Director",
     description: "Highest system authority with full regulatory oversight.",
+  },
+  [MERA_ROLES.MERA_ADMIN]: {
+    displayName: "MERA Admin",
+    description: "National command-centre administrator with full MERA oversight.",
+  },
+  [MERA_ROLES.MERA_SUPERVISOR]: {
+    displayName: "MERA Supervisor",
+    description: "Supervisor authority for approvals, case escalation, and inspection assignment.",
+  },
+  [MERA_ROLES.MERA_ANALYST]: {
+    displayName: "MERA Analyst",
+    description: "Risk, complaints, analytics, cases, and report intelligence analyst.",
+  },
+  [MERA_ROLES.MERA_INSPECTOR]: {
+    displayName: "MERA Inspector",
+    description: "Assigned field inspection and station verification officer.",
+  },
+  [MERA_ROLES.MERA_PUBLIC_COMMUNICATIONS]: {
+    displayName: "MERA Public Communications",
+    description: "Public notices, approved briefings, and communication workflow.",
+  },
+  [MERA_ROLES.MERA_VIEWER]: {
+    displayName: "MERA Viewer",
+    description: "Read-only regulatory command-centre access.",
   },
   [MERA_ROLES.NATIONAL_OPERATIONS_ANALYST]: {
     displayName: "National Operations Analyst",
@@ -106,6 +136,25 @@ export const MERA_PERMISSIONS = Object.freeze({
   TASKS_WORK: "TASKS_WORK",
   TASKS_ADD_EVIDENCE: "TASKS_ADD_EVIDENCE",
   TASKS_STATS_VIEW: "TASKS_STATS_VIEW",
+  VIEW_COMMAND_CENTRE: "VIEW_COMMAND_CENTRE",
+  VIEW_MAP: "VIEW_MAP",
+  VIEW_STATION_PROFILE: "VIEW_STATION_PROFILE",
+  MANAGE_CASES: "MANAGE_CASES",
+  ASSIGN_INSPECTIONS: "ASSIGN_INSPECTIONS",
+  COMPLETE_INSPECTIONS: "COMPLETE_INSPECTIONS",
+  MANAGE_PRICE_COMPLIANCE: "MANAGE_PRICE_COMPLIANCE",
+  GENERATE_REPORTS: "GENERATE_REPORTS",
+  CREATE_PUBLIC_NOTICE: "CREATE_PUBLIC_NOTICE",
+  APPROVE_PUBLIC_NOTICE: "APPROVE_PUBLIC_NOTICE",
+  PUBLISH_PUBLIC_NOTICE: "PUBLISH_PUBLIC_NOTICE",
+  MANAGE_USERS: "MANAGE_USERS",
+  VIEW_AUDIT_LOGS: "VIEW_AUDIT_LOGS",
+  ALERTS_VIEW: "ALERTS_VIEW",
+  ALERTS_MANAGE: "ALERTS_MANAGE",
+  RISK_VIEW: "RISK_VIEW",
+  RISK_RECALCULATE: "RISK_RECALCULATE",
+  PUBLIC_NOTICES_VIEW: "PUBLIC_NOTICES_VIEW",
+  ANALYTICS_VIEW: "ANALYTICS_VIEW",
 })
 
 export const MERA_ROLE_SET = new Set(Object.values(MERA_ROLES))
@@ -113,6 +162,11 @@ export const MERA_PERMISSION_SET = new Set(Object.values(MERA_PERMISSIONS))
 
 export const MERA_GLOBAL_SCOPE_ROLES = new Set([
   MERA_ROLES.SUPER_ADMIN,
+  MERA_ROLES.MERA_ADMIN,
+  MERA_ROLES.MERA_SUPERVISOR,
+  MERA_ROLES.MERA_ANALYST,
+  MERA_ROLES.MERA_PUBLIC_COMMUNICATIONS,
+  MERA_ROLES.MERA_VIEWER,
   MERA_ROLES.NATIONAL_OPERATIONS_ANALYST,
   MERA_ROLES.EXECUTIVE_VIEWER,
   MERA_ROLES.MARKET_SUPPLY_ANALYST,

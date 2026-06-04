@@ -1,5 +1,4 @@
 <resources>
     <string name="app_name">SmartLink User App</string>
     <!-- Replace with your actual Mapbox Public Access Token -->
-    <string name="mapbox_access_token">pk.eyJ1Ijoicm9tZW8yMDEwZmF2b3VyIiwiYSI6ImNtbTF4OGk1bzAxNzAycHNlY3owdDV0ZzUifQ.5o4YL0lDMPBl4QKUf5kWcg</string>
 </resources>

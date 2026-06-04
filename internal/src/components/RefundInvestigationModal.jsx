@@ -3,7 +3,7 @@ import { internalApi } from "../api/internalApi"
 import ActionConfirmModal from "./ActionConfirmModal"
 import MetricGrid from "./MetricGrid"
 import StatusPill from "./StatusPill"
-import { formatDateTime, formatMoney, formatNumber } from "../utils/display"
+import { formatCodeLabel, formatDateTime, formatMoney, formatNumber } from "../utils/display"
 
 function ModalFrame({ title, subtitle, badges = null, onClose, children }) {
   useEffect(() => {
@@ -160,7 +160,7 @@ export default function RefundInvestigationModal({
     mode === "support"
       ? internalApi.supportEscalateRefundToCompliance
       : internalApi.escalateRefundToCompliance
-  const recommendationLabel = (assessment?.recommendation || "NEED_MORE_EVIDENCE").replaceAll("_", " ")
+  const recommendationLabel = formatCodeLabel(assessment?.recommendation || "NEED_MORE_EVIDENCE")
   const confidenceLabel = assessment?.confidenceLabel || "LOW"
   const overviewMetrics = refund ? [
     {
@@ -261,7 +261,7 @@ export default function RefundInvestigationModal({
                 >
                   <section className="refund-recommendation-banner">
                     <div>
-                      <strong>{assessment?.recommendation || "NEED_MORE_EVIDENCE"}</strong>
+                      <strong>{formatCodeLabel(assessment?.recommendation || "NEED_MORE_EVIDENCE")}</strong>
                       <p>Primary automated recommendation for this case bundle.</p>
                     </div>
                     <div className="refund-recommendation-badges">
@@ -486,7 +486,7 @@ export default function RefundInvestigationModal({
                     <article key={item.publicId} className="timeline-item">
                       <div>
                         <strong>{item.summary}</strong>
-                        <p>{item.actionType} · {item.targetType}</p>
+                        <p>{formatCodeLabel(item.actionType)} · {formatCodeLabel(item.targetType)}</p>
                       </div>
                       <div className="timeline-meta">
                         <StatusPill value={item.severity} />

@@ -2062,7 +2062,7 @@ export async function finalizeFuelOrderFromPumpSession({
   return buildFuelOrderPayload(prisma, order)
 }
 
-async function loadCurrentActiveSessionSummary(stationId) {
+async function loadCurrentActiveSessionSummary(stationId, { assignedPumpId = null } = {}) {
   const rows = await prisma.$queryRaw`
     SELECT
       ps.id,
@@ -2088,6 +2088,7 @@ async function loadCurrentActiveSessionSummary(stationId) {
     LEFT JOIN fuel_types ft ON ft.id = fo.fuel_type_id
     LEFT JOIN users u ON u.id = fo.user_id
     WHERE ps.station_id = ${stationId}
+      AND (${assignedPumpId} IS NULL OR ps.pump_id = ${assignedPumpId})
       AND ps.session_status IN ('CREATED', 'STARTED', 'DISPENSING')
     ORDER BY
       CASE ps.session_status
@@ -2130,15 +2131,22 @@ async function loadCurrentActiveSessionSummary(stationId) {
 
 export async function getStationOperationsKioskData({
   stationPublicId,
+  auth = null,
 } = {}) {
   await ensureFuelOrderTablesReady()
   const station = await resolveStationContext(stationPublicId)
   if (!station?.id) throw notFound(`Station not found: ${stationPublicId}`)
+  const kioskPumpScope = auth?.sessionType === "KIOSK"
+    ? Number(auth?.assignedPumpId || 0) || null
+    : null
+  if (auth?.sessionType === "KIOSK" && !kioskPumpScope) {
+    throw badRequest("This kiosk is not assigned to a pump. Ask manager to configure it.")
+  }
 
   const [queueSnapshot, nearbyWalletOrders, activeSession, hybridPilotQueue] = await Promise.all([
-    getQueueSnapshot(station),
-    listNearbyWalletOrdersForStation({ stationPublicId }),
-    loadCurrentActiveSessionSummary(station.id),
+    getQueueSnapshot(station, { assignedPumpId: kioskPumpScope }),
+    kioskPumpScope ? Promise.resolve({ items: [] }) : listNearbyWalletOrdersForStation({ stationPublicId }),
+    loadCurrentActiveSessionSummary(station.id, { assignedPumpId: kioskPumpScope }),
     getHybridQueueSnapshot(station.id),
   ])
 

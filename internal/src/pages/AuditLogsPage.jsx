@@ -4,7 +4,7 @@ import InternalShell from "../components/InternalShell"
 import PreviewTablePanel from "../components/PreviewTablePanel"
 import MetricGrid from "../components/MetricGrid"
 import StatusPill from "../components/StatusPill"
-import { formatDateTime, formatNumber } from "../utils/display"
+import { formatCodeLabel, formatDateTime, formatNumber } from "../utils/display"
 import { useInternalAuth } from "../auth/AuthContext"
 
 function downloadAuditCsv(rows) {
@@ -16,11 +16,11 @@ function downloadAuditCsv(rows) {
       [
         row.publicId,
         row.actorName,
-        row.actorRoleCode,
-        row.actionType,
-        row.targetType,
+        formatCodeLabel(row.actorRoleCode),
+        formatCodeLabel(row.actionType),
+        formatCodeLabel(row.targetType),
         row.targetPublicId,
-        row.severity,
+        formatCodeLabel(row.severity),
         row.summary,
         row.createdAt,
         JSON.stringify(row.metadata || {}),
@@ -59,10 +59,10 @@ function AuditEventModal({ event, onClose }) {
         <div className="internal-modal-body internal-modal-body--list">
           <div className="settings-summary-list admin-detail-grid">
             <div><span>Actor</span><strong>{event.actorName || "System"}</strong></div>
-            <div><span>Role</span><strong>{event.actorRoleCode || "-"}</strong></div>
-            <div><span>Action</span><strong>{event.actionType || "-"}</strong></div>
-            <div><span>Severity</span><strong>{event.severity || "-"}</strong></div>
-            <div><span>Target Type</span><strong>{event.targetType || "-"}</strong></div>
+            <div><span>Role</span><strong>{formatCodeLabel(event.actorRoleCode)}</strong></div>
+            <div><span>Action</span><strong>{formatCodeLabel(event.actionType)}</strong></div>
+            <div><span>Severity</span><strong>{formatCodeLabel(event.severity)}</strong></div>
+            <div><span>Target Type</span><strong>{formatCodeLabel(event.targetType)}</strong></div>
             <div><span>Target ID</span><strong>{event.targetPublicId || "-"}</strong></div>
             <div><span>Timestamp</span><strong>{formatDateTime(event.createdAt)}</strong></div>
             <div><span>Event ID</span><strong>{event.publicId || "-"}</strong></div>
@@ -200,11 +200,11 @@ export default function AuditLogsPage() {
         </select>
         <select className="page-select" value={actionFilter} onChange={(event) => setActionFilter(event.target.value)}>
           <option value="">All actions</option>
-          {actionOptions.map((action) => <option key={action} value={action}>{action}</option>)}
+          {actionOptions.map((action) => <option key={action} value={action}>{formatCodeLabel(action)}</option>)}
         </select>
         <select className="page-select" value={severityFilter} onChange={(event) => setSeverityFilter(event.target.value)}>
           <option value="">All severities</option>
-          {severityOptions.map((severity) => <option key={severity} value={severity}>{severity}</option>)}
+          {severityOptions.map((severity) => <option key={severity} value={severity}>{formatCodeLabel(severity)}</option>)}
         </select>
       </div>
 
