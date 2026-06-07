@@ -1,4 +1,19 @@
 import { useEffect, useMemo, useState } from "react"
+import {
+  Activity,
+  AlertTriangle,
+  ArrowRight,
+  Banknote,
+  CheckCircle2,
+  ChevronDown,
+  ChevronUp,
+  CircleDollarSign,
+  Gauge,
+  MapPin,
+  RadioTower,
+  ShieldAlert,
+  WalletCards,
+} from "lucide-react"
 import { internalApi } from "../api/internalApi"
 import InternalShell from "../components/InternalShell"
 import { DataTable, Panel } from "../components/PanelTable"
@@ -6,7 +21,128 @@ import PreviewListPanel from "../components/PreviewListPanel"
 import StatusPill from "../components/StatusPill"
 import { formatCodeLabel, formatDateTime, formatMoney, formatNumber, formatRelative } from "../utils/display"
 import { useInternalAuth } from "../auth/AuthContext"
-import { InternalKpiDrilldownCard, InternalKpiDrilldownDrawer } from "../components/InternalKpiDrilldown"
+import { InternalKpiDrilldownDrawer } from "../components/InternalKpiDrilldown"
+
+function safeNumber(value) {
+  const numeric = Number(value)
+  return Number.isFinite(numeric) ? numeric : 0
+}
+
+function percentOf(value, total) {
+  const denominator = safeNumber(total)
+  if (!denominator) return 0
+  return Math.max(0, Math.min(100, Math.round((safeNumber(value) / denominator) * 100)))
+}
+
+function toneForCount(value, fallback = "neutral") {
+  return safeNumber(value) > 0 ? fallback : "success"
+}
+
+function formatCompactMoney(value) {
+  const amount = safeNumber(value)
+  const absolute = Math.abs(amount)
+  if (absolute >= 1_000_000_000) return `MWK ${(amount / 1_000_000_000).toFixed(1).replace(/\.0$/, "")}B`
+  if (absolute >= 1_000_000) return `MWK ${(amount / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`
+  if (absolute >= 1_000) return `MWK ${(amount / 1_000).toFixed(1).replace(/\.0$/, "")}K`
+  return formatMoney(amount)
+}
+
+const focusIconMap = {
+  stations: CheckCircle2,
+  transactions: CircleDollarSign,
+  attention: AlertTriangle,
+  settlements: Banknote,
+}
+
+const signalIconMap = {
+  Gauge,
+  RadioTower,
+  ShieldAlert,
+  WalletCards,
+  Activity,
+  MapPin,
+}
+
+function FocusCard({ item, onClick }) {
+  const Icon = focusIconMap[item.icon] || Gauge
+  const progress = typeof item.progress === "number" ? item.progress : null
+
+  return (
+    <button type="button" className={`overview-focus-card overview-focus-card--${item.tone || "neutral"}`} onClick={onClick}>
+      <span className="overview-focus-card__icon">
+        <Icon aria-hidden="true" />
+      </span>
+      <span className="overview-focus-card__copy">
+        <span className="overview-focus-card__label">{item.label}</span>
+        <strong>{item.value}</strong>
+        <span className="overview-focus-card__detail">{item.detail}</span>
+      </span>
+      <span className="overview-focus-card__meta">
+        {item.badge ? <span>{item.badge}</span> : null}
+        <ArrowRight aria-hidden="true" />
+      </span>
+      {progress !== null ? (
+        <span className="overview-focus-card__meter" aria-hidden="true">
+          <span style={{ width: `${progress}%` }} />
+        </span>
+      ) : null}
+    </button>
+  )
+}
+
+function SignalCard({ item, onClick }) {
+  const Icon = signalIconMap[item.icon] || Activity
+
+  return (
+    <button type="button" className={`overview-signal-card overview-signal-card--${item.tone || "neutral"}`} onClick={onClick}>
+      <span className="overview-signal-card__top">
+        <Icon aria-hidden="true" />
+        <span>{item.label}</span>
+      </span>
+      <strong>{item.value}</strong>
+      <small>{item.detail}</small>
+    </button>
+  )
+}
+
+function SnapshotMetricGrid({ items }) {
+  return (
+    <div className="overview-snapshot-grid">
+      {items.map((item) => (
+        <div key={item.label} className={`overview-snapshot-metric overview-snapshot-metric--${item.tone || "neutral"}`}>
+          <span>{item.label}</span>
+          <strong>{item.value}</strong>
+          {item.detail ? <small>{item.detail}</small> : null}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function RegionCell({ row }) {
+  return (
+    <div className="overview-region-cell">
+      <strong>{row.region}</strong>
+      <span>{row.city || "Regional cluster"}</span>
+    </div>
+  )
+}
+
+function AvailabilityCell({ row }) {
+  const progress = percentOf(row.activeCount, row.stationCount)
+
+  return (
+    <div className="overview-progress-cell">
+      <div>
+        <strong>{formatNumber(row.activeCount)}</strong>
+        <span>of {formatNumber(row.stationCount)}</span>
+      </div>
+      <span className="overview-progress-bar" aria-hidden="true">
+        <span style={{ width: `${progress}%` }} />
+      </span>
+    </div>
+  )
+}
 
 function SnapshotList({ items, emptyLabel = "No items available." }) {
   if (!items?.length) return <p className="empty-cell">{emptyLabel}</p>
@@ -98,30 +234,115 @@ export default function OverviewPage() {
 
   const metrics = data?.metrics || {}
 
-  const summaryItems = [
-    { label: "Active Stations", value: formatNumber(metrics.totalActiveStations), tone: "success", icon: "check" },
-    { label: "Pending Activations", value: formatNumber(metrics.stationsPendingActivation), tone: "warning", icon: "fuel" },
-    { label: "Offline Stations", value: formatNumber(metrics.stationsOffline), tone: metrics.stationsOffline ? "danger" : "neutral", icon: "car" },
-    { label: "Live Pump Alerts", value: formatNumber(metrics.livePumpAlerts), tone: metrics.livePumpAlerts ? "danger" : "neutral", icon: "alert" },
-    { label: "Today's Transactions", value: formatNumber(metrics.todayTransactionCount), tone: "neutral", icon: "car" },
-    { label: "Today's Value", value: formatMoney(metrics.todayTransactionValue), tone: "neutral", icon: "wallet" },
-    { label: "Pending Settlements", value: formatNumber(metrics.pendingSettlements), tone: metrics.pendingSettlements ? "warning" : "neutral", icon: "wallet" },
-    { label: "High-Risk Alerts", value: formatNumber(metrics.highRiskAlerts), tone: metrics.highRiskAlerts ? "danger" : "neutral", icon: "alert" },
-    { label: "Critical Support", value: formatNumber(metrics.criticalSupportTickets), tone: metrics.criticalSupportTickets ? "danger" : "neutral", icon: "fuel" },
+  const activeStations = safeNumber(metrics.totalActiveStations)
+  const totalStations = safeNumber(metrics.totalStations)
+  const networkOnlinePercent = percentOf(activeStations, totalStations)
+  const attentionLoad =
+    safeNumber(metrics.stationsOffline) +
+    safeNumber(metrics.livePumpAlerts) +
+    safeNumber(metrics.highRiskAlerts) +
+    safeNumber(metrics.criticalSupportTickets)
+
+  const focusItems = [
     {
-      label: "System Health",
-      value: metrics.systemHealthStatus || "-",
-      tone:
-        metrics.systemHealthStatus === "Operational"
-          ? "success"
-          : metrics.systemHealthStatus === "Degraded"
-            ? "danger"
-            : "warning",
-      icon: "check",
+      label: "Active network",
+      value: formatNumber(activeStations),
+      detail: `${formatNumber(totalStations)} total stations`,
+      badge: `${networkOnlinePercent}% online`,
+      tone: safeNumber(metrics.stationsOffline) ? "warning" : "success",
+      icon: "stations",
+      progress: networkOnlinePercent,
+      note: "Station availability is calculated from active stations against total registered stations.",
+    },
+    {
+      label: "Today's throughput",
+      value: formatCompactMoney(metrics.todayTransactionValue),
+      detail: `${formatNumber(metrics.todayTransactionCount)} transactions`,
+      badge: "Today",
+      tone: "neutral",
+      icon: "transactions",
+      note: "Transaction value and count are scoped to the current business day.",
+    },
+    {
+      label: "Attention queue",
+      value: formatNumber(attentionLoad),
+      detail: `${formatNumber(data?.needsAttention?.length)} prioritized records`,
+      badge: attentionLoad ? "Review" : "Clear",
+      tone: attentionLoad ? "danger" : "success",
+      icon: "attention",
+      note: "This combines offline stations, pump alerts, high-risk alerts, and critical support tickets.",
+    },
+    {
+      label: "Settlement exposure",
+      value: formatCompactMoney(metrics.pendingSettlementValue),
+      detail: `${formatNumber(metrics.pendingSettlements)} batches pending`,
+      badge: safeNumber(metrics.pendingSettlements) ? "Finance" : "Clear",
+      tone: safeNumber(metrics.pendingSettlements) ? "warning" : "success",
+      icon: "settlements",
+      note: "Pending settlement value reflects batches still awaiting review or payout movement.",
     },
   ]
-  const summaryLimit = 6
-  const visibleSummaryItems = showAllSummary ? summaryItems : summaryItems.slice(0, summaryLimit)
+
+  const signalItems = [
+    {
+      label: "System health",
+      value: metrics.systemHealthStatus || "-",
+      detail: data?.systemHealthSummary?.latestEventAt ? `Latest ${formatRelative(data.systemHealthSummary.latestEventAt)}` : "No recent system event",
+      tone: metrics.systemHealthStatus === "Operational" ? "success" : metrics.systemHealthStatus === "Degraded" ? "danger" : "warning",
+      icon: "Activity",
+    },
+    {
+      label: "Offline stations",
+      value: formatNumber(metrics.stationsOffline),
+      detail: `${formatNumber(totalStations)} stations tracked`,
+      tone: toneForCount(metrics.stationsOffline, "danger"),
+      icon: "RadioTower",
+    },
+    {
+      label: "Pump alerts",
+      value: formatNumber(metrics.livePumpAlerts),
+      detail: "Offline, paused, or degraded",
+      tone: toneForCount(metrics.livePumpAlerts, "danger"),
+      icon: "Gauge",
+    },
+    {
+      label: "Active queues",
+      value: formatNumber(metrics.activeQueues),
+      detail: "Waiting, called, or late",
+      tone: toneForCount(metrics.activeQueues, "warning"),
+      icon: "MapPin",
+    },
+    {
+      label: "Pending activations",
+      value: formatNumber(metrics.stationsPendingActivation),
+      detail: "Submitted or under review",
+      tone: toneForCount(metrics.stationsPendingActivation, "warning"),
+      icon: "RadioTower",
+    },
+    {
+      label: "High-risk alerts",
+      value: formatNumber(metrics.highRiskAlerts),
+      detail: "Compliance watchlist",
+      tone: toneForCount(metrics.highRiskAlerts, "danger"),
+      icon: "ShieldAlert",
+    },
+    {
+      label: "Critical support",
+      value: formatNumber(metrics.criticalSupportTickets),
+      detail: "Open priority cases",
+      tone: toneForCount(metrics.criticalSupportTickets, "danger"),
+      icon: "Activity",
+    },
+    {
+      label: "Subscription revenue",
+      value: formatCompactMoney(metrics.subscriptionRevenueSnapshot),
+      detail: "Monthly active plan total",
+      tone: "neutral",
+      icon: "WalletCards",
+    },
+  ]
+  const signalLimit = 6
+  const visibleSignalItems = showAllSummary ? signalItems : signalItems.slice(0, signalLimit)
 
   const panelRegistry = useMemo(() => {
     if (!data) return []
@@ -130,27 +351,28 @@ export default function OverviewPage() {
       needsAttention: (
         <PreviewListPanel
           key="needsAttention"
-          title="Needs Attention"
-          subtitle="Prioritized operational and commercial items requiring action."
+          title="Attention Queue"
+          subtitle="Highest-priority operational and commercial records."
           items={data.needsAttention}
-          previewLimit={4}
-          modalTitle="All Needs Attention Items"
+          previewLimit={5}
+          modalTitle="All Attention Queue Items"
           renderContent={(items) => <SnapshotList items={items} emptyLabel="No urgent items in the queue." />}
         />
       ),
       regionalOperations: (
-        <Panel key="regionalOperations" title="Regional Operations Summary">
+        <Panel key="regionalOperations" title="Regional Operations" subtitle="Station availability, queues, incidents, and value by cluster.">
           <DataTable
             columns={[
-              { key: "region", label: "Region" },
-              { key: "stationCount", label: "Stations" },
-              { key: "activeCount", label: "Active" },
-              { key: "offlineCount", label: "Offline" },
-              { key: "queuePressure", label: "Queue Pressure" },
-              { key: "incidentCount", label: "Incidents" },
-              { key: "transactionValue", label: "Value", render: (row) => formatMoney(row.transactionValue) },
+              { key: "region", label: "Region", render: (row) => <RegionCell row={row} /> },
+              { key: "availability", label: "Availability", render: (row) => <AvailabilityCell row={row} /> },
+              { key: "offlineCount", label: "Offline", render: (row) => formatNumber(row.offlineCount) },
+              { key: "queuePressure", label: "Queues", render: (row) => formatNumber(row.queuePressure) },
+              { key: "incidentCount", label: "Incidents", render: (row) => formatNumber(row.incidentCount) },
+              { key: "transactionValue", label: "Value", render: (row) => formatCompactMoney(row.transactionValue) },
             ]}
             rows={regions}
+            minWidth={560}
+            compact
           />
           {data.regionalOperations?.highestDemandRegion ? (
             <p className="panel-note">Highest-demand region today: <strong>{data.regionalOperations.highestDemandRegion}</strong></p>
@@ -160,7 +382,8 @@ export default function OverviewPage() {
       liveIncidents: (
         <PreviewListPanel
           key="liveIncidents"
-          title="Live Incidents Feed"
+          title="Live Incidents"
+          subtitle="Open alerts sorted by severity and recency."
           items={data.liveIncidents}
           previewLimit={4}
           modalTitle="All Live Incidents"
@@ -188,32 +411,38 @@ export default function OverviewPage() {
       ) : null,
       supportSnapshot: hasPermission("support:view") ? (
         <Panel key="supportSnapshot" title="Support & Dispute Snapshot">
-          <div className="snapshot-stat-grid">
-            <div><span>Open tickets</span><strong>{formatNumber(data.supportSnapshot?.openTickets)}</strong></div>
-            <div><span>Escalated disputes</span><strong>{formatNumber(data.supportSnapshot?.escalatedDisputes)}</strong></div>
-            <div><span>Failed payment issues</span><strong>{formatNumber(data.supportSnapshot?.failedPaymentIssues)}</strong></div>
-            <div><span>Refunds pending approval</span><strong>{formatNumber(data.supportSnapshot?.refundsPendingApproval)}</strong></div>
-          </div>
+          <SnapshotMetricGrid
+            items={[
+              { label: "Open tickets", value: formatNumber(data.supportSnapshot?.openTickets), tone: toneForCount(data.supportSnapshot?.openTickets, "warning") },
+              { label: "Escalated disputes", value: formatNumber(data.supportSnapshot?.escalatedDisputes), tone: toneForCount(data.supportSnapshot?.escalatedDisputes, "danger") },
+              { label: "Payment issues", value: formatNumber(data.supportSnapshot?.failedPaymentIssues), tone: toneForCount(data.supportSnapshot?.failedPaymentIssues, "warning") },
+              { label: "Refund approvals", value: formatNumber(data.supportSnapshot?.refundsPendingApproval), tone: toneForCount(data.supportSnapshot?.refundsPendingApproval, "warning") },
+            ]}
+          />
         </Panel>
       ) : null,
       financeSnapshot: hasPermission("finance:view") ? (
         <Panel key="financeSnapshot" title="Finance Snapshot">
-          <div className="snapshot-stat-grid">
-            <div><span>Today platform revenue</span><strong>{formatMoney(data.financeSnapshot?.todayRevenue)}</strong></div>
-            <div><span>Unsettled value</span><strong>{formatMoney(data.financeSnapshot?.unsettledValue)}</strong></div>
-            <div><span>Pending payouts</span><strong>{formatNumber(data.financeSnapshot?.payoutBatchesPending)}</strong></div>
-            <div><span>Refund outflow</span><strong>{formatMoney(data.financeSnapshot?.refundOutflowToday)}</strong></div>
-          </div>
+          <SnapshotMetricGrid
+            items={[
+              { label: "Platform revenue", value: formatCompactMoney(data.financeSnapshot?.todayRevenue), detail: "Today" },
+              { label: "Unsettled value", value: formatCompactMoney(data.financeSnapshot?.unsettledValue), tone: toneForCount(data.financeSnapshot?.unsettledValue, "warning") },
+              { label: "Pending payouts", value: formatNumber(data.financeSnapshot?.payoutBatchesPending), tone: toneForCount(data.financeSnapshot?.payoutBatchesPending, "warning") },
+              { label: "Refund outflow", value: formatCompactMoney(data.financeSnapshot?.refundOutflowToday), detail: "Today" },
+            ]}
+          />
         </Panel>
       ) : null,
       riskSnapshot: hasPermission("risk:view") ? (
         <Panel key="riskSnapshot" title="Risk & Compliance Snapshot">
-          <div className="snapshot-stat-grid">
-            <div><span>Suspicious transactions</span><strong>{formatNumber(data.riskSnapshot?.suspiciousTransactionsCount)}</strong></div>
-            <div><span>Frozen entities</span><strong>{formatNumber(data.riskSnapshot?.frozenAccountsOrStations)}</strong></div>
-            <div><span>Unresolved cases</span><strong>{formatNumber(data.riskSnapshot?.unresolvedComplianceCases)}</strong></div>
-            <div><span>Anomaly alerts</span><strong>{formatNumber(data.riskSnapshot?.anomalyAlerts)}</strong></div>
-          </div>
+          <SnapshotMetricGrid
+            items={[
+              { label: "Suspicious tx", value: formatNumber(data.riskSnapshot?.suspiciousTransactionsCount), tone: toneForCount(data.riskSnapshot?.suspiciousTransactionsCount, "warning") },
+              { label: "Frozen entities", value: formatNumber(data.riskSnapshot?.frozenAccountsOrStations), tone: toneForCount(data.riskSnapshot?.frozenAccountsOrStations, "danger") },
+              { label: "Unresolved cases", value: formatNumber(data.riskSnapshot?.unresolvedComplianceCases), tone: toneForCount(data.riskSnapshot?.unresolvedComplianceCases, "warning") },
+              { label: "Anomaly alerts", value: formatNumber(data.riskSnapshot?.anomalyAlerts), tone: toneForCount(data.riskSnapshot?.anomalyAlerts, "danger") },
+            ]}
+          />
         </Panel>
       ) : null,
       latestAuditActivity: hasPermission("audit:view") ? (
@@ -228,19 +457,23 @@ export default function OverviewPage() {
       ) : null,
       systemHealthSummary: hasPermission("system_health:view") ? (
         <Panel key="systemHealthSummary" title="System Health Summary">
-          <div className="snapshot-stat-grid">
-            <div><span>Status</span><strong>{data.systemHealthSummary?.status || "-"}</strong></div>
-            <div><span>Degraded services</span><strong>{formatNumber(data.systemHealthSummary?.degradedServices)}</strong></div>
-            <div><span>Latest event</span><strong>{formatDateTime(data.systemHealthSummary?.latestEventAt)}</strong></div>
-          </div>
+          <SnapshotMetricGrid
+            items={[
+              { label: "Status", value: data.systemHealthSummary?.status || "-", tone: data.systemHealthSummary?.status === "Operational" ? "success" : "warning" },
+              { label: "Degraded services", value: formatNumber(data.systemHealthSummary?.degradedServices), tone: toneForCount(data.systemHealthSummary?.degradedServices, "danger") },
+              { label: "Latest event", value: formatDateTime(data.systemHealthSummary?.latestEventAt), detail: "System stream" },
+            ]}
+          />
         </Panel>
       ) : null,
       subscriptionCommercial: hasPermission("finance:view") || hasPermission("stations:view") ? (
         <Panel key="subscriptionCommercial" title="Subscription & Commercial Snapshot">
-          <div className="snapshot-stat-grid">
-            <div><span>Recent renewals</span><strong>{formatNumber(data.subscriptionCommercial?.recentRenewals)}</strong></div>
-            <div><span>At-risk accounts</span><strong>{formatNumber(data.subscriptionCommercial?.atRiskStationAccounts)}</strong></div>
-          </div>
+          <SnapshotMetricGrid
+            items={[
+              { label: "Recent renewals", value: formatNumber(data.subscriptionCommercial?.recentRenewals) },
+              { label: "At-risk accounts", value: formatNumber(data.subscriptionCommercial?.atRiskStationAccounts), tone: toneForCount(data.subscriptionCommercial?.atRiskStationAccounts, "warning") },
+            ]}
+          />
           <DataTable
             columns={[
               { key: "planName", label: "Plan" },
@@ -249,6 +482,8 @@ export default function OverviewPage() {
               { key: "monthlyFeeTotal", label: "Monthly Fees", render: (row) => formatMoney(row.monthlyFeeTotal) },
             ]}
             rows={data.subscriptionCommercial?.activeSubscriptionsByPlan || []}
+            minWidth={620}
+            compact
           />
         </Panel>
       ) : null,
@@ -287,33 +522,41 @@ export default function OverviewPage() {
           </div>
         </section>
       ) : (
-        <div className="overview-page overview-page--classic">
-          <section className="internal-summary-strip">
-            {visibleSummaryItems.map((item) => (
-              <InternalKpiDrilldownCard
-                key={item.label}
-                label={item.label}
-                value={item.value}
-                helper="overview metric"
-                delta={item.tone === "danger" ? "Watch" : item.tone === "warning" ? "Review" : "OK"}
-                tone={item.tone}
-                onClick={() => setActiveSummary(item)}
-              />
+        <div className="overview-page overview-page--modern">
+          <section className="overview-focus-grid" aria-label="Overview focus metrics">
+            {focusItems.map((item) => (
+              <FocusCard key={item.label} item={item} onClick={() => setActiveSummary(item)} />
             ))}
           </section>
-          {summaryItems.length > summaryLimit ? (
-            <button type="button" className="metric-grid-view-all" onClick={() => setShowAllSummary((prev) => !prev)}>
-              {showAllSummary ? "Show less" : `View all ${summaryItems.length}`}
-            </button>
-          ) : null}
+
+          <section className="overview-signal-section">
+            <div className="overview-section-heading">
+              <div>
+                <h2>Operational Signals</h2>
+                <p>Live status across stations, queues, support, risk, and finance.</p>
+              </div>
+              {signalItems.length > signalLimit ? (
+                <button type="button" className="metric-grid-view-all" onClick={() => setShowAllSummary((prev) => !prev)}>
+                  {showAllSummary ? <ChevronUp aria-hidden="true" /> : <ChevronDown aria-hidden="true" />}
+                  <span>{showAllSummary ? "Show less" : `View ${signalItems.length}`}</span>
+                </button>
+              ) : null}
+            </div>
+            <div className="overview-signal-grid" aria-label="Secondary operational metrics">
+              {visibleSignalItems.map((item) => (
+                <SignalCard key={item.label} item={item} onClick={() => setActiveSummary(item)} />
+              ))}
+            </div>
+          </section>
+
           <InternalKpiDrilldownDrawer
             open={Boolean(activeSummary)}
             onOpenChange={(open) => !open && setActiveSummary(null)}
             drilldown={activeSummary ? {
               title: activeSummary.label,
               value: activeSummary.value,
-              subtitle: "Live overview metric from the internal command workspace.",
-              note: "Use the related workspace panels below the KPI strip for the operational records behind this value.",
+              subtitle: activeSummary.detail || "Live overview metric from the internal command workspace.",
+              note: activeSummary.note || "Use the related workspace panels below for the operational records behind this value.",
             } : null}
           />
 

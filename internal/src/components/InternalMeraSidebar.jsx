@@ -1,9 +1,7 @@
-import { useMemo, useState } from "react"
+import { useMemo } from "react"
 import {
   AlertTriangle,
   BarChart3,
-  ChevronLeft,
-  ChevronRight,
   ArrowLeft,
   ClipboardCheck,
   Database,
@@ -20,7 +18,6 @@ import {
   ScrollText,
   Settings,
   UserCircle2,
-  ShieldCheck,
   Users,
   WalletCards,
   Bell,
@@ -28,16 +25,6 @@ import {
 import { useLocation, useNavigate } from "react-router-dom"
 import { navigationItems } from "../config/navigation"
 import { useInternalAuth } from "../auth/AuthContext"
-
-const sidebarStorageKey = "smartlinkInternalMeraSidebarCollapsed"
-
-const sectionIcons = {
-  "Command Center": LayoutDashboard,
-  Operations: RadioTower,
-  Oversight: ShieldCheck,
-  Intelligence: BarChart3,
-  Governance: Settings,
-}
 
 const settingsItems = [
   { label: "Profile", path: "/settings/profile", icon: UserCircle2 },
@@ -86,10 +73,6 @@ export default function InternalMeraSidebar() {
   const navigate = useNavigate()
   const location = useLocation()
   const { session } = useInternalAuth()
-  const [collapsed, setCollapsed] = useState(() => {
-    if (typeof window === "undefined") return false
-    return window.localStorage.getItem(sidebarStorageKey) === "true"
-  })
   const profile = session?.profile || {}
   const allowed = useMemo(() => new Set(profile.navigation || []), [profile.navigation])
   const settingsMode = location.pathname.startsWith("/settings")
@@ -102,21 +85,16 @@ export default function InternalMeraSidebar() {
   }, [visibleItems])
   const fullName = profile.user?.fullName || profile.user?.email || "Internal Staff"
   const roleName = profile.roles?.[0]?.name || profile.primaryRole || "Internal role"
-
-  function toggleCollapsed() {
-    setCollapsed((current) => {
-      const next = !current
-      try {
-        window.localStorage.setItem(sidebarStorageKey, String(next))
-      } catch {
-        // Storage can be unavailable in restricted browser contexts.
-      }
-      return next
-    })
+  const sidebarWidth = "var(--sidebar-width)"
+  const sidebarStyle = {
+    flex: `0 0 ${sidebarWidth}`,
+    width: sidebarWidth,
+    minWidth: sidebarWidth,
+    maxWidth: sidebarWidth,
   }
 
   return (
-    <aside className={`internal-mera-sidebar ${collapsed ? "is-collapsed" : ""}`}>
+    <aside className="internal-mera-sidebar" style={sidebarStyle}>
         <nav className="internal-mera-sidebar__nav" aria-label={settingsMode ? "Internal settings navigation" : "Internal navigation"}>
           {settingsMode ? (
             <div className="internal-settings-nav-mode">
@@ -170,11 +148,10 @@ export default function InternalMeraSidebar() {
           ) : null}
 
           {groupedItems.map((group) => {
-            const SectionIcon = sectionIcons[group.section] || LayoutDashboard
             return (
               <section key={group.section} className="internal-mera-sidebar__section">
                 <div className="internal-mera-sidebar__section-title">
-                  {collapsed ? <SectionIcon aria-hidden="true" /> : <span>{group.section}</span>}
+                  <span>{group.section}</span>
                 </div>
                 <div className="internal-mera-sidebar__items">
                   {group.items.filter((item) => item.key !== "overview").map((item) => {
@@ -203,10 +180,6 @@ export default function InternalMeraSidebar() {
         </nav>
 
         <div className="internal-mera-sidebar__footer">
-          <button type="button" className="internal-mera-nav-item" onClick={toggleCollapsed} title={collapsed ? "Expand sidebar" : "Collapse sidebar"} aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}>
-            {collapsed ? <ChevronRight aria-hidden="true" /> : <ChevronLeft aria-hidden="true" />}
-            <span>{collapsed ? "Expand" : "Collapse"}</span>
-          </button>
           {!settingsMode && allowed.has("settings") ? (
             <button type="button" className={`internal-mera-nav-item ${isActivePath(location.pathname, "/settings") ? "is-active" : ""}`} onClick={() => navigate("/settings")}>
               <Settings aria-hidden="true" />

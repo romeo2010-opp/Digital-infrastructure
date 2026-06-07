@@ -1637,7 +1637,7 @@ function ConsumptionPanel({ displayMode = 'line' as DashboardBlockDisplay }: { d
               { y: 76, label: yTicks[2] },
               { y: 108, label: yTicks[3] },
             ].map((row, index) => (
-              <g key={row.label}>
+              <g key={`tick-${index}-${row.y}`}>
                 <text x="0" y={row.y + 4} fill="#9ca3af" fontSize="10">{index === 0 ? `${Math.round(row.label / 1000)}k L` : Math.round(row.label / 1000)}</text>
                 <line x1="34" y1={row.y} x2="300" y2={row.y} stroke="#f1f5f9" strokeWidth="0.5" />
               </g>
