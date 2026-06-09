@@ -1,7 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react"
 
 const MOBILE_BREAKPOINT_PX = 768
-const DESKTOP_COLLAPSED_WIDTH = 56
 const DESKTOP_EXPANDED_WIDTH = 256
 const SIDEBAR_WIDTH_STORAGE_KEY = "smartlink.internal.sidebarWidth"
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "smartlink.internal.sidebarCollapsed"
@@ -14,14 +13,10 @@ function getStoredSidebarWidth() {
   return Math.min(320, Math.max(DESKTOP_EXPANDED_WIDTH, value))
 }
 
-function getStoredCollapsedState() {
-  return window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === "true"
-}
-
 export function AppShellProvider({ children }) {
   const [isMobile, setIsMobile] = useState(() => window.innerWidth <= MOBILE_BREAKPOINT_PX)
   const [isSidebarOpen, setIsSidebarOpen] = useState(false)
-  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => getStoredCollapsedState())
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false)
   const [desktopSidebarWidth, setDesktopSidebarWidth] = useState(() => getStoredSidebarWidth())
 
   useEffect(() => {
@@ -36,14 +31,14 @@ export function AppShellProvider({ children }) {
   }, [])
 
   useEffect(() => {
-    window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, String(isSidebarCollapsed))
-  }, [isSidebarCollapsed])
+    window.localStorage.removeItem(SIDEBAR_COLLAPSED_STORAGE_KEY)
+  }, [])
 
   useEffect(() => {
     window.localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(desktopSidebarWidth))
   }, [desktopSidebarWidth])
 
-  const activeSidebarWidth = isMobile ? 0 : isSidebarCollapsed ? DESKTOP_COLLAPSED_WIDTH : desktopSidebarWidth
+  const activeSidebarWidth = isMobile ? 0 : desktopSidebarWidth
 
   useEffect(() => {
     document.documentElement.style.setProperty("--sidebar-width", `${activeSidebarWidth}px`)

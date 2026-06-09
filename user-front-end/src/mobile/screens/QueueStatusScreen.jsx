@@ -1152,20 +1152,12 @@ export function QueueStatusScreen({ queueJoinId, onBack, onLeaveComplete }) {
                     <strong>{displayEnum(pumpAssignment?.status || snapshot?.operationalStatus)}</strong>
                   </p>
                   <p>
-                    <span>Vehicle</span>
-                    <strong>
-                      {snapshot?.vehicle
-                        ? `${snapshot.vehicle.make || ""} ${snapshot.vehicle.model || ""}`.trim() || "Vehicle"
-                        : "Vehicle"}
-                    </strong>
-                  </p>
-                  <p>
-                    <span>Tank side</span>
-                    <strong>{displayEnum(snapshot?.vehicle?.tankSide || "UNKNOWN")}</strong>
+                    <span>Fuel type</span>
+                    <strong>{fuelTypeLabel(snapshot?.fuelType)}</strong>
                   </p>
                 </div>
                 <p className="queue-muted queue-metric-note">
-                  {pumpAssignment?.reason || "This pump matches your fuel type and vehicle profile."}
+                  {pumpAssignment?.reason || "This pump matches your requested fuel type and current lane load."}
                 </p>
                 {approachInstruction?.message ? (
                   <p className={approachInstruction.shouldProceed ? "queue-success-text" : "queue-info-text"}>
@@ -1177,8 +1169,8 @@ export function QueueStatusScreen({ queueJoinId, onBack, onLeaveComplete }) {
               <>
                 <p className="queue-muted queue-metric-note">
                   {pumpAssignment?.status === "MANUAL_REVIEW_REQUIRED"
-                    ? "We are confirming the best pump for your vehicle."
-                    : "SmartLink is checking fuel type, tank side, lane fit, and pump load."}
+                    ? "We are confirming the best pump for your fuel request."
+                    : "SmartLink is checking fuel type, lane fit, and pump load."}
                 </p>
                 {pumpAssignment?.reason ? <p className="queue-warning-text">{pumpAssignment.reason}</p> : null}
               </>

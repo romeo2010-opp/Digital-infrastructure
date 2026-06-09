@@ -85,7 +85,7 @@ export default function InternalMeraSidebar() {
   }, [visibleItems])
   const fullName = profile.user?.fullName || profile.user?.email || "Internal Staff"
   const roleName = profile.roles?.[0]?.name || profile.primaryRole || "Internal role"
-  const sidebarWidth = "var(--sidebar-width)"
+  const sidebarWidth = "var(--internal-desktop-sidebar-width, 248px)"
   const sidebarStyle = {
     flex: `0 0 ${sidebarWidth}`,
     width: sidebarWidth,

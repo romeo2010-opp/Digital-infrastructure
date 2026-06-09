@@ -63,6 +63,43 @@ const signalIconMap = {
   MapPin,
 }
 
+const metricBreakdownColumns = [
+  { key: "metric", label: "Metric" },
+  { key: "value", label: "Value", align: "right" },
+  { key: "note", label: "Context" },
+]
+
+const regionalDrilldownColumns = [
+  { key: "region", label: "Region" },
+  { key: "activeCount", label: "Active", align: "right", render: (row) => formatNumber(row.activeCount) },
+  { key: "stationCount", label: "Stations", align: "right", render: (row) => formatNumber(row.stationCount) },
+  { key: "offlineCount", label: "Offline", align: "right", render: (row) => formatNumber(row.offlineCount) },
+  { key: "queuePressure", label: "Queues", align: "right", render: (row) => formatNumber(row.queuePressure) },
+  { key: "incidentCount", label: "Alerts", align: "right", render: (row) => formatNumber(row.incidentCount) },
+]
+
+const throughputDrilldownColumns = [
+  { key: "region", label: "Region" },
+  { key: "transactionValue", label: "Today value", align: "right", render: (row) => formatCompactMoney(row.transactionValue) },
+  { key: "queuePressure", label: "Queue load", align: "right", render: (row) => formatNumber(row.queuePressure) },
+  { key: "incidentCount", label: "Alerts", align: "right", render: (row) => formatNumber(row.incidentCount) },
+]
+
+const attentionDrilldownColumns = [
+  { key: "title", label: "Record" },
+  { key: "severity", label: "Severity", render: (row) => <StatusPill value={row.severity || "INFO"} /> },
+  { key: "category", label: "Category", render: (row) => formatCodeLabel(row.category || row.ownerRoleCode || row.entityType || "-") },
+  { key: "stationName", label: "Station", render: (row) => row.stationName || row.entityPublicId || "-" },
+  { key: "createdAt", label: "Age", align: "right", render: (row) => formatRelative(row.createdAt) },
+]
+
+const subscriptionDrilldownColumns = [
+  { key: "planName", label: "Plan" },
+  { key: "status", label: "Status", render: (row) => <StatusPill value={row.status || "ACTIVE"} /> },
+  { key: "stationCount", label: "Stations", align: "right", render: (row) => formatNumber(row.stationCount) },
+  { key: "monthlyFeeTotal", label: "Monthly fees", align: "right", render: (row) => formatCompactMoney(row.monthlyFeeTotal) },
+]
+
 function FocusCard({ item, onClick }) {
   const Icon = focusIconMap[item.icon] || Gauge
   const progress = typeof item.progress === "number" ? item.progress : null
@@ -144,10 +181,10 @@ function AvailabilityCell({ row }) {
   )
 }
 
-function SnapshotList({ items, emptyLabel = "No items available." }) {
+function SnapshotList({ items, emptyLabel = "No items available.", className = "" }) {
   if (!items?.length) return <p className="empty-cell">{emptyLabel}</p>
   return (
-    <div className="timeline-list">
+    <div className={["timeline-list", className].filter(Boolean).join(" ")}>
       {items.map((item) => (
         <article key={item.publicId || `${item.title}-${item.createdAt}`} className="timeline-item">
           <div>
@@ -237,11 +274,84 @@ export default function OverviewPage() {
   const activeStations = safeNumber(metrics.totalActiveStations)
   const totalStations = safeNumber(metrics.totalStations)
   const networkOnlinePercent = percentOf(activeStations, totalStations)
+  const regionalItems = Array.isArray(data?.regionalOperations?.items) ? data.regionalOperations.items : []
+  const attentionItems = Array.isArray(data?.needsAttention) ? data.needsAttention : []
+  const liveIncidentItems = Array.isArray(data?.liveIncidents) ? data.liveIncidents : []
+  const onboardingItems = Array.isArray(data?.pendingOnboarding?.items) ? data.pendingOnboarding.items : []
+  const subscriptionItems = Array.isArray(data?.subscriptionCommercial?.activeSubscriptionsByPlan)
+    ? data.subscriptionCommercial.activeSubscriptionsByPlan
+    : []
   const attentionLoad =
     safeNumber(metrics.stationsOffline) +
     safeNumber(metrics.livePumpAlerts) +
     safeNumber(metrics.highRiskAlerts) +
     safeNumber(metrics.criticalSupportTickets)
+  const networkDrilldownRows = regionalItems.length
+    ? regionalItems
+    : [{
+      region: "Network total",
+      activeCount: activeStations,
+      stationCount: totalStations,
+      offlineCount: safeNumber(metrics.stationsOffline),
+      queuePressure: safeNumber(metrics.activeQueues),
+      incidentCount: safeNumber(metrics.livePumpAlerts) + safeNumber(metrics.highRiskAlerts),
+    }]
+  const throughputDrilldownRows = regionalItems.length
+    ? regionalItems
+    : [{
+      region: "Today",
+      transactionValue: safeNumber(metrics.todayTransactionValue),
+      queuePressure: safeNumber(metrics.activeQueues),
+      incidentCount: safeNumber(metrics.livePumpAlerts) + safeNumber(metrics.highRiskAlerts),
+    }]
+  const attentionBreakdownRows = [
+    { id: "offline-stations", metric: "Offline stations", value: formatNumber(metrics.stationsOffline), note: "Stations currently marked inactive or offline." },
+    { id: "pump-alerts", metric: "Pump alerts", value: formatNumber(metrics.livePumpAlerts), note: "Offline, paused, or degraded pump states." },
+    { id: "risk-alerts", metric: "High-risk alerts", value: formatNumber(metrics.highRiskAlerts), note: "Compliance and risk cases on the watchlist." },
+    { id: "critical-support", metric: "Critical support tickets", value: formatNumber(metrics.criticalSupportTickets), note: "Open priority support cases needing action." },
+  ]
+  const financeBreakdownRows = [
+    { id: "pending-value", metric: "Pending settlement value", value: formatCompactMoney(metrics.pendingSettlementValue), note: "Settlement value awaiting review or payout movement." },
+    { id: "pending-batches", metric: "Pending settlement batches", value: formatNumber(metrics.pendingSettlements), note: "Batches currently pending or under review." },
+    { id: "held-batches", metric: "Held settlements", value: formatNumber(data?.financeSnapshot?.heldSettlements), note: "Settlement batches currently held." },
+    { id: "today-revenue", metric: "Platform revenue today", value: formatCompactMoney(data?.financeSnapshot?.todayRevenue), note: "Settlement fee revenue posted today." },
+    { id: "refund-outflow", metric: "Refund outflow today", value: formatCompactMoney(data?.financeSnapshot?.refundOutflowToday), note: "Approved or paid refund outflow for today." },
+  ]
+  const supportBreakdownRows = [
+    { id: "open-tickets", metric: "Open tickets", value: formatNumber(data?.supportSnapshot?.openTickets), note: "Open, in-progress, or escalated cases." },
+    { id: "escalated-disputes", metric: "Escalated disputes", value: formatNumber(data?.supportSnapshot?.escalatedDisputes), note: "Cases currently escalated." },
+    { id: "payment-issues", metric: "Payment issues", value: formatNumber(data?.supportSnapshot?.failedPaymentIssues), note: "Open payment failure cases." },
+    { id: "refund-approvals", metric: "Refund approvals", value: formatNumber(data?.supportSnapshot?.refundsPendingApproval), note: "Refunds waiting on support or finance approval." },
+  ]
+  const riskBreakdownRows = [
+    { id: "suspicious-transactions", metric: "Suspicious transactions", value: formatNumber(data?.riskSnapshot?.suspiciousTransactionsCount), note: "Transactions or cases flagged by compliance rules." },
+    { id: "frozen-entities", metric: "Frozen entities", value: formatNumber(data?.riskSnapshot?.frozenAccountsOrStations), note: "Accounts or stations currently frozen." },
+    { id: "unresolved-cases", metric: "Unresolved compliance cases", value: formatNumber(data?.riskSnapshot?.unresolvedComplianceCases), note: "Open, investigating, or frozen compliance cases." },
+    { id: "anomaly-alerts", metric: "Anomaly alerts", value: formatNumber(data?.riskSnapshot?.anomalyAlerts), note: "High or critical unresolved anomaly alerts." },
+  ]
+  const systemBreakdownRows = [
+    { id: "status", metric: "System status", value: metrics.systemHealthStatus || "-", note: "Current system health rollup." },
+    { id: "degraded-services", metric: "Degraded services", value: formatNumber(data?.systemHealthSummary?.degradedServices), note: "Open critical or persistent warning health events." },
+    { id: "latest-event", metric: "Latest event", value: formatDateTime(data?.systemHealthSummary?.latestEventAt), note: "Most recent system health event." },
+  ]
+  const onboardingBreakdownRows = [
+    { id: "awaiting-verification", metric: "Awaiting verification", value: formatNumber(data?.pendingOnboarding?.summary?.awaitingVerification), note: "Submitted or review onboarding records." },
+    { id: "activation-review", metric: "Activation review", value: formatNumber(data?.pendingOnboarding?.summary?.activationReview), note: "Stations ready for activation review." },
+    { id: "delayed-items", metric: "Delayed items", value: formatNumber(data?.pendingOnboarding?.summary?.delayedItems), note: "Onboarding records older than the SLA window." },
+  ]
+  const subscriptionBreakdownRows = subscriptionItems.length
+    ? subscriptionItems
+    : [{ planName: "Active plans", status: "ACTIVE", stationCount: 0, monthlyFeeTotal: safeNumber(metrics.subscriptionRevenueSnapshot) }]
+  const alertSourceItems = [...attentionItems, ...liveIncidentItems]
+  const alertMatches = (item, terms) => terms.some((term) => `${item?.category || ""} ${item?.title || ""} ${item?.summary || ""} ${item?.ownerRoleCode || ""}`.toLowerCase().includes(term))
+  const pumpAlertItems = alertSourceItems.filter((item) => alertMatches(item, ["pump", "nozzle", "telemetry", "degraded", "offline"])).slice(0, 8)
+  const riskAlertItems = alertSourceItems.filter((item) => alertMatches(item, ["risk", "compliance", "fraud", "suspicious", "transaction"])).slice(0, 8)
+  const supportAlertItems = alertSourceItems.filter((item) => alertMatches(item, ["support", "ticket", "dispute", "refund"])).slice(0, 8)
+  const alertDrilldown = (rows, fallbackRows = attentionBreakdownRows) => (
+    rows.length
+      ? { columns: attentionDrilldownColumns, rows }
+      : { columns: metricBreakdownColumns, rows: fallbackRows }
+  )
 
   const focusItems = [
     {
@@ -253,6 +363,12 @@ export default function OverviewPage() {
       icon: "stations",
       progress: networkOnlinePercent,
       note: "Station availability is calculated from active stations against total registered stations.",
+      drilldown: {
+        subtitle: "Station availability by region.",
+        note: "These rows show active, offline, queue, and alert pressure by regional cluster.",
+        columns: regionalDrilldownColumns,
+        rows: networkDrilldownRows,
+      },
     },
     {
       label: "Today's throughput",
@@ -262,15 +378,26 @@ export default function OverviewPage() {
       tone: "neutral",
       icon: "transactions",
       note: "Transaction value and count are scoped to the current business day.",
+      drilldown: {
+        subtitle: `${formatNumber(metrics.todayTransactionCount)} transactions posted today.`,
+        note: "Regional value is calculated from transactions with today's occurrence date.",
+        columns: throughputDrilldownColumns,
+        rows: throughputDrilldownRows,
+      },
     },
     {
       label: "Attention queue",
       value: formatNumber(attentionLoad),
-      detail: `${formatNumber(data?.needsAttention?.length)} prioritized records`,
+      detail: `${formatNumber(attentionItems.length)} prioritized records`,
       badge: attentionLoad ? "Review" : "Clear",
       tone: attentionLoad ? "danger" : "success",
       icon: "attention",
       note: "This combines offline stations, pump alerts, high-risk alerts, and critical support tickets.",
+      drilldown: {
+        subtitle: `${formatNumber(attentionItems.length)} highest-priority records plus metric composition.`,
+        note: "The metric value is the total operational load; the table shows the latest prioritized records when available.",
+        ...alertDrilldown(attentionItems, attentionBreakdownRows),
+      },
     },
     {
       label: "Settlement exposure",
@@ -280,6 +407,12 @@ export default function OverviewPage() {
       tone: safeNumber(metrics.pendingSettlements) ? "warning" : "success",
       icon: "settlements",
       note: "Pending settlement value reflects batches still awaiting review or payout movement.",
+      drilldown: {
+        subtitle: "Finance exposure and settlement movement.",
+        note: "These values come from settlement batches and refund request snapshots.",
+        columns: metricBreakdownColumns,
+        rows: financeBreakdownRows,
+      },
     },
   ]
 
@@ -290,6 +423,12 @@ export default function OverviewPage() {
       detail: data?.systemHealthSummary?.latestEventAt ? `Latest ${formatRelative(data.systemHealthSummary.latestEventAt)}` : "No recent system event",
       tone: metrics.systemHealthStatus === "Operational" ? "success" : metrics.systemHealthStatus === "Degraded" ? "danger" : "warning",
       icon: "Activity",
+      drilldown: {
+        subtitle: "Current system health rollup.",
+        note: "Persistent warning events are counted as degraded after the configured health window.",
+        columns: metricBreakdownColumns,
+        rows: systemBreakdownRows,
+      },
     },
     {
       label: "Offline stations",
@@ -297,6 +436,14 @@ export default function OverviewPage() {
       detail: `${formatNumber(totalStations)} stations tracked`,
       tone: toneForCount(metrics.stationsOffline, "danger"),
       icon: "RadioTower",
+      drilldown: {
+        subtitle: "Offline station pressure by region.",
+        note: "Rows are grouped by station city/region and include active queues plus open alerts.",
+        columns: regionalDrilldownColumns,
+        rows: networkDrilldownRows.filter((row) => safeNumber(row.offlineCount) > 0).length
+          ? networkDrilldownRows.filter((row) => safeNumber(row.offlineCount) > 0)
+          : networkDrilldownRows,
+      },
     },
     {
       label: "Pump alerts",
@@ -304,6 +451,14 @@ export default function OverviewPage() {
       detail: "Offline, paused, or degraded",
       tone: toneForCount(metrics.livePumpAlerts, "danger"),
       icon: "Gauge",
+      drilldown: {
+        subtitle: "Pump and telemetry records behind the alert count.",
+        note: "When row-level pump alerts are present, they appear here; otherwise the card shows the metric composition.",
+        ...alertDrilldown(pumpAlertItems, [
+          { id: "pump-alerts", metric: "Live pump alerts", value: formatNumber(metrics.livePumpAlerts), note: "Offline, paused, or degraded pump states." },
+          { id: "open-incidents", metric: "Open incidents", value: formatNumber(liveIncidentItems.length), note: "Open dashboard alerts available in the overview packet." },
+        ]),
+      },
     },
     {
       label: "Active queues",
@@ -311,6 +466,14 @@ export default function OverviewPage() {
       detail: "Waiting, called, or late",
       tone: toneForCount(metrics.activeQueues, "warning"),
       icon: "MapPin",
+      drilldown: {
+        subtitle: "Active queue pressure by region.",
+        note: "Queue pressure counts waiting, called, or late queue entries.",
+        columns: regionalDrilldownColumns,
+        rows: regionalItems.filter((row) => safeNumber(row.queuePressure) > 0).length
+          ? regionalItems.filter((row) => safeNumber(row.queuePressure) > 0)
+          : networkDrilldownRows,
+      },
     },
     {
       label: "Pending activations",
@@ -318,6 +481,13 @@ export default function OverviewPage() {
       detail: "Submitted or under review",
       tone: toneForCount(metrics.stationsPendingActivation, "warning"),
       icon: "RadioTower",
+      drilldown: {
+        subtitle: "Onboarding items awaiting activation movement.",
+        note: "Summary rows are shown when the overview packet has no individual onboarding alert rows.",
+        ...(onboardingItems.length
+          ? { columns: attentionDrilldownColumns, rows: onboardingItems }
+          : { columns: metricBreakdownColumns, rows: onboardingBreakdownRows }),
+      },
     },
     {
       label: "High-risk alerts",
@@ -325,6 +495,11 @@ export default function OverviewPage() {
       detail: "Compliance watchlist",
       tone: toneForCount(metrics.highRiskAlerts, "danger"),
       icon: "ShieldAlert",
+      drilldown: {
+        subtitle: "Risk and compliance snapshot.",
+        note: "Rows show available risk records first, with aggregate compliance metrics as fallback.",
+        ...alertDrilldown(riskAlertItems, riskBreakdownRows),
+      },
     },
     {
       label: "Critical support",
@@ -332,6 +507,11 @@ export default function OverviewPage() {
       detail: "Open priority cases",
       tone: toneForCount(metrics.criticalSupportTickets, "danger"),
       icon: "Activity",
+      drilldown: {
+        subtitle: "Support and dispute workload.",
+        note: "Rows show available support records first, with support snapshot metrics as fallback.",
+        ...alertDrilldown(supportAlertItems, supportBreakdownRows),
+      },
     },
     {
       label: "Subscription revenue",
@@ -339,9 +519,15 @@ export default function OverviewPage() {
       detail: "Monthly active plan total",
       tone: "neutral",
       icon: "WalletCards",
+      drilldown: {
+        subtitle: "Subscription revenue by plan and status.",
+        note: "Monthly fee totals are grouped from station subscription statuses.",
+        columns: subscriptionDrilldownColumns,
+        rows: subscriptionBreakdownRows,
+      },
     },
   ]
-  const signalLimit = 6
+  const signalLimit = 4
   const visibleSignalItems = showAllSummary ? signalItems : signalItems.slice(0, signalLimit)
 
   const panelRegistry = useMemo(() => {
@@ -356,7 +542,13 @@ export default function OverviewPage() {
           items={data.needsAttention}
           previewLimit={5}
           modalTitle="All Attention Queue Items"
-          renderContent={(items) => <SnapshotList items={items} emptyLabel="No urgent items in the queue." />}
+          renderContent={(items) => (
+            <SnapshotList
+              items={items}
+              emptyLabel="No urgent items in the queue."
+              className="timeline-list--attention"
+            />
+          )}
         />
       ),
       regionalOperations: (
@@ -555,8 +747,14 @@ export default function OverviewPage() {
             drilldown={activeSummary ? {
               title: activeSummary.label,
               value: activeSummary.value,
-              subtitle: activeSummary.detail || "Live overview metric from the internal command workspace.",
-              note: activeSummary.note || "Use the related workspace panels below for the operational records behind this value.",
+              subtitle: activeSummary.drilldown?.subtitle || activeSummary.detail || "Live overview metric from the internal command workspace.",
+              note: activeSummary.drilldown?.note || activeSummary.note || "Use the related workspace panels below for the operational records behind this value.",
+              rows: activeSummary.drilldown?.rows || [],
+              columns: activeSummary.drilldown?.columns || [],
+              content: activeSummary.drilldown?.content,
+              renderContent: activeSummary.drilldown?.renderContent,
+              actionLabel: activeSummary.drilldown?.actionLabel,
+              onAction: activeSummary.drilldown?.onAction,
             } : null}
           />
 

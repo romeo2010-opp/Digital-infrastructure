@@ -223,7 +223,6 @@ function normalizeStation(row) {
     subscriptionPlanCode: subscriptionPlanCode || null,
     queuePlanEnabled: toBooleanOrDefault(queuePlanEnabledRaw, false),
     reservationPlanEnabled: toBooleanOrDefault(reservationPlanEnabledRaw, false),
-    opsPrediction: row?.opsPrediction || row?.ops_prediction || null,
   }
 }
 
@@ -270,29 +269,6 @@ export const stationsApi = {
     }
 
     return requestWithAuth(`/api/user/stations/${encodeURIComponent(scopedStationPublicId)}/fuel-status`, { signal })
-  },
-
-  async getStationOpsPrediction(stationPublicId, { fuelTypeCode = 'PETROL', signal } = {}) {
-    const scopedStationPublicId = String(stationPublicId || '').trim()
-    if (!scopedStationPublicId) throw new Error('stationPublicId is required')
-
-    const normalizedFuelType = String(fuelTypeCode || 'PETROL').trim().toUpperCase() === 'DIESEL' ? 'DIESEL' : 'PETROL'
-
-    if (dataSourceMode !== 'api') {
-      return {
-        stationPublicId: scopedStationPublicId,
-        fuelType: normalizedFuelType,
-        prediction: null,
-        generatedAt: new Date().toISOString(),
-      }
-    }
-
-    const params = new URLSearchParams()
-    params.set('fuelType', normalizedFuelType)
-    return requestWithAuth(
-      `/api/user/stations/${encodeURIComponent(scopedStationPublicId)}/ops-prediction?${params.toString()}`,
-      { signal }
-    )
   },
 
   async getStationPromotionPreview(stationPublicId, { fuelTypeCode, litres = 20, paymentMethod = 'CASH', signal } = {}) {

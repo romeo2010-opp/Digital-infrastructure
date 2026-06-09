@@ -334,6 +334,12 @@ export default function WalletOperationsPage() {
       note: form.note?.trim() || "",
       requestKey: generateRequestKey(actionModal.requestKeyPrefix || "wallet-op"),
     }
+    if (!payload.reasonCode) {
+      throw new Error("Reason code is required.")
+    }
+    if (!payload.note) {
+      throw new Error("Note is required.")
+    }
 
     if (actionModal.kind === "pointsAdjust") {
       await internalApi.createWalletPointsAdjustment(walletId, {
@@ -1072,8 +1078,8 @@ export default function WalletOperationsPage() {
               ) : null}
 
               <PreviewTablePanel
-                title="Manual Holds"
-                subtitle="Reservation and manual hold visibility for available balance review."
+                title="Wallet Holds"
+                subtitle="Active reservation, queue, and manual holds affecting available balance."
                 previewLimit={6}
                 compact
                 minWidth={760}
@@ -1101,6 +1107,9 @@ export default function WalletOperationsPage() {
                             subtitle: "Release the selected manual hold and restore available balance.",
                             submitLabel: "Release Hold",
                             requestKeyPrefix: "wallet-release-hold",
+                            initialValues: {
+                              reasonCode: "HOLD_RELEASE_APPROVED",
+                            },
                             fields: [
                               { name: "reasonCode", label: "Reason code", placeholder: "HOLD_RELEASE_APPROVED" },
                               { name: "note", label: "Note", type: "textarea", rows: 4, fullWidth: true, placeholder: "Explain why the hold is being released." },

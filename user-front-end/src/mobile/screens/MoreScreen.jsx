@@ -16,7 +16,6 @@ import {
 
 const primaryItems = [
   { key: 'account', label: 'Account', path: '/m/account', Icon: AccountIcon },
-  { key: 'vehicles', label: 'Vehicles', path: '/m/vehicles', Icon: CarIcon },
   { key: 'fleet', label: 'Fleet Mode', path: '/m/fleet', Icon: CarIcon },
   { key: 'notifications', label: 'Notifications', path: '/m/alerts', Icon: BellIcon },
   { key: 'appearance', label: 'Appearance', path: '/m/settings', Icon: EyeIcon },

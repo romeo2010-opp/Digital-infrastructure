@@ -15105,13 +15105,18 @@ button {
 }
 
 /* Keep the internal navigation usable: the current design ships with an always-open sidebar. */
+:root,
+:root[data-internal-theme="mera-light"] {
+  --internal-desktop-sidebar-width: 248px;
+}
+
 .internal-mera-sidebar,
 :root[data-internal-theme="mera-light"] .internal-mera-sidebar {
-  flex: 0 0 var(--sidebar-width) !important;
-  flex-basis: var(--sidebar-width) !important;
-  width: var(--sidebar-width) !important;
-  min-width: var(--sidebar-width) !important;
-  max-width: var(--sidebar-width) !important;
+  flex: 0 0 var(--internal-desktop-sidebar-width) !important;
+  flex-basis: var(--internal-desktop-sidebar-width) !important;
+  width: var(--internal-desktop-sidebar-width) !important;
+  min-width: var(--internal-desktop-sidebar-width) !important;
+  max-width: var(--internal-desktop-sidebar-width) !important;
 }
 
 .internal-mera-sidebar .internal-mera-nav-item,
@@ -15138,4 +15143,180 @@ button {
 .internal-mera-sidebar .internal-mera-user > svg,
 :root[data-internal-theme="mera-light"] .internal-mera-sidebar .internal-mera-user > svg {
   display: block !important;
+}
+
+.internal-shell__body,
+.app-main,
+.dashboard,
+.dashboard-replica,
+.internal-page-inner,
+.overview-page--modern,
+.overview-signal-section,
+.metric-grid-shell,
+.metric-grid,
+.internal-summary-strip,
+.kpi-row,
+.overview-focus-grid,
+.overview-signal-grid,
+.overview-snapshot-grid,
+.dashboard-grid,
+.internal-overview-layout,
+.panel {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.metric-grid,
+.internal-summary-strip {
+  grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)) !important;
+}
+
+.kpi-row {
+  grid-template-columns: repeat(auto-fit, minmax(min(168px, 100%), 1fr));
+}
+
+.overview-focus-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(230px, 100%), 1fr));
+}
+
+.overview-signal-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr));
+}
+
+.overview-snapshot-grid,
+.snapshot-stat-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(132px, 100%), 1fr));
+}
+
+.metric-card,
+.kpi-card,
+.overview-focus-card,
+.overview-signal-card,
+.overview-snapshot-metric,
+.snapshot-stat-grid div {
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.metric-card strong,
+.metric-card small,
+.kpi-value,
+.kpi-copy p,
+.kpi-copy small,
+.overview-signal-card strong,
+.overview-signal-card small,
+.overview-snapshot-metric strong {
+  overflow-wrap: anywhere;
+}
+
+.overview-signal-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+  gap: 10px;
+}
+
+.overview-signal-card {
+  min-height: 108px;
+  border-color: #d9e2ee;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+  padding: 13px 14px;
+}
+
+.overview-signal-card__top {
+  gap: 8px;
+}
+
+.overview-signal-card__top span,
+.overview-signal-card small {
+  min-width: 0;
+}
+
+.timeline-list--attention {
+  gap: 10px;
+}
+
+.timeline-list--attention .timeline-item {
+  position: relative;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 12px;
+  min-height: 88px;
+  overflow: hidden;
+  border: 1px solid #d9e2ee !important;
+  border-radius: 8px !important;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%) !important;
+  padding: 13px 14px 13px 16px;
+  box-shadow: 0 8px 18px rgba(16, 24, 40, 0.04) !important;
+}
+
+.timeline-list--attention .timeline-item::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: #ef4444;
+}
+
+.timeline-list--attention .timeline-item strong {
+  color: #111827 !important;
+  font-size: 13px;
+  font-weight: 680;
+  line-height: 1.3;
+}
+
+.timeline-list--attention .timeline-item p {
+  max-width: 54ch;
+  margin-top: 6px;
+  color: #52677f !important;
+  font-size: 12px;
+  line-height: 1.42;
+}
+
+.timeline-list--attention .timeline-meta {
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+  min-width: 0;
+}
+
+.timeline-list--attention .timeline-meta > span:not(.status-pill),
+.timeline-list--attention .timeline-meta time {
+  display: inline-flex;
+  align-items: center;
+  max-width: 160px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #eef4fb;
+  color: #52677f;
+  padding: 5px 8px;
+  font-size: 11px;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timeline-list--attention .status-pill {
+  min-height: 20px;
+  padding: 2px 7px;
+  font-size: 10px;
+}
+
+@media (max-width: 1080px) {
+  .overview-signal-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+}
+
+@media (max-width: 720px) {
+  .overview-signal-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .timeline-list--attention .timeline-item {
+    grid-template-columns: 1fr;
+  }
+
+  .timeline-list--attention .timeline-meta {
+    justify-content: flex-start;
+  }
 }

@@ -8,10 +8,7 @@ import {
   ToolsIcon,
 } from "../icons";
 import { stationsApi } from "../api/stationsApi";
-import { fleetApi } from "../api/fleetApi";
-import { vehiclesApi } from "../api/vehiclesApi";
 import { formatTime } from "../dateTime";
-import { displayEnum } from "../vehicleCatalog";
 
 const facilityIconMap = {
   Car: CarIcon,
@@ -213,22 +210,6 @@ function formatMoney(value, currencyCode = "MWK") {
   })}`;
 }
 
-function formatOpsMinutes(value) {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return "N/A";
-  return `${Math.max(0, Math.round(numeric))} min`;
-}
-
-function opsSeverityStatus(value) {
-  const normalized = String(value || "")
-    .trim()
-    .toUpperCase();
-  if (normalized === "CRITICAL" || normalized === "HIGH") return "unavailable";
-  if (normalized === "MEDIUM") return "low";
-  if (normalized === "LOW") return "available";
-  return "in-use";
-}
-
 function countdownLabel(value, nowTick) {
   if (!value) return "Offer inactive";
   const diffMs = new Date(value).getTime() - nowTick;
@@ -266,7 +247,7 @@ export function StationDetailsScreen({
   onReserve,
   onGetReservationSlots,
   onConnectReservationRealtime,
-  onManageVehicles,
+  onNotifyFuelArrival,
   isFavorite = false,
   onToggleFavorite,
   autoOpenJoinModal = false,
@@ -283,22 +264,17 @@ export function StationDetailsScreen({
   );
   const [customFuelLiters, setCustomFuelLiters] = useState("");
   const [queuePaymentMode, setQueuePaymentMode] = useState("PAY_AT_PUMP");
-  const [fleetSummary, setFleetSummary] = useState(null);
-  const [fleetSummaryLoading, setFleetSummaryLoading] = useState(false);
-  const [fleetSummaryError, setFleetSummaryError] = useState("");
-  const [selectedFleetRequestId, setSelectedFleetRequestId] = useState("");
-  const [vehicles, setVehicles] = useState([]);
-  const [vehiclesLoading, setVehiclesLoading] = useState(false);
-  const [vehicleError, setVehicleError] = useState("");
-  const [selectedVehicleId, setSelectedVehicleId] = useState("");
   const [apiFuelStatuses, setApiFuelStatuses] = useState([]);
   const [fuelStatusLoading, setFuelStatusLoading] = useState(false);
   const [fuelStatusResolved, setFuelStatusResolved] = useState(false);
   const [promotionPreview, setPromotionPreview] = useState(null);
   const [promotionPreviewLoading, setPromotionPreviewLoading] = useState(false);
-  const [opsPrediction, setOpsPrediction] = useState(null);
-  const [opsPredictionLoading, setOpsPredictionLoading] = useState(false);
   const [promoNowTick, setPromoNowTick] = useState(() => Date.now());
+  const [fuelNotifyState, setFuelNotifyState] = useState({
+    key: "",
+    status: "",
+    message: "",
+  });
   const [showIdentifierModal, setShowIdentifierModal] = useState(false);
   const [isJoiningQueue, setIsJoiningQueue] = useState(false);
   const [showReservationModal, setShowReservationModal] = useState(false);
@@ -323,26 +299,6 @@ export function StationDetailsScreen({
   const usesApiFuelStatus = stationsApi.isApiMode();
   const queuePlanEnabled = station?.queuePlanEnabled ?? true;
   const reservationPlanEnabled = station?.reservationPlanEnabled ?? true;
-
-  const approvedFleetRequests = useMemo(() => {
-    const requests = Array.isArray(fleetSummary?.requests) ? fleetSummary.requests : [];
-    const selectedFuel = String(selectedFuelType || "").trim().toLowerCase();
-    return requests.filter((request) => {
-      if (String(request?.status || "").toLowerCase() !== "approved") return false;
-      const requestStationId = String(request?.station?.publicId || "").trim();
-      if (requestStationId && stationPublicId && requestStationId !== stationPublicId) return false;
-      const vehicleFuelType = String(request?.vehicle?.fuelType || "").trim().toLowerCase();
-      if (vehicleFuelType && !["mixed", "unknown"].includes(vehicleFuelType) && vehicleFuelType !== selectedFuel) return false;
-      return Boolean(request?.fleet?.publicId && request?.vehicle?.publicId && request?.publicId);
-    });
-  }, [fleetSummary?.requests, selectedFuelType, stationPublicId]);
-
-  const selectedFleetRequest = useMemo(() => {
-    return approvedFleetRequests.find((request) => request.publicId === selectedFleetRequestId) || approvedFleetRequests[0] || null;
-  }, [approvedFleetRequests, selectedFleetRequestId]);
-  const selectedVehicle = useMemo(() => {
-    return vehicles.find((vehicle) => vehicle.id === selectedVehicleId) || vehicles.find((vehicle) => vehicle.isDefault) || vehicles[0] || null;
-  }, [selectedVehicleId, vehicles]);
 
   const refreshReservationSlots = useCallback(
     async ({ showLoader = false, clearError = false } = {}) => {
@@ -382,61 +338,6 @@ export function StationDetailsScreen({
     },
     [onGetReservationSlots, reservationFuelType, showReservationModal, station],
   );
-
-  useEffect(() => {
-    if (!showIdentifierModal) return undefined;
-    let active = true;
-    setVehiclesLoading(true);
-    setVehicleError("");
-    vehiclesApi
-      .list()
-      .then((payload) => {
-        if (!active) return;
-        const items = Array.isArray(payload) ? payload : [];
-        setVehicles(items);
-        const nextVehicle = items.find((item) => item.isDefault) || items[0] || null;
-        setSelectedVehicleId((current) => current || nextVehicle?.id || "");
-        if (nextVehicle?.fuelType) {
-          setSelectedFuelType(nextVehicle.fuelType);
-          setSelectedPresetLiters(fuelPresetOptions(nextVehicle.fuelType)[1]);
-        }
-        if (nextVehicle?.numberPlate) {
-          setQueueIdentifier(nextVehicle.numberPlate);
-        }
-      })
-      .catch((error) => {
-        if (!active) return;
-        setVehicles([]);
-        setVehicleError(error?.message || "Unable to load vehicles.");
-      })
-      .finally(() => {
-        if (active) setVehiclesLoading(false);
-      });
-    setFleetSummaryLoading(true);
-    setFleetSummaryError("");
-    fleetApi.driverSummary()
-      .then((payload) => {
-        if (!active) return;
-        setFleetSummary(payload || null);
-      })
-      .catch((error) => {
-        if (!active) return;
-        setFleetSummary(null);
-        setFleetSummaryError(error?.message || "Fleet funds are unavailable right now.");
-      })
-      .finally(() => {
-        if (active) setFleetSummaryLoading(false);
-      });
-    return () => {
-      active = false;
-    };
-  }, [showIdentifierModal]);
-
-  useEffect(() => {
-    if (queuePaymentMode !== "FLEET_WALLET") return;
-    if (selectedFleetRequestId && approvedFleetRequests.some((request) => request.publicId === selectedFleetRequestId)) return;
-    setSelectedFleetRequestId(approvedFleetRequests[0]?.publicId || "");
-  }, [approvedFleetRequests, queuePaymentMode, selectedFleetRequestId]);
 
   useEffect(() => {
     if (!showReservationModal) return;
@@ -583,41 +484,6 @@ export function StationDetailsScreen({
     };
   }, [stationPublicId]);
 
-  useEffect(() => {
-    if (!stationPublicId || !stationsApi.isApiMode()) {
-      setOpsPrediction(station?.opsPrediction || null);
-      setOpsPredictionLoading(false);
-      return;
-    }
-
-    let cancelled = false;
-    const controller = new AbortController();
-    setOpsPredictionLoading(true);
-
-    stationsApi
-      .getStationOpsPrediction(stationPublicId, {
-        fuelTypeCode: selectedFuelType,
-        signal: controller.signal,
-      })
-      .then((payload) => {
-        if (cancelled) return;
-        setOpsPrediction(payload || null);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setOpsPrediction(null);
-      })
-      .finally(() => {
-        if (cancelled) return;
-        setOpsPredictionLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-      controller.abort();
-    };
-  }, [selectedFuelType, station?.opsPrediction, stationPublicId]);
-
   const selectedPreviewLitres = useMemo(() => {
     const custom = Number(customFuelLiters);
     if (Number.isFinite(custom) && custom > 0) return custom;
@@ -727,6 +593,38 @@ export function StationDetailsScreen({
     : !hasJoinableQueueFuel
       ? "This station does not currently have Petrol or Diesel available for the digital queue."
       : selectedQueueFuelUnavailableMessage;
+  const depletedFuelTypes = useMemo(
+    () => fuelTypeStatuses.filter((item) => item.status === "unavailable"),
+    [fuelTypeStatuses],
+  );
+  const availableFuelTypes = useMemo(
+    () => fuelTypeStatuses.filter((item) => item.status !== "unavailable"),
+    [fuelTypeStatuses],
+  );
+  const fuelArrivalNotifyTargets = useMemo(() => {
+    if (queueFuelStatusPending || !depletedFuelTypes.length) return [];
+    if (!availableFuelTypes.length) {
+      return [
+        {
+          key: "all-fuel",
+          fuelTypeCode: "",
+          fuelTypeLabel: "Fuel",
+          buttonLabel: "Notify me when fuel arrives",
+        },
+      ];
+    }
+
+    return depletedFuelTypes.map((item, index) => {
+      const fuelTypeCode = normalizeFuelTypeCode(item?.code || item?.label);
+      const fuelTypeLabel = String(item?.label || fuelTypeLabelFromCode(fuelTypeCode)).trim() || "Fuel";
+      return {
+        key: `${fuelTypeCode || fuelTypeLabel}-${index}`,
+        fuelTypeCode,
+        fuelTypeLabel,
+        buttonLabel: `Notify me when ${fuelTypeLabel} arrives`,
+      };
+    });
+  }, [availableFuelTypes.length, depletedFuelTypes, queueFuelStatusPending]);
 
   useEffect(() => {
     if (!hasJoinableQueueFuel) return;
@@ -756,6 +654,7 @@ export function StationDetailsScreen({
     setJoinError("");
     setIdentifierError("");
     setFuelAmountError("");
+    setQueueIdentifier("");
     setShowIdentifierModal(true);
   }, [isJoiningQueue, onJoinQueue, queueJoinBlockedMessage, queuePlanEnabled]);
 
@@ -814,12 +713,6 @@ export function StationDetailsScreen({
   const promoPricePerLitreValue = hasDirectPromoDiscount
     ? promoPricing?.effectivePricePerLitre
     : (promoPricing?.directPricePerLitre ?? basePricePerLitre);
-  const opsForecast = opsPrediction?.prediction || null;
-  const opsQueueLength = Number(opsForecast?.queue_length_30m);
-  const opsQueueLabel = Number.isFinite(opsQueueLength) ? Math.max(0, Math.round(opsQueueLength)).toLocaleString() : "N/A";
-  const opsWaitLabel = opsForecast?.wait_time_range || formatOpsMinutes(opsForecast?.wait_time_minutes);
-  const opsStockoutLabel = formatOpsMinutes(opsForecast?.stockout_minutes);
-
   const openReservationModal = () => {
     if (!reservationPlanEnabled) return;
     if (!onReserve || isCreatingReservation) return;
@@ -922,7 +815,7 @@ export function StationDetailsScreen({
       return;
     }
 
-    const normalizedIdentifier = String(selectedVehicle?.numberPlate || queueIdentifier || "")
+    const normalizedIdentifier = String(queueIdentifier || "")
       .trim()
       .toUpperCase();
     if (!normalizedIdentifier) {
@@ -953,7 +846,6 @@ export function StationDetailsScreen({
     try {
       await onJoinQueue(station, {
         fuelType: selectedFuelType,
-        vehicleId: selectedVehicle?.id || "",
         maskedPlate: normalizedIdentifier.slice(0, 32),
         requestedLiters: parsedFuelLiters,
         prepay: queuePaymentMode === "PREPAY",
@@ -963,6 +855,35 @@ export function StationDetailsScreen({
       setJoinError(queueJoinErrorMessage(error));
     } finally {
       setIsJoiningQueue(false);
+    }
+  };
+  const handleFuelArrivalNotify = async (target) => {
+    if (!target || fuelNotifyState.status === "saving") return;
+    const targetKey = String(target.key || "fuel").trim() || "fuel";
+    setFuelNotifyState({
+      key: targetKey,
+      status: "saving",
+      message: "",
+    });
+
+    try {
+      const result = await onNotifyFuelArrival?.(station, {
+        fuelTypeCode: target.fuelTypeCode,
+        fuelTypeLabel: target.fuelTypeLabel,
+      });
+      setFuelNotifyState({
+        key: targetKey,
+        status: "saved",
+        message:
+          String(result?.message || "").trim() ||
+          "Done. We will notify you when fuel arrives.",
+      });
+    } catch (error) {
+      setFuelNotifyState({
+        key: targetKey,
+        status: "error",
+        message: error?.message || "Unable to enable arrival notifications.",
+      });
     }
   };
 
@@ -1053,42 +974,32 @@ export function StationDetailsScreen({
           ) : (
             <p className="details-section-note">Fuel status unavailable.</p>
           )}
-        </section>
-
-        <section className="details-block">
-          <div className="details-section-head">
-            <h3>Operations Forecast</h3>
-            {opsPredictionLoading ? (
-              <small className="details-section-note">Updating…</small>
-            ) : null}
-          </div>
-          {opsForecast ? (
-            <>
-              <div className="details-ops-grid">
-                <div className="details-ops-item">
-                  <span>Queue in 30m</span>
-                  <strong>{opsQueueLabel}</strong>
-                </div>
-                <div className="details-ops-item">
-                  <span>Wait</span>
-                  <strong>{opsWaitLabel}</strong>
-                </div>
-                <div className="details-ops-item">
-                  <span>Stockout</span>
-                  <strong>{opsStockoutLabel}</strong>
-                </div>
-                <div className="details-ops-item">
-                  <span>Congestion</span>
-                  <strong className={`details-fuel-status ${opsSeverityStatus(opsForecast.congestion_level)}`}>
-                    {opsForecast.congestion_level || "N/A"}
-                  </strong>
-                </div>
-              </div>
-              <p className="details-ops-note">{opsForecast.station_manager_summary || opsForecast.operational_recommendation}</p>
-            </>
-          ) : (
-            <p className="details-section-note">Forecast unavailable.</p>
-          )}
+          {fuelArrivalNotifyTargets.length ? (
+            <div className="details-fuel-notify-actions">
+              {fuelArrivalNotifyTargets.map((target) => (
+                <button
+                  key={target.key}
+                  type="button"
+                  className={`details-action-button is-secondary ${
+                    fuelNotifyState.key === target.key && fuelNotifyState.status
+                      ? `is-notify-${fuelNotifyState.status}`
+                      : ""
+                  }`}
+                  onClick={() => handleFuelArrivalNotify(target)}
+                  disabled={fuelNotifyState.status === "saving"}
+                >
+                  {fuelNotifyState.status === "saving" && fuelNotifyState.key === target.key
+                    ? "Saving..."
+                    : target.buttonLabel}
+                </button>
+              ))}
+              {fuelNotifyState.message ? (
+                <p className={fuelNotifyState.status === "error" ? "details-inline-error" : "details-section-note"}>
+                  {fuelNotifyState.message}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
         </section>
 
         <section className="details-block">
@@ -1493,62 +1404,10 @@ export function StationDetailsScreen({
               </button>
             </header>
 
-            <section className="queue-vehicle-panel">
-              <div className="queue-vehicle-panel-head">
-                <span>Vehicle</span>
-                {vehicles.length ? (
-                  <button type="button" onClick={() => onManageVehicles?.()}>
-                    View
-                  </button>
-                ) : null}
-              </div>
-              {vehiclesLoading ? (
-                <p className="queue-info-text">Loading saved vehicles...</p>
-              ) : vehicles.length ? (
-                <>
-                  <select
-                    className="queue-vehicle-select"
-                    value={selectedVehicle?.id || ""}
-                    onChange={(event) => {
-                      const vehicle = vehicles.find((item) => item.id === event.target.value);
-                      setSelectedVehicleId(event.target.value);
-                      if (vehicle?.fuelType) {
-                        setSelectedFuelType(vehicle.fuelType);
-                        setSelectedPresetLiters(fuelPresetOptions(vehicle.fuelType)[1]);
-                      }
-                      if (vehicle?.numberPlate) {
-                        setQueueIdentifier(vehicle.numberPlate);
-                      }
-                      setJoinError("");
-                    }}
-                  >
-                    {vehicles.map((vehicle) => (
-                      <option key={vehicle.id} value={vehicle.id}>
-                        {vehicle.make} {vehicle.model} · {vehicle.numberPlate}
-                      </option>
-                    ))}
-                  </select>
-                  {selectedVehicle ? (
-                    <div className="queue-selected-vehicle-card">
-                      <strong>{selectedVehicle.make} {selectedVehicle.model} · {selectedVehicle.numberPlate}</strong>
-                      <small>{displayEnum(selectedVehicle.fuelType)} · Tank: {displayEnum(selectedVehicle.tankSide)} · {displayEnum(selectedVehicle.tankSideConfidence)}</small>
-                    </div>
-                  ) : null}
-                </>
-              ) : (
-                <div className="queue-selected-vehicle-card is-empty">
-                  <strong>Pilot mode active</strong>
-                  <small>Vehicle setup is paused for now. Enter a plate, phone or user code below to join the queue.</small>
-                </div>
-              )}
-              {vehicleError ? <p className="details-inline-error">{vehicleError}</p> : null}
-            </section>
-
             <label className="queue-modal-input">
               <span>Fuel type</span>
               <select
                 value={selectedFuelType}
-                disabled={Boolean(selectedVehicle?.fuelType)}
                 onChange={(event) => {
                   const nextFuelType = event.target.value;
                   setSelectedFuelType(nextFuelType);
@@ -1624,11 +1483,10 @@ export function StationDetailsScreen({
               <span>Identifier (plate, phone or user code)</span>
               <input
                 type="text"
-                value={selectedVehicle?.numberPlate || queueIdentifier}
+                value={queueIdentifier}
                 maxLength={32}
                 autoComplete="off"
                 placeholder="e.g. BT1234"
-                disabled={Boolean(selectedVehicle?.numberPlate)}
                 onChange={(event) => {
                   setQueueIdentifier(event.target.value);
                   if (identifierError) setIdentifierError("");

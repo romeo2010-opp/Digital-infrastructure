@@ -1870,9 +1870,12 @@ export async function releaseWalletHold({ actor, walletId, holdId, reasonCode, n
     const normalizedReasonCode = String(reasonCode || "").trim()
     const normalizedNote = String(note || "").trim()
     const correlationId = buildMutationCorrelationId(requestKey)
-    const safeHoldId = Number(holdId || 0)
+    const normalizedHoldKey = String(holdId || "").trim()
+    const safeHoldId = Number(normalizedHoldKey || 0)
+    const hasNumericHoldId = Number.isFinite(safeHoldId) && safeHoldId > 0
+    const holdIdForLookup = hasNumericHoldId ? safeHoldId : 0
 
-    if (!safeHoldId) throw badRequest("A valid holdId is required.")
+    if (!hasNumericHoldId && !normalizedHoldKey) throw badRequest("A valid holdId is required.")
     if (!normalizedReasonCode) throw badRequest("reasonCode is required.")
     if (!normalizedNote) throw badRequest("note is required.")
 
@@ -1882,11 +1885,10 @@ export async function releaseWalletHold({ actor, walletId, holdId, reasonCode, n
     }
 
     const holdRows = await tx.$queryRaw`
-      SELECT id, reference, status, amount, currency_code, created_at, released_at
+      SELECT id, reference, hold_type, status, amount, currency_code, created_at, released_at
       FROM wallet_reservation_holds
-      WHERE id = ${safeHoldId}
-        AND wallet_id = ${wallet.id}
-        AND hold_type = 'MANUAL_HOLD'
+      WHERE wallet_id = ${wallet.id}
+        AND (id = ${holdIdForLookup} OR reference = ${normalizedHoldKey})
       LIMIT 1
       FOR UPDATE
     `
@@ -1906,7 +1908,7 @@ export async function releaseWalletHold({ actor, walletId, holdId, reasonCode, n
         reason_code = COALESCE(${normalizedReasonCode}, reason_code),
         note = ${normalizedNote},
         updated_at = CURRENT_TIMESTAMP(3)
-      WHERE id = ${safeHoldId}
+      WHERE id = ${Number(hold.id)}
     `
 
     const afterBalances = await getWalletBalanceSnapshot(tx, wallet.id)
@@ -1917,7 +1919,7 @@ export async function releaseWalletHold({ actor, walletId, holdId, reasonCode, n
       targetUserId: wallet.userId,
       capabilityUsed: INTERNAL_PERMISSIONS.WALLET_HOLD_RELEASE,
       actionType: "WALLET_HOLD_RELEASED",
-      actionSummary: `Manual hold ${String(hold.reference || "").trim()} released.`,
+      actionSummary: `Wallet hold ${String(hold.reference || "").trim()} (${String(hold.hold_type || "HOLD").trim()}) released.`,
       entityType: "WALLET_HOLD",
       entityId: String(hold.reference || "").trim(),
       amountDeltaMwk: Math.abs(toNumber(hold.amount)),

@@ -6,14 +6,17 @@ const NETWORK_POINT_COUNT = 200
 const NETWORK_LINK_DISTANCE = 230
 
 function buildNetworkPoints(width, height) {
+  const safeWidth = Number.isFinite(width) && width > 0 ? width : 1
+  const safeHeight = Number.isFinite(height) && height > 0 ? height : 1
+
   return Array.from({ length: NETWORK_POINT_COUNT }, () => {
     const highlight = Math.random() > 0.82
     const radius = highlight ? 2.6 + Math.random() * 2.4 : 1 + Math.random() * 1.6
     const speed = 1 + Math.random() * 0.24
 
     return {
-      x: Math.random() * width,
-      y: Math.random() * height,
+      x: Math.random() * safeWidth,
+      y: Math.random() * safeHeight,
       vx: (Math.random() - 0.5) * speed,
       vy: (Math.random() - 0.5) * speed,
       radius,
@@ -52,9 +55,9 @@ export default function LoginPage() {
 
     function resize() {
       const rect = canvas.getBoundingClientRect()
-      width = rect.width
-      height = rect.height
-      dpr = Math.min(window.devicePixelRatio || 1, 2)
+      width = Number.isFinite(rect.width) && rect.width > 0 ? rect.width : Math.max(1, window.innerWidth || 1)
+      height = Number.isFinite(rect.height) && rect.height > 0 ? rect.height : Math.max(1, window.innerHeight || 1)
+      dpr = Math.min(Number.isFinite(window.devicePixelRatio) ? window.devicePixelRatio || 1 : 1, 2)
       canvas.width = Math.round(width * dpr)
       canvas.height = Math.round(height * dpr)
       context.setTransform(dpr, 0, 0, dpr, 0, 0)
@@ -62,6 +65,10 @@ export default function LoginPage() {
     }
 
     function drawFrame(time) {
+      if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+        resize()
+      }
+
       context.clearRect(0, 0, width, height)
 
       const floorGlow = context.createLinearGradient(0, height * 0.45, 0, height)
@@ -104,10 +111,13 @@ export default function LoginPage() {
           }
         }
 
+        const renderX = Number.isFinite(x) ? x : point.x
+        const renderY = Number.isFinite(y) ? y : point.y
+
         return {
           ...point,
-          renderX: x,
-          renderY: y,
+          renderX,
+          renderY,
           highlightBoost,
         }
       })
@@ -137,13 +147,14 @@ export default function LoginPage() {
         const radius = point.radius * pulse
 
         if (point.glow) {
-          const glow = context.createRadialGradient(point.renderX, point.renderY, 0, point.renderX, point.renderY, radius * 8.5)
+          const glowRadius = Number.isFinite(radius) && radius > 0 ? radius * 8.5 : 1
+          const glow = context.createRadialGradient(point.renderX, point.renderY, 0, point.renderX, point.renderY, glowRadius)
           glow.addColorStop(0, `rgba(194, 240, 255, ${point.opacity + point.highlightBoost * 0.42})`)
           glow.addColorStop(0.28, `rgba(82, 205, 255, ${point.opacity * 0.8 + point.highlightBoost * 0.34})`)
           glow.addColorStop(1, "rgba(82, 205, 255, 0)")
           context.fillStyle = glow
           context.beginPath()
-          context.arc(point.renderX, point.renderY, radius * 8.5, 0, Math.PI * 2)
+          context.arc(point.renderX, point.renderY, glowRadius, 0, Math.PI * 2)
           context.fill()
         }
 
