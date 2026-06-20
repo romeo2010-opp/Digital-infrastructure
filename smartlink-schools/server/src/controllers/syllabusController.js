@@ -708,7 +708,7 @@ export async function createManualSyllabusEntry(req, res) {
   const schoolId = getScopedSchoolId(req)
   const nextStatus = manualEntryStatusFromBody(req.body)
   const topicName = cleanText(req.body.topic_name || req.body.topicName || req.body.title) || (nextStatus === "draft" ? "Untitled syllabus draft" : "")
-  if (!topicName) throw new HttpError(400, "Topic name is required")
+  if (!topicName) throw new HttpError(400, "Syllabus document title is required")
   const references = await resolveManualReferences(pool, schoolId, req.body)
   const syllabusPayload = parseManualSyllabusPayload(manualSyllabusPayloadFromBody(req.body, []))
   const [[existing]] = await pool.query(
@@ -781,7 +781,7 @@ export async function updateManualSyllabusEntry(req, res) {
       : cleanText(req.body.topic_name || req.body.topicName || req.body.title)
     const nextStatus = manualEntryStatusFromBody(req.body)
     const topicName = requestedTopicName || (nextStatus === "draft" ? "Untitled syllabus draft" : "")
-    if (!topicName) throw new HttpError(400, "Topic name is required")
+    if (!topicName) throw new HttpError(400, "Syllabus document title is required")
     const references = await resolveManualReferences(connection, schoolId, req.body, entry)
     const syllabusPayload = parseManualSyllabusPayload(manualSyllabusPayloadFromBody(req.body, entry.objectives_json))
     await connection.query(
