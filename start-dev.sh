@@ -1,32 +1,45 @@
 #!/bin/bash
 
-echo "Starting SmartLink development environment..."
-# Start Database
-echo "Starting Database"
-(sudo /opt/lampp/lampp start) &
+set -euo pipefail
+IFS=$'\n\t'
 
-# Start frontend
-echo "Starting Backend..."
-(cd back-end && PUPPETEER_EXECUTABLE_PATH=/opt/google/chrome/chrome REPORT_PDF_ALLOW_PDFKIT_FALLBACK=false npm run dev) &
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
 
-# Start frontend
-echo "Starting Vite frontend..."
-(cd front-end && npm run dev) &
+start_service() {
+  local name="$1"
+  local dir="$2"
+  local cmd="$3"
 
-# Start user-frontend
-echo "Starting user-frontend..."
-(cd user-front-end && npm run dev) &
+  echo "Starting $name..."
+  if [ ! -d "$dir" ]; then
+    echo "ERROR: directory not found: $dir"
+    return 1
+  fi
 
-# Start MERA
-echo "Starting MERA..."
-(cd mera && npm run dev) &
+  (cd "$dir" && eval "$cmd") &
+}
 
-# Start frontend
-echo "Starting Vite internal"
-(cd internal && npm run dev) &
+if ! command -v npm >/dev/null 2>&1; then
+  echo "ERROR: npm is required but not installed."
+  exit 1
+fi
 
-# Start kiosk
-echo "Starting Kiosk frontend..."
-(cd smartlink-kiosk && npm run dev) &
-# Wait for processes
+if command -v sudo >/dev/null 2>&1; then
+  echo "Starting Database..."
+  sudo /opt/lampp/lampp start
+else
+  echo "WARNING: sudo not available, skipping database start."
+fi
+
+start_service "SmartLink backend" "back-end" "PUPPETE_EXECUTABLE_PATH=/opt/google/chrome/chrome REPORT_PDF_ALLOW_PDFKIT_FALLBACK=false npm run dev"
+start_service "Vite frontend" "front-end" "npm run dev"
+start_service "User frontend" "user-front-end" "npm run dev"
+start_service "MERA" "mera" "npm run dev"
+start_service "Internal frontend" "internal" "npm run dev"
+start_service "Kiosk frontend" "smartlink-kiosk" "npm run dev"
+start_service "Smartlink-Schools server" "smartlink-schools/server" "npm run dev"
+start_service "Smartlink-Schools client" "smartlink-schools/client" "npm run dev"
+
+echo "All services started. Waiting for processes..."
 wait
