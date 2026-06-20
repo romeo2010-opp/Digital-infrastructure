@@ -257,34 +257,19 @@ export function SyllabusIntelligencePage() {
 
   const renderUploads = () => (
     <div className="grid gap-3">
-      <SectionCard title="Documents" subtitle="Reviewed syllabus documents stay here for reference.">
-        <PortalTable
-          rows={uploads}
-          columns={[
-            { key: 'original_filename', label: 'Document' },
-            { key: 'subject_name', label: 'Subject', render: (row) => row.subject_name || '-' },
-            { key: 'grade_name', label: 'Grade', render: (row) => row.grade_name || '-' },
-            { key: 'processing_status', label: 'Status', render: (row) => statusChip(row.processing_status) },
-            { key: 'pending_items', label: 'Pending', render: (row) => row.pending_items || 0 },
-            { key: 'actions', label: 'Review', render: (row) => <button type="button" className="text-[11px] font-bold text-[#2563eb]" onClick={(event) => { event.stopPropagation(); openReview(row.id) }}>Open</button> },
-          ]}
-          emptyMessage={loading ? 'Loading uploads...' : 'No syllabus uploads yet.'}
-        />
-      </SectionCard>
-
-      <SectionCard title="Teacher Entries" subtitle="Teacher-created syllabus topics waiting for school leadership review.">
+      <SectionCard title="Syllabus Documents" subtitle="One stable syllabus document per year level and subject.">
         <PortalTable
           rows={manualEntries}
           columns={[
-            { key: 'topic_name', label: 'Topic' },
+            { key: 'topic_name', label: 'Syllabus Document' },
             { key: 'subject_name', label: 'Subject', render: (row) => row.subject_name || '-' },
             { key: 'grade_name', label: 'Year', render: (row) => row.grade_name || '-' },
             {
               key: 'structure',
               label: 'Structure',
-              render: (row) => `${row.syllabus_map?.subtopics?.length || 0} subtopics / ${row.success_criteria_count || 0} criteria / ${row.success_criteria_tag_count || row.success_criteria_count || 0} tags`,
+              render: (row) => `${row.syllabus_map?.subtopics?.length || 0} topics / ${row.success_criteria_count || 0} criteria / ${row.success_criteria_tag_count || row.success_criteria_count || 0} tags`,
             },
-            { key: 'submitted_by_name', label: 'Teacher', render: (row) => row.submitted_by_name || '-' },
+            { key: 'submitted_by_name', label: 'Owner', render: (row) => row.submitted_by_name || '-' },
             { key: 'status', label: 'Status', render: (row) => statusChip(row.status) },
             {
               key: 'actions',
@@ -300,7 +285,7 @@ export function SyllabusIntelligencePage() {
               ),
             },
           ]}
-          emptyMessage={loading ? 'Loading teacher entries...' : 'No teacher syllabus entries yet.'}
+          emptyMessage={loading ? 'Loading syllabus documents...' : 'No syllabus documents yet.'}
         />
         {manualEntries.length ? (
           <div className="grid gap-2 border-t border-[#e2e8f0] p-4">
@@ -372,7 +357,6 @@ export function SyllabusIntelligencePage() {
           { key: 'subject_name', label: 'Subject' },
           { key: 'topic_name', label: 'Topic' },
           { key: 'parent_topic_name', label: 'Parent', render: (row) => row.parent_topic_name || '-' },
-          { key: 'term', label: 'Term', render: (row) => row.term || '-' },
           { key: 'approved_question_count', label: 'Approved Qs', render: (row) => row.approved_question_count || 0 },
           { key: 'source_type', label: 'Source', render: (row) => valueLabel(row.source_type) },
         ]}
@@ -545,8 +529,8 @@ export function SyllabusIntelligencePage() {
       </section>
 
       <SectionKpiStrip items={[
-        { label: 'Documents', value: uploads.length, helper: 'library', delta: `${uploads.filter((row) => row.processing_status === 'pending_review').length} pending` },
-        { label: 'Teacher Entries', value: manualEntries.length, helper: 'manual topics', delta: `${manualEntries.filter((row) => row.status === 'pending_review').length} pending` },
+        { label: 'Syllabus Docs', value: manualEntries.length, helper: 'grade-subject documents', delta: `${manualEntries.filter((row) => row.status === 'pending_review').length} pending` },
+        { label: 'Pending Review', value: manualEntries.filter((row) => row.status === 'pending_review').length, helper: 'documents', delta: 'leadership queue' },
         { label: 'Approved Topics', value: topics.length, helper: 'topic map', delta: 'drill ready' },
         { label: 'Approved Questions', value: questions.filter((row) => row.approval_status === 'approved').length, helper: 'question bank', delta: `${questions.filter((row) => row.approval_status === 'pending_review').length} pending` },
         { label: 'AI Mode', value: ai?.available ? 'Ready' : 'Manual', helper: ai?.provider || 'none', delta: ai?.model || 'fallback', tone: ai?.available ? 'good' : 'warn' },
