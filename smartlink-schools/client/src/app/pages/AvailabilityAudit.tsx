@@ -1,0 +1,197 @@
+import { useMemo, useState } from 'react'
+import { AlertTriangle, Download, Plus, Search } from 'lucide-react'
+import { Toolbar } from '../components/Toolbar'
+import { Button } from '../components/ui/button'
+import { Input } from '../components/ui/input'
+import { ModalShell } from '../components/ModalShell'
+import { FieldLabel, FieldShell, ToolbarField } from '../components/FieldLabel'
+import { PortalTable } from '../components/PortalTable'
+import { SectionCard } from '../components/SectionCard'
+import { SectionKpiStrip } from '../components/SectionKpiStrip'
+import { MERA_PERMISSIONS } from '../lib/access'
+import { usePortal } from '../lib/portalContext'
+import { matchesSearch, normalizeDate, normalizeRows, renderPill } from '../lib/portalUtils'
+
+const fieldClass = 'h-9 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700'
+
+export function AvailabilityAudit() {
+  const { data, runAction, api, token, hasPermission } = usePortal()
+  const [search, setSearch] = useState('')
+  const [mismatchOnly, setMismatchOnly] = useState(false)
+  const [modalOpen, setModalOpen] = useState(false)
+  const [form, setForm] = useState({
+    stationPublicId: '',
+    petrolAvailable: true,
+    dieselAvailable: true,
+    activePumps: '',
+    reportedBy: '',
+  })
+
+  const rows = useMemo(() => {
+    const base = normalizeRows(data.availabilityReports?.items).filter((row: any) => matchesSearch(row, search))
+    return mismatchOnly ? base.filter((row: any) => row.mismatchIndicator === 'CONFLICT') : base
+  }, [data.availabilityReports, mismatchOnly, search])
+
+  const suspicious = rows
+    .slice()
+    .sort((a: any, b: any) => Number(b.mismatchTotal || 0) - Number(a.mismatchTotal || 0))
+    .slice(0, 6)
+  const canLog = hasPermission(MERA_PERMISSIONS.AVAILABILITY_LOG)
+  const conflictRows = rows.filter((row: any) => row.mismatchIndicator === 'CONFLICT' || Number(row.mismatchTotal || 0) > 0)
+  const dryRows = rows.filter((row: any) => !row.petrolAvailable || !row.dieselAvailable)
+  const suspiciousRows = suspicious
+  const availabilityColumns = [
+    { key: 'recordId', label: 'Record' },
+    { key: 'station', label: 'Station', render: (row: any) => row.station?.name || '-' },
+    { key: 'petrolAvailable', label: 'Petrol', render: (row: any) => row.petrolAvailable ? 'AVAILABLE' : 'DRY' },
+    { key: 'dieselAvailable', label: 'Diesel', render: (row: any) => row.dieselAvailable ? 'AVAILABLE' : 'DRY' },
+    { key: 'createdAt', label: 'Created', render: (row: any) => normalizeDate(row.createdAt) },
+  ]
+
+  return (
+    <div className="flex h-full flex-col gap-4 overflow-y-auto p-4">
+      <Toolbar>
+        <ToolbarField label="Search declarations" hint="Filter station availability declarations by station, record, district, or reporter. Example: search a station name. " className="min-w-[280px] flex-1">
+        <div className="flex items-center gap-2">
+          <Search className="size-4 text-slate-400" />
+          <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search station or record..." />
+        </div>
+        </ToolbarField>
+        <ToolbarField label="Mismatch filter" hint="Show only records where station declarations conflict with inspection or supply evidence. Example: declared dry after a recent delivery.">
+          <label className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700">
+            <input type="checkbox" checked={mismatchOnly} onChange={(event) => setMismatchOnly(event.target.checked)} />
+            Mismatch only
+          </label>
+        </ToolbarField>
+        <ToolbarField label="Declaration date" hint="Filter declarations by date. Example: review availability submitted today.">
+          <input type="date" className={fieldClass} />
+        </ToolbarField>
+        {canLog ? (
+          <Button type="button" size="sm" className="bg-blue-700 hover:bg-blue-800" onClick={() => setModalOpen(true)}>
+            <Plus className="size-4" />
+            Add Declaration
+          </Button>
+        ) : null}
+        <Button type="button" variant="outline" size="sm">
+          <Download className="size-4" />
+          Export Declarations
+        </Button>
+      </Toolbar>
+
+      <SectionKpiStrip
+        columns={availabilityColumns}
+        items={[
+          { label: 'Total Reports', value: rows.length, rows, accent: '#2563eb' },
+          { label: 'Conflict Reports', value: conflictRows.length, rows: conflictRows, tone: conflictRows.length ? 'bad' : 'good', accent: '#dc2626' },
+          { label: 'Dry Stations', value: dryRows.length, rows: dryRows, tone: dryRows.length ? 'warn' : 'good', accent: '#f59e0b' },
+          { label: 'Suspicious Declarations', value: suspiciousRows.length, rows: suspiciousRows, tone: suspiciousRows.length ? 'warn' : 'neutral', accent: '#7c3aed' },
+        ]}
+      />
+
+      <div className="grid min-h-0 flex-1 gap-4 xl:grid-cols-[1.8fr_0.9fr]">
+        <SectionCard title="Station Declaration Audit Ledger" subtitle="Live station availability declarations and conflict detection">
+          <PortalTable
+            rows={rows}
+            columns={[
+              { key: 'recordId', label: 'Record ID' },
+              { key: 'station', label: 'Station', render: (row) => row.station?.name || '-' },
+              { key: 'district', label: 'District', render: (row) => row.station?.city || '-' },
+              { key: 'petrolAvailable', label: 'Petrol', render: (row) => renderPill(row.petrolAvailable ? 'AVAILABLE' : 'DRY') },
+              { key: 'dieselAvailable', label: 'Diesel', render: (row) => renderPill(row.dieselAvailable ? 'AVAILABLE' : 'DRY') },
+              { key: 'activePumps', label: 'Active Pumps', render: (row) => row.activePumps ?? '-' },
+              { key: 'reportedBy', label: 'Reported By' },
+              { key: 'createdAt', label: 'Timestamp', render: (row) => normalizeDate(row.createdAt) },
+              { key: 'complaintConflict', label: 'Complaint Conflict', render: (row) => row.mismatchIndicator === 'CONFLICT' ? <AlertTriangle className="size-4 text-amber-600" /> : 'Clear' },
+              { key: 'deliveryConflict', label: 'Delivery Conflict', render: (row) => Number(row.mismatchTotal || 0) > 1 ? <AlertTriangle className="size-4 text-red-600" /> : 'Clear' },
+              { key: 'mismatchIndicator', label: 'Mismatch Severity', render: (row) => renderPill(row.mismatchIndicator) },
+            ]}
+          />
+        </SectionCard>
+
+        <SectionCard title="Most Suspicious Declarations" subtitle="Reports with the highest complaint conflict weight">
+          <div className="space-y-2 px-4 py-3 text-xs">
+            {suspicious.length ? (
+              suspicious.map((row: any) => (
+                <div key={row.recordId} className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="font-medium text-slate-800">{row.station?.name}</div>
+                      <div className="mt-1 text-slate-500">{row.station?.city || 'Unassigned district'}</div>
+                    </div>
+                    {renderPill(row.mismatchIndicator)}
+                  </div>
+                  <div className="mt-2 text-slate-600">
+                    Complaints in conflict window: <span className="font-medium">{row.mismatchTotal || 0}</span>
+                  </div>
+                  <div className="mt-1 text-slate-500">{normalizeDate(row.createdAt)}</div>
+                </div>
+              ))
+            ) : (
+              <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 p-3 text-slate-500">
+                No suspicious declarations found.
+              </div>
+            )}
+          </div>
+        </SectionCard>
+      </div>
+
+      <ModalShell
+        open={modalOpen}
+        onOpenChange={setModalOpen}
+        title="Record Availability Declaration"
+        description="Write a station availability declaration into the audit ledger and live station status."
+        footer={
+          <>
+            <Button type="button" variant="outline" onClick={() => setModalOpen(false)}>Cancel</Button>
+            <Button
+              type="button"
+              className="bg-blue-700 hover:bg-blue-800"
+              onClick={async () => {
+                await runAction(() =>
+                  api.createAvailabilityReport(token, {
+                    ...form,
+                    activePumps: form.activePumps === '' ? null : Number(form.activePumps),
+                  }),
+                )
+                setModalOpen(false)
+              }}
+            >
+              Save Declaration
+            </Button>
+          </>
+        }
+      >
+        <div className="grid gap-3">
+          <FieldShell label="Station" hint="Choose the station whose fuel availability is being declared. Example: select the station inspected or reported by phone.">
+            <select className={`${fieldClass} w-full`} value={form.stationPublicId} onChange={(event) => setForm({ ...form, stationPublicId: event.target.value })}>
+              <option value="">Select station</option>
+              {normalizeRows(data.profiles).map((station: any) => (
+                <option key={station.public_id} value={station.public_id}>
+                  {station.name} {station.city ? `- ${station.city}` : ''}
+                </option>
+              ))}
+            </select>
+          </FieldShell>
+          <div className="grid gap-3 md:grid-cols-2">
+            <label className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+              <FieldLabel label="Petrol available" hint="Mark this if petrol is available for sale or visibly stocked. Example: active petrol pump service during the audit." />
+              <input type="checkbox" checked={form.petrolAvailable} onChange={(event) => setForm({ ...form, petrolAvailable: event.target.checked })} />
+              <span className="ml-2">Yes</span>
+            </label>
+            <label className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+              <FieldLabel label="Diesel available" hint="Mark this if diesel is available for sale or visibly stocked. Example: diesel queue is being served at the time of audit." />
+              <input type="checkbox" checked={form.dieselAvailable} onChange={(event) => setForm({ ...form, dieselAvailable: event.target.checked })} />
+              <span className="ml-2">Yes</span>
+            </label>
+          </div>
+          <FieldShell label="Active pumps" hint="Enter how many pumps are actively dispensing fuel. Example: 3 active pumps across petrol and diesel.">
+            <Input value={form.activePumps} onChange={(event) => setForm({ ...form, activePumps: event.target.value })} placeholder="Active pumps" />
+          </FieldShell>
+          <FieldShell label="Reported by" hint="Record the source of this availability declaration. Example: Station manager, MERA officer, automated station update.">
+            <Input value={form.reportedBy} onChange={(event) => setForm({ ...form, reportedBy: event.target.value })} placeholder="Reported by" />
+          </FieldShell>
+        </div>
+      </ModalShell>
+    </div>
+  )
+}

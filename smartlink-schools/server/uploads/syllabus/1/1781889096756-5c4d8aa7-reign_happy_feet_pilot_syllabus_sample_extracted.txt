@@ -1,0 +1,786 @@
+SmartLink Schools Pilot Syllabus File
+Sample term-aligned syllabus for Reign International Academy and Happy Feet
+Montessori Preschool
+Designed for syllabus upload, AI extraction, teacher review, Daily Drills, and parent
+progress summaries.
+
+Document Type
+
+Sample syllabus upload file for SmartLink Schools
+
+School / Pilot Target
+
+Reign International Academy and Happy Feet Montessori Preschool, Chileka
+
+Curriculum Track
+
+Cambridge Primary-style starter plan + Montessori Early Years activity plan
+
+Pilot Scope
+
+4-week starter syllabus for one primary class and one preschool group
+
+Subjects
+
+English / Spelling, Mathematics, Science, Montessori Practical Life, Sensorial, Language, Math,
+Culture
+
+Prepared For
+
+SmartLink Schools pilot demonstration and term setup
+
+Date Prepared
+
+19 June 2026
+
+Important note: This is a sample planning file, not an official Cambridge, Montessori, MANEB, or school-approved
+syllabus. The school should review, edit, and approve all extracted topics before use with students.
+
+SmartLink Schools Pilot Syllabus Template - Sample / Not an official school curriculum
+
+Page 1
+
+1. Purpose and Upload Instructions
+This PDF is structured so SmartLink Schools can read it, extract curriculum fields, and present them to a teacher/admin
+for approval. It should be used as a pilot demonstration file or editable planning template.
+Field
+
+Value SmartLink should extract
+
+School
+
+Reign International Academy and Happy Feet Montessori Preschool
+
+Academic Year
+
+2026/2027 or school-selected year
+
+Term
+
+Term 1 - new term pilot setup
+
+Term Dates
+
+To be confirmed by school: Start ________ End ________
+
+Pilot Class
+
+Cambridge Primary Stage 3 or nearest school-selected class
+
+Preschool Group
+
+Happy Feet Montessori Early Years
+
+Approval Rule
+
+All topics, questions, answers, and explanations require teacher approval before student use
+
+Suggested extraction tags: curriculum, level, stage, subject, week, topic, subtopic, learning objective, skill, daily drill
+focus, assessment note, parent summary note, confidence score.
+
+2. Term Setup Overview
+Period
+
+Term Setup Goal
+
+SmartLink Output
+
+Pre-term
+
+Import class list, teacher list, parent contacts, term dates,
+and syllabus plan.
+
+Term dashboard, approved topic map, parent
+invitation list.
+
+Week 1
+
+Baseline checks, welcome updates, class routines,
+spelling/math readiness.
+
+Baseline mastery snapshot and first parent update.
+
+Week 2
+
+Start Daily Drills from approved topics.
+
+Student drill attempts and early weak-topic
+detection.
+
+Week 3
+
+Continue weekly topics and review weak areas.
+
+Teacher insight: class weak topics and missed drills.
+
+Week 4
+
+Mini progress review and parent summary.
+
+Weekly summary showing completed drills,
+strengths, and support areas.
+
+SmartLink Schools Pilot Syllabus Template - Sample / Not an official school curriculum
+
+Page 2
+
+3. Happy Feet Montessori Early Years - 4 Week Starter Plan
+Level: Montessori Early Years / Preschool. Focus: gentle development, observation, practical activities, language
+confidence, numeracy foundations, and parent visibility. No high-pressure exam mode should be used.
+Week
+
+Topic
+
+Details for SmartLink extraction
+
+1
+
+Practical Life - Care of self
+and environment
+
+Subtopics: Hand washing, pouring, spooning, tidying learning space.
+Objectives: Follow simple routines; improve coordination; show independence.
+Skills: fine motor, independence, routine
+Daily Drill: Optional 3-item picture routine check.
+Assessment Notes: Teacher observation checklist.
+
+1
+
+Language - Listening and
+oral expression
+
+Subtopics: Name objects, follow two-step instructions, story circle.
+Objectives: Listen attentively; answer simple questions; use new words.
+Skills: listening, vocabulary, speaking
+Daily Drill: Oral vocabulary game.
+Assessment Notes: Anecdotal notes; no formal scoring.
+
+2
+
+Sensorial - Shapes, colours,
+and matching
+
+Subtopics: Sort by colour, match basic shapes, compare sizes.
+Objectives: Identify common colours and shapes; group similar items.
+Skills: classification, visual discrimination
+Daily Drill: Picture matching activity.
+Assessment Notes: Photo evidence or observation.
+
+2
+
+Mathematics - Counting 1-10
+
+Subtopics: Count objects, match number symbols, compare more/less.
+Objectives: Count accurately with objects; recognise numbers 1-10.
+Skills: counting, one-to-one correspondence
+Daily Drill: Counting objects 1-10.
+Assessment Notes: Short activity check.
+
+3
+
+Culture - My school and
+community
+
+Subtopics: People at school, classroom roles, helping others.
+Objectives: Identify school helpers; practise respectful behaviour.
+Skills: social awareness, confidence
+Daily Drill: Match helper to role.
+Assessment Notes: Participation notes.
+
+3
+
+Language - Phonics
+readiness
+
+Subtopics: Initial sounds, rhymes, picture-word matching.
+Objectives: Hear beginning sounds; match simple picture sounds.
+Skills: phonemic awareness
+Daily Drill: Initial sound picture drill.
+Assessment Notes: Simple teacher-led oral check.
+
+4
+
+Practical Life - Grace and
+courtesy
+
+Subtopics: Greeting, sharing materials, waiting turn, saying thank you.
+Objectives: Practise polite classroom behaviour and turn-taking.
+Skills: social skills, self-regulation
+Daily Drill: Scenario choice activity.
+Assessment Notes: Observation summary for guardian.
+
+4
+
+Mathematics - Patterns and
+sorting
+
+Subtopics: AB patterns, object sorting by size/colour/type.
+Objectives: Continue simple patterns; explain sorting rule.
+Skills: patterning, reasoning
+Daily Drill: Finish the pattern.
+Assessment Notes: Practical task completion.
+
+SmartLink Schools Pilot Syllabus Template - Sample / Not an official school curriculum
+
+Page 3
+
+4. Cambridge Primary Stage 3 - English and Spelling
+Level: Cambridge Primary-style Stage 3 starter plan. Subject: English / Spelling. Focus: reading fluency, vocabulary,
+grammar, spelling patterns, and simple writing.
+Week
+
+Topic
+
+Details for SmartLink extraction
+
+1
+
+Reading routines and
+comprehension
+
+Subtopics: Short stories, main idea, who/what/where questions.
+Objectives: Read a short text and answer literal questions; identify main character and
+setting.
+Skills: reading, recall, comprehension
+Daily Drill: 5 short comprehension questions.
+Assessment Notes: Baseline reading check.
+
+1
+
+Spelling list 1
+
+Subtopics: Short vowel words and common classroom words.
+Objectives: Spell selected weekly words correctly and use them in oral sentences.
+Skills: spelling, vocabulary
+Daily Drill: 5-word spelling drill.
+Assessment Notes: Friday spelling check.
+
+2
+
+Sentence building
+
+Subtopics: Capital letters, full stops, simple sentence order.
+Objectives: Write clear simple sentences using correct punctuation.
+Skills: grammar, writing
+Daily Drill: Fix-the-sentence questions.
+Assessment Notes: Teacher marks short written responses.
+
+2
+
+Vocabulary growth
+
+Subtopics: Synonyms, antonyms, word meaning from context.
+Objectives: Use context to understand common words; choose suitable alternatives.
+Skills: vocabulary, reasoning
+Daily Drill: Multiple choice word meaning.
+Assessment Notes: Low-stakes class quiz.
+
+3
+
+Grammar basics
+
+Subtopics: Nouns, verbs, adjectives.
+Objectives: Identify nouns, verbs, and adjectives in simple sentences.
+Skills: grammar, classification
+Daily Drill: Label word type in sentences.
+Assessment Notes: Auto-mark objective items.
+
+3
+
+Spelling list 2
+
+Subtopics: Consonant blends and common high-frequency words.
+Objectives: Spell weekly words and recognise patterns.
+Skills: spelling, phonics
+Daily Drill: Spelling + sentence completion.
+Assessment Notes: Friday spelling check.
+
+4
+
+Writing short paragraphs
+
+Subtopics: Topic sentence, supporting details, neat ending.
+Objectives: Write a short paragraph about school/home using 3-5 sentences.
+Skills: composition, organisation
+Daily Drill: Choose best sentence order.
+Assessment Notes: Teacher review for writing.
+
+5. Sample English / Spelling Question Seeds
+Topic
+
+Question / Answer
+
+Explanation
+
+Spelling List 1
+
+Type: short_answer
+Question: Spell the word: school
+Correct answer: school
+
+The word school begins with sch and ends
+with ool.
+
+Grammar Basics
+
+Type: multiple_choice
+Question: Which word is a verb? A. jump B. blue C. table
+Correct answer: A
+
+A verb is an action word. Jump is an action.
+
+Sentence Building
+
+Type: short_answer
+Question: Rewrite correctly: my name is ana.
+Correct answer: My name is Ana.
+
+A sentence starts with a capital letter and
+names start with capital letters.
+
+SmartLink Schools Pilot Syllabus Template - Sample / Not an official school curriculum
+
+Page 4
+
+6. Cambridge Primary Stage 3 - Mathematics
+Subject: Mathematics. Focus: number confidence, operations, measurement, shapes, and problem solving.
+Week
+
+Topic
+
+Details for SmartLink extraction
+
+1
+
+Number and place value
+
+Subtopics: Counting, ordering, tens and ones, compare numbers.
+Objectives: Read, write, order, and compare numbers within the class range.
+Skills: number sense, comparison
+Daily Drill: 8 number questions.
+Assessment Notes: Baseline number check.
+
+1
+
+Addition and subtraction
+review
+
+Subtopics: Mental addition, subtraction, missing numbers.
+Objectives: Add and subtract simple numbers using mental or written strategies.
+Skills: calculation, fluency
+Daily Drill: Mixed addition/subtraction.
+Assessment Notes: Auto-mark objective items.
+
+2
+
+Multiplication foundations
+
+Subtopics: Repeated addition, 2x, 5x, 10x facts.
+Objectives: Represent multiplication as equal groups and repeated addition.
+Skills: multiplication, reasoning
+Daily Drill: Times-table fluency.
+Assessment Notes: Teacher checks working.
+
+2
+
+Word problems
+
+Subtopics: One-step problems using addition/subtraction.
+Objectives: Choose the correct operation for a simple word problem.
+Skills: problem-solving
+Daily Drill: Story problem daily drill.
+Assessment Notes: Track wrong-operation mistakes.
+
+3
+
+Measurement
+
+Subtopics: Length, mass, capacity, choosing units.
+Objectives: Use appropriate units and compare measurements.
+Skills: measurement, estimation
+Daily Drill: Unit choice and comparison.
+Assessment Notes: Practical measurement task.
+
+3
+
+Geometry
+
+Subtopics: 2D shapes, sides, corners, symmetry intro.
+Objectives: Identify common shapes and describe simple properties.
+Skills: geometry, classification
+Daily Drill: Shape property questions.
+Assessment Notes: Auto-mark MCQ.
+
+4
+
+Fractions introduction
+
+Subtopics: Halves, quarters, equal parts, simple diagrams.
+Objectives: Recognise halves and quarters as equal parts of a whole.
+Skills: fractions, visual reasoning
+Daily Drill: Picture-based fractions.
+Assessment Notes: Teacher review for diagrams.
+
+7. Sample Mathematics Question Seeds
+Topic
+
+Question / Answer
+
+Explanation
+
+Place Value
+
+Type: multiple_choice
+Question: What is the value of 5 in 352? A. 5 B. 50 C. 500
+Correct answer: B
+
+In 352, the 5 is in the tens place, so its value is
+50.
+
+Addition
+
+Type: short_answer
+Question: 27 + 15 = ?
+Correct answer: 42
+
+Add ones first, then tens. 27 + 15 = 42.
+
+Fractions
+
+Type: multiple_choice
+Question: Which fraction means one out of two equal
+parts? A. 1/4 B. 1/2 C. 2/3
+Correct answer: B
+
+One out of two equal parts is one half, written
+as 1/2.
+
+SmartLink Schools Pilot Syllabus Template - Sample / Not an official school curriculum
+
+Page 5
+
+8. Cambridge Primary Stage 3 - Science
+Subject: Science. Focus: observation, questioning, living things, materials, forces, and simple scientific enquiry.
+Week
+
+Topic
+
+Details for SmartLink extraction
+
+1
+
+Living things
+
+Subtopics: Plants and animals, basic needs, habitats.
+Objectives: Describe what living things need and identify simple habitats.
+Skills: observation, classification
+Daily Drill: Living/non-living questions.
+Assessment Notes: Class discussion + quiz.
+
+1
+
+Scientific enquiry
+
+Subtopics: Observe, predict, record.
+Objectives: Make simple observations and record findings using words or pictures.
+Skills: enquiry, recording
+Daily Drill: Observation vocabulary.
+Assessment Notes: Practical observation task.
+
+2
+
+Plants
+
+Subtopics: Parts of a plant, roots, stem, leaves, flowers.
+Objectives: Name common parts of a plant and describe simple functions.
+Skills: recall, explanation
+Daily Drill: Plant part matching.
+Assessment Notes: Auto-mark matching/MCQ.
+
+2
+
+Materials
+
+Subtopics: Wood, plastic, metal, glass, fabric.
+Objectives: Identify materials and describe properties such as hard, soft, smooth, rough.
+Skills: classification, vocabulary
+Daily Drill: Material property questions.
+Assessment Notes: Practical sorting activity.
+
+3
+
+Forces and movement
+
+Subtopics: Push, pull, movement, simple speed/direction changes.
+Objectives: Describe pushes and pulls and observe how objects move.
+Skills: cause-effect, observation
+Daily Drill: Push/pull examples.
+Assessment Notes: Teacher-led practical notes.
+
+3
+
+Health and hygiene
+
+Subtopics: Clean hands, food, exercise, rest.
+Objectives: Explain basic habits that keep the body healthy.
+Skills: health literacy
+Daily Drill: Short scenario questions.
+Assessment Notes: Parent summary note.
+
+4
+
+Earth and weather
+
+Subtopics: Weather observation, clouds, rain, sun, wind.
+Objectives: Observe daily weather and use simple weather words.
+Skills: observation, recording
+Daily Drill: Weather vocabulary.
+Assessment Notes: Mini weather diary.
+
+9. Sample Science Question Seeds
+Topic
+
+Question / Answer
+
+Explanation
+
+Living Things
+
+Type: multiple_choice
+Question: Which one is a living thing? A. stone B. goat C.
+chair
+Correct answer: B
+
+A goat is living because it grows, needs food,
+and can reproduce.
+
+Plants
+
+Type: short_answer
+Question: Which part of a plant takes in water from the
+soil?
+Correct answer: roots
+
+Roots help the plant take in water and hold it in
+the soil.
+
+Materials
+
+Type: multiple_choice
+Question: Which material is usually transparent? A. glass
+B. wood C. cloth
+Correct answer: A
+
+Transparent means light can pass through it.
+Glass is usually transparent.
+
+SmartLink Schools Pilot Syllabus Template - Sample / Not an official school curriculum
+
+Page 6
+
+10. Daily Drill Rules for This Pilot
+Daily Drills should be short, teacher-approved, and aligned with weekly topics. SmartLink should not use unapproved
+AI-generated questions with students.
+Class / Level
+
+Drill Length
+
+Subjects
+
+AI Use
+
+Montessori Early Years
+
+3-5 guided items, optional
+
+Practical Life, Sensorial,
+Language, Math
+
+AI may draft teacher activities only;
+no direct child AI tutor.
+
+Cambridge Primary Stage 3
+
+5-8 questions, 5-10
+minutes
+
+English, Spelling, Mathematics,
+Science
+
+AI may simplify approved
+explanations after student asks for
+help.
+
+11. Assessment and Parent Summary Plan
+Assessment Type
+
+When
+
+Purpose
+
+SmartLink Record
+
+Baseline check
+
+Week 1
+
+Find starting level in spelling, reading, number, and
+science vocabulary.
+
+baseline_assessments and
+mastery snapshot
+
+Daily Drill
+
+Week 2 onward
+
+Low-pressure practice and weak-topic detection.
+
+drill_sessions and
+student_topic_mastery
+
+Friday spelling check
+
+Weekly
+
+Track weekly spelling progress.
+
+question_bank + weekly
+result
+
+Teacher observation
+
+Ongoing
+
+Capture Montessori practical and social
+development.
+
+teacher observation note
+
+Parent summary
+
+End of week
+
+Communicate progress without shaming learners.
+
+guardian weekly drill
+summary
+
+Parent summary example: Your child completed 4 of 5 practice activities this week. Strong area: number recognition.
+Support area: spelling short vowel words. Recommended home activity: read one short story together and practise five
+words for 10 minutes.
+
+12. Teacher Approval Checklist
+Item
+
+Approve?
+
+Term dates entered correctly
+
+Yes / No
+
+Class/stage selected correctly
+
+Yes / No
+
+Subjects match school plan
+
+Yes / No
+
+Weekly topics match teacher scheme of work
+
+Yes / No
+
+Daily Drill questions are age-appropriate
+
+Yes / No
+
+Answers and explanations are correct
+
+Yes / No
+
+Parent summary wording is non-shaming
+
+Yes / No
+
+SmartLink Schools Pilot Syllabus Template - Sample / Not an official school curriculum
+
+Notes
+
+Page 7
+
+13. SmartLink Extraction Schema
+SmartLink should extract the following fields from this PDF and present them to the school for approval.
+Schema Field
+
+Expected Value
+
+school
+
+Reign International Academy and Happy Feet Montessori Preschool
+
+term
+
+Term 1 or school-confirmed term
+
+pilot_duration_weeks
+
+4
+
+track_1.level
+
+Montessori Early Years
+
+track_1.subjects
+
+Practical Life, Sensorial, Language, Mathematics, Culture
+
+track_2.level
+
+Cambridge Primary Stage 3
+
+track_2.subjects
+
+English, Spelling, Mathematics, Science
+
+approval_required
+
+true
+
+student_use_requires_approved_questi
+ons
+
+true
+
+14. Approval Sign-off
+Role
+
+Name
+
+Signature
+
+Date
+
+School Director / Headteacher
+Pilot Teacher
+SmartLink Representative
+
+Romeo Mbeya
+
+15. References Used to Build This Sample
+This document is a sample and does not copy official Cambridge assessment papers or proprietary school materials. It
+uses public curriculum descriptions only for broad structure.
+Cambridge Primary curriculum: Cambridge International states that Cambridge Primary offers over ten subjects including English, mathematics
+and science, with opportunities for creativity, expression and wellbeing. Source:
+https://www.cambridgeinternational.org/programmes-and-qualifications/cambridge-primary/curriculum
+Cambridge Primary assessment: Cambridge Progression Tests are internal classroom assessments for checking knowledge, skills and
+understanding, available for core subjects including English, mathematics and science. Source:
+https://www.cambridgeinternational.org/programmes-and-qualifications/cambridge-primary/assessment/
+Montessori early childhood structure: Montessori early childhood curriculum is commonly organised around Practical Life, Sensorial, Math,
+Language, and Cultural Studies. Source: https://amshq.org/about-us/inside-the-montessori-classroom/early-childhood/
+
+SmartLink Schools Pilot Syllabus Template - Sample / Not an official school curriculum
+
+Page 8
+
+

@@ -1,0 +1,242 @@
+import { useEffect, useMemo, useState } from 'react'
+import { ArrowLeft } from 'lucide-react'
+import { Button } from './ui/button'
+import { Input } from './ui/input'
+import { InputOTP, InputOTPGroup, InputOTPSlot } from './ui/input-otp'
+
+type LoginChallenge = {
+  challengeId: string
+  maskedEmail?: string
+  expiresAt?: string
+  resendAvailableAt?: string
+}
+
+const loginFont = {
+  fontFamily: 'Poppins, "Geist Variable", Geist, Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+}
+
+const fieldLabelClass = 'mb-1.5 block text-[13px] font-semibold leading-none text-[#202020]'
+const inputClass = 'h-9 rounded-[6px] border-[#dddddd] bg-white px-3 text-[13px] font-medium text-[#171717] shadow-[0_1px_4px_rgba(0,0,0,0.09)] placeholder:text-[#a4a4a4] focus-visible:border-[#b8b8b8] focus-visible:ring-0'
+const primaryButtonClass = 'h-9 rounded-[6px] border-0 bg-[#6bdd9e] text-[14px] font-semibold text-[#111111] shadow-none transition hover:bg-[#5dd38f] active:translate-y-px'
+
+export function LoginScreen({
+  onLogin,
+  onVerifyCode,
+  onResendCode,
+  onCancelCode,
+  pendingChallenge,
+  successGate = false,
+  successLoading = false,
+  onSuccessAnimationComplete,
+  loading,
+  error,
+}: {
+  onLogin: (credentials: { email?: string; studentCode?: string; student_code?: string; password: string; loginType?: string; login_type?: string }) => Promise<any> | void
+  onVerifyCode: (payload: { challengeId: string; code: string; trustDevice?: boolean }) => Promise<any> | void
+  onResendCode: (payload?: { challengeId?: string }) => Promise<any> | void
+  onCancelCode: () => void
+  pendingChallenge?: LoginChallenge | null
+  successGate?: boolean
+  successLoading?: boolean
+  onSuccessAnimationComplete?: () => void
+  loading: boolean
+  error: string
+}) {
+  const [mode, setMode] = useState<'student' | 'staff'>('student')
+  const [email, setEmail] = useState('')
+  const [studentCode, setStudentCode] = useState('')
+  const [password, setPassword] = useState('')
+  const [code, setCode] = useState('')
+  const [trustDevice, setTrustDevice] = useState(false)
+  const [now, setNow] = useState(() => Date.now())
+
+  useEffect(() => {
+    if (!pendingChallenge) return undefined
+    setCode('')
+    setTrustDevice(false)
+    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [pendingChallenge?.challengeId])
+
+  useEffect(() => {
+    if (!successGate || successLoading || !onSuccessAnimationComplete) return undefined
+    const timer = window.setTimeout(onSuccessAnimationComplete, 650)
+    return () => window.clearTimeout(timer)
+  }, [onSuccessAnimationComplete, successGate, successLoading])
+
+  const resendWait = useMemo(() => {
+    const date = pendingChallenge?.resendAvailableAt ? new Date(pendingChallenge.resendAvailableAt) : null
+    if (!date || Number.isNaN(date.getTime())) return 0
+    return Math.max(0, Math.ceil((date.getTime() - now) / 1000))
+  }, [now, pendingChallenge?.resendAvailableAt])
+
+  const expiryLabel = useMemo(() => {
+    const date = pendingChallenge?.expiresAt ? new Date(pendingChallenge.expiresAt) : null
+    if (!date || Number.isNaN(date.getTime())) return ''
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  }, [pendingChallenge?.expiresAt])
+
+  const showSuccessStep = Boolean(successGate)
+  const showCodeStep = !showSuccessStep && Boolean(pendingChallenge?.challengeId)
+  const isStudentMode = mode === 'student'
+
+  const switchMode = (nextMode: 'student' | 'staff') => {
+    setMode(nextMode)
+    setPassword('')
+  }
+
+  return (
+    <main className="smartlink-reference-login mera-login-root flex min-h-screen w-full items-center justify-center bg-[#eeeeee] px-4 py-8 text-[#191919]" style={loginFont}>
+      <section className="w-full max-w-[385px] rounded-[15px] bg-white px-7 py-8 shadow-none sm:px-8">
+        <header className="text-center">
+          <h1 className="m-0 text-[19px] font-medium uppercase leading-6 tracking-[0.035em] text-[#171717]">
+            {showSuccessStep ? 'SMARTLINK SCHOOLS' : showCodeStep ? 'SMARTLINK SCHOOLS - VERIFY' : 'SMARTLINK SCHOOLS - PORTAL'}
+          </h1>
+          <p className="mx-auto mt-1.5 max-w-[275px] text-[13px] font-normal leading-5 text-[#8b8b8b]">
+            {showSuccessStep
+              ? successLoading ? 'Preparing your school workspace' : 'Opening your school workspace'
+              : showCodeStep
+              ? `Enter the code sent to ${pendingChallenge?.maskedEmail || 'your school email'}`
+              : isStudentMode
+              ? 'Students and guardians can open results, fees, homework and notices here'
+              : 'Staff can enter their email and password to access the school workspace'}
+          </p>
+        </header>
+
+        {showSuccessStep ? (
+          <div className="mt-9 grid justify-items-center gap-4">
+            <span className="size-9 animate-spin rounded-full border-2 border-[#dddddd] border-t-[#6bdd9e]" aria-hidden="true" />
+            <p className="m-0 text-[13px] font-semibold text-[#171717]">{successLoading ? 'Loading...' : 'Access approved'}</p>
+          </div>
+        ) : showCodeStep ? (
+          <form
+            className="mt-8 grid gap-5"
+            onSubmit={(event) => {
+              event.preventDefault()
+              if (!pendingChallenge?.challengeId || code.length !== 6) return
+              onVerifyCode({ challengeId: pendingChallenge.challengeId, code, trustDevice })
+            }}
+          >
+            <div>
+              <label className={fieldLabelClass}>Login Code</label>
+              <InputOTP value={code} onChange={setCode} maxLength={6} containerClassName="justify-between gap-2">
+                <InputOTPGroup className="gap-2">
+                  {Array.from({ length: 6 }).map((_, index) => (
+                    <InputOTPSlot
+                      // eslint-disable-next-line react/no-array-index-key
+                      key={index}
+                      index={index}
+                      className="h-10 w-10 rounded-[6px] border border-[#dddddd] bg-white text-[15px] font-semibold text-[#171717] shadow-[0_1px_4px_rgba(0,0,0,0.09)] first:rounded-[6px] first:border last:rounded-[6px] focus:border-[#b8b8b8] focus:ring-0"
+                    />
+                  ))}
+                </InputOTPGroup>
+              </InputOTP>
+              {expiryLabel ? <p className="m-0 mt-2 text-[12px] leading-5 text-[#8b8b8b]">Code expires at {expiryLabel}.</p> : null}
+            </div>
+
+            <label className="flex items-start gap-2 text-[12px] leading-5 text-[#4d4d4d]">
+              <input
+                type="checkbox"
+                checked={trustDevice}
+                onChange={(event) => setTrustDevice(event.target.checked)}
+                className="mt-1 size-4 rounded border-[#cfcfcf] accent-[#6bdd9e]"
+              />
+              Trust this browser for 30 days
+            </label>
+
+            {error ? <p className="m-0 rounded-[6px] border border-[#efcaca] bg-[#fff1f1] px-3 py-2 text-[12px] leading-[1.45] text-[#9b3838]">{error}</p> : null}
+
+            <Button type="submit" className={primaryButtonClass} disabled={loading || code.length !== 6}>
+              {loading ? 'Verifying...' : 'Verify Code'}
+            </Button>
+
+            <div className="flex items-center justify-between gap-3 text-[13px]">
+              <button type="button" onClick={onCancelCode} className="inline-flex items-center gap-1.5 font-medium text-[#171717] hover:underline">
+                <ArrowLeft className="size-3.5" />
+                Change email
+              </button>
+              <button
+                type="button"
+                onClick={() => onResendCode({ challengeId: pendingChallenge?.challengeId })}
+                disabled={loading || resendWait > 0}
+                className="font-medium text-[#1677ff] hover:underline disabled:text-[#9b9b9b] disabled:no-underline"
+              >
+                {resendWait > 0 ? `Resend in ${resendWait}s` : 'Resend code'}
+              </button>
+            </div>
+          </form>
+        ) : (
+          <form
+            className="mt-8 grid gap-5"
+            onSubmit={(event) => {
+              event.preventDefault()
+              if (isStudentMode) {
+                onLogin({ login_type: 'student', student_code: studentCode.trim(), password })
+                return
+              }
+              onLogin({ email: email.trim(), password })
+            }}
+          >
+            {isStudentMode ? (
+              <label className="block">
+                <span className={fieldLabelClass}>Student ID / Admission No</span>
+                <Input
+                  type="text"
+                  value={studentCode}
+                  onChange={(event) => setStudentCode(event.target.value)}
+                  placeholder="SL-P1-001"
+                  required
+                  autoComplete="username"
+                  className={inputClass}
+                />
+              </label>
+            ) : (
+              <label className="block">
+                <span className={fieldLabelClass}>Staff Email</span>
+                <Input
+                  type="email"
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                  placeholder="admin@greenhill.mw"
+                  required
+                  autoComplete="username"
+                  className={inputClass}
+                />
+              </label>
+            )}
+
+            <label className="block">
+              <span className={fieldLabelClass}>{isStudentMode ? 'Date of Birth' : 'Password'}</span>
+              <Input
+                type={isStudentMode ? 'date' : 'password'}
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                placeholder={isStudentMode ? 'YYYY-MM-DD' : 'Enter password'}
+                required
+                autoComplete={isStudentMode ? 'bday' : 'current-password'}
+                className={inputClass}
+              />
+            </label>
+
+            {error ? <p className="m-0 rounded-[6px] border border-[#efcaca] bg-[#fff1f1] px-3 py-2 text-[12px] leading-[1.45] text-[#9b3838]">{error}</p> : null}
+
+            <Button type="submit" className={`mt-3 ${primaryButtonClass}`} disabled={loading}>
+              {loading ? 'Signing in...' : isStudentMode ? 'Student Login' : 'Staff Login'}
+            </Button>
+
+            <p className="m-0 pt-1 text-center text-[13px] font-normal leading-5 text-[#191919]">
+              {isStudentMode ? 'Are you an admin?' : 'Student or guardian?'}{' '}
+              <button
+                type="button"
+                className="font-normal text-[#1677ff] hover:underline"
+                onClick={() => switchMode(isStudentMode ? 'staff' : 'student')}
+              >
+                {isStudentMode ? 'Click Here' : 'Student Login'}
+              </button>
+            </p>
+          </form>
+        )}
+      </section>
+    </main>
+  )
+}
