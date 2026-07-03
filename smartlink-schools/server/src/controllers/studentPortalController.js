@@ -394,6 +394,260 @@ async function loadTimetable(schoolId, student, session) {
   }
 }
 
+function normalizePercent(value) {
+  if (value === null || value === undefined || value === "") return null
+  const number = Number(value)
+  return Number.isFinite(number) ? Number(number.toFixed(1)) : null
+}
+
+function rankingAward(row) {
+  if (Number(row.completed_drills || 0) < 2) return null
+  if (row.streak_active) return "Practice streak"
+  if (Number(row.improvement_points || 0) >= 8) return "Improving star"
+  if (Number(row.average_score || 0) >= 85) return "Top performer"
+  if (Number(row.recent_completed || 0) >= 4) return "Practice streak"
+  return null
+}
+
+function formatPlacement(position) {
+  const value = Number(position || 0)
+  return value > 0 ? `#${value}` : "-"
+}
+
+function formatAverage(value) {
+  return value === null || value === undefined ? "-" : `${value}%`
+}
+
+function rankingCelebrations(row) {
+  const completedDrills = Number(row.completed_drills || 0)
+  if (completedDrills <= 0) return []
+  const studentKey = Number(row.student_id || 0)
+  const latestKey = row.latest_drill_date || row.streak_latest_date || "latest"
+  const events = []
+
+  if (completedDrills === 1 && row.latest_drill_date) {
+    events.push({
+      type: "first_drill",
+      key: `first-drill:${studentKey}:${row.latest_drill_date}`,
+      title: "First Daily Drill completed",
+      message: "Your Daily Drill journey has started. Keep practising and your ranking will keep growing.",
+      stats: [
+        { label: "Completed", value: "1 drill" },
+        { label: "Class rank", value: formatPlacement(row.position) },
+      ],
+    })
+  }
+
+  if (row.streak_started) {
+    const streakDays = Number(row.current_streak_days || 0)
+    events.push({
+      type: "streak_started",
+      key: `streak-started:${studentKey}:${row.streak_latest_date || latestKey}:${streakDays}`,
+      title: streakDays === 2 ? "Daily Drill streak started" : `${streakDays}-day Daily Drill streak`,
+      message: streakDays === 2
+        ? "You have completed Daily Drills on consecutive days. That habit is now building."
+        : "You kept your Daily Drill streak going. Keep showing up and stacking progress.",
+      stats: [
+        { label: "Streak", value: `${streakDays} days` },
+        { label: "Average", value: formatAverage(row.average_score) },
+      ],
+    })
+  }
+
+  if (Number(row.movement || 0) > 0 && row.previous_position) {
+    const places = Number(row.movement || 0)
+    events.push({
+      type: "rank_climb",
+      key: `rank-climb:${studentKey}:${latestKey}:${row.previous_position}:${row.position}`,
+      title: `You moved up ${places} ${places === 1 ? "place" : "places"}`,
+      message: `You passed ${places} ${places === 1 ? "classmate" : "classmates"} on the Daily Drill ranking.`,
+      stats: [
+        { label: "Now", value: formatPlacement(row.position) },
+        { label: "Before", value: formatPlacement(row.previous_position) },
+      ],
+    })
+  }
+
+  return events
+}
+
+function activeDrillWindow(session) {
+  const today = new Date().toISOString().slice(0, 10)
+  const start = session.term?.start_date || "1900-01-01"
+  const status = String(session.activeTermStatus || session.term?.status || "").toLowerCase()
+  const end = ["open", "marking"].includes(status) ? "9999-12-31" : session.term?.end_date || today
+  return { start, end }
+}
+
+function dateToUtcMs(value) {
+  const date = dateOnly(value)
+  if (!date) return null
+  const time = Date.parse(`${date}T00:00:00Z`)
+  return Number.isNaN(time) ? null : time
+}
+
+function dateAddDays(value, days) {
+  const time = dateToUtcMs(value)
+  if (time === null) return ""
+  return new Date(time + days * 86400000).toISOString().slice(0, 10)
+}
+
+function daysFromTo(fromValue, toValue) {
+  const from = dateToUtcMs(fromValue)
+  const to = dateToUtcMs(toValue)
+  if (from === null || to === null) return null
+  return Math.round((to - from) / 86400000)
+}
+
+function currentPracticeStreak(datesCsv) {
+  const dates = [...new Set(String(datesCsv || "").split(",").map(dateOnly).filter(Boolean))]
+    .sort((a, b) => String(b).localeCompare(String(a)))
+  if (!dates.length) return { days: 0, active: false, latest: "" }
+  const latest = dates[0]
+  const today = new Date().toISOString().slice(0, 10)
+  const daysSinceLatest = daysFromTo(latest, today)
+  let expected = latest
+  let streak = 0
+  for (const date of dates) {
+    if (date !== expected) break
+    streak += 1
+    expected = dateAddDays(expected, -1)
+  }
+  return {
+    days: streak,
+    active: daysSinceLatest === null ? false : daysSinceLatest <= 1,
+    latest,
+  }
+}
+
+async function loadDrillRanking(schoolId, student, session) {
+  if (!student.current_class_id || session.setupRequired) {
+    return { leaderboard: [], movements: [], awards: [], summary: { class_size: 0, current_position: null } }
+  }
+  const drillWindow = activeDrillWindow(session)
+  const [rows] = await pool.query(
+    `SELECT s.id AS student_id, s.first_name, s.last_name, s.profile_photo_url,
+       COUNT(ds.id) AS completed_drills,
+       AVG(ds.percentage) AS average_score,
+       SUM(ds.score) AS total_score,
+       MAX(ds.scheduled_date) AS latest_drill_date,
+       GROUP_CONCAT(DISTINCT ds.scheduled_date ORDER BY ds.scheduled_date DESC) AS completed_dates_csv,
+       SUM(CASE WHEN ds.scheduled_date >= DATE_SUB(CURDATE(), INTERVAL 7 DAY) THEN 1 ELSE 0 END) AS recent_completed,
+       AVG(CASE WHEN ds.scheduled_date >= DATE_SUB(CURDATE(), INTERVAL 7 DAY) THEN ds.percentage END) AS recent_score,
+       AVG(CASE WHEN ds.scheduled_date >= DATE_SUB(CURDATE(), INTERVAL 21 DAY)
+                 AND ds.scheduled_date < DATE_SUB(CURDATE(), INTERVAL 7 DAY)
+                THEN ds.percentage END) AS prior_recent_score
+     FROM student_enrollments se
+     JOIN students s ON s.id = se.student_id AND s.school_id = se.school_id AND s.status = 'active'
+     LEFT JOIN drill_sessions ds ON ds.school_id = se.school_id
+      AND ds.student_id = s.id
+      AND ds.status = 'completed'
+      AND ds.scheduled_date BETWEEN ? AND ?
+     WHERE se.school_id = ?
+       AND se.academic_year_id = ?
+       AND se.term_id = ?
+       AND se.class_id = ?
+       AND se.enrollment_status = 'active'
+    GROUP BY s.id, s.first_name, s.last_name, s.profile_photo_url`,
+    [
+      drillWindow.start,
+      drillWindow.end,
+      schoolId,
+      session.academicYearId,
+      session.termId,
+      student.current_class_id,
+    ],
+  )
+  const previousRanked = [...rows]
+    .filter((row) => row.prior_recent_score !== null)
+    .sort((a, b) =>
+      Number(b.prior_recent_score || 0) - Number(a.prior_recent_score || 0)
+      || Number(b.completed_drills || 0) - Number(a.completed_drills || 0)
+      || String(a.first_name || "").localeCompare(String(b.first_name || "")),
+    )
+  const previousPositions = new Map(previousRanked.map((row, index) => [Number(row.student_id), index + 1]))
+  const hasAnyCompletedDrill = rows.some((row) => Number(row.completed_drills || 0) > 0)
+  const ranked = [...rows]
+    .sort((a, b) =>
+      (Number(b.completed_drills || 0) > 0 ? 1 : 0) - (Number(a.completed_drills || 0) > 0 ? 1 : 0)
+      || Number(b.average_score || 0) - Number(a.average_score || 0)
+      || Number(b.completed_drills || 0) - Number(a.completed_drills || 0)
+      || Number(b.total_score || 0) - Number(a.total_score || 0)
+      || String(a.first_name || "").localeCompare(String(b.first_name || "")),
+    )
+    .map((row, index) => {
+      const completedDrills = Number(row.completed_drills || 0)
+      const position = index + 1
+      const previousPosition = completedDrills > 0 ? previousPositions.get(Number(row.student_id)) || null : null
+      const movement = previousPosition && position ? previousPosition - position : 0
+      const recentScore = normalizePercent(row.recent_score)
+      const priorRecentScore = normalizePercent(row.prior_recent_score)
+      const improvement = recentScore !== null && priorRecentScore !== null
+        ? Number((recentScore - priorRecentScore).toFixed(1))
+        : null
+      const streak = currentPracticeStreak(row.completed_dates_csv)
+      const streakActive = completedDrills > 0
+        && streak.active
+        && (streak.days >= 2 || Number(row.recent_completed || 0) >= 4)
+      const streakStarted = completedDrills > 1 && streak.active && streak.days >= 2
+      const normalized = {
+        student_id: Number(row.student_id),
+        full_name: [row.first_name, row.last_name].filter(Boolean).join(" "),
+        profile_photo_url: row.profile_photo_url || null,
+        position,
+        previous_position: previousPosition,
+        movement,
+        movement_direction: completedDrills <= 0 ? "not_started" : movement > 0 ? "up" : movement < 0 ? "down" : previousPosition ? "steady" : "new",
+        medal: hasAnyCompletedDrill && completedDrills > 0 && position === 1 ? "gold" : hasAnyCompletedDrill && completedDrills > 0 && position === 2 ? "silver" : hasAnyCompletedDrill && completedDrills > 0 && position === 3 ? "bronze" : null,
+        completed_drills: completedDrills,
+        recent_completed: Number(row.recent_completed || 0),
+        average_score: normalizePercent(row.average_score),
+        recent_score: recentScore,
+        prior_recent_score: priorRecentScore,
+        improvement_points: improvement,
+        latest_drill_date: dateOnly(row.latest_drill_date),
+        current_streak_days: streak.days,
+        streak_active: streakActive,
+        streak_started: streakStarted,
+        streak_latest_date: streak.latest,
+        streak_key: streakActive ? `${row.student_id}:${streak.latest}:${streak.days}:${Number(row.recent_completed || 0)}` : null,
+        is_current_student: Number(row.student_id) === Number(student.id),
+      }
+      normalized.award = rankingAward(normalized)
+      normalized.celebrations = rankingCelebrations(normalized)
+      return normalized
+    })
+  const current = ranked.find((row) => row.is_current_student) || null
+  const leader = ranked.find((row) => Number(row.completed_drills || 0) > 0) || null
+  const participantCount = ranked.filter((row) => Number(row.completed_drills || 0) > 0).length
+  return {
+    class_id: Number(student.current_class_id),
+    class_name: student.class_name || "",
+    generated_at: new Date().toISOString(),
+    summary: {
+      class_size: ranked.length,
+      participant_count: participantCount,
+      current_position: current?.position || null,
+      current_average: current?.average_score ?? null,
+      current_completed: current?.completed_drills || 0,
+      current_movement: current?.movement || 0,
+      current_award: current?.award || null,
+      leader_name: leader?.full_name || null,
+      leader_average: leader?.average_score ?? null,
+    },
+    celebrations: current?.celebrations || [],
+    leaderboard: ranked,
+    movements: ranked
+      .filter((row) => row.movement_direction === "up" || row.movement_direction === "down")
+      .sort((a, b) => Math.abs(Number(b.movement || 0)) - Math.abs(Number(a.movement || 0)))
+      .slice(0, 8),
+    awards: ranked
+      .filter((row) => row.award)
+      .sort((a, b) => Number(b.improvement_points || 0) - Number(a.improvement_points || 0) || a.position - b.position)
+      .slice(0, 6),
+  }
+}
+
 function messageIsVisibleToStudent(message, student) {
   if (message.message_type !== "announcement") return false
   const scope = parseJsonObject(message.recipient_scope)
@@ -585,13 +839,14 @@ export async function getStudentPortal(req, res) {
     [schoolId, student.id],
   )
 
-  const [results, fees, homework, attendance, timetable, notices] = await Promise.all([
+  const [results, fees, homework, attendance, timetable, notices, ranking] = await Promise.all([
     loadResults(schoolId, student.id),
     loadFees(schoolId, student.id, session.term?.name || student.term_name || ""),
     loadHomework(schoolId, student, session),
     loadAttendance(schoolId, student, session),
     loadTimetable(schoolId, student, session),
     loadNotices(schoolId, student, session),
+    loadDrillRanking(schoolId, student, session),
   ])
 
   const payload = {
@@ -623,6 +878,7 @@ export async function getStudentPortal(req, res) {
     homework,
     attendance,
     notices,
+    ranking,
   }
 
   res.json({ student_portal: payload })

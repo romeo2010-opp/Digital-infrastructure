@@ -10,9 +10,36 @@ const app = express()
 
 function corsOrigin() {
   const raw = String(process.env.CORS_ORIGIN || "").trim()
-  if (!raw) return true
   const origins = raw.split(",").map((origin) => origin.trim()).filter(Boolean)
-  return origins.length > 1 ? origins : origins[0]
+  if (!origins.length) return true
+  return (origin, callback) => {
+    if (!origin || origins.includes("*") || origins.includes(origin) || isTrustedDevOrigin(origin)) {
+      callback(null, true)
+      return
+    }
+    callback(new Error(`CORS origin not allowed: ${origin}`))
+  }
+}
+
+function isTrustedDevOrigin(origin) {
+  try {
+    const { hostname } = new URL(origin)
+    if (/^(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]|::1)$/i.test(hostname)) return true
+    if (/^192\.168\.\d{1,3}\.\d{1,3}$/.test(hostname)) return true
+    if (/^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname)) return true
+    if (/^172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}$/.test(hostname)) return true
+    if (/^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3}$/.test(hostname)) return true
+    return [
+      ".trycloudflare.com",
+      ".cfargotunnel.com",
+      ".ngrok-free.app",
+      ".ngrok.app",
+      ".loca.lt",
+      ".localtunnel.me",
+    ].some((suffix) => hostname.endsWith(suffix))
+  } catch {
+    return false
+  }
 }
 
 app.use(cors({ origin: corsOrigin(), credentials: true }))
@@ -33,6 +60,14 @@ app.use((req, _res, next) => {
 
 app.use((error, _req, res, _next) => {
   const status = error.status || 500
+  if (status >= 500) {
+    console.error("[smartlink-schools] request failed", {
+      message: error.message,
+      code: error.code,
+      sqlMessage: error.sqlMessage,
+      stack: error.stack,
+    })
+  }
   res.status(status).json({
     message: status >= 500 ? "Internal server error" : error.message,
   })

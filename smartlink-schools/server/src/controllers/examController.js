@@ -10,11 +10,14 @@ import {
   isTeacher,
 } from "../utils/tenantScope.js"
 import { HttpError } from "../utils/http.js"
+import { studentCodeSortSql } from "../utils/studentSort.js"
+import { getReportPdfTemplateForSchool, normalizeReportPdfTemplateId } from "../services/reportSettingsService.js"
 
 const FORMAL_ASSESSMENT_TYPES = new Set(["mid_term", "end_of_term_exam", "mock_exam", "final_exam"])
 const EXAM_TYPES = new Set(["end_of_term", "mid_term", "mock", "final", "custom"])
 const EXAM_STATUSES = new Set(["draft", "scheduled", "in_progress", "marking", "results_submitted", "results_approved", "locked", "archived"])
 const PAPER_STATUSES = new Set(["draft", "open", "ready_for_review", "approved", "scheduled", "marking", "results_submitted", "results_approved", "returned", "locked", "archived"])
+const NORMAL_TIMETABLE_SESSION_STATUSES = new Set(["marking", "results_submitted", "results_approved", "locked", "archived"])
 
 function cleanText(value) {
   return String(value || "").trim()
@@ -26,6 +29,18 @@ function normalizeDate(value, label) {
   const date = new Date(text)
   if (Number.isNaN(date.getTime())) throw new HttpError(400, `${label} must be a valid date`)
   return text.slice(0, 10)
+}
+
+async function restoreNormalScheduleAfterExamSession(connection, schoolId, sessionId) {
+  const [timetableResult] = await connection.query(
+    "UPDATE exam_timetable_entries SET status = 'written' WHERE school_id = ? AND exam_session_id = ? AND status = 'scheduled'",
+    [schoolId, sessionId],
+  )
+  await connection.query(
+    "UPDATE exam_sessions SET operating_mode = 'NORMAL_LESSONS_CONTINUE' WHERE school_id = ? AND id = ?",
+    [schoolId, sessionId],
+  )
+  return { exam_timetable_entries_written: Number(timetableResult.affectedRows || 0) }
 }
 
 function teacherPairsClause(pairs, classColumn = "a.class_id", subjectColumn = "a.subject_id") {
@@ -367,7 +382,7 @@ export async function getExamSession(req, res) {
        LEFT JOIN term_results tr ON tr.id = rc.term_result_id AND tr.school_id = rc.school_id
        LEFT JOIN classes c ON c.id = tr.class_id AND c.school_id = tr.school_id
        WHERE rc.school_id = ? AND rc.exam_session_id = ?
-       ORDER BY s.last_name, s.first_name`,
+       ORDER BY ${studentCodeSortSql("s")}, s.last_name, s.first_name`,
       [schoolId, sessionId],
     )
   const issues = isTeacher(req) ? { draft_papers: [], pending_batches: [], missing_marks: [] } : await buildIssues(connection, schoolId, sessionId)
@@ -402,23 +417,36 @@ export async function transitionExamSession(req, res) {
   const status = cleanText(req.body.status)
   if (!sessionId) throw new HttpError(400, "Exam session id is required")
   if (!EXAM_STATUSES.has(status)) throw new HttpError(400, "Exam session status is invalid")
-  const [[current]] = await pool.query("SELECT status FROM exam_sessions WHERE id = ? AND school_id = ? LIMIT 1", [sessionId, schoolId])
-  if (!current) throw new HttpError(404, "Exam session was not found")
-  if (current.status === "archived") throw new HttpError(409, "Archived exam sessions are read-only")
-  if (current.status === "locked" && status !== "archived") throw new HttpError(409, "Locked exam sessions can only be archived")
-  await pool.query("UPDATE exam_sessions SET status = ? WHERE id = ? AND school_id = ?", [status, sessionId, schoolId])
-  if (status === "locked") {
-    await pool.query("UPDATE assessments SET status = 'locked' WHERE school_id = ? AND exam_session_id = ? AND status <> 'archived'", [schoolId, sessionId])
-    await pool.query("UPDATE result_batches SET status = 'locked' WHERE school_id = ? AND exam_session_id = ? AND status = 'approved'", [schoolId, sessionId])
-    await pool.query(
-      `UPDATE result_entries re
-       JOIN result_batches rb ON rb.id = re.result_batch_id AND rb.school_id = re.school_id
-       SET re.status = 'locked'
-       WHERE re.school_id = ? AND rb.exam_session_id = ? AND re.status = 'approved'`,
-      [schoolId, sessionId],
-    )
+  const connection = await pool.getConnection()
+  try {
+    await connection.beginTransaction()
+    const [[current]] = await connection.query("SELECT status FROM exam_sessions WHERE id = ? AND school_id = ? LIMIT 1", [sessionId, schoolId])
+    if (!current) throw new HttpError(404, "Exam session was not found")
+    if (current.status === "archived") throw new HttpError(409, "Archived exam sessions are read-only")
+    if (current.status === "locked" && status !== "archived") throw new HttpError(409, "Locked exam sessions can only be archived")
+    await connection.query("UPDATE exam_sessions SET status = ? WHERE id = ? AND school_id = ?", [status, sessionId, schoolId])
+    const scheduleReset = NORMAL_TIMETABLE_SESSION_STATUSES.has(status)
+      ? await restoreNormalScheduleAfterExamSession(connection, schoolId, sessionId)
+      : null
+    if (status === "locked") {
+      await connection.query("UPDATE assessments SET status = 'locked' WHERE school_id = ? AND exam_session_id = ? AND status <> 'archived'", [schoolId, sessionId])
+      await connection.query("UPDATE result_batches SET status = 'locked' WHERE school_id = ? AND exam_session_id = ? AND status = 'approved'", [schoolId, sessionId])
+      await connection.query(
+        `UPDATE result_entries re
+         JOIN result_batches rb ON rb.id = re.result_batch_id AND rb.school_id = re.school_id
+         SET re.status = 'locked'
+         WHERE re.school_id = ? AND rb.exam_session_id = ? AND re.status = 'approved'`,
+        [schoolId, sessionId],
+      )
+    }
+    await connection.commit()
+    res.json({ ok: true, schedule_reset: scheduleReset })
+  } catch (error) {
+    await connection.rollback()
+    throw error
+  } finally {
+    connection.release()
   }
-  res.json({ ok: true })
 }
 
 export async function createExamPaper(req, res) {
@@ -797,7 +825,8 @@ async function loadReportCardPayload(schoolId, cardId) {
   const [[card]] = await pool.query(
     `SELECT rc.*, s.first_name, s.last_name, COALESCE(s.student_id, s.admission_no) AS student_code,
       s.admission_no, s.gender, s.date_of_birth, s.profile_photo_url,
-      sch.name AS school_name, sch.city AS school_city, sch.country AS school_country,
+      sch.name AS school_name, sch.code AS school_code, sch.school_prefix,
+      sch.city AS school_city, sch.country AS school_country,
       c.name AS class_name, ay.name AS academic_year_name, t.name AS term_name,
       t.term_number, t.start_date AS term_start_date, t.end_date AS term_end_date,
       es.name AS exam_session_name, es.exam_type, es.start_date AS exam_start_date, es.end_date AS exam_end_date,
@@ -865,6 +894,62 @@ async function loadReportCardPayload(schoolId, cardId) {
     total_marks: subject.total_marks === null ? null : Number(subject.total_marks),
     total_percent: subject.score === null ? null : Number(subject.score),
   }))
+  const [formalAssessmentRows] = await pool.query(
+    `SELECT re.id, re.score, re.grade, re.comment, re.status, re.last_saved_at, re.updated_at,
+      rb.id AS result_batch_id, rb.exam_session_id, rb.academic_year_id, rb.term_id,
+      a.id AS assessment_id, a.name AS assessment_name, a.assessment_type, a.total_marks,
+      es.name AS exam_session_name, es.exam_type,
+      subj.code AS subject_code, subj.name AS subject_name,
+      teacher.full_name AS teacher_name, ett.exam_date
+     FROM result_entries re
+     JOIN result_batches rb ON rb.id = re.result_batch_id AND rb.school_id = re.school_id
+     JOIN assessments a ON a.id = rb.assessment_id AND a.school_id = rb.school_id
+     JOIN subjects subj ON subj.id = rb.subject_id AND subj.school_id = rb.school_id
+     LEFT JOIN users teacher ON teacher.id = rb.teacher_id AND teacher.school_id = rb.school_id
+     LEFT JOIN exam_sessions es ON es.id = rb.exam_session_id AND es.school_id = rb.school_id
+     LEFT JOIN exam_timetable_entries ett ON ett.school_id = rb.school_id
+       AND ett.exam_session_id <=> rb.exam_session_id
+       AND ett.assessment_id = rb.assessment_id
+       AND ett.class_id = rb.class_id
+       AND ett.subject_id = rb.subject_id
+     WHERE re.school_id = ? AND re.student_id = ?
+       AND rb.academic_year_id = ? AND rb.term_id = ?
+     ORDER BY COALESCE(ett.exam_date, re.last_saved_at, re.updated_at) ASC, subj.name`,
+    [schoolId, card.student_id, card.academic_year_id, card.term_id],
+  )
+  const [recurringAssessmentRows] = await pool.query(
+    `SELECT air.id, air.score, air.comment, air.status, air.last_saved_at, air.updated_at,
+      ai.title AS assessment_name, ai.total_marks, ai.instance_date,
+      rat.assessment_type, subj.code AS subject_code, subj.name AS subject_name,
+      teacher.full_name AS teacher_name
+     FROM assessment_instance_results air
+     JOIN assessment_instances ai ON ai.id = air.assessment_instance_id AND ai.school_id = air.school_id
+     LEFT JOIN recurring_assessment_templates rat ON rat.id = ai.template_id AND rat.school_id = ai.school_id
+     JOIN subjects subj ON subj.id = ai.subject_id AND subj.school_id = ai.school_id
+     LEFT JOIN users teacher ON teacher.id = ai.teacher_id AND teacher.school_id = ai.school_id
+     WHERE air.school_id = ? AND air.student_id = ?
+       AND ai.academic_year_id = ? AND ai.term_id = ?
+     ORDER BY ai.instance_date ASC, subj.name`,
+    [schoolId, card.student_id, card.academic_year_id, card.term_id],
+  )
+  const normalizeAssessmentRow = (row, sourceType) => {
+    const score = row.score === null ? null : Number(row.score)
+    const totalMarks = row.total_marks === null ? null : Number(row.total_marks)
+    const percentage = score === null || !totalMarks ? null : Number(((score / totalMarks) * 100).toFixed(1))
+    return {
+      ...row,
+      source_type: sourceType,
+      score,
+      raw_score: score,
+      total_marks: totalMarks,
+      total_percent: percentage,
+      result_date: row.exam_date || row.instance_date || row.last_saved_at || row.updated_at,
+    }
+  }
+  const assessmentItems = [
+    ...formalAssessmentRows.map((row) => normalizeAssessmentRow(row, "formal_assessment")),
+    ...recurringAssessmentRows.map((row) => normalizeAssessmentRow(row, "recurring_assessment")),
+  ]
   const failedSubjects = normalizedSubjects.filter((subject) => Number(subject.total_percent || 0) < 50).length
   const averageScore = card.average_score === null ? null : Number(card.average_score)
   return {
@@ -881,6 +966,7 @@ async function loadReportCardPayload(schoolId, cardId) {
     failed_subjects: failedSubjects,
     remark: failedSubjects > 0 || (averageScore !== null && averageScore < 50) ? "FAIL" : "PASS",
     subjects: normalizedSubjects,
+    assessment_items: assessmentItems,
   }
 }
 
@@ -914,90 +1000,491 @@ function drawStudentPhoto(doc, report, x, y, size) {
     .text(studentInitials(report), x, y + (size / 2) - 9, { width: size, align: "center" })
 }
 
-function drawReportCardPdf(report, res) {
-  const doc = new PDFDocument({ size: "A4", margin: 42 })
+const REPORT_COLORS = Object.freeze({
+  navy: "#052a63",
+  yellow: "#f4c542",
+  cream: "#fff2cc",
+  red: "#e60000",
+  black: "#111111",
+  muted: "#3f3f46",
+})
+
+const REPORT_FONT_REGULAR = "/usr/share/fonts/truetype/msttcorefonts/Comic_Sans_MS.ttf"
+const REPORT_FONT_BOLD = "/usr/share/fonts/truetype/msttcorefonts/Comic_Sans_MS_Bold.ttf"
+const REPORT_SANS_FONT_REGULAR = "/usr/share/fonts/truetype/msttcorefonts/Arial.ttf"
+const REPORT_SANS_FONT_BOLD = "/usr/share/fonts/truetype/msttcorefonts/Arial_Bold.ttf"
+const RIA_REFERENCE_HEADER_PATH = path.resolve(process.cwd(), "src/assets/report-templates/ria-reference-header-000.jpg")
+const RIA_REFERENCE_HEADER_RATIO = 472 / 1675
+const REPORT_COLUMNS = Object.freeze([112, 50, 48, 260, 70])
+const REPORT_GRADING_KEY = Object.freeze([
+  ["Outstanding", "90 - 100", "A*"],
+  ["High", "80 - 89", "B"],
+  ["Good", "70 - 79", "C"],
+  ["Aspiring", "60 - 69", "D"],
+  ["Basic", "50 - 59", "E"],
+  ["Unclassified", "40 - 49", "F"],
+  ["Below Standard", "0 - 39", "U"],
+])
+
+function registerReportFonts(doc) {
+  try {
+    if (fs.existsSync(REPORT_FONT_REGULAR) && fs.existsSync(REPORT_FONT_BOLD)) {
+      doc.registerFont("ReportBody", REPORT_FONT_REGULAR)
+      doc.registerFont("ReportBold", REPORT_FONT_BOLD)
+      return { regular: "ReportBody", bold: "ReportBold" }
+    }
+  } catch {
+    // Built-in PDF fonts are the safe fallback if the server font is unavailable.
+  }
+  return { regular: "Helvetica", bold: "Helvetica-Bold" }
+}
+
+function registerReportSansFonts(doc) {
+  try {
+    if (fs.existsSync(REPORT_SANS_FONT_REGULAR) && fs.existsSync(REPORT_SANS_FONT_BOLD)) {
+      doc.registerFont("ReportSans", REPORT_SANS_FONT_REGULAR)
+      doc.registerFont("ReportSansBold", REPORT_SANS_FONT_BOLD)
+      return { regular: "ReportSans", bold: "ReportSansBold" }
+    }
+  } catch {
+    // Built-in PDF fonts are the safe fallback if the server font is unavailable.
+  }
+  return { regular: "Helvetica", bold: "Helvetica-Bold" }
+}
+
+function reportText(value, fallback = "-") {
+  const text = String(value ?? "").replace(/\s+/g, " ").trim()
+  return text || fallback
+}
+
+function reportStudentName(report) {
+  const reversedName = [report.last_name, report.first_name].filter(Boolean).join(" ")
+  return reportText(reversedName || report.student_code || report.admission_no).toUpperCase()
+}
+
+function reportGradeFromPercentage(value) {
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) return "-"
+  if (numeric >= 90) return "A*"
+  if (numeric >= 80) return "B"
+  if (numeric >= 70) return "C"
+  if (numeric >= 60) return "D"
+  if (numeric >= 50) return "E"
+  if (numeric >= 40) return "F"
+  return "U"
+}
+
+function normalizeReportGrade(row) {
+  const percentage = Number(row.total_percent ?? row.percentage)
+  if (Number.isFinite(percentage)) return reportGradeFromPercentage(percentage)
+  const explicitGrade = reportText(row.grade || row.raw_grade, "")
+  if (explicitGrade) return explicitGrade
+  return "-"
+}
+
+function isWeakReportResult(row) {
+  const grade = normalizeReportGrade(row).toUpperCase()
+  const percentage = Number(row.total_percent ?? row.percentage)
+  return grade === "U" || (Number.isFinite(percentage) && percentage < 50)
+}
+
+function reportTeacherNames(report) {
+  const names = [
+    ...(report.assessment_items || []).map((item) => item.teacher_name),
+    ...(report.subjects || []).map((subject) => subject.teacher_name),
+  ]
+  return [...new Set(names.map((name) => reportText(name, "")).filter(Boolean))]
+}
+
+function drawReportCrest(doc, report, fonts, x, y, size) {
+  const prefix = reportText(report.school_prefix || report.school_code || report.school_name, "SL").slice(0, 3).toUpperCase()
+  doc.save()
+  doc.moveTo(x + size / 2, y)
+    .lineTo(x + size - 7, y + 14)
+    .lineTo(x + size - 13, y + size - 12)
+    .lineTo(x + size / 2, y + size)
+    .lineTo(x + 13, y + size - 12)
+    .lineTo(x + 7, y + 14)
+    .closePath()
+    .fillAndStroke(REPORT_COLORS.navy, REPORT_COLORS.black)
+  doc.circle(x + size / 2, y + size / 2, size * 0.29).fill(REPORT_COLORS.yellow)
+  doc.font(fonts.bold).fontSize(13).fillColor(REPORT_COLORS.navy)
+    .text(prefix, x, y + size / 2 - 8, { width: size, align: "center" })
+  doc.font(fonts.bold).fontSize(6.6).fillColor(REPORT_COLORS.navy)
+    .text(reportText(report.school_name, "School").toUpperCase(), x - 20, y + size + 4, { width: size + 40, align: "center" })
+  doc.restore()
+}
+
+function schoolReportContactLines(report) {
+  const schoolName = `${report.school_name || ""} ${report.school_code || ""} ${report.school_prefix || ""}`
+  if (/reign|ria/i.test(schoolName)) {
+    return [
+      ["P", "Chileka-10 Miles P.O Box 3004, Blantyre"],
+      ["D", "Directors office: 0998 723 023"],
+      ["A", "Administrator: 0881 507 135"],
+      ["F", "Accounts: 0989 074 506"],
+      ["E", "reignacademymw21@gmail.com"],
+    ]
+  }
+  return [
+    ["P", [report.school_city, report.school_country].filter(Boolean).join(", ") || reportText(report.school_name, "School")],
+    ["D", reportText(report.school_name, "School")],
+  ]
+}
+
+function drawContactLine(doc, fonts, label, value, x, y, width) {
+  doc.circle(x + 4, y + 5, 4).fill(REPORT_COLORS.yellow)
+  doc.font(fonts.bold).fontSize(5.5).fillColor(REPORT_COLORS.navy)
+    .text(label, x + 1, y + 2, { width: 6, align: "center" })
+  doc.font(fonts.regular).fontSize(7.6).fillColor(REPORT_COLORS.black)
+  const height = Math.max(11, doc.heightOfString(value, { width }))
+  doc.text(value, x + 15, y, { width })
+  return y + height + 1
+}
+
+function drawReportLetterhead(doc, report, fonts) {
+  const pageWidth = doc.page.width
+  const margin = 36
+  doc.rect(margin, 26, 450, 8).fill(REPORT_COLORS.navy)
+  doc.rect(margin, 43, 485, 7).fill(REPORT_COLORS.yellow)
+  doc.polygon([503, 26], [576, 26], [552, 34], [503, 34]).fill(REPORT_COLORS.navy)
+  doc.polygon([532, 43], [576, 43], [552, 50], [532, 50]).fill(REPORT_COLORS.yellow)
+
+  drawReportCrest(doc, report, fonts, 58, 58, 64)
+
+  let contactY = 59
+  for (const [label, value] of schoolReportContactLines(report)) {
+    contactY = drawContactLine(doc, fonts, label, value, 360, contactY, 190)
+  }
+
+  doc.font(fonts.bold).fontSize(14.2).fillColor(REPORT_COLORS.navy)
+    .text("ASSESSMENT AND MIDTERM REPORT", margin, 134, { width: pageWidth - (margin * 2), align: "center" })
+  return 166
+}
+
+function drawRiaExactLetterhead(doc, report, fonts, headingFonts) {
+  const pageWidth = doc.page.width
+  if (!fs.existsSync(RIA_REFERENCE_HEADER_PATH)) {
+    return drawReportLetterhead(doc, report, fonts)
+  }
+  const imageHeight = pageWidth * RIA_REFERENCE_HEADER_RATIO
+  doc.image(RIA_REFERENCE_HEADER_PATH, 0, 0, { width: pageWidth })
+  doc.font(headingFonts.bold).fontSize(10.4).fillColor(REPORT_COLORS.navy)
+    .text("ASSESSMENT AND MIDTERM REPORT", 36, imageHeight + 5, { width: pageWidth - 72, align: "center" })
+  return imageHeight + 36
+}
+
+function drawModernAcademicLetterhead(doc, report, fonts) {
+  const pageWidth = doc.page.width
+  const margin = 36
+  doc.rect(0, 0, pageWidth, 92).fill("#f8fafc")
+  doc.rect(0, 0, 16, 136).fill(REPORT_COLORS.navy)
+  doc.rect(16, 0, 4, 136).fill(REPORT_COLORS.yellow)
+  doc.font(fonts.bold).fontSize(14).fillColor(REPORT_COLORS.navy)
+    .text(reportText(report.school_name, "School").toUpperCase(), margin, 32, { width: 320 })
+  doc.font(fonts.regular).fontSize(8.8).fillColor(REPORT_COLORS.muted)
+    .text([report.school_city, report.school_country].filter(Boolean).join(", "), margin, 53, { width: 300 })
+  doc.font(fonts.bold).fontSize(12).fillColor(REPORT_COLORS.black)
+    .text("ASSESSMENT AND MIDTERM REPORT", margin, 102, { width: pageWidth - 72, align: "center" })
+  return 136
+}
+
+function drawCompactFormalLetterhead(doc, report, fonts) {
+  const pageWidth = doc.page.width
+  const margin = 42
+  doc.moveTo(margin, 42).lineTo(pageWidth - margin, 42).lineWidth(1.1).strokeColor(REPORT_COLORS.black).stroke()
+  doc.font(fonts.bold).fontSize(13).fillColor(REPORT_COLORS.black)
+    .text(reportText(report.school_name, "School").toUpperCase(), margin, 52, { width: pageWidth - (margin * 2), align: "center" })
+  doc.font(fonts.regular).fontSize(8.6).fillColor(REPORT_COLORS.muted)
+    .text([report.school_city, report.school_country].filter(Boolean).join(", "), margin, 72, { width: pageWidth - (margin * 2), align: "center" })
+  doc.moveTo(margin, 90).lineTo(pageWidth - margin, 90).lineWidth(0.9).strokeColor(REPORT_COLORS.black).stroke()
+  doc.font(fonts.bold).fontSize(11).fillColor(REPORT_COLORS.navy)
+    .text("ASSESSMENT AND MIDTERM REPORT", margin, 104, { width: pageWidth - (margin * 2), align: "center" })
+  return 132
+}
+
+function drawTemplateLetterhead(doc, report, fonts, templateId, headingFonts = fonts) {
+  if (templateId === "ria_exact") return drawRiaExactLetterhead(doc, report, fonts, headingFonts)
+  if (templateId === "modern_academic") return drawModernAcademicLetterhead(doc, report, fonts)
+  if (templateId === "compact_formal") return drawCompactFormalLetterhead(doc, report, fonts)
+  return drawReportLetterhead(doc, report, fonts)
+}
+
+function drawMetaField(doc, fonts, label, value, x, y, labelWidth, valueWidth) {
+  doc.font(fonts.bold).fontSize(8.8).fillColor(REPORT_COLORS.black)
+    .text(label, x, y, { width: labelWidth })
+  doc.font(fonts.regular).fontSize(8.8).fillColor(REPORT_COLORS.black)
+    .text(reportText(value), x + labelWidth, y, { width: valueWidth })
+}
+
+function drawReportStudentDetails(doc, report, fonts, y) {
+  const teachers = reportTeacherNames(report)
+  drawMetaField(doc, fonts, "STUDENT NAME:", reportStudentName(report), 72, y, 103, 185)
+  drawMetaField(doc, fonts, "CLASS:", report.class_name, 378, y, 48, 112)
+  y += 19
+  drawMetaField(doc, fonts, "ACADEMIC YEAR:", report.academic_year_name, 72, y, 112, 150)
+  drawMetaField(doc, fonts, "LEAD TEACHER:", teachers[0] || "-", 328, y, 103, 125)
+  y += 19
+  drawMetaField(doc, fonts, "ASSISTANT/SUBJECT TEACHER:", teachers[1] || teachers[0] || "-", 72, y, 182, 265)
+  return y + 28
+}
+
+function reportAssessmentNumber(value) {
+  const match = String(value || "").match(/(?:continuous\s*)?assessment\s*(\d+)|\bca\s*(\d+)\b/i)
+  if (!match) return null
+  const number = Number(match[1] || match[2])
+  return Number.isFinite(number) ? number : null
+}
+
+function reportExamSectionTitle(examType, sessionName, assessmentType) {
+  const type = String(examType || "").toLowerCase()
+  const name = reportText(sessionName, "")
+  if (type.includes("mid") || /mid/i.test(name)) return "MIDTERM REPORT"
+  if (name) {
+    const upperName = name.toUpperCase()
+    return upperName.endsWith("REPORT") ? upperName : `${upperName} REPORT`
+  }
+  return `${assessmentTypeLabel(assessmentType || examType || "assessment").toUpperCase()} REPORT`
+}
+
+function reportSectionMeta(item, report) {
+  const assessmentNumber = reportAssessmentNumber(item.assessment_name)
+  if (assessmentNumber) {
+    return {
+      key: `continuous:${assessmentNumber}`,
+      title: `CONTINUOUS ASSESSMENT ${assessmentNumber} REPORT`,
+      sort: assessmentNumber < 3 ? 100 + assessmentNumber : 350 + assessmentNumber,
+    }
+  }
+
+  const examType = item.exam_type || report.exam_type
+  const sessionName = item.exam_session_name || report.exam_session_name
+  const assessmentType = item.assessment_type
+  const isExam = item.exam_session_id || examType || String(assessmentType || "").includes("term") || String(assessmentType || "").includes("exam")
+  if (isExam) {
+    const title = reportExamSectionTitle(examType, sessionName, assessmentType)
+    return {
+      key: `exam:${item.exam_session_id || report.exam_session_id || title}`,
+      title,
+      sort: title === "MIDTERM REPORT" ? 300 : 320,
+    }
+  }
+
+  const titleBase = assessmentTypeLabel(assessmentType || (item.source_type === "recurring_assessment" ? "recurring assessment" : "continuous assessment"))
+    .toUpperCase()
+  return {
+    key: `${item.source_type || "assessment"}:${assessmentType || titleBase}`,
+    title: titleBase.endsWith("REPORT") ? titleBase : `${titleBase} REPORT`,
+    sort: item.source_type === "recurring_assessment" ? 420 : 240,
+  }
+}
+
+function buildReportSections(report) {
+  const sourceRows = (report.assessment_items || []).length
+    ? report.assessment_items
+    : (report.subjects || []).map((subject) => ({
+      ...subject,
+      source_type: "report_card",
+      assessment_name: report.exam_session_name,
+      assessment_type: report.exam_type,
+      exam_session_id: report.exam_session_id,
+      exam_session_name: report.exam_session_name,
+      exam_type: report.exam_type,
+    }))
+
+  const sections = new Map()
+  for (const row of sourceRows) {
+    const meta = reportSectionMeta(row, report)
+    const section = sections.get(meta.key) || { ...meta, rows: [] }
+    section.rows.push(row)
+    sections.set(meta.key, section)
+  }
+
+  if (!sections.size) {
+    const meta = reportSectionMeta({ source_type: "report_card", exam_type: report.exam_type, exam_session_name: report.exam_session_name }, report)
+    sections.set(meta.key, { ...meta, rows: [] })
+  }
+
+  return [...sections.values()]
+    .map((section) => ({
+      ...section,
+      rows: section.rows.sort((a, b) => reportText(a.subject_name).localeCompare(reportText(b.subject_name))),
+    }))
+    .sort((a, b) => a.sort - b.sort || a.title.localeCompare(b.title))
+}
+
+function drawReportGrid(doc, x, y, widths, height, fillColor = null) {
+  const totalWidth = widths.reduce((sum, width) => sum + width, 0)
+  if (fillColor) doc.rect(x, y, totalWidth, height).fill(fillColor)
+  doc.lineWidth(0.65).strokeColor(REPORT_COLORS.black).rect(x, y, totalWidth, height).stroke()
+  let cursor = x
+  for (let index = 0; index < widths.length - 1; index += 1) {
+    cursor += widths[index]
+    doc.moveTo(cursor, y).lineTo(cursor, y + height).stroke()
+  }
+}
+
+function reportTextHeight(doc, fonts, text, width, size = 8.2, bold = false) {
+  doc.font(bold ? fonts.bold : fonts.regular).fontSize(size)
+  return doc.heightOfString(reportText(text), { width })
+}
+
+function drawReportTableHeader(doc, fonts, title, x, y, widths) {
+  const totalWidth = widths.reduce((sum, width) => sum + width, 0)
+  doc.rect(x, y, totalWidth, 18).fillAndStroke(REPORT_COLORS.navy, REPORT_COLORS.black)
+  doc.font(fonts.bold).fontSize(8.8).fillColor("#ffffff")
+    .text(title, x + 4, y + 4.5, { width: totalWidth - 8, align: "center" })
+  y += 18
+  drawReportGrid(doc, x, y, widths, 23, REPORT_COLORS.cream)
+  const labels = ["Subjects", "Mark", "Grade", "Comments", "Teacher"]
+  let cursor = x
+  labels.forEach((label, index) => {
+    doc.font(fonts.bold).fontSize(8.2).fillColor(REPORT_COLORS.black)
+      .text(label, cursor + 4, y + 7, { width: widths[index] - 8, align: "center" })
+    cursor += widths[index]
+  })
+  return y + 23
+}
+
+function ensureReportSpace(doc, y, neededHeight, topY = 42) {
+  if (y + neededHeight <= doc.page.height - 36) return y
+  doc.addPage()
+  return topY
+}
+
+function drawReportResultRow(doc, fonts, row, x, y, widths) {
+  const subject = reportText(row.subject_name || row.subject_code)
+  const mark = scoreLabel(row.raw_score ?? row.score)
+  const grade = normalizeReportGrade(row)
+  const comment = reportText(row.comment)
+  const teacher = reportText(row.teacher_name)
+  const weak = isWeakReportResult(row)
+  const innerWidths = widths.map((width) => width - 8)
+  const rowHeight = Math.max(
+    29,
+    reportTextHeight(doc, fonts, subject, innerWidths[0]) + 12,
+    reportTextHeight(doc, fonts, comment, innerWidths[3]) + 12,
+    reportTextHeight(doc, fonts, teacher, innerWidths[4]) + 12,
+  )
+  drawReportGrid(doc, x, y, widths, rowHeight)
+  let cursor = x
+  doc.font(fonts.regular).fontSize(8.2).fillColor(REPORT_COLORS.black)
+    .text(subject, cursor + 4, y + 6, { width: innerWidths[0] })
+  cursor += widths[0]
+  doc.fillColor(weak ? REPORT_COLORS.red : REPORT_COLORS.black)
+    .text(mark, cursor + 4, y + 6, { width: innerWidths[1], align: "center" })
+  cursor += widths[1]
+  doc.font(fonts.bold).fillColor(weak ? REPORT_COLORS.red : REPORT_COLORS.black)
+    .text(grade, cursor + 4, y + 6, { width: innerWidths[2], align: "center" })
+  cursor += widths[2]
+  doc.font(fonts.regular).fillColor(weak ? REPORT_COLORS.red : REPORT_COLORS.black)
+    .text(comment, cursor + 4, y + 6, { width: innerWidths[3] })
+  cursor += widths[3]
+  doc.fillColor(REPORT_COLORS.black)
+    .text(teacher, cursor + 4, y + 6, { width: innerWidths[4] })
+  return y + rowHeight
+}
+
+function reportOverallComment(report, rows) {
+  const firstName = reportText(report.first_name, "The learner")
+  const weakRows = rows.filter(isWeakReportResult)
+  if (!rows.length) return "Results will appear here once assessment marks have been captured and approved."
+  if (weakRows.length) {
+    const subjects = weakRows.slice(0, 2).map((row) => reportText(row.subject_name)).join(" and ")
+    return `${firstName} should continue focused revision in ${subjects} while maintaining regular practice across all subjects.`
+  }
+  return `${firstName} has shown steady progress across the assessed subjects. Continued practice and active participation will help maintain this performance.`
+}
+
+function drawOverallCommentRow(doc, fonts, report, rows, x, y, widths) {
+  const labelWidth = widths[0] + widths[1] + widths[2]
+  const commentWidth = widths[3] + widths[4]
+  const comment = reportOverallComment(report, rows)
+  const rowHeight = Math.max(47, reportTextHeight(doc, fonts, comment, commentWidth - 10) + 16)
+  drawReportGrid(doc, x, y, [labelWidth, commentWidth], rowHeight)
+  doc.font(fonts.bold).fontSize(8.2).fillColor(REPORT_COLORS.black)
+    .text("TEACHER'S OVERALL\nCOMMENTS:", x + 6, y + 10, { width: labelWidth - 12, align: "center" })
+  doc.font(fonts.regular).fontSize(8.2).fillColor(rows.some(isWeakReportResult) ? REPORT_COLORS.red : REPORT_COLORS.black)
+    .text(comment, x + labelWidth + 6, y + 9, { width: commentWidth - 12 })
+  return y + rowHeight
+}
+
+function drawAssessmentSection(doc, fonts, report, section, startY) {
+  const x = 36
+  let y = ensureReportSpace(doc, startY, 96)
+  y = drawReportTableHeader(doc, fonts, section.title, x, y, REPORT_COLUMNS)
+  const rows = section.rows.length ? section.rows : [{ subject_name: "-", comment: "-", teacher_name: "-" }]
+  for (const row of rows) {
+    const estimate = Math.max(
+      29,
+      reportTextHeight(doc, fonts, row.subject_name || row.subject_code, REPORT_COLUMNS[0] - 8) + 12,
+      reportTextHeight(doc, fonts, row.comment, REPORT_COLUMNS[3] - 8) + 12,
+      reportTextHeight(doc, fonts, row.teacher_name, REPORT_COLUMNS[4] - 8) + 12,
+    )
+    if (y + estimate > doc.page.height - 90) {
+      doc.addPage()
+      y = drawReportTableHeader(doc, fonts, section.title, x, 42, REPORT_COLUMNS)
+    }
+    y = drawReportResultRow(doc, fonts, row, x, y, REPORT_COLUMNS)
+  }
+  if (y + 58 > doc.page.height - 36) {
+    doc.addPage()
+    y = drawReportTableHeader(doc, fonts, section.title, x, 42, REPORT_COLUMNS)
+  }
+  y = drawOverallCommentRow(doc, fonts, report, section.rows, x, y, REPORT_COLUMNS)
+  return y + 18
+}
+
+function drawGradingKey(doc, fonts) {
+  doc.addPage()
+  const x = 62
+  let y = 58
+  doc.roundedRect(x, y, 118, 24, 2).fill(REPORT_COLORS.navy)
+  doc.font(fonts.bold).fontSize(10).fillColor("#ffffff")
+    .text("GRADING KEY", x, y + 6, { width: 118, align: "center" })
+  y += 56
+
+  const widths = [225, 160, 90]
+  drawReportGrid(doc, x, y, widths, 28, REPORT_COLORS.navy)
+  let cursor = x
+  ;["Grading Scale", "Mark", "Grade"].forEach((label, index) => {
+    doc.font(fonts.bold).fontSize(9).fillColor("#ffffff")
+      .text(label, cursor + 5, y + 8, { width: widths[index] - 10, align: "center" })
+    cursor += widths[index]
+  })
+  y += 28
+
+  for (const [scale, mark, grade] of REPORT_GRADING_KEY) {
+    drawReportGrid(doc, x, y, widths, 29)
+    doc.rect(x, y, widths[0], 29).fill(REPORT_COLORS.cream)
+    doc.lineWidth(0.65).strokeColor(REPORT_COLORS.black).rect(x, y, widths[0], 29).stroke()
+    doc.font(fonts.regular).fontSize(8.8).fillColor(REPORT_COLORS.black)
+      .text(scale, x + 6, y + 8, { width: widths[0] - 12 })
+      .text(mark, x + widths[0] + 6, y + 8, { width: widths[1] - 12, align: "center" })
+    doc.font(fonts.bold)
+      .text(grade, x + widths[0] + widths[1] + 6, y + 8, { width: widths[2] - 12, align: "center" })
+    y += 29
+  }
+}
+
+function drawReportCardPdf(report, res, options = {}) {
+  const templateId = normalizeReportPdfTemplateId(options.template, report)
+  const doc = new PDFDocument({ size: "LETTER", margin: 36 })
   const filename = reportFileName(report)
   res.setHeader("Content-Type", "application/pdf")
   res.setHeader("Content-Disposition", `inline; filename="${filename}"`)
   doc.pipe(res)
 
-  const pageWidth = doc.page.width
-  const margin = doc.page.margins.left
-  const contentWidth = pageWidth - (margin * 2)
-  const fullName = [report.first_name, report.last_name].filter(Boolean).join(" ")
-
-  doc.font("Helvetica-Bold").fontSize(15).fillColor("#111827")
-    .text(String(report.school_name || "School").toUpperCase(), margin, 46, { width: contentWidth, align: "center" })
-  doc.font("Helvetica").fontSize(9).fillColor("#475569")
-    .text([report.school_city, report.school_country].filter(Boolean).join(", "), margin, 66, { width: contentWidth, align: "center" })
-  doc.moveTo(margin, 88).lineTo(pageWidth - margin, 88).lineWidth(1.2).strokeColor("#111827").stroke()
-  doc.font("Helvetica-Bold").fontSize(12).fillColor("#111827")
-    .text("EXAMINATION RESULTS", margin, 98, { width: contentWidth, align: "center" })
-  doc.font("Helvetica").fontSize(9.5).fillColor("#475569")
-    .text(report.exam_session_name || report.term_name || "Exam Session", margin, 115, { width: contentWidth, align: "center" })
-
-  const leftX = margin
-  const rightX = margin + 270
-  const rightFieldWidth = 168
-  const photoSize = 64
-  drawStudentPhoto(doc, report, pageWidth - margin - photoSize, 145, photoSize)
-  let y = 145
-  drawField(doc, "Name", fullName, leftX, y)
-  drawField(doc, "Term", report.term_name, rightX, y, rightFieldWidth)
-  y += 18
-  drawField(doc, "Student ID", report.student_code || report.admission_no, leftX, y)
-  drawField(doc, "Academic Year", report.academic_year_name, rightX, y, rightFieldWidth)
-  y += 18
-  drawField(doc, "Class", report.class_name, leftX, y)
-  drawField(doc, "Exam Type", valueLabel(report.exam_type), rightX, y, rightFieldWidth)
-  y += 18
-  drawField(doc, "Attendance", percentLabel(report.attendance_percent), leftX, y)
-  drawField(doc, "Generated", dateLabel(report.generated_at), rightX, y, rightFieldWidth)
-  y += 18
-  drawField(doc, "Average", percentLabel(report.average_score), leftX, y)
-  drawField(doc, "Grade", report.grade, rightX, y, rightFieldWidth)
-  y += 18
-  drawField(doc, "Position", report.position ? `${report.position} / ${report.class_total || "-"}` : "-", leftX, y)
-  drawField(doc, "Total Students", report.class_total || "-", rightX, y, rightFieldWidth)
-
-  y += 34
-  const columns = [
-    { label: "Subject Code", x: margin, width: 82 },
-    { label: "Subject Name", x: margin + 86, width: 188 },
-    { label: "Exam Mark", x: margin + 278, width: 72, align: "right" },
-    { label: "Total", x: margin + 354, width: 58, align: "right" },
-    { label: "Grade", x: margin + 418, width: 48 },
-    { label: "Comment", x: margin + 470, width: 82 },
-  ]
-  doc.rect(margin, y, contentWidth, 22).fillAndStroke("#f3f4f6", "#d1d5db")
-  doc.font("Helvetica-Bold").fontSize(8).fillColor("#374151")
-  columns.forEach((column) => doc.text(column.label, column.x + 4, y + 7, { width: column.width - 8, align: column.align || "left" }))
-  y += 22
-
-  const rows = report.subjects || []
-  for (const subject of rows) {
-    if (y > 735) {
-      doc.addPage()
-      y = 48
-    }
-    doc.rect(margin, y, contentWidth, 24).strokeColor("#e5e7eb").stroke()
-    doc.font("Helvetica").fontSize(8.5).fillColor("#111827")
-    doc.text(subject.subject_code || "-", columns[0].x + 4, y + 7, { width: columns[0].width - 8 })
-    doc.text(subject.subject_name || "-", columns[1].x + 4, y + 7, { width: columns[1].width - 8 })
-    doc.text(`${scoreLabel(subject.raw_score)} / ${scoreLabel(subject.total_marks || 100)}`, columns[2].x + 4, y + 7, { width: columns[2].width - 8, align: "right" })
-    doc.font("Helvetica-Bold").text(percentLabel(subject.total_percent), columns[3].x + 4, y + 7, { width: columns[3].width - 8, align: "right" })
-    doc.text(subject.grade || "-", columns[4].x + 4, y + 7, { width: columns[4].width - 8 })
-    doc.font("Helvetica").fillColor("#4b5563").text(subject.comment || "-", columns[5].x + 4, y + 7, { width: columns[5].width - 8 })
-    y += 24
+  const headingFonts = registerReportSansFonts(doc)
+  const fonts = ["modern_academic", "compact_formal"].includes(templateId)
+    ? headingFonts
+    : registerReportFonts(doc)
+  let y = drawTemplateLetterhead(doc, report, fonts, templateId, headingFonts)
+  y = drawReportStudentDetails(doc, report, fonts, y)
+  for (const section of buildReportSections(report)) {
+    y = drawAssessmentSection(doc, fonts, report, section, y)
   }
-
-  y += 18
-  doc.moveTo(margin, y).lineTo(pageWidth - margin, y).lineWidth(1.2).strokeColor("#111827").stroke()
-  y += 12
-  doc.font("Helvetica-Bold").fontSize(9.5).fillColor("#111827").text(`Subjects Below 50: ${report.failed_subjects || 0}`, margin, y)
-  doc.text(`Remarks: ${report.remark || "-"}`, margin + 220, y)
-  doc.font("Helvetica").fontSize(8).fillColor("#64748b").text(`Report Card #${report.id}`, margin, y + 24)
-
+  drawGradingKey(doc, fonts)
   doc.end()
 }
 
@@ -1016,5 +1503,9 @@ export async function getReportCardPdf(req, res) {
   if (!cardId) throw new HttpError(400, "Report card id is required")
   const reportCard = await loadReportCardPayload(schoolId, cardId)
   await assertReportCardVisibleToUser(reportCard, req.user)
-  drawReportCardPdf(reportCard, res)
+  const requestedTemplate = String(req.query?.template || "").trim()
+  const template = requestedTemplate
+    ? normalizeReportPdfTemplateId(requestedTemplate, reportCard)
+    : await getReportPdfTemplateForSchool(pool, schoolId, reportCard)
+  drawReportCardPdf(reportCard, res, { template })
 }

@@ -2,6 +2,7 @@ import { pool } from "../config/db.js"
 import { getScopedSchoolId, getTeacherClassSubjectPairs, isTeacher } from "../utils/tenantScope.js"
 import { HttpError } from "../utils/http.js"
 import { getActiveAcademicSession, sessionPayload } from "../services/academicSessionService.js"
+import { studentCodeSortSql } from "../utils/studentSort.js"
 
 function normalizeDate(value, label) {
   const text = String(value || "").trim()
@@ -423,12 +424,12 @@ async function buildProgressionPreviewRows(connection, schoolId, fromAcademicYea
      LEFT JOIN result_entries re ON re.school_id = rb.school_id AND re.result_batch_id = rb.id AND re.student_id = se.student_id
      WHERE se.school_id = ? AND se.term_id = ? AND se.enrollment_status = 'active'
        AND s.status = 'active'
-     GROUP BY se.student_id, se.class_id, se.stream_section, s.first_name, s.last_name, student_code,
+     GROUP BY se.student_id, se.class_id, se.stream_section, s.student_id, s.admission_no, s.first_name, s.last_name, student_code,
        s.status, c.name, r.id, r.to_class_id, r.is_terminal_class, r.default_decision, next_c.name,
        pd_target.decision, pd_target.to_class_id, pd_target.reason, pd_target.approved_at,
        pd_preapproved.decision, pd_preapproved.to_class_id, pd_preapproved.reason, pd_preapproved.approved_at,
        approved_c.name
-     ORDER BY s.last_name, s.first_name`,
+     ORDER BY ${studentCodeSortSql("s")}, s.last_name, s.first_name`,
     [fromAcademicYearId, toAcademicYearId, fromAcademicYearId, fromAcademicYearId, schoolId, sourceTerm.id],
   )
 
@@ -913,7 +914,7 @@ export async function getTermResultView(req, res) {
      JOIN classes c ON c.id = se.class_id AND c.school_id = se.school_id
      WHERE se.school_id = ? AND se.academic_year_id = ? AND se.term_id = ? AND se.class_id = ?
        AND se.enrollment_status = 'active' AND s.status = 'active'
-     ORDER BY s.last_name, s.first_name`,
+     ORDER BY ${studentCodeSortSql("s")}, s.last_name, s.first_name`,
     [schoolId, term.academic_year_id, termId, classId],
   )
 

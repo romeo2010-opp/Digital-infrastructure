@@ -2,6 +2,7 @@ import { pool } from "../config/db.js"
 import { getScopedSchoolId, getTeacherClassIds, scopedInClause } from "../utils/tenantScope.js"
 import { HttpError } from "../utils/http.js"
 import { getActiveAcademicSession, sessionPayload } from "../services/academicSessionService.js"
+import { studentCodeSortSql } from "../utils/studentSort.js"
 
 export async function listClasses(req, res) {
   const schoolId = getScopedSchoolId(req)
@@ -33,7 +34,7 @@ export async function listClasses(req, res) {
      WHERE se.school_id = ? AND se.academic_year_id = ? AND se.term_id = ?
       AND se.enrollment_status = 'active' AND se.class_id IN (${classIds.map(() => "?").join(", ")})
       AND s.status = 'active'
-     ORDER BY s.last_name, s.first_name`,
+     ORDER BY ${studentCodeSortSql("s")}, s.last_name, s.first_name`,
     [schoolId, session.academicYearId, session.termId, ...classIds],
   )
 
@@ -119,7 +120,7 @@ export async function getClass(req, res) {
      JOIN students s ON s.id = se.student_id AND s.school_id = se.school_id
      WHERE se.school_id = ? AND se.academic_year_id = ? AND se.term_id = ?
       AND se.class_id = ? AND se.enrollment_status = 'active' AND s.status = 'active'
-     ORDER BY s.last_name, s.first_name`,
+     ORDER BY ${studentCodeSortSql("s")}, s.last_name, s.first_name`,
     [schoolId, session.academicYearId, session.termId, classId],
   )
   const assignmentSessionClause = session.setupRequired
@@ -260,7 +261,7 @@ export async function listParents(req, res) {
       AND se.academic_year_id = ? AND se.term_id = ? AND se.enrollment_status = 'active'
      JOIN classes c ON c.id = se.class_id AND c.school_id = se.school_id
      WHERE l.school_id = ? AND s.status = 'active'${classScope.clause}
-     ORDER BY u.full_name, s.last_name`,
+     ORDER BY u.full_name, ${studentCodeSortSql("s")}, s.last_name`,
     [session.academicYearId, session.termId, schoolId, ...classScope.params],
   )
   res.json({ parents: rows, session: sessionPayload(session), setup_required: false })
@@ -404,7 +405,7 @@ export async function quickSearch(req, res) {
        WHERE se.school_id = ? AND se.academic_year_id = ? AND se.term_id = ?
         AND se.enrollment_status = 'active' AND s.status = 'active'
         AND CONCAT(s.first_name, ' ', s.last_name, ' ', s.admission_no, ' ', COALESCE(s.student_id, ''), ' ', COALESCE(c.name, '')) LIKE ?${classScope.clause}
-       ORDER BY s.last_name, s.first_name LIMIT ?`,
+       ORDER BY ${studentCodeSortSql("s")}, s.last_name, s.first_name LIMIT ?`,
       [schoolId, session.academicYearId, session.termId, query, ...classScope.params, limit],
     )
   const [homework] = await pool.query(
@@ -464,7 +465,7 @@ export async function quickSearch(req, res) {
        JOIN classes c ON c.id = se.class_id AND c.school_id = se.school_id
        WHERE f.school_id = ? AND s.status = 'active'
         AND CONCAT(s.first_name, ' ', s.last_name, ' ', f.status, ' ', COALESCE(c.name, '')) LIKE ?${classScope.clause}
-       ORDER BY balance DESC LIMIT ?`,
+       ORDER BY balance DESC, ${studentCodeSortSql("s")} LIMIT ?`,
       [session.academicYearId, session.termId, schoolId, query, ...classScope.params, limit],
     )
 

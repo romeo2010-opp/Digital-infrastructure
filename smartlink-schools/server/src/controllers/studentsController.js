@@ -6,15 +6,49 @@ import { HttpError } from "../utils/http.js"
 import { getScopedSchoolId, getTeacherClassIds, scopedInClause } from "../utils/tenantScope.js"
 import { generateStudentId, validateStudentSetupPayload } from "../services/studentSetupService.js"
 import { getActiveAcademicSession, requireActiveAcademicSession, sessionPayload } from "../services/academicSessionService.js"
+import { studentCodeSortSql } from "../utils/studentSort.js"
 
 const STUDENT_PHOTO_TYPES = new Set(["image/png", "image/jpeg"])
 const STUDENT_PHOTO_EXTENSIONS = {
   "image/png": "png",
   "image/jpeg": "jpg",
 }
+const STUDENT_STATUSES = new Set(["active", "suspended", "transferred_out", "withdrawn", "graduated", "archived"])
+const STUDENT_TYPES = new Set(["new", "returning", "transfer"])
 
 function cleanText(value, fallback = "") {
   return String(value ?? fallback).trim()
+}
+
+function cleanOptionalText(value, maxLength = 255) {
+  const text = cleanText(value)
+  return text ? text.slice(0, maxLength) : null
+}
+
+function cleanRequiredText(value, fieldName, maxLength = 100) {
+  const text = cleanText(value)
+  if (!text) throw new HttpError(400, `${fieldName} is required`)
+  return text.slice(0, maxLength)
+}
+
+function cleanDate(value, fieldName) {
+  const text = cleanText(value)
+  if (!text) throw new HttpError(400, `${fieldName} is required`)
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) throw new HttpError(400, `${fieldName} must use YYYY-MM-DD`)
+  return text
+}
+
+function cleanOptionalDate(value, fieldName) {
+  const text = cleanText(value)
+  if (!text) return null
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) throw new HttpError(400, `${fieldName} must use YYYY-MM-DD`)
+  return text
+}
+
+function pickBodyValue(body, snakeKey, camelKey, fallback) {
+  if (Object.prototype.hasOwnProperty.call(body, snakeKey)) return body[snakeKey]
+  if (Object.prototype.hasOwnProperty.call(body, camelKey)) return body[camelKey]
+  return fallback
 }
 
 export async function listStudents(req, res) {
@@ -58,7 +92,7 @@ export async function listStudents(req, res) {
        LEFT JOIN student_guardians g ON g.student_id = s.id AND g.school_id = s.school_id AND g.guardian_number = 1
        WHERE s.school_id = ? AND s.status = 'active' AND se.id IS NULL
         AND CONCAT(s.first_name, ' ', s.last_name, ' ', COALESCE(s.student_id, ''), ' ', s.admission_no) LIKE ?
-       ORDER BY s.last_name, s.first_name
+       ORDER BY ${studentCodeSortSql("s")}, s.last_name, s.first_name
        LIMIT 100`,
       [session.academicYearId, session.termId, schoolId, search],
     )
@@ -91,7 +125,7 @@ export async function listStudents(req, res) {
      WHERE se.school_id = ? AND se.academic_year_id = ? AND se.term_id = ?
        AND se.enrollment_status = 'active' AND s.status = ?
        AND CONCAT(s.first_name, ' ', s.last_name, ' ', COALESCE(s.student_id, ''), ' ', s.admission_no, ' ', c.name) LIKE ?${classScope.clause}
-     ORDER BY s.last_name, s.first_name
+     ORDER BY ${studentCodeSortSql("s")}, s.last_name, s.first_name
      LIMIT 100`,
     [schoolId, session.academicYearId, session.termId, studentStatus, search, ...classScope.params],
   )
@@ -127,7 +161,7 @@ export async function getStudent(req, res) {
       fp.fee_category, fp.payment_plan, fp.discount_percent, fp.discount_reason
      FROM students s
      LEFT JOIN student_enrollments se ON se.student_id = s.id AND se.school_id = s.school_id
-      AND se.academic_year_id = ? AND se.term_id = ? AND se.enrollment_status = 'active'
+      AND se.academic_year_id = ? AND se.term_id = ? AND se.enrollment_status <> 'superseded'
      LEFT JOIN terms t ON t.id = se.term_id AND t.school_id = se.school_id
      LEFT JOIN academic_years ay ON ay.id = se.academic_year_id AND ay.school_id = se.school_id
      LEFT JOIN classes c ON c.id = COALESCE(se.class_id, s.class_id) AND c.school_id = s.school_id
@@ -284,6 +318,66 @@ export async function getStudent(req, res) {
      ORDER BY ai.instance_date DESC, subj.name`,
     [schoolId, studentId],
   )
+  const [formalAssessments] = await pool.query(
+    `SELECT re.id, re.result_batch_id, re.score, re.grade, re.comment, re.status, re.last_saved_at,
+      a.id AS assessment_id, a.name AS assessment_name, a.assessment_type, a.total_marks,
+      a.exam_session_id, es.name AS exam_session_name, es.exam_type,
+      ay.name AS academic_year_name, t.name AS term_name, c.name AS class_name,
+      subj.name AS subject_name, subj.code AS subject_code, teacher.full_name AS teacher_name,
+      ett.exam_date, rb.status AS batch_status
+     FROM result_entries re
+     JOIN result_batches rb ON rb.id = re.result_batch_id AND rb.school_id = re.school_id
+     JOIN assessments a ON a.id = rb.assessment_id AND a.school_id = rb.school_id
+     JOIN academic_years ay ON ay.id = rb.academic_year_id AND ay.school_id = rb.school_id
+     JOIN terms t ON t.id = rb.term_id AND t.school_id = rb.school_id
+     JOIN classes c ON c.id = rb.class_id AND c.school_id = rb.school_id
+     JOIN subjects subj ON subj.id = rb.subject_id AND subj.school_id = rb.school_id
+     JOIN users teacher ON teacher.id = rb.teacher_id AND teacher.school_id = rb.school_id
+     LEFT JOIN exam_sessions es ON es.id = rb.exam_session_id AND es.school_id = rb.school_id
+     LEFT JOIN exam_timetable_entries ett ON ett.school_id = rb.school_id
+      AND ett.exam_session_id <=> rb.exam_session_id
+      AND ett.assessment_id = rb.assessment_id
+      AND ett.class_id = rb.class_id
+     WHERE re.school_id = ? AND re.student_id = ?
+     ORDER BY ay.start_date DESC, t.term_number DESC, COALESCE(ett.exam_date, re.last_saved_at, re.updated_at) DESC, subj.name`,
+    [schoolId, studentId],
+  )
+  const assessmentResults = [
+    ...formalAssessments.map((row) => {
+      const score = row.score === null ? null : Number(row.score)
+      const totalMarks = row.total_marks === null ? null : Number(row.total_marks)
+      const percentage = score === null || !totalMarks ? null : Number(((score / totalMarks) * 100).toFixed(1))
+      return {
+        ...row,
+        id: `formal-${row.id}`,
+        source_type: "formal_assessment",
+        source_label: row.exam_session_id ? "Exam / formal paper" : "Class assessment",
+        score,
+        total_marks: totalMarks,
+        percentage,
+        result_date: row.exam_date || row.last_saved_at,
+      }
+    }),
+    ...recurringAssessments.map((row) => {
+      const score = row.score === null ? null : Number(row.score)
+      const totalMarks = row.total_marks === null ? null : Number(row.total_marks)
+      const percentage = score === null || !totalMarks ? null : Number(((score / totalMarks) * 100).toFixed(1))
+      return {
+        ...row,
+        id: `recurring-${row.id}`,
+        source_type: "recurring_assessment",
+        source_label: "Recurring assessment",
+        score,
+        total_marks: totalMarks,
+        percentage,
+        result_date: row.instance_date || row.last_saved_at,
+      }
+    }),
+  ].sort((a, b) => {
+    const aTime = Date.parse(a.result_date || a.last_saved_at || "") || 0
+    const bTime = Date.parse(b.result_date || b.last_saved_at || "") || 0
+    return bTime - aTime || String(a.assessment_name || "").localeCompare(String(b.assessment_name || ""))
+  })
   const [attendance] = await pool.query(
     `SELECT attendance_date, status, note
      FROM attendance_records
@@ -299,7 +393,116 @@ export async function getStudent(req, res) {
      ORDER BY due_date DESC`,
     [schoolId, studentId],
   )
-  res.json({ student: { ...student, guardians, enrollments, results, exam_reports: results, recurring_assessments: recurringAssessments, attendance, fees } })
+  res.json({
+    student: {
+      ...student,
+      guardians,
+      enrollments,
+      results,
+      exam_reports: results,
+      formal_assessment_results: formalAssessments,
+      recurring_assessments: recurringAssessments,
+      assessment_results: assessmentResults,
+      attendance,
+      fees,
+    },
+  })
+}
+
+export async function updateStudent(req, res) {
+  const schoolId = getScopedSchoolId(req)
+  const studentId = Number(req.params.id || 0)
+  if (!studentId) throw new HttpError(400, "Student id is required")
+
+  const connection = await pool.getConnection()
+  try {
+    await connection.beginTransaction()
+    const [[existing]] = await connection.query(
+      "SELECT * FROM students WHERE school_id = ? AND id = ? LIMIT 1 FOR UPDATE",
+      [schoolId, studentId],
+    )
+    if (!existing) throw new HttpError(404, "Student was not found")
+
+    const body = req.body || {}
+    const classIdValue = pickBodyValue(body, "class_id", "classId", existing.class_id)
+    const classId = classIdValue === null || classIdValue === "" || classIdValue === undefined ? null : Number(classIdValue)
+    if (classId !== null && (!Number.isFinite(classId) || classId <= 0)) throw new HttpError(400, "Class is invalid")
+    if (classId !== null) {
+      const [[classRow]] = await connection.query("SELECT id FROM classes WHERE school_id = ? AND id = ? LIMIT 1", [schoolId, classId])
+      if (!classRow) throw new HttpError(400, "Selected class does not belong to this school")
+    }
+
+    const studentType = cleanText(pickBodyValue(body, "student_type", "studentType", existing.student_type || "new"))
+    if (!STUDENT_TYPES.has(studentType)) throw new HttpError(400, "Student type is invalid")
+    const status = cleanText(pickBodyValue(body, "status", "status", existing.status || "active"))
+    if (!STUDENT_STATUSES.has(status)) throw new HttpError(400, "Student status is invalid")
+
+    const nextStudent = {
+      class_id: classId,
+      first_name: cleanRequiredText(pickBodyValue(body, "first_name", "firstName", existing.first_name), "First name"),
+      last_name: cleanRequiredText(pickBodyValue(body, "last_name", "lastName", existing.last_name), "Last name"),
+      date_of_birth: cleanDate(pickBodyValue(body, "date_of_birth", "dateOfBirth", existing.date_of_birth?.toISOString?.().slice(0, 10) || existing.date_of_birth), "Date of birth"),
+      gender: cleanRequiredText(pickBodyValue(body, "gender", "gender", existing.gender), "Gender", 30),
+      national_id: cleanOptionalText(pickBodyValue(body, "national_id", "nationalId", existing.national_id), 80),
+      profile_photo_url: cleanOptionalText(pickBodyValue(body, "profile_photo_url", "profilePhotoUrl", existing.profile_photo_url), 255),
+      stream_section: cleanOptionalText(pickBodyValue(body, "stream_section", "streamSection", existing.stream_section), 80),
+      enrollment_date: cleanOptionalDate(pickBodyValue(body, "enrollment_date", "enrollmentDate", existing.enrollment_date?.toISOString?.().slice(0, 10) || existing.enrollment_date), "Enrollment date"),
+      student_type: studentType,
+      previous_school: cleanOptionalText(pickBodyValue(body, "previous_school", "previousSchool", existing.previous_school), 160),
+      status,
+    }
+
+    await connection.query(
+      `UPDATE students
+       SET class_id = ?, first_name = ?, last_name = ?, date_of_birth = ?, gender = ?,
+        national_id = ?, profile_photo_url = ?, stream_section = ?, enrollment_date = ?,
+        student_type = ?, previous_school = ?, status = ?
+       WHERE school_id = ? AND id = ?`,
+      [
+        nextStudent.class_id,
+        nextStudent.first_name,
+        nextStudent.last_name,
+        nextStudent.date_of_birth,
+        nextStudent.gender,
+        nextStudent.national_id,
+        nextStudent.profile_photo_url,
+        nextStudent.stream_section,
+        nextStudent.enrollment_date,
+        nextStudent.student_type,
+        nextStudent.previous_school,
+        nextStudent.status,
+        schoolId,
+        studentId,
+      ],
+    )
+
+    const session = await getActiveAcademicSession(schoolId, connection)
+    if (!session.setupRequired && nextStudent.class_id) {
+      const enrollmentStatus = nextStudent.status === "archived" ? "superseded" : nextStudent.status
+      await connection.query(
+        `UPDATE student_enrollments
+         SET class_id = ?, stream_section = ?, enrollment_status = ?
+         WHERE school_id = ? AND student_id = ? AND academic_year_id = ? AND term_id = ?`,
+        [
+          nextStudent.class_id,
+          nextStudent.stream_section,
+          enrollmentStatus,
+          schoolId,
+          studentId,
+          session.academicYearId,
+          session.termId,
+        ],
+      )
+    }
+
+    await connection.commit()
+    res.json({ ok: true, student: { id: studentId, ...nextStudent } })
+  } catch (error) {
+    await connection.rollback()
+    throw error
+  } finally {
+    connection.release()
+  }
 }
 
 export async function createStudent(req, res) {

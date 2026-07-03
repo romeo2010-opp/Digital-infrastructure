@@ -1,6 +1,7 @@
 import { pool } from "../config/db.js"
 import { assertTeacherCanUseClass, getScopedSchoolId, getTeacherClassIds, scopedInClause } from "../utils/tenantScope.js"
 import { getActiveAcademicSession, sessionPayload } from "../services/academicSessionService.js"
+import { studentCodeSortSql } from "../utils/studentSort.js"
 
 export async function listAttendance(req, res) {
   const schoolId = getScopedSchoolId(req)
@@ -20,7 +21,7 @@ export async function listAttendance(req, res) {
      LEFT JOIN attendance_records ar ON ar.student_id = s.id AND ar.school_id = s.school_id AND ar.attendance_date = ?
      WHERE se.school_id = ? AND se.academic_year_id = ? AND se.term_id = ?
       AND se.enrollment_status = 'active' AND s.status = 'active'${classScope.clause}
-     ORDER BY c.name, s.last_name, s.first_name`,
+     ORDER BY c.name, ${studentCodeSortSql("s")}, s.last_name, s.first_name`,
     [date, schoolId, session.academicYearId, session.termId, ...classScope.params],
   )
   res.json({ attendance: rows, date, session: sessionPayload(session), setup_required: false })

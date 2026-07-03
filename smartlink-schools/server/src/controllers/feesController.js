@@ -2,6 +2,7 @@ import { pool } from "../config/db.js"
 import { HttpError } from "../utils/http.js"
 import { getScopedSchoolId } from "../utils/tenantScope.js"
 import { getActiveAcademicSession, sessionPayload } from "../services/academicSessionService.js"
+import { studentCodeSortSql } from "../utils/studentSort.js"
 
 export async function listFeeAccounts(req, res) {
   const schoolId = getScopedSchoolId(req)
@@ -18,7 +19,7 @@ export async function listFeeAccounts(req, res) {
       AND se.academic_year_id = ? AND se.term_id = ? AND se.enrollment_status = 'active'
      JOIN classes c ON c.id = se.class_id AND c.school_id = se.school_id
      WHERE f.school_id = ? AND s.status = 'active'
-     ORDER BY balance DESC, s.last_name`,
+     ORDER BY balance DESC, ${studentCodeSortSql("s")}, s.last_name`,
     [session.academicYearId, session.termId, schoolId],
   )
   res.json({ feeAccounts: rows, session: sessionPayload(session), setup_required: false })

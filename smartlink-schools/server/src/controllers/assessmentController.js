@@ -4,6 +4,7 @@ import path from "path"
 import { HttpError } from "../utils/http.js"
 import { buildTopicRecommendation, classifyDifficulty } from "../services/recommendationService.js"
 import { getActiveAcademicSession, sessionPayload } from "../services/academicSessionService.js"
+import { assessmentExportFilename, buildAssessmentPdf, normalizeAssessmentExportVariant } from "../services/assessmentExportService.js"
 import { getScopedSchoolId, getTeacherClassIds, isTeacher, scopedInClause } from "../utils/tenantScope.js"
 
 const ASSESSMENT_TYPES = new Set(["class_test", "quiz", "assignment", "mid_term", "end_of_term_exam", "mock_exam", "final_exam"])
@@ -36,6 +37,29 @@ const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif
 
 function cleanText(value, fallback = "") {
   return String(value ?? fallback).trim()
+}
+
+function safePathPart(value, fallback = "item") {
+  return cleanText(value, fallback)
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/gi, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 100) || fallback
+}
+
+function assessmentMediaFolderName(assessment, assessmentId) {
+  return `${safePathPart(assessment?.name, "assessment")}-${assessmentId}`
+}
+
+function plainTextFromContentParts(parts = []) {
+  if (!Array.isArray(parts)) return ""
+  return parts
+    .map((part) => {
+      if (part?.type === "image") return cleanText(part.caption || part.alt_text || part.altText) ? `[Image: ${cleanText(part.caption || part.alt_text || part.altText)}]` : "[Image]"
+      return cleanText(part?.text)
+    })
+    .filter(Boolean)
+    .join("\n\n")
 }
 
 function idValue(value) {
@@ -167,9 +191,10 @@ function blockQuestionToQuestion(block, index) {
   const content = block.content_json || {}
   const metadata = block.metadata_json || {}
   const questionType = content.question_type || metadata.question_type || "short_answer"
+  const contentParts = Array.isArray(content.content_parts) ? content.content_parts : []
   const question = {
     question_number: content.question_number || index + 1,
-    question_text: content.question_text || content.text || "",
+    question_text: content.question_text || content.text || plainTextFromContentParts(contentParts),
     question_type: questionType,
     marks: content.marks || metadata.marks || "",
     topic_text: metadata.topic_text || content.topic_text || "",
@@ -181,6 +206,7 @@ function blockQuestionToQuestion(block, index) {
     marking_scheme: metadata.marking_scheme || "",
     explanation: metadata.explanation || "",
     options: Array.isArray(content.options) ? content.options : [],
+    content_parts: contentParts,
     sort_order: block.sort_order || index + 1,
   }
   return question
@@ -225,6 +251,7 @@ function buildBlocksFromQuestions(assessment = {}, questions = []) {
       content_json: {
         question_number: index + 1,
         question_text: question.question_text || "",
+        content_parts: Array.isArray(question.content_parts) ? question.content_parts : [],
         question_type: question.question_type || "short_answer",
         marks: question.marks || "",
         question_instructions: question.question_instructions || "",
@@ -465,7 +492,8 @@ async function resolveAssignedTeacher(connection, req, schoolId, classId, subjec
 function normalizeQuestionInput(rawQuestions = [], mode = "draft") {
   if (!Array.isArray(rawQuestions)) return []
   return rawQuestions.map((raw, index) => {
-    const questionText = cleanText(raw.question_text || raw.questionText || raw.text)
+    const contentParts = Array.isArray(raw.content_parts || raw.contentParts) ? (raw.content_parts || raw.contentParts) : []
+    const questionText = cleanText(raw.question_text || raw.questionText || raw.text || plainTextFromContentParts(contentParts))
     const hasAnyValue = questionText
       || cleanText(raw.correct_answer || raw.correctAnswer)
       || cleanText(raw.marking_scheme || raw.markingScheme)
@@ -508,6 +536,7 @@ function normalizeQuestionInput(rawQuestions = [], mode = "draft") {
       correct_answer: cleanText(raw.correct_answer || raw.correctAnswer) || null,
       marking_scheme: cleanText(raw.marking_scheme || raw.markingScheme) || null,
       explanation: cleanText(raw.explanation) || null,
+      content_parts: contentParts,
       sort_order: Number(raw.sort_order || raw.sortOrder || index + 1),
       options,
     }
@@ -804,6 +833,32 @@ export async function getAssessmentBuilderSetup(req, res) {
     examSessionParams,
   )
 
+  let curricula = []
+  let examTracks = []
+  try {
+    const [rows] = await pool.query(
+      "SELECT id, name, country, is_active FROM curricula WHERE school_id = ? AND is_active = 1 ORDER BY name",
+      [schoolId],
+    )
+    curricula = rows
+  } catch {
+    curricula = []
+  }
+  try {
+    const [rows] = await pool.query(
+      `SELECT et.id, et.name, et.track_type, et.grade_id, et.curriculum_id, et.is_active,
+        c.name AS curriculum_name, c.country AS curriculum_country
+       FROM exam_tracks et
+       LEFT JOIN curricula c ON c.id = et.curriculum_id AND c.school_id = et.school_id
+       WHERE et.school_id = ? AND et.is_active = 1
+       ORDER BY c.name, et.name`,
+      [schoolId],
+    )
+    examTracks = rows
+  } catch {
+    examTracks = []
+  }
+
   res.json({
     session: sessionPayload(session),
     setup_required: session.setupRequired,
@@ -826,6 +881,8 @@ export async function getAssessmentBuilderSetup(req, res) {
       is_active: Boolean(row.is_active),
     })),
     exam_sessions: examSessions,
+    curricula,
+    exam_tracks: examTracks,
   })
 }
 
@@ -1083,13 +1140,14 @@ export async function uploadAssessmentMedia(req, res) {
       "image/svg+xml": "svg",
     }
     const extension = extensionMap[fileType] || "img"
-    const safeName = fileName.replace(/[^a-z0-9._-]+/gi, "-").replace(/^-|-$/g, "").slice(0, 80) || "assessment-image"
-    const folder = path.resolve(process.cwd(), "uploads", "assessment-media", String(schoolId), String(assessmentId))
+    const safeName = safePathPart(fileName.replace(/\.[^.]+$/, ""), "assessment-image").slice(0, 80)
+    const assessmentFolder = assessmentMediaFolderName(assessment, assessmentId)
+    const folder = path.resolve(process.cwd(), "uploads", "assessment-media", String(schoolId), assessmentFolder)
     await fs.mkdir(folder, { recursive: true })
-    const storedName = `${Date.now()}-${safeName.replace(/\.[^.]+$/, "")}.${extension}`
+    const storedName = `${Date.now()}-${safeName}.${extension}`
     const storagePath = path.join(folder, storedName)
     await fs.writeFile(storagePath, buffer)
-    const publicPath = `/uploads/assessment-media/${schoolId}/${assessmentId}/${storedName}`
+    const publicPath = `/uploads/assessment-media/${schoolId}/${assessmentFolder}/${storedName}`
 
     const [result] = await connection.query(
       `INSERT INTO assessment_media (
@@ -1111,6 +1169,36 @@ export async function uploadAssessmentMedia(req, res) {
   } finally {
     connection.release()
   }
+}
+
+export async function exportAssessmentPdf(req, res) {
+  const schoolId = getScopedSchoolId(req)
+  const assessmentId = idValue(req.params.id)
+  if (!assessmentId) throw new HttpError(400, "Assessment id is required")
+
+  const assessment = await loadAssessmentBase(pool, schoolId, assessmentId)
+  await assertAssessmentReadable(pool, req, schoolId, assessment)
+  const normalizedAssessment = rowToAssessment(assessment)
+  const [questions, media, [schoolRows]] = await Promise.all([
+    loadQuestions(pool, schoolId, assessmentId),
+    loadMedia(pool, schoolId, assessmentId),
+    pool.query("SELECT name FROM schools WHERE id = ? LIMIT 1", [schoolId]),
+  ])
+  const blocks = await loadBlocks(pool, schoolId, assessmentId, normalizedAssessment, questions)
+  const variant = normalizeAssessmentExportVariant(req.query.variant)
+  const pdf = await buildAssessmentPdf({
+    assessment: normalizedAssessment,
+    questions,
+    blocks,
+    media,
+    schoolName: schoolRows?.[0]?.name || "",
+    variant,
+  })
+  const filename = assessmentExportFilename(normalizedAssessment, variant)
+  res.setHeader("Content-Type", "application/pdf")
+  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`)
+  res.setHeader("Content-Length", String(pdf.length))
+  res.send(pdf)
 }
 
 export async function transitionAssessmentStatus(req, res) {
@@ -1178,6 +1266,79 @@ export async function transitionAssessmentStatus(req, res) {
       media: await loadMedia(pool, schoolId, assessmentId),
       review: buildReviewChecks(normalizedAssessment, nextQuestions),
     })
+  } catch (error) {
+    await connection.rollback()
+    throw error
+  } finally {
+    connection.release()
+  }
+}
+
+export async function deleteAssessment(req, res) {
+  const schoolId = getScopedSchoolId(req)
+  const assessmentId = idValue(req.params.id)
+  if (!assessmentId) throw new HttpError(400, "Assessment id is required")
+
+  const connection = await pool.getConnection()
+  try {
+    await connection.beginTransaction()
+    const assessment = await loadAssessmentBase(connection, schoolId, assessmentId)
+    await assertAssessmentReadable(connection, req, schoolId, assessment)
+
+    if (String(assessment.status || "") !== "draft") {
+      throw new HttpError(409, "Only draft papers can be deleted.")
+    }
+
+    const [[links]] = await connection.query(
+      `SELECT
+        (SELECT COUNT(*) FROM exam_timetable_entries WHERE school_id = ? AND assessment_id = ?) AS timetable_count,
+        (SELECT COUNT(*) FROM result_batches WHERE school_id = ? AND assessment_id = ?) AS result_batch_count,
+        (SELECT COUNT(*) FROM subject_results WHERE school_id = ? AND assessment_id = ?) AS subject_result_count`,
+      [schoolId, assessmentId, schoolId, assessmentId, schoolId, assessmentId],
+    )
+    if (Number(links?.timetable_count || 0) || Number(links?.result_batch_count || 0) || Number(links?.subject_result_count || 0)) {
+      throw new HttpError(409, "This draft is already linked to timetable or result records.")
+    }
+
+    const [mediaRows] = await connection.query(
+      "SELECT storage_path FROM assessment_media WHERE school_id = ? AND assessment_id = ?",
+      [schoolId, assessmentId],
+    )
+
+    await connection.query(
+      `DELETE atm FROM assessment_topic_marks atm
+       JOIN assessment_topics at ON at.id = atm.assessment_topic_id AND at.school_id = atm.school_id
+       WHERE at.school_id = ? AND at.assessment_id = ?`,
+      [schoolId, assessmentId],
+    )
+    await connection.query(
+      `DELETE qo FROM assessment_question_options qo
+       JOIN assessment_questions q ON q.id = qo.question_id AND q.school_id = qo.school_id
+       WHERE q.school_id = ? AND q.assessment_id = ?`,
+      [schoolId, assessmentId],
+    )
+    await connection.query("UPDATE assessment_blocks SET parent_block_id = NULL WHERE school_id = ? AND assessment_id = ?", [schoolId, assessmentId])
+    await connection.query("DELETE FROM assessment_blocks WHERE school_id = ? AND assessment_id = ?", [schoolId, assessmentId])
+    await connection.query("DELETE FROM assessment_media WHERE school_id = ? AND assessment_id = ?", [schoolId, assessmentId])
+    await connection.query("DELETE FROM assessment_questions WHERE school_id = ? AND assessment_id = ?", [schoolId, assessmentId])
+    await connection.query("DELETE FROM assessment_topics WHERE school_id = ? AND assessment_id = ?", [schoolId, assessmentId])
+    await connection.query("DELETE FROM assessments WHERE school_id = ? AND id = ?", [schoolId, assessmentId])
+
+    await connection.commit()
+
+    const uploadFolders = new Set([
+      path.resolve(process.cwd(), "uploads", "assessment-media", String(schoolId), String(assessmentId)),
+      path.resolve(process.cwd(), "uploads", "assessment-media", String(schoolId), assessmentMediaFolderName(assessment, assessmentId)),
+    ])
+    mediaRows.forEach((row) => {
+      if (!row.storage_path) return
+      uploadFolders.add(path.dirname(path.resolve(process.cwd(), String(row.storage_path).replace(/^\/+/, ""))))
+    })
+    ;[...uploadFolders].forEach((folder) => {
+      fs.rm(folder, { recursive: true, force: true }).catch(() => {})
+    })
+
+    res.json({ ok: true, id: assessmentId })
   } catch (error) {
     await connection.rollback()
     throw error

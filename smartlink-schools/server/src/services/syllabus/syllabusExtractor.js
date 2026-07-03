@@ -4,8 +4,13 @@ const MAX_CHUNK_CHARS = 14000
 const CHUNK_OVERLAP_CHARS = 700
 const MAX_AI_CHUNKS = 8
 
+const NON_INSTRUCTIONAL_HEADING_RE = /^(acknowledg(e)?ments?|appreciation|dedication|foreword|preface|copyright|disclaimer|introduction to the document|about this document|how to use this (book|guide|document)|table of contents|contents|contributors?|authors?|editorial team|minister'?s message|director'?s message|publisher'?s note|isbn|references|bibliography|appendix|appendices)$/i
+const NON_INSTRUCTIONAL_LINE_RE = /^(all rights reserved|no part of this publication|printed by|published by|isbn\b|copyright\b|page\s+\d+|^\d+$)/i
+const SYLLABUS_SIGNAL_RE = /\b(strand|substrand|sub-strand|topic|subtopic|unit|module|chapter|term|week|lesson|learning outcome|learning objective|objective|competenc|content standard|performance standard|success criteria|assessment criteria|assessment objective|scheme of work|scope and sequence|teaching points?|suggested activities|skills?|values?|attitudes?|knowledge|exam|paper|weighting|curriculum|syllabus)\b/i
+const MAX_PREPARED_TEXT_CHARS = 180000
+
 const extractionSchemaHint = `Expected JSON shape:
-{"curriculum":"","level":"","grade":"","subject":"","term":"","topics":[{"topic_name":"","description":"","subtopics":[{"subtopic_name":"","learning_objectives":[],"skills":[],"suggested_week":null,"exam_relevance":"low|medium|high","keywords":[],"prerequisites":[],"confidence":0.0}],"confidence":0.0}],"warnings":[]}`
+{"curriculum":"","level":"","grade":"","subject":"","term":"","topics":[{"topic_name":"","description":"","subtopics":[{"subtopic_name":"","learning_objectives":["observable learner success criteria beginning with the correct action verb"],"skills":["define|list|explain|describe|identify|compare|calculate|analyse|evaluate|create|apply"],"suggested_week":null,"exam_relevance":"low|medium|high","keywords":[],"prerequisites":[],"confidence":0.0}],"confidence":0.0}],"warnings":[]}`
 
 const extractionResponseSchema = {
   type: "OBJECT",
@@ -69,8 +74,68 @@ function uniqueStrings(values, limit = 12) {
   return result
 }
 
+function normalizeWhitespace(text) {
+  return String(text || "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\u00a0/g, " ")
+    .replace(/[ \t]+$/gm, "")
+    .trim()
+}
+
+function blockLooksNonInstructional(block) {
+  const lines = block.split(/\n/).map((line) => line.trim()).filter(Boolean)
+  if (!lines.length) return true
+  const first = lines[0].replace(/[:.\-–—]+$/g, "").trim()
+  const joined = lines.join(" ")
+  if (NON_INSTRUCTIONAL_HEADING_RE.test(first) && !SYLLABUS_SIGNAL_RE.test(joined)) return true
+  if (lines.length <= 3 && lines.every((line) => NON_INSTRUCTIONAL_LINE_RE.test(line))) return true
+  const noiseLines = lines.filter((line) => NON_INSTRUCTIONAL_LINE_RE.test(line)).length
+  if (noiseLines >= Math.max(2, Math.ceil(lines.length * 0.7)) && !SYLLABUS_SIGNAL_RE.test(joined)) return true
+  if (/^(contents|table of contents)\b/i.test(first)) return true
+  return false
+}
+
+function stripLikelyHeadersAndFooters(text) {
+  const lineCounts = new Map()
+  const lines = text.split(/\n/)
+  for (const line of lines) {
+    const clean = line.trim()
+    if (!clean || clean.length > 90) continue
+    lineCounts.set(clean.toLowerCase(), (lineCounts.get(clean.toLowerCase()) || 0) + 1)
+  }
+  return lines
+    .filter((line) => {
+      const clean = line.trim()
+      if (!clean) return true
+      if (NON_INSTRUCTIONAL_LINE_RE.test(clean)) return false
+      return (lineCounts.get(clean.toLowerCase()) || 0) < 4
+    })
+    .join("\n")
+}
+
+export function prepareSyllabusTextForExtraction(text) {
+  const normalized = normalizeWhitespace(text)
+  if (!normalized) return { text: "", ignored_blocks: 0, warnings: ["No readable syllabus text was found."] }
+  const withoutRepeatedChrome = stripLikelyHeadersAndFooters(normalized)
+  const blocks = withoutRepeatedChrome.split(/\n{2,}/).map((block) => block.trim()).filter(Boolean)
+  const kept = []
+  let ignoredBlocks = 0
+  for (const block of blocks.length ? blocks : [withoutRepeatedChrome]) {
+    if (blockLooksNonInstructional(block)) {
+      ignoredBlocks += 1
+      continue
+    }
+    kept.push(block)
+  }
+  const prepared = (kept.length ? kept : blocks).join("\n\n").slice(0, MAX_PREPARED_TEXT_CHARS)
+  const warnings = []
+  if (ignoredBlocks) warnings.push(`Ignored ${ignoredBlocks} likely non-instructional document block${ignoredBlocks === 1 ? "" : "s"} before extraction.`)
+  if (prepared.length >= MAX_PREPARED_TEXT_CHARS) warnings.push("The document was shortened to the most relevant readable syllabus text before extraction.")
+  return { text: prepared, ignored_blocks: ignoredBlocks, warnings }
+}
+
 export function chunkSyllabusText(text, maxChars = MAX_CHUNK_CHARS) {
-  const clean = String(text || "").replace(/\r\n/g, "\n").trim()
+  const clean = prepareSyllabusTextForExtraction(text).text
   if (!clean) return []
   const paragraphs = clean.split(/\n{2,}/).map((part) => part.trim()).filter(Boolean)
   const chunks = []
@@ -122,7 +187,7 @@ function fallbackExtraction(text, metadata = {}) {
       subtopics: [{
         subtopic_name: clean.slice(0, 120),
         learning_objectives: [`Review and approve learning objectives for ${clean.slice(0, 80)}.`],
-        skills: ["recall"],
+        skills: ["define"],
         suggested_week: index + 1,
         exam_relevance: "medium",
         keywords: clean.split(/\s+/).filter((part) => part.length > 3).slice(0, 6),
@@ -237,7 +302,15 @@ Chunk: ${chunkIndex + 1} of ${chunkCount}
 
 Rules:
 - Extract only curriculum data supported by this chunk.
+- First reason internally about the document structure, which lines are topics/subtopics, and which lines are true success criteria or learning outcomes. Do not output that reasoning; return JSON only.
+- Adapt to the document type. A full syllabus usually has strands, objectives, topics, standards and assessment guidance. A scheme of work usually has weeks, lessons, activities and resources. An exam outline usually has papers, weighting, objectives and topic coverage.
 - Include topics, subtopics, objectives, skills, teaching weeks, exam relevance, keywords, prerequisites, confidence scores, and warnings.
+- Each learning_objectives item must be an observable success criterion, not a topic heading. Preserve the curriculum meaning, but start with a verb that matches the cognitive demand.
+- Use skills as concise cognitive/action tags chosen from: define, list, explain, describe, identify, compare, calculate, analyse, evaluate, create, apply.
+- Match the tag to the criterion: "define/state/name" => define; "list/enumerate" => list; "explain/justify/interpret" => explain; "describe/outline" => describe; "identify/label/select" => identify; "compare/contrast/differentiate/match" => compare; "calculate/solve/measure" => calculate; "analyse/examine/investigate/collect" => analyse; "evaluate/assess/review/reflect" => evaluate; "plan/design/develop/create/prepare" => create; "use/apply/implement/teach/conduct/demonstrate" => apply.
+- Do not default to define. Use define only when the source criterion is about definitions, meaning, recall, naming, or stating facts.
+- Skip acknowledgements, prefaces, contents pages, copyright statements, contributor lists, general school vision text, page headers, footers, and any administrative text that is not part of the teachable syllabus.
+- Do not treat a table of contents as the final topic map unless the document chunk contains no fuller topic/objective detail.
 - Set low confidence when the source is unclear.
 - Do not invent topics that are not supported by the document.
 - Return JSON only.
@@ -247,8 +320,9 @@ ${chunk}`
 }
 
 export async function extractSyllabusStructure(text, metadata = {}) {
-  const chunks = chunkSyllabusText(text).slice(0, MAX_AI_CHUNKS)
-  const fallback = fallbackExtraction(text, metadata)
+  const prepared = prepareSyllabusTextForExtraction(text)
+  const chunks = chunkSyllabusText(prepared.text).slice(0, MAX_AI_CHUNKS)
+  const fallback = fallbackExtraction(prepared.text || text, metadata)
   if (!chunks.length) {
     return { ok: false, data: normalizeExtractionPayload(fallback), message: "No readable syllabus text was found.", model: null, raw: "" }
   }
@@ -285,6 +359,7 @@ export async function extractSyllabusStructure(text, metadata = {}) {
   const successful = results.filter((result) => result.ok)
   const payloads = (successful.length ? successful : results).map((result) => result.data).filter(Boolean)
   const data = payloads.length ? mergeExtractionPayloads(payloads, metadata) : normalizeExtractionPayload(fallback)
+  data.warnings = uniqueStrings([...(prepared.warnings || []), ...(data.warnings || [])], 20)
   const firstResult = results[0] || {}
   return {
     ok: successful.length > 0,

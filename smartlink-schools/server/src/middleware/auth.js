@@ -30,6 +30,22 @@ export function signSession(user) {
   )
 }
 
+export function verifySessionToken(token) {
+  const payload = jwt.verify(token, process.env.JWT_SECRET || "smartlink-schools-dev-secret")
+  return {
+    id: Number(payload.sub),
+    schoolId: payload.schoolId ? Number(payload.schoolId) : null,
+    role: payload.role,
+    email: payload.email,
+    fullName: payload.fullName,
+    mustChangePassword: Boolean(payload.mustChangePassword),
+    studentId: payload.studentId ? Number(payload.studentId) : null,
+    studentCode: payload.studentCode || null,
+    admissionNo: payload.admissionNo || null,
+    classId: payload.classId ? Number(payload.classId) : null,
+  }
+}
+
 export function requireAuth(req, _res, next) {
   const header = req.headers.authorization || ""
   const token = header.startsWith("Bearer ") ? header.slice(7) : null
@@ -39,19 +55,7 @@ export function requireAuth(req, _res, next) {
   }
 
   try {
-    const payload = jwt.verify(token, process.env.JWT_SECRET || "smartlink-schools-dev-secret")
-    req.user = {
-      id: Number(payload.sub),
-      schoolId: payload.schoolId ? Number(payload.schoolId) : null,
-      role: payload.role,
-      email: payload.email,
-      fullName: payload.fullName,
-      mustChangePassword: Boolean(payload.mustChangePassword),
-      studentId: payload.studentId ? Number(payload.studentId) : null,
-      studentCode: payload.studentCode || null,
-      admissionNo: payload.admissionNo || null,
-      classId: payload.classId ? Number(payload.classId) : null,
-    }
+    req.user = verifySessionToken(token)
     next()
   } catch (_error) {
     throw new HttpError(401, "Invalid or expired session")

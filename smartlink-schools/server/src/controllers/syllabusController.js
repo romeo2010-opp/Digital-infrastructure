@@ -1,11 +1,14 @@
 import fs from "fs/promises"
 import path from "path"
 import { randomUUID } from "crypto"
+import { execFile } from "child_process"
+import { promisify } from "util"
 import { pool } from "../config/db.js"
 import { HttpError } from "../utils/http.js"
 import { getScopedSchoolId } from "../utils/tenantScope.js"
 import { chunkSyllabusText, extractSyllabusStructure } from "../services/syllabus/syllabusExtractor.js"
 
+const execFileAsync = promisify(execFile)
 const MAX_UPLOAD_BYTES = 12 * 1024 * 1024
 const ALLOWED_TYPES = new Set([
   "text/plain",
@@ -47,6 +50,71 @@ const successCriteriaActionLabels = {
   state: "State",
 }
 
+const criterionActionVerbs = {
+  define: ["define", "state", "name", "recall", "recognise", "recognize", "give meaning", "give the meaning"],
+  list: ["list", "enumerate"],
+  explain: ["explain", "justify", "discuss", "interpret", "understand", "tell why", "show why"],
+  describe: ["describe", "outline", "summarise", "summarize", "tell about"],
+  identify: ["identify", "locate", "select", "find", "label", "point out"],
+  compare: ["compare", "contrast", "differentiate", "distinguish", "classify", "sort", "match"],
+  calculate: ["calculate", "solve", "compute", "estimate", "measure", "draw", "graph"],
+  analyse: ["analyse", "analyze", "examine", "investigate", "infer", "collect", "organise", "organize"],
+  evaluate: ["evaluate", "assess", "critique", "judge", "review", "reflect"],
+  create: ["create", "design", "develop", "construct", "produce", "compose", "plan", "prepare", "formulate", "write", "build"],
+  apply: ["apply", "use", "implement", "teach", "conduct", "perform", "demonstrate", "practice", "practise", "carry out", "execute"],
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+}
+
+function criterionTextWithoutLearnerLead(value) {
+  return cleanText(value)
+    .replace(/^(learners?|students?|pupils?|children)\s+(can|will|should|should be able to|are able to|must|need to)\s+/i, "")
+    .replace(/^by the end of (the )?(topic|lesson|unit|module|term|week)[^,.:;]*[,.:;]\s*/i, "")
+    .replace(/^to\s+/i, "")
+    .trim()
+}
+
+function inferCriterionActions(value, limit = 3) {
+  const text = criterionTextWithoutLearnerLead(value).toLowerCase()
+  if (!text) return []
+  const matches = []
+  for (const [action, verbs] of Object.entries(criterionActionVerbs)) {
+    for (const verb of verbs) {
+      const pattern = new RegExp(`\\b${escapeRegExp(verb).replace(/\\ /g, "\\s+")}(?:s|ed|ing)?\\b`, "i")
+      const match = text.match(pattern)
+      if (match?.index !== undefined) {
+        matches.push({ action, index: match.index })
+        break
+      }
+    }
+  }
+  return [...new Map(matches.sort((a, b) => a.index - b.index).map((match) => [match.action, match.action])).values()].slice(0, limit)
+}
+
+function stripCriterionActionLead(value) {
+  const text = criterionTextWithoutLearnerLead(value)
+  if (!text) return ""
+  const verbPattern = Object.values(criterionActionVerbs)
+    .flat()
+    .sort((a, b) => b.length - a.length)
+    .map((verb) => escapeRegExp(verb).replace(/\\ /g, "\\s+"))
+    .join("|")
+  return text
+    .replace(new RegExp(`^(?:${verbPattern})(?:\\s+and\\s+(?:${verbPattern}))?\\s+`, "i"), "")
+    .replace(/^[:;,\-\s]+/, "")
+    .trim() || text
+}
+
+function resolveCriterionActions(text, providedActions = []) {
+  const cleanProvided = normalizeActions(providedActions)
+  const inferred = inferCriterionActions(text)
+  if (!cleanProvided.length) return inferred.length ? inferred : ["define"]
+  if (cleanProvided.length === 1 && cleanProvided[0] === "define" && inferred.length && inferred[0] !== "define") return inferred
+  return cleanProvided
+}
+
 function humanizeAction(value) {
   return cleanText(value)
     .replace(/[_-]+/g, " ")
@@ -77,13 +145,17 @@ function actionLabel(action) {
 function normalizeCriterion(value) {
   if (typeof value === "string") {
     const text = cleanText(value)
-    return text ? { action: "", actions: [], label: "", labels: [], detail: text, text } : null
+    const actions = resolveCriterionActions(text)
+    const labels = actions.map(actionLabel).filter(Boolean)
+    const detail = stripCriterionActionLead(text)
+    return text ? { action: actions[0] || "", actions, label: labels[0] || "", labels, detail: detail || text, text: detail && labels.length ? `${labels[0]} ${detail}` : text } : null
   }
   if (!value || typeof value !== "object") return null
-  const actions = normalizeActions(value.actions || value.tags || value.action || value.verb || value.tag || value.skill_type || value.skillType)
+  const sourceText = cleanText(value.text || value.objective_text || value.objective || value.title || value.detail || value.target || value.value || value.content)
+  const actions = resolveCriterionActions(sourceText, value.actions || value.tags || value.action || value.verb || value.tag || value.skill_type || value.skillType)
   const labels = actions.map(actionLabel).filter(Boolean)
   const fullText = cleanText(value.text || value.objective_text || value.objective || value.title)
-  const detail = cleanText(value.detail || value.target || value.value || value.content)
+  const detail = cleanText(value.detail || value.target || value.value || value.content) || stripCriterionActionLead(fullText || sourceText)
   const text = detail && labels.length ? `${labels.join(", ")} ${detail}` : detail || fullText
   if (!text) return null
   return { action: actions[0] || "", actions, label: labels[0] || "", labels, detail: detail || text, text }
@@ -123,14 +195,14 @@ function parseObjectives(value) {
 }
 
 function parseManualSyllabusPayload(value) {
-  if (value === undefined || value === null || value === "") return { flat_objectives: [], subtopics: [] }
+  if (value === undefined || value === null || value === "") return { flat_objectives: [], subtopics: [], topics: [] }
   if (typeof value === "string") {
     const parsed = parseJson(value, null)
     if (parsed !== null) return parseManualSyllabusPayload(parsed)
-    return { flat_objectives: parseObjectives(value), subtopics: [] }
+    return { flat_objectives: parseObjectives(value), subtopics: [], topics: [] }
   }
-  if (Array.isArray(value)) return { flat_objectives: parseObjectives(value), subtopics: [] }
-  if (typeof value !== "object") return { flat_objectives: [], subtopics: [] }
+  if (Array.isArray(value)) return { flat_objectives: parseObjectives(value), subtopics: [], topics: [] }
+  if (typeof value !== "object") return { flat_objectives: [], subtopics: [], topics: [] }
 
   const flatSource = value.flat_objectives ?? value.flatObjectives ?? value.objectives ?? value.learning_objectives ?? value.learningObjectives ?? []
   const flatObjectives = [
@@ -138,29 +210,49 @@ function parseManualSyllabusPayload(value) {
     ...parseObjectives(value.criteria || value.success_criteria || value.successCriteria || []),
   ].slice(0, 30)
 
-  const subtopicSource = value.subtopics || value.sections || []
-  const subtopics = Array.isArray(subtopicSource)
-    ? subtopicSource
-      .map((subtopic) => {
-        const title = cleanText(subtopic?.title || subtopic?.subtopic_name || subtopic?.name)
-        const criteriaSource = subtopic?.criteria || subtopic?.success_criteria || subtopic?.successCriteria || subtopic?.objectives || subtopic?.learning_objectives || subtopic?.learningObjectives || []
+  const normalizeSubtopic = (subtopic) => {
+    const title = cleanText(subtopic?.title || subtopic?.subtopic_name || subtopic?.name)
+    const criteriaSource = subtopic?.criteria || subtopic?.success_criteria || subtopic?.successCriteria || subtopic?.objectives || subtopic?.learning_objectives || subtopic?.learningObjectives || []
+    const criteria = (Array.isArray(criteriaSource) ? criteriaSource : [criteriaSource])
+      .map(normalizeCriterion)
+      .filter(Boolean)
+      .slice(0, 30)
+    const notes = cleanText(subtopic?.notes || subtopic?.description) || null
+    if (!title && !notes && !criteria.length) return null
+    return { title, notes, criteria }
+  }
+
+  const topicSource = value.topics || value.units || []
+  const topics = Array.isArray(topicSource)
+    ? topicSource
+      .map((topic) => {
+        const title = cleanText(topic?.title || topic?.topic_name || topic?.name)
+        const notes = cleanText(topic?.notes || topic?.description) || null
+        const subtopics = (Array.isArray(topic?.subtopics) ? topic.subtopics : [])
+          .map(normalizeSubtopic)
+          .filter(Boolean)
+          .slice(0, 40)
+        const criteriaSource = topic?.criteria || topic?.success_criteria || topic?.successCriteria || []
         const criteria = (Array.isArray(criteriaSource) ? criteriaSource : [criteriaSource])
           .map(normalizeCriterion)
           .filter(Boolean)
           .slice(0, 30)
-        const notes = cleanText(subtopic?.notes || subtopic?.description) || null
-        if (!title && !notes && !criteria.length) return null
-        return {
-          title,
-          notes,
-          criteria,
-        }
+        if (!title && !notes && !subtopics.length && !criteria.length) return null
+        return { title, notes, criteria, subtopics }
       })
+      .filter(Boolean)
+      .slice(0, 30)
+    : []
+
+  const subtopicSource = value.subtopics || value.sections || []
+  const subtopics = Array.isArray(subtopicSource)
+    ? subtopicSource
+      .map(normalizeSubtopic)
       .filter(Boolean)
       .slice(0, 40)
     : []
 
-  return { flat_objectives: flatObjectives, subtopics }
+  return { flat_objectives: flatObjectives, subtopics, topics }
 }
 
 function manualSyllabusPayloadFromBody(body, fallback) {
@@ -178,12 +270,22 @@ function manualEntryStatusFromBody(body, fallback = "pending_review") {
 
 function normalizeManualEntry(row) {
   const syllabusMap = parseManualSyllabusPayload(row.objectives_json)
+  const topicCriteria = syllabusMap.topics.reduce((total, topic) => (
+    total
+      + topic.criteria.length
+      + topic.subtopics.reduce((inner, subtopic) => inner + subtopic.criteria.length, 0)
+  ), 0)
+  const topicTags = syllabusMap.topics.reduce((total, topic) => (
+    total
+      + topic.criteria.reduce((inner, criterion) => inner + Math.max(criterion.actions?.length || 0, 1), 0)
+      + topic.subtopics.reduce((inner, subtopic) => inner + subtopic.criteria.reduce((criteriaTotal, criterion) => criteriaTotal + Math.max(criterion.actions?.length || 0, 1), 0), 0)
+  ), 0)
   return {
     ...row,
     objectives_json: syllabusMap.flat_objectives,
     syllabus_map: syllabusMap,
-    success_criteria_count: syllabusMap.subtopics.reduce((total, subtopic) => total + subtopic.criteria.length, 0),
-    success_criteria_tag_count: syllabusMap.subtopics.reduce((total, subtopic) => total + subtopic.criteria.reduce((criteriaTotal, criterion) => criteriaTotal + Math.max(criterion.actions?.length || 0, 1), 0), 0),
+    success_criteria_count: topicCriteria + syllabusMap.subtopics.reduce((total, subtopic) => total + subtopic.criteria.length, 0),
+    success_criteria_tag_count: topicTags + syllabusMap.subtopics.reduce((total, subtopic) => total + subtopic.criteria.reduce((criteriaTotal, criterion) => criteriaTotal + Math.max(criterion.actions?.length || 0, 1), 0), 0),
   }
 }
 
@@ -193,6 +295,25 @@ function safeFilename(fileName) {
 
 function canReviewManualSyllabus(req) {
   return ["super_admin", "school_owner", "headteacher"].includes(String(req.user?.role || ""))
+}
+
+function resolveStoredUploadPath(value) {
+  const relativePath = cleanText(value).replace(/^\/+/, "")
+  if (!relativePath) return null
+  const uploadRoot = path.resolve(process.cwd(), "uploads")
+  const candidate = path.resolve(process.cwd(), relativePath)
+  if (candidate !== uploadRoot && !candidate.startsWith(`${uploadRoot}${path.sep}`)) return null
+  return candidate
+}
+
+async function removeStoredUploadFile(value) {
+  const filePath = resolveStoredUploadPath(value)
+  if (!filePath) return
+  try {
+    await fs.unlink(filePath)
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error
+  }
 }
 
 async function resolveManualReferences(connection, schoolId, body, current = {}) {
@@ -242,8 +363,48 @@ function decodeUploadPayload(body) {
   throw new HttpError(400, "Provide a data_url or text_content for the syllabus upload")
 }
 
-function extractText(buffer, mimeType) {
+function xmlTextToPlainText(value) {
+  return String(value || "")
+    .replace(/<w:tab\/>/g, "\t")
+    .replace(/<w:br\/>/g, "\n")
+    .replace(/<\/w:p>/g, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, "\"")
+    .replace(/&#39;/g, "'")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim()
+}
+
+async function commandText(command, args, options = {}) {
+  try {
+    const { stdout } = await execFileAsync(command, args, { timeout: 18000, maxBuffer: 4 * 1024 * 1024, ...options })
+    return String(stdout || "").trim()
+  } catch {
+    return ""
+  }
+}
+
+async function extractText(buffer, mimeType, filePath = "") {
   if (mimeType === "text/plain" || mimeType === "text/csv") return buffer.toString("utf8")
+  if (mimeType === "application/pdf" && filePath) {
+    const text = await commandText("pdftotext", ["-layout", "-enc", "UTF-8", filePath, "-"])
+    if (text.split(/\s+/).filter((word) => /[A-Za-z]{3}/.test(word)).length > 20) return text.slice(0, 220000)
+  }
+  if (mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" && filePath) {
+    const xml = await commandText("unzip", ["-p", filePath, "word/document.xml"])
+    const text = xmlTextToPlainText(xml)
+    if (text.split(/\s+/).filter((word) => /[A-Za-z]{3}/.test(word)).length > 20) return text.slice(0, 220000)
+  }
+  if (mimeType === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" && filePath) {
+    const shared = xmlTextToPlainText(await commandText("unzip", ["-p", filePath, "xl/sharedStrings.xml"]))
+    const sheet = xmlTextToPlainText(await commandText("unzip", ["-p", filePath, "xl/worksheets/sheet1.xml"]))
+    const text = [shared, sheet].filter(Boolean).join("\n\n")
+    if (text.split(/\s+/).filter((word) => /[A-Za-z]{3}/.test(word)).length > 20) return text.slice(0, 220000)
+  }
   const roughText = buffer.toString("utf8").replace(/[^\x09\x0A\x0D\x20-\x7E]+/g, " ")
   const readable = roughText.split(/\s+/).filter((word) => /[A-Za-z]{3}/.test(word)).join(" ")
   return readable.length > 200 ? readable.slice(0, 100000) : ""
@@ -332,8 +493,9 @@ async function processUploadRecord(connection, schoolId, uploadId) {
   const [[upload]] = await connection.query("SELECT * FROM syllabus_uploads WHERE id = ? AND school_id = ? LIMIT 1", [uploadId, schoolId])
   if (!upload) throw new HttpError(404, "Syllabus upload was not found")
   await connection.query("UPDATE syllabus_uploads SET processing_status = 'extracting', error_message = NULL WHERE id = ? AND school_id = ?", [uploadId, schoolId])
-  const buffer = await fs.readFile(path.resolve(process.cwd(), upload.file_path.replace(/^\/+/, "")))
-  const text = extractText(buffer, upload.mime_type)
+  const uploadPath = path.resolve(process.cwd(), upload.file_path.replace(/^\/+/, ""))
+  const buffer = await fs.readFile(uploadPath)
+  const text = await extractText(buffer, upload.mime_type, uploadPath)
   const textFolder = path.resolve(process.cwd(), "uploads", "syllabus-text", String(schoolId))
   await fs.mkdir(textFolder, { recursive: true })
   const textName = `${upload.id}-${path.basename(upload.stored_filename, path.extname(upload.stored_filename))}.txt`
@@ -461,6 +623,39 @@ export async function listSyllabusUploads(req, res) {
   res.json({ uploads: uploads.map((row) => ({ ...row, extraction_summary_json: parseJson(row.extraction_summary_json, null) })) })
 }
 
+export async function deleteSyllabusUpload(req, res) {
+  const schoolId = getScopedSchoolId(req)
+  const uploadId = Number(req.params.id || 0)
+  const [[upload]] = await pool.query("SELECT id, uploaded_by, processing_status, file_path, extracted_text_path FROM syllabus_uploads WHERE school_id = ? AND id = ? LIMIT 1", [schoolId, uploadId])
+  if (!upload) throw new HttpError(404, "Uploaded material was not found")
+  const leadership = canReviewManualSyllabus(req)
+  const ownsUpload = Number(upload.uploaded_by) === Number(req.user?.id)
+  if (!leadership && !ownsUpload) throw new HttpError(403, "You can only delete your own uploaded material")
+  if (!leadership && upload.processing_status === "approved") throw new HttpError(403, "Only school leadership can delete approved uploaded material")
+
+  const connection = await pool.getConnection()
+  try {
+    await connection.beginTransaction()
+    await connection.query("UPDATE syllabus_topics SET source_upload_id = NULL WHERE school_id = ? AND source_upload_id = ?", [schoolId, uploadId])
+    await connection.query("DELETE FROM syllabus_document_chunks WHERE school_id = ? AND upload_id = ?", [schoolId, uploadId])
+    await connection.query("UPDATE syllabus_extracted_items SET parent_extracted_item_id = NULL WHERE school_id = ? AND upload_id = ?", [schoolId, uploadId])
+    await connection.query("DELETE FROM syllabus_extracted_items WHERE school_id = ? AND upload_id = ?", [schoolId, uploadId])
+    await connection.query("DELETE FROM syllabus_uploads WHERE school_id = ? AND id = ?", [schoolId, uploadId])
+    await connection.commit()
+  } catch (error) {
+    await connection.rollback()
+    throw error
+  } finally {
+    connection.release()
+  }
+
+  await Promise.all([
+    removeStoredUploadFile(upload.file_path),
+    removeStoredUploadFile(upload.extracted_text_path),
+  ])
+  res.json({ ok: true })
+}
+
 export async function processSyllabusUpload(req, res) {
   const schoolId = getScopedSchoolId(req)
   const uploadId = Number(req.params.id || 0)
@@ -570,55 +765,294 @@ async function createTopicFromItem(connection, schoolId, item, upload, parentTop
   return Number(existing?.id || 0)
 }
 
+function criterionFromExtractedItem(item) {
+  const raw = parseJson(item?.raw_json, null)
+  const title = cleanText(raw?.text || raw?.objective_text || raw?.objective || item?.title)
+  if (!title) return null
+  if (item.item_type === "skill") {
+    const wordCount = title.split(/\s+/).filter(Boolean).length
+    if (wordCount <= 3 || Object.keys(criterionActionVerbs).includes(normalizeAction(title))) return null
+  }
+  const actions = resolveCriterionActions(title, raw?.actions || raw?.tags || raw?.skill_tags)
+  const detail = stripCriterionActionLead(title)
+  const labels = actions.map(actionLabel).filter(Boolean)
+  return {
+    actions,
+    detail: detail || title,
+    text: detail && labels.length ? `${labels[0]} ${detail}` : title,
+  }
+}
+
+function valueLabelForDocument(value) {
+  return cleanText(value)
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase())
+}
+
+function syllabusMapHasContent(map) {
+  return Boolean(
+    map?.topics?.length
+    || map?.subtopics?.length
+    || map?.flat_objectives?.length,
+  )
+}
+
+async function buildApprovedExtractionSyllabusMap(connection, schoolId, uploadId) {
+  const [items] = await connection.query(
+    `SELECT *
+     FROM syllabus_extracted_items
+     WHERE school_id = ? AND upload_id = ? AND status = 'approved'
+     ORDER BY COALESCE(parent_extracted_item_id, id),
+       FIELD(item_type, 'topic', 'subtopic', 'objective', 'skill', 'assessment_note'), id`,
+    [schoolId, uploadId],
+  )
+  const byParent = new Map()
+  for (const item of items) {
+    const parentId = item.parent_extracted_item_id ? Number(item.parent_extracted_item_id) : 0
+    if (!byParent.has(parentId)) byParent.set(parentId, [])
+    byParent.get(parentId).push(item)
+  }
+
+  const criteriaForParent = (parentId) => (byParent.get(Number(parentId)) || [])
+    .filter((child) => child.item_type === "objective" || child.item_type === "skill")
+    .map(criterionFromExtractedItem)
+    .filter(Boolean)
+
+  const topics = []
+  const topicById = new Map()
+  for (const item of items.filter((row) => row.item_type === "topic")) {
+    const topic = {
+      title: item.title,
+      notes: cleanText(item.description) || "",
+      criteria: criteriaForParent(item.id),
+      subtopics: [],
+    }
+    topics.push(topic)
+    topicById.set(Number(item.id), topic)
+  }
+
+  const subtopics = []
+  for (const item of items.filter((row) => row.item_type === "subtopic")) {
+    const subtopic = {
+      title: item.title,
+      notes: cleanText(item.description) || "",
+      criteria: criteriaForParent(item.id),
+    }
+    const parentTopic = item.parent_extracted_item_id ? topicById.get(Number(item.parent_extracted_item_id)) : null
+    if (parentTopic) parentTopic.subtopics.push(subtopic)
+    else subtopics.push(subtopic)
+  }
+
+  const nestedChildIds = new Set(items.filter((row) => row.parent_extracted_item_id).map((row) => Number(row.id)))
+  const flatObjectives = items
+    .filter((row) => (row.item_type === "objective" || row.item_type === "skill") && !nestedChildIds.has(Number(row.id)) && !row.parent_extracted_item_id)
+    .map((row) => row.item_type === "skill" ? `Apply ${row.title}` : row.title)
+    .filter(Boolean)
+
+  return { flat_objectives: flatObjectives, subtopics, topics }
+}
+
+async function syncApprovedUploadSyllabusDocument(connection, schoolId, uploadId, reviewedBy) {
+  const [[upload]] = await connection.query(
+    `SELECT su.*, subj.name AS subject_name, gl.name AS grade_name
+     FROM syllabus_uploads su
+     LEFT JOIN subjects subj ON subj.id = su.subject_id AND subj.school_id = su.school_id
+     LEFT JOIN grade_levels gl ON gl.id = su.grade_id AND gl.school_id = su.school_id
+     WHERE su.school_id = ? AND su.id = ?
+     LIMIT 1`,
+    [schoolId, uploadId],
+  )
+  if (!upload?.subject_id) return null
+  const syllabusMap = await buildApprovedExtractionSyllabusMap(connection, schoolId, uploadId)
+  if (!syllabusMapHasContent(syllabusMap)) return null
+
+  const title = [upload.grade_name, upload.subject_name].filter(Boolean).join(" ")
+    || cleanText(path.basename(upload.original_filename || "", path.extname(upload.original_filename || "")))
+    || "Syllabus document"
+  const description = [
+    `Generated from approved ${valueLabelForDocument(upload.material_type || "syllabus")} extraction.`,
+    upload.original_filename ? `Source: ${upload.original_filename}` : "",
+  ].filter(Boolean).join(" ")
+  const [[existing]] = await connection.query(
+    `SELECT id
+     FROM manual_syllabus_entries
+     WHERE school_id = ? AND grade_id <=> ? AND subject_id = ? AND status <> 'rejected'
+     ORDER BY FIELD(status, 'approved', 'pending_review', 'revision_requested', 'draft'), updated_at DESC, id DESC
+     LIMIT 1`,
+    [schoolId, upload.grade_id || null, upload.subject_id],
+  )
+  if (existing) {
+    await connection.query(
+      `UPDATE manual_syllabus_entries
+       SET curriculum_id = ?, grade_id = ?, subject_id = ?, topic_name = ?, description = ?,
+         objectives_json = ?, status = 'approved', reviewed_by = ?, reviewed_at = CURRENT_TIMESTAMP,
+         review_notes = ?
+       WHERE school_id = ? AND id = ?`,
+      [
+        upload.curriculum_id || null,
+        upload.grade_id || null,
+        upload.subject_id,
+        title,
+        description,
+        JSON.stringify(syllabusMap),
+        reviewedBy || upload.uploaded_by,
+        "Built from approved syllabus extraction items.",
+        schoolId,
+        existing.id,
+      ],
+    )
+    return { entry_id: Number(existing.id), reused: true }
+  }
+
+  const [result] = await connection.query(
+    `INSERT INTO manual_syllabus_entries (
+      school_id, submitted_by, reviewed_by, curriculum_id, grade_id, subject_id, term, suggested_week,
+      topic_name, description, objectives_json, status, review_notes, reviewed_at
+    ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, 'approved', ?, CURRENT_TIMESTAMP)`,
+    [
+      schoolId,
+      upload.uploaded_by || reviewedBy,
+      reviewedBy || upload.uploaded_by,
+      upload.curriculum_id || null,
+      upload.grade_id || null,
+      upload.subject_id,
+      title,
+      description,
+      JSON.stringify(syllabusMap),
+      "Built from approved syllabus extraction items.",
+    ],
+  )
+  return { entry_id: Number(result.insertId), reused: false }
+}
+
+async function syncSyllabusUploadReviewState(connection, schoolId, uploadId) {
+  const [[counts]] = await connection.query(
+    `SELECT
+      SUM(CASE WHEN status = 'pending_review' THEN 1 ELSE 0 END) AS pending_items,
+      SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) AS approved_items
+     FROM syllabus_extracted_items
+     WHERE school_id = ? AND upload_id = ?`,
+    [schoolId, uploadId],
+  )
+  const pendingItems = Number(counts?.pending_items || 0)
+  const approvedItems = Number(counts?.approved_items || 0)
+  const nextStatus = pendingItems === 0 && approvedItems > 0 ? "approved" : "pending_review"
+  await connection.query(
+    "UPDATE syllabus_uploads SET processing_status = ? WHERE school_id = ? AND id = ? AND processing_status <> 'failed'",
+    [nextStatus, schoolId, uploadId],
+  )
+  return { pending_items: pendingItems, approved_items: approvedItems, processing_status: nextStatus }
+}
+
+async function approveExtractedItemInTransaction(connection, schoolId, itemId, approvedBy) {
+  const [[item]] = await connection.query("SELECT * FROM syllabus_extracted_items WHERE school_id = ? AND id = ? LIMIT 1 FOR UPDATE", [schoolId, itemId])
+  if (!item) throw new HttpError(404, "Extracted item was not found")
+  const [[upload]] = await connection.query("SELECT * FROM syllabus_uploads WHERE school_id = ? AND id = ? LIMIT 1", [schoolId, item.upload_id])
+  if (!upload?.subject_id) throw new HttpError(400, "Upload must be linked to a subject before approval")
+  if (!["topic", "subtopic"].includes(item.item_type)) {
+    await connection.query(
+      "UPDATE syllabus_extracted_items SET status = 'approved', approved_by = ?, approved_at = CURRENT_TIMESTAMP WHERE school_id = ? AND id = ?",
+      [approvedBy, schoolId, itemId],
+    )
+    if (item.item_type === "objective" && item.parent_extracted_item_id) {
+      const [[parent]] = await connection.query(
+        "SELECT merged_into_topic_id FROM syllabus_extracted_items WHERE school_id = ? AND id = ? LIMIT 1",
+        [schoolId, item.parent_extracted_item_id],
+      )
+      if (parent?.merged_into_topic_id) {
+        await insertLearningObjective(connection, Number(parent.merged_into_topic_id), item.title, null)
+      }
+    }
+    return { item_id: itemId, upload_id: Number(item.upload_id), item_type: item.item_type }
+  }
+
+  let parentTopicId = null
+  if (item.parent_extracted_item_id) {
+    const [[parent]] = await connection.query(
+      "SELECT merged_into_topic_id FROM syllabus_extracted_items WHERE school_id = ? AND id = ? LIMIT 1",
+      [schoolId, item.parent_extracted_item_id],
+    )
+    parentTopicId = parent?.merged_into_topic_id || null
+  }
+  item.approved_by = approvedBy
+  const topicId = await createTopicFromItem(connection, schoolId, item, upload, parentTopicId)
+  await connection.query(
+    `UPDATE syllabus_extracted_items
+     SET status = 'approved', approved_by = ?, approved_at = CURRENT_TIMESTAMP, merged_into_topic_id = ?
+     WHERE school_id = ? AND id = ?`,
+    [approvedBy, topicId, schoolId, itemId],
+  )
+  const [objectives] = await connection.query(
+    "SELECT * FROM syllabus_extracted_items WHERE school_id = ? AND parent_extracted_item_id = ? AND item_type = 'objective'",
+    [schoolId, itemId],
+  )
+  for (const objective of objectives) {
+    await connection.query(
+      `INSERT INTO learning_objectives (topic_id, objective_text, exam_relevance)
+       VALUES (?, ?, ?)
+       ON DUPLICATE KEY UPDATE objective_text = objective_text`,
+      [topicId, objective.title, objective.exam_relevance || null],
+    )
+  }
+  return { item_id: itemId, upload_id: Number(item.upload_id), item_type: item.item_type, topic_id: topicId }
+}
+
 export async function approveExtractedItem(req, res) {
   const schoolId = getScopedSchoolId(req)
   const itemId = Number(req.params.id || 0)
   const connection = await pool.getConnection()
   try {
     await connection.beginTransaction()
-    const [[item]] = await connection.query("SELECT * FROM syllabus_extracted_items WHERE school_id = ? AND id = ? LIMIT 1 FOR UPDATE", [schoolId, itemId])
-    if (!item) throw new HttpError(404, "Extracted item was not found")
-    const [[upload]] = await connection.query("SELECT * FROM syllabus_uploads WHERE school_id = ? AND id = ? LIMIT 1", [schoolId, item.upload_id])
-    if (!upload?.subject_id) throw new HttpError(400, "Upload must be linked to a subject before approval")
-    if (!["topic", "subtopic"].includes(item.item_type)) {
-      await connection.query(
-        "UPDATE syllabus_extracted_items SET status = 'approved', approved_by = ?, approved_at = CURRENT_TIMESTAMP WHERE school_id = ? AND id = ?",
-        [req.user.id, schoolId, itemId],
-      )
-      await connection.commit()
-      return res.json({ ok: true, item_id: itemId })
-    }
+    const approved = await approveExtractedItemInTransaction(connection, schoolId, itemId, req.user.id)
+    const state = await syncSyllabusUploadReviewState(connection, schoolId, approved.upload_id)
+    const document = await syncApprovedUploadSyllabusDocument(connection, schoolId, approved.upload_id, req.user.id)
+    await connection.commit()
+    res.json({ ok: true, ...approved, ...state, document_entry_id: document?.entry_id || null })
+  } catch (error) {
+    await connection.rollback()
+    throw error
+  } finally {
+    connection.release()
+  }
+}
 
-    let parentTopicId = null
-    if (item.parent_extracted_item_id) {
-      const [[parent]] = await connection.query(
-        "SELECT merged_into_topic_id FROM syllabus_extracted_items WHERE school_id = ? AND id = ? LIMIT 1",
-        [schoolId, item.parent_extracted_item_id],
-      )
-      parentTopicId = parent?.merged_into_topic_id || null
+export async function approveExtractedItems(req, res) {
+  const schoolId = getScopedSchoolId(req)
+  const rawIds = Array.isArray(req.body.item_ids) ? req.body.item_ids : Array.isArray(req.body.itemIds) ? req.body.itemIds : []
+  const itemIds = [...new Set(rawIds.map((id) => Number(id || 0)).filter(Boolean))].slice(0, 500)
+  if (!itemIds.length) throw new HttpError(400, "Select at least one extracted item to approve")
+  const connection = await pool.getConnection()
+  try {
+    await connection.beginTransaction()
+    const [orderedItems] = await connection.query(
+      `SELECT id
+       FROM syllabus_extracted_items
+       WHERE school_id = ? AND id IN (?)
+       ORDER BY upload_id, COALESCE(parent_extracted_item_id, id),
+         FIELD(item_type, 'topic', 'subtopic', 'objective', 'skill', 'assessment_note'), id`,
+      [schoolId, itemIds],
+    )
+    if (!orderedItems.length) throw new HttpError(404, "Selected extracted items were not found")
+    const uploadsToSync = new Set()
+    const approvedItems = []
+    for (const row of orderedItems) {
+      const approved = await approveExtractedItemInTransaction(connection, schoolId, Number(row.id), req.user.id)
+      uploadsToSync.add(Number(approved.upload_id))
+      approvedItems.push(approved)
     }
-    item.approved_by = req.user.id
-    const topicId = await createTopicFromItem(connection, schoolId, item, upload, parentTopicId)
-    await connection.query(
-      `UPDATE syllabus_extracted_items
-       SET status = 'approved', approved_by = ?, approved_at = CURRENT_TIMESTAMP, merged_into_topic_id = ?
-       WHERE school_id = ? AND id = ?`,
-      [req.user.id, topicId, schoolId, itemId],
-    )
-    const [objectives] = await connection.query(
-      "SELECT * FROM syllabus_extracted_items WHERE school_id = ? AND parent_extracted_item_id = ? AND item_type = 'objective'",
-      [schoolId, itemId],
-    )
-    for (const objective of objectives) {
-      await connection.query(
-        `INSERT INTO learning_objectives (topic_id, objective_text, exam_relevance)
-         VALUES (?, ?, ?)
-         ON DUPLICATE KEY UPDATE objective_text = objective_text`,
-        [topicId, objective.title, objective.exam_relevance || null],
-      )
+    const documentIds = []
+    for (const uploadId of uploadsToSync) {
+      await syncSyllabusUploadReviewState(connection, schoolId, uploadId)
+      const document = await syncApprovedUploadSyllabusDocument(connection, schoolId, uploadId, req.user.id)
+      if (document?.entry_id) documentIds.push(document.entry_id)
     }
     await connection.commit()
-    res.json({ ok: true, topic_id: topicId })
+    res.json({
+      ok: true,
+      approved_items: approvedItems.length,
+      item_ids: approvedItems.map((item) => item.item_id),
+      document_entry_ids: [...new Set(documentIds)],
+    })
   } catch (error) {
     await connection.rollback()
     throw error
@@ -884,6 +1318,32 @@ export async function approveManualSyllabusEntry(req, res) {
     for (const objective of syllabusPayload.flat_objectives) {
       await insertLearningObjective(connection, topicId, objective)
     }
+    for (const topic of syllabusPayload.topics || []) {
+      if (!cleanText(topic.title)) continue
+      const childTopicId = await createTopicFromManualEntry(connection, schoolId, entry, req.user.id, {
+        parentTopicId: topicId,
+        topicName: topic.title,
+        description: topic.notes,
+      })
+      for (const criterion of topic.criteria || []) {
+        for (const objective of objectiveTextsForCriterion(criterion)) {
+          await insertLearningObjective(connection, childTopicId, objective.text, objective.skillType)
+        }
+      }
+      for (const subtopic of topic.subtopics || []) {
+        if (!cleanText(subtopic.title)) continue
+        const subtopicId = await createTopicFromManualEntry(connection, schoolId, entry, req.user.id, {
+          parentTopicId: childTopicId,
+          topicName: subtopic.title,
+          description: subtopic.notes,
+        })
+        for (const criterion of subtopic.criteria || []) {
+          for (const objective of objectiveTextsForCriterion(criterion)) {
+            await insertLearningObjective(connection, subtopicId, objective.text, objective.skillType)
+          }
+        }
+      }
+    }
     for (const subtopic of syllabusPayload.subtopics) {
       if (!cleanText(subtopic.title)) continue
       const subtopicId = await createTopicFromManualEntry(connection, schoolId, entry, req.user.id, {
@@ -926,6 +1386,19 @@ export async function rejectManualSyllabusEntry(req, res) {
     [status, req.user.id, cleanText(req.body.review_notes || req.body.reviewNotes) || null, schoolId, entryId],
   )
   if (!result.affectedRows) throw new HttpError(404, "Manual syllabus entry was not found or is already approved")
+  res.json({ ok: true })
+}
+
+export async function deleteManualSyllabusEntry(req, res) {
+  const schoolId = getScopedSchoolId(req)
+  const entryId = Number(req.params.id || 0)
+  const [[entry]] = await pool.query("SELECT id, submitted_by, status FROM manual_syllabus_entries WHERE school_id = ? AND id = ? LIMIT 1", [schoolId, entryId])
+  if (!entry) throw new HttpError(404, "Syllabus document was not found")
+  const leadership = canReviewManualSyllabus(req)
+  const ownsEntry = Number(entry.submitted_by) === Number(req.user?.id)
+  if (!leadership && !ownsEntry) throw new HttpError(403, "You can only delete your own syllabus documents")
+  if (!leadership && entry.status === "approved") throw new HttpError(403, "Only school leadership can delete approved syllabus documents")
+  await pool.query("DELETE FROM manual_syllabus_entries WHERE school_id = ? AND id = ?", [schoolId, entryId])
   res.json({ ok: true })
 }
 

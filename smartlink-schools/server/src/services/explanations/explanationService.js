@@ -40,7 +40,7 @@ export async function adaptExplanation({ question, studentAnswer, mode = "simple
     tone: normalizedMode,
     warnings: ["AI assistance was unavailable; showing the approved explanation."],
   }
-  const prompt = `You are helping a student understand an already-approved answer. Do not change the correct answer. Use only the approved answer and approved explanation as the source of truth. Keep it short, clear, and non-shaming.
+  const prompt = `You are helping a student understand an already-approved answer. Do not change the correct meaning. Use the internal answer guide and approved explanation as the source of truth, but do not reveal the marking scheme. Keep it short, clear, and non-shaming.
 
 Requested help: ${modeLabels[normalizedMode]}
 Student grade/form: ${question.grade_name || ""}
@@ -48,9 +48,15 @@ Grade-aware tone guide: ${toneGuide}
 Topic: ${question.topic_name || ""}
 Student mastery level: ${masteryLabel}
 Approved question: ${question.question_text}
-Approved correct answer: ${question.correct_answer}
+Internal answer guide: ${question.correct_answer}
 Approved explanation: ${approved}
 Student wrong answer, if any: ${studentAnswer || ""}
+
+Rules:
+- Never say "award marks", "rubric", or "marking scheme".
+- Do not list the teacher's marking guide.
+- If the learner was partly right, say what idea was right and what detail was missing.
+- If giving a hint, do not give away the full answer.
 
 Return JSON only. Set tone to a concise label that matches the grade stage and requested help.`
 

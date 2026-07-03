@@ -7,6 +7,7 @@ import {
   isTeacher,
 } from "../utils/tenantScope.js"
 import { HttpError } from "../utils/http.js"
+import { studentCodeSortSql } from "../utils/studentSort.js"
 
 const ADMIN_ROLES = new Set(["school_owner", "headteacher", "super_admin"])
 const EVENT_TYPES = new Set([
@@ -1095,7 +1096,7 @@ async function loadInstanceDetail(connection, req, schoolId, instanceId) {
      WHERE se.school_id = ? AND se.academic_year_id = ? AND se.term_id = ? AND se.class_id = ?
        AND se.enrollment_status = 'active' AND s.status = 'active'
        AND (? IS NULL OR COALESCE(se.stream_section, '') = COALESCE(?, ''))
-     ORDER BY s.last_name, s.first_name`,
+     ORDER BY ${studentCodeSortSql("s")}, s.last_name, s.first_name`,
     [
       instanceId,
       schoolId,

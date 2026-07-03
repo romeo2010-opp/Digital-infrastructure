@@ -3,6 +3,7 @@ import { pool } from "../config/db.js"
 import { signSession } from "../middleware/auth.js"
 import { HttpError } from "../utils/http.js"
 import { getActiveAcademicSession, sessionPayload } from "../services/academicSessionService.js"
+import { getSchoolFeatures } from "../services/schoolFeaturesService.js"
 
 async function decorateSessionUser(user) {
   if (!user?.schoolId) return user
@@ -11,11 +12,13 @@ async function decorateSessionUser(user) {
     "SELECT name, city, country FROM schools WHERE id = ? LIMIT 1",
     [user.schoolId],
   )
+  const schoolFeatures = await getSchoolFeatures(pool, user.schoolId)
   const baseUser = {
     ...user,
     schoolName: school?.name || null,
     schoolCity: school?.city || null,
     schoolCountry: school?.country || null,
+    schoolFeatures,
     academicSession: sessionPayload(session),
     mustChangePassword: Boolean(user.mustChangePassword),
   }
@@ -129,6 +132,15 @@ function studentDatePasswordCandidates(dateOfBirth) {
   ])
 }
 
+async function passwordMatches(password, hash) {
+  if (!hash) return false
+  try {
+    return await bcrypt.compare(password, hash)
+  } catch {
+    return false
+  }
+}
+
 async function loginStaff(req) {
   const email = String(req.body.email || "").trim()
   const password = String(req.body.password || "")
@@ -139,7 +151,7 @@ async function loginStaff(req) {
     [email],
   )
   const user = rows[0]
-  if (!user || !(await bcrypt.compare(password, user.password_hash))) {
+  if (!user || !(await passwordMatches(password, user.password_hash))) {
     throw new HttpError(401, "Invalid credentials")
   }
   return user
@@ -193,10 +205,10 @@ export async function changePassword(req, res) {
     [req.user.id],
   )
   const user = rows[0]
-  if (!user || !(await bcrypt.compare(currentPassword, user.password_hash))) {
+  if (!user || !(await passwordMatches(currentPassword, user.password_hash))) {
     throw new HttpError(401, "Current password is incorrect")
   }
-  if (await bcrypt.compare(newPassword, user.password_hash)) {
+  if (await passwordMatches(newPassword, user.password_hash)) {
     throw new HttpError(400, "Choose a new password that is different from the temporary password")
   }
 

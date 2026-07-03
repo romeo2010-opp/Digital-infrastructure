@@ -1,7 +1,7 @@
 import { Router } from "express"
 import authRoutes from "./auth.routes.js"
 import { getDashboard } from "../controllers/dashboardController.js"
-import { listStudents, getStudent, createStudent, uploadStudentPhoto } from "../controllers/studentsController.js"
+import { listStudents, getStudent, createStudent, updateStudent, uploadStudentPhoto } from "../controllers/studentsController.js"
 import { listFeeAccounts, recordPayment } from "../controllers/feesController.js"
 import { listAttendance, markAttendance } from "../controllers/attendanceController.js"
 import { listHomework, createHomework } from "../controllers/homeworkController.js"
@@ -9,6 +9,8 @@ import { listMessages, createMessage, uploadMessageImage } from "../controllers/
 import { getStudentPortal, reactToAnnouncement, voteAnnouncementPoll } from "../controllers/studentPortalController.js"
 import {
   createAssessment,
+  deleteAssessment,
+  exportAssessmentPdf,
   getAssessment,
   getAssessmentBuilderSetup,
   listAssessments,
@@ -56,6 +58,7 @@ import {
 import { listDrills } from "../controllers/drillsController.js"
 import {
   answerDrillQuestion,
+  generateDrillsForClass,
   generateDrillForStudent,
   getDrillSession,
   getDrillHistory,
@@ -64,14 +67,32 @@ import {
   getTodayDrill,
   submitDrill,
 } from "../controllers/drillsController.js"
+import {
+  cancelLessonLog,
+  createLessonLog,
+  finalizeLessonLog,
+  getAcademicCoverage,
+  getClassLessonHistory,
+  getClassSubjectCoverage,
+  getLessonLog,
+  getLessonLogSuggestionsController,
+  getTeacherToday,
+  listLessonLogs,
+  reopenLessonLog,
+  updateLessonLog,
+} from "../controllers/lessonLogsController.js"
 import { listForecasts } from "../controllers/forecastController.js"
 import { getAiStatusController, getAiUsageSummaryController, testAiController, updateAiSettingsController } from "../controllers/aiController.js"
+import { getReportPdfSettingsController, updateReportPdfSettingsController } from "../controllers/reportSettingsController.js"
 import {
   approveExtractedItem,
+  approveExtractedItems,
   approveManualSyllabusEntry,
   createSyllabusTopic,
   createSyllabusUpload,
   createManualSyllabusEntry,
+  deleteManualSyllabusEntry,
+  deleteSyllabusUpload,
   getManualSyllabusEntry,
   getSyllabusReview,
   getSyllabusSetup,
@@ -93,9 +114,107 @@ import {
   getQuestionBatchReview,
   listQuestions,
   rejectQuestion,
+  sourceAssessmentQuestions,
   updateQuestion,
 } from "../controllers/questionsController.js"
 import { adaptQuestionExplanation, flagQuestionExplanation, synthesizeQuestionExplanationSpeech } from "../controllers/explanationsController.js"
+import { getSchoolFeaturesController, updateSchoolFeaturesController } from "../controllers/schoolFeaturesController.js"
+import {
+  applyWeeklyActivitiesToVersionController,
+  archiveBellScheduleController,
+  archiveCurriculumRequirementController,
+  archiveFacilityController,
+  archiveStreamSchedulingRuleController,
+  archiveSubjectFocusAssignmentController,
+  archiveSubjectFocusCategoryController,
+  archiveSubjectFocusRuleController,
+  archiveWeeklyActivityController,
+  assignEquipmentController,
+  calculateExamAvailabilityWindowsController,
+  createBellScheduleController,
+  createBellScheduleSlotController,
+  createCurriculumRequirementController,
+  createEquipmentController,
+  createFacilityController,
+  createStreamSchedulingRuleController,
+  createSubjectFocusAssignmentController,
+  createSubjectFocusCategoryController,
+  createSubjectFocusRuleController,
+  createWeeklyActivityController,
+  deleteBellScheduleSlotController,
+  duplicateFacilityController,
+  duplicateWeeklyActivityController,
+  getFacilityController,
+  getWeeklyActivityController,
+  listBellSchedulesController,
+  listBellSlotTagsController,
+  listCurriculumRequirementsController,
+  listEquipmentController,
+  listFacilitiesController,
+  listOccupancyController,
+  listStreamSchedulingRulesController,
+  listSubjectFocusAssignmentsController,
+  listSubjectFocusCategoriesController,
+  listSubjectFocusRulesController,
+  listTimetableDayTemplatesController,
+  listWeeklyActivitiesController,
+  setBellScheduleSlotTagsController,
+  setFacilityAvailabilityController,
+  setFacilitySubjectEligibilityController,
+  setTimetableDayTemplateController,
+  updateBellScheduleController,
+  updateBellScheduleSlotController,
+  updateCurriculumRequirementController,
+  updateFacilityController,
+  updateStreamSchedulingRuleController,
+  updateSubjectFocusAssignmentController,
+  updateSubjectFocusCategoryController,
+  updateSubjectFocusRuleController,
+  updateWeeklyActivityController,
+  validateFacilityUseController,
+  validateWeeklyActivityController,
+} from "../modules/timetabling/schedulingFoundation.controller.js"
+import {
+  allocateExamRoomsController,
+  allocateInvigilatorsController,
+  approveTimetableVersionController,
+  archiveTimetableController,
+  cancelTimetableGenerationJobController,
+  cloneTimetableVersionController,
+  completeTimetableWithSolverController,
+  createTimetableController,
+  createTimetableEntryController,
+  createTimetableVersionController,
+  findTimetableAlternativesController,
+  generateExamTimetableController,
+  getTimetableFocusReportController,
+  getTimetableController,
+  getTimetableGenerationJobController,
+  getTimetableReadinessController,
+  getTimetableSetupOptionsController,
+  getTimetableStreamRuleReportController,
+  getTimetableVersionController,
+  listTimetableAuditController,
+  listTimetableConflictsController,
+  listTimetablesController,
+  listTimetableVersionsController,
+  publishTimetableVersionController,
+  requestTimetableChangesController,
+  startTimetableGenerationController,
+  submitTimetableReviewController,
+  timetableSolverHealthController,
+  updateTimetableSetupController,
+  validateTimetableEntryController,
+} from "../modules/timetabling/timetabling.controller.js"
+import {
+  getSchoolTodayAlertsController,
+  getSchoolTodayClassController,
+  getSchoolTodayController,
+  getSchoolTodayExamsController,
+  getSchoolTodayFacilityController,
+  getSchoolTodayTeacherController,
+  recalculateSchoolTodayController,
+} from "../modules/timetabling/schoolToday.controller.js"
 import {
   createRecurringAssessmentTemplate,
   createSchoolEvent,
@@ -150,10 +269,107 @@ router.get("/dashboard", requireRole("school_owner", "headteacher", "teacher", "
 router.get("/student-portal", requireRole("student"), asyncHandler(getStudentPortal))
 router.post("/student-portal/announcements/:id/reaction", requireRole("student"), asyncHandler(reactToAnnouncement))
 router.post("/student-portal/announcements/:id/vote", requireRole("student"), asyncHandler(voteAnnouncementPoll))
+router.get("/timetables", requireRole("school_owner", "headteacher", "teacher", "bursar"), asyncHandler(listTimetablesController))
+router.post("/timetables", requireRole("school_owner", "headteacher"), asyncHandler(createTimetableController))
+router.get("/timetables/setup-options", requireRole("school_owner", "headteacher", "teacher", "bursar"), asyncHandler(getTimetableSetupOptionsController))
+router.get("/timetables/generation-jobs/:jobId", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(getTimetableGenerationJobController))
+router.post("/timetables/generation-jobs/:jobId/cancel", requireRole("school_owner", "headteacher"), asyncHandler(cancelTimetableGenerationJobController))
+router.get("/timetables/:id", requireRole("school_owner", "headteacher", "teacher", "bursar"), asyncHandler(getTimetableController))
+router.patch("/timetables/:id/setup", requireRole("school_owner", "headteacher"), asyncHandler(updateTimetableSetupController))
+router.post("/timetables/:id/archive", requireRole("school_owner", "headteacher"), asyncHandler(archiveTimetableController))
+router.get("/timetables/:id/audit", requireRole("school_owner", "headteacher"), asyncHandler(listTimetableAuditController))
+router.get("/timetables/:id/versions", requireRole("school_owner", "headteacher", "teacher", "bursar"), asyncHandler(listTimetableVersionsController))
+router.post("/timetables/:id/versions", requireRole("school_owner", "headteacher"), asyncHandler(createTimetableVersionController))
+router.get("/timetables/:id/versions/:versionId", requireRole("school_owner", "headteacher", "teacher", "bursar"), asyncHandler(getTimetableVersionController))
+router.post("/timetables/:id/versions/:versionId/clone", requireRole("school_owner", "headteacher"), asyncHandler(cloneTimetableVersionController))
+router.post("/timetables/:id/versions/:versionId/generate", requireRole("school_owner", "headteacher"), asyncHandler(startTimetableGenerationController))
+router.post("/timetables/:id/versions/:versionId/complete-with-solver", requireRole("school_owner", "headteacher"), asyncHandler(completeTimetableWithSolverController))
+router.post("/timetables/:id/versions/:versionId/find-alternatives", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(findTimetableAlternativesController))
+router.post("/timetables/:id/versions/:versionId/apply-weekly-activities", requireRole("school_owner", "headteacher"), asyncHandler(applyWeeklyActivitiesToVersionController))
+router.get("/timetables/:id/versions/:versionId/readiness", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(getTimetableReadinessController))
+router.get("/timetables/:id/versions/:versionId/focus-report", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(getTimetableFocusReportController))
+router.get("/timetables/:id/versions/:versionId/stream-rule-report", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(getTimetableStreamRuleReportController))
+router.get("/timetables/:id/versions/:versionId/conflicts", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(listTimetableConflictsController))
+router.post("/timetables/:id/versions/:versionId/validate-entry", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(validateTimetableEntryController))
+router.post("/timetables/:id/versions/:versionId/entries", requireRole("school_owner", "headteacher"), asyncHandler(createTimetableEntryController))
+router.post("/timetables/:id/versions/:versionId/submit-review", requireRole("school_owner", "headteacher"), asyncHandler(submitTimetableReviewController))
+router.post("/timetables/:id/versions/:versionId/request-changes", requireRole("school_owner", "headteacher"), asyncHandler(requestTimetableChangesController))
+router.post("/timetables/:id/versions/:versionId/approve", requireRole("school_owner", "headteacher"), asyncHandler(approveTimetableVersionController))
+router.post("/timetables/:id/versions/:versionId/publish", requireRole("school_owner", "headteacher"), asyncHandler(publishTimetableVersionController))
+router.get("/system/timetable-solver/health", requireRole("school_owner", "headteacher"), asyncHandler(timetableSolverHealthController))
+router.post("/exam-timetables/:id/versions/:versionId/generate", requireRole("school_owner", "headteacher"), asyncHandler(generateExamTimetableController))
+router.post("/exam-timetables/:id/versions/:versionId/generate-for-scope", requireRole("school_owner", "headteacher"), asyncHandler(generateExamTimetableController))
+router.post("/exam-timetables/:id/versions/:versionId/allocate-rooms", requireRole("school_owner", "headteacher"), asyncHandler(allocateExamRoomsController))
+router.post("/exam-timetables/:id/versions/:versionId/allocate-invigilators", requireRole("school_owner", "headteacher"), asyncHandler(allocateInvigilatorsController))
+router.get("/exam-timetables/generation-jobs/:jobId", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(getTimetableGenerationJobController))
+router.post("/exam-timetables/generation-jobs/:jobId/cancel", requireRole("school_owner", "headteacher"), asyncHandler(cancelTimetableGenerationJobController))
 router.get("/ai/status", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(getAiStatusController))
 router.post("/ai/test", requireRole("school_owner", "headteacher"), asyncHandler(testAiController))
 router.get("/ai/usage-summary", requireRole("school_owner", "headteacher"), asyncHandler(getAiUsageSummaryController))
 router.patch("/ai/settings", requireRole("school_owner", "headteacher"), asyncHandler(updateAiSettingsController))
+router.get("/school/features", requireRole("school_owner", "headteacher", "teacher", "bursar", "parent", "student"), asyncHandler(getSchoolFeaturesController))
+router.patch("/school/features", requireRole("school_owner", "headteacher"), asyncHandler(updateSchoolFeaturesController))
+router.get("/school/report-settings", requireRole("school_owner", "headteacher", "teacher", "bursar"), asyncHandler(getReportPdfSettingsController))
+router.patch("/school/report-settings", requireRole("school_owner", "headteacher"), asyncHandler(updateReportPdfSettingsController))
+router.get("/school/today", requireRole("school_owner", "headteacher", "teacher", "bursar", "parent", "student"), asyncHandler(getSchoolTodayController))
+router.get("/school/today/classes/:classId", requireRole("school_owner", "headteacher", "teacher", "bursar", "parent", "student"), asyncHandler(getSchoolTodayClassController))
+router.get("/school/today/teachers/:teacherId", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(getSchoolTodayTeacherController))
+router.get("/school/today/facilities/:facilityId", requireRole("school_owner", "headteacher", "teacher", "bursar"), asyncHandler(getSchoolTodayFacilityController))
+router.get("/school/today/exams", requireRole("school_owner", "headteacher", "teacher", "bursar", "parent", "student"), asyncHandler(getSchoolTodayExamsController))
+router.get("/school/today/alerts", requireRole("school_owner", "headteacher", "teacher", "bursar"), asyncHandler(getSchoolTodayAlertsController))
+router.post("/school/today/recalculate", requireRole("school_owner", "headteacher"), asyncHandler(recalculateSchoolTodayController))
+router.get("/scheduling/bell-schedules", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(listBellSchedulesController))
+router.get("/scheduling/bell-slot-tags", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(listBellSlotTagsController))
+router.get("/scheduling/timetables/:timetableId/day-templates", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(listTimetableDayTemplatesController))
+router.patch("/scheduling/timetables/:timetableId/day-templates/:cycleDayId", requireRole("school_owner", "headteacher"), asyncHandler(setTimetableDayTemplateController))
+router.post("/scheduling/bell-schedules", requireRole("school_owner", "headteacher"), asyncHandler(createBellScheduleController))
+router.patch("/scheduling/bell-schedules/:id", requireRole("school_owner", "headteacher"), asyncHandler(updateBellScheduleController))
+router.post("/scheduling/bell-schedules/:id/archive", requireRole("school_owner", "headteacher"), asyncHandler(archiveBellScheduleController))
+router.put("/scheduling/bell-schedules/:id/slot-tags", requireRole("school_owner", "headteacher"), asyncHandler(setBellScheduleSlotTagsController))
+router.post("/scheduling/bell-schedules/:id/slots", requireRole("school_owner", "headteacher"), asyncHandler(createBellScheduleSlotController))
+router.patch("/scheduling/bell-schedule-slots/:slotId", requireRole("school_owner", "headteacher"), asyncHandler(updateBellScheduleSlotController))
+router.delete("/scheduling/bell-schedule-slots/:slotId", requireRole("school_owner", "headteacher"), asyncHandler(deleteBellScheduleSlotController))
+router.get("/scheduling/curriculum-requirements", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(listCurriculumRequirementsController))
+router.post("/scheduling/curriculum-requirements", requireRole("school_owner", "headteacher"), asyncHandler(createCurriculumRequirementController))
+router.patch("/scheduling/curriculum-requirements/:id", requireRole("school_owner", "headteacher"), asyncHandler(updateCurriculumRequirementController))
+router.post("/scheduling/curriculum-requirements/:id/archive", requireRole("school_owner", "headteacher"), asyncHandler(archiveCurriculumRequirementController))
+router.get("/scheduling/subject-focus-categories", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(listSubjectFocusCategoriesController))
+router.post("/scheduling/subject-focus-categories", requireRole("school_owner", "headteacher"), asyncHandler(createSubjectFocusCategoryController))
+router.patch("/scheduling/subject-focus-categories/:id", requireRole("school_owner", "headteacher"), asyncHandler(updateSubjectFocusCategoryController))
+router.post("/scheduling/subject-focus-categories/:id/archive", requireRole("school_owner", "headteacher"), asyncHandler(archiveSubjectFocusCategoryController))
+router.get("/scheduling/subject-focus-assignments", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(listSubjectFocusAssignmentsController))
+router.post("/scheduling/subject-focus-assignments", requireRole("school_owner", "headteacher"), asyncHandler(createSubjectFocusAssignmentController))
+router.patch("/scheduling/subject-focus-assignments/:id", requireRole("school_owner", "headteacher"), asyncHandler(updateSubjectFocusAssignmentController))
+router.post("/scheduling/subject-focus-assignments/:id/archive", requireRole("school_owner", "headteacher"), asyncHandler(archiveSubjectFocusAssignmentController))
+router.get("/scheduling/subject-focus-rules", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(listSubjectFocusRulesController))
+router.post("/scheduling/subject-focus-rules", requireRole("school_owner", "headteacher"), asyncHandler(createSubjectFocusRuleController))
+router.patch("/scheduling/subject-focus-rules/:id", requireRole("school_owner", "headteacher"), asyncHandler(updateSubjectFocusRuleController))
+router.post("/scheduling/subject-focus-rules/:id/archive", requireRole("school_owner", "headteacher"), asyncHandler(archiveSubjectFocusRuleController))
+router.get("/scheduling/stream-scheduling-rules", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(listStreamSchedulingRulesController))
+router.post("/scheduling/stream-scheduling-rules", requireRole("school_owner", "headteacher"), asyncHandler(createStreamSchedulingRuleController))
+router.patch("/scheduling/stream-scheduling-rules/:id", requireRole("school_owner", "headteacher"), asyncHandler(updateStreamSchedulingRuleController))
+router.post("/scheduling/stream-scheduling-rules/:id/archive", requireRole("school_owner", "headteacher"), asyncHandler(archiveStreamSchedulingRuleController))
+router.get("/scheduling/facilities", requireRole("school_owner", "headteacher", "teacher", "bursar"), asyncHandler(listFacilitiesController))
+router.post("/scheduling/facilities", requireRole("school_owner", "headteacher"), asyncHandler(createFacilityController))
+router.get("/scheduling/facilities/:id", requireRole("school_owner", "headteacher", "teacher", "bursar"), asyncHandler(getFacilityController))
+router.patch("/scheduling/facilities/:id", requireRole("school_owner", "headteacher"), asyncHandler(updateFacilityController))
+router.post("/scheduling/facilities/:id/archive", requireRole("school_owner", "headteacher"), asyncHandler(archiveFacilityController))
+router.post("/scheduling/facilities/:id/duplicate", requireRole("school_owner", "headteacher"), asyncHandler(duplicateFacilityController))
+router.post("/scheduling/facilities/:id/equipment", requireRole("school_owner", "headteacher"), asyncHandler(assignEquipmentController))
+router.post("/scheduling/facilities/:id/subjects", requireRole("school_owner", "headteacher"), asyncHandler(setFacilitySubjectEligibilityController))
+router.post("/scheduling/facilities/:id/availability", requireRole("school_owner", "headteacher"), asyncHandler(setFacilityAvailabilityController))
+router.post("/scheduling/facilities/validate-use", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(validateFacilityUseController))
+router.get("/scheduling/equipment", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(listEquipmentController))
+router.post("/scheduling/equipment", requireRole("school_owner", "headteacher"), asyncHandler(createEquipmentController))
+router.get("/scheduling/weekly-activities", requireRole("school_owner", "headteacher", "teacher", "bursar"), asyncHandler(listWeeklyActivitiesController))
+router.post("/scheduling/weekly-activities", requireRole("school_owner", "headteacher"), asyncHandler(createWeeklyActivityController))
+router.post("/scheduling/weekly-activities/validate", requireRole("school_owner", "headteacher"), asyncHandler(validateWeeklyActivityController))
+router.get("/scheduling/weekly-activities/:id", requireRole("school_owner", "headteacher", "teacher", "bursar"), asyncHandler(getWeeklyActivityController))
+router.patch("/scheduling/weekly-activities/:id", requireRole("school_owner", "headteacher"), asyncHandler(updateWeeklyActivityController))
+router.post("/scheduling/weekly-activities/:id/archive", requireRole("school_owner", "headteacher"), asyncHandler(archiveWeeklyActivityController))
+router.post("/scheduling/weekly-activities/:id/duplicate", requireRole("school_owner", "headteacher"), asyncHandler(duplicateWeeklyActivityController))
+router.get("/scheduling/occupancy", requireRole("school_owner", "headteacher", "teacher", "bursar"), asyncHandler(listOccupancyController))
+router.get("/scheduling/exam-availability-windows", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(calculateExamAvailabilityWindowsController))
 router.get("/classes", requireRole("school_owner", "headteacher", "teacher", "bursar"), asyncHandler(listClasses))
 router.post("/classes", requireRole("school_owner", "headteacher"), asyncHandler(createClass))
 router.get("/classes/:id", requireRole("school_owner", "headteacher", "teacher", "bursar"), asyncHandler(getClass))
@@ -222,8 +438,22 @@ router.get("/teacher-assignments", requireRole("school_owner", "headteacher", "t
 router.post("/teacher-assignments", requireRole("school_owner", "headteacher"), asyncHandler(createTeacherAssignment))
 router.patch("/teacher-assignments/:id", requireRole("school_owner", "headteacher"), asyncHandler(updateTeacherAssignment))
 router.delete("/teacher-assignments/:id", requireRole("school_owner", "headteacher"), asyncHandler(deactivateTeacherAssignment))
+router.get("/teacher/today", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(getTeacherToday))
+router.get("/teacher/today/lessons", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(listLessonLogs))
+router.get("/lesson-logs/suggestions", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(getLessonLogSuggestionsController))
+router.get("/lesson-logs", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(listLessonLogs))
+router.post("/lesson-logs", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(createLessonLog))
+router.get("/lesson-logs/:id", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(getLessonLog))
+router.patch("/lesson-logs/:id", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(updateLessonLog))
+router.post("/lesson-logs/:id/finalize", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(finalizeLessonLog))
+router.post("/lesson-logs/:id/reopen", requireRole("school_owner", "headteacher"), asyncHandler(reopenLessonLog))
+router.post("/lesson-logs/:id/cancel", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(cancelLessonLog))
+router.get("/classes/:classId/subjects/:subjectId/lesson-history", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(getClassLessonHistory))
+router.get("/classes/:classId/subjects/:subjectId/coverage", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(getClassSubjectCoverage))
+router.get("/admin/academic/coverage", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(getAcademicCoverage))
 router.get("/students", requireRole("school_owner", "headteacher", "teacher", "bursar"), asyncHandler(listStudents))
 router.get("/students/:id", requireRole("school_owner", "headteacher", "teacher", "bursar"), asyncHandler(getStudent))
+router.patch("/students/:id", requireRole("school_owner", "headteacher"), asyncHandler(updateStudent))
 router.post("/students/photo", requireRole("school_owner", "headteacher"), asyncHandler(uploadStudentPhoto))
 router.post("/students", requireRole("school_owner", "headteacher"), asyncHandler(createStudent))
 router.get("/fees", requireRole("school_owner", "headteacher", "bursar"), asyncHandler(listFeeAccounts))
@@ -238,12 +468,15 @@ router.post("/messages", requireRole("school_owner", "headteacher", "bursar", "t
 router.get("/assessments/setup", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(getAssessmentBuilderSetup))
 router.get("/assessments", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(listAssessments))
 router.post("/assessments", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(createAssessment))
+router.get("/assessments/:id/export/pdf", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(exportAssessmentPdf))
 router.get("/assessments/:id", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(getAssessment))
 router.put("/assessments/:id", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(saveAssessmentDraft))
+router.delete("/assessments/:id", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(deleteAssessment))
 router.post("/assessments/:id/media", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(uploadAssessmentMedia))
 router.post("/assessments/:id/status", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(transitionAssessmentStatus))
 router.get("/assessment-insights", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(topicInsights))
 router.get("/daily-drills", requireRole("school_owner", "headteacher", "teacher", "parent", "student"), asyncHandler(listDrills))
+router.post("/drills/generate/class/:classId", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(generateDrillsForClass))
 router.post("/drills/generate/:studentId?", requireRole("school_owner", "headteacher", "teacher", "student"), asyncHandler(generateDrillForStudent))
 router.get("/drills/today/:studentId?", requireRole("school_owner", "headteacher", "teacher", "student"), asyncHandler(getTodayDrill))
 router.post("/drills/:id/answer", requireRole("school_owner", "headteacher", "teacher", "student"), asyncHandler(answerDrillQuestion))
@@ -260,9 +493,11 @@ router.get("/exam-forecast", requireRole("school_owner", "headteacher", "teacher
 router.get("/syllabus/setup", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(getSyllabusSetup))
 router.get("/syllabus/uploads", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(listSyllabusUploads))
 router.post("/syllabus/uploads", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(createSyllabusUpload))
+router.delete("/syllabus/uploads/:id", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(deleteSyllabusUpload))
 router.post("/syllabus/uploads/:id/process", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(processSyllabusUpload))
 router.get("/syllabus/uploads/:id/review", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(getSyllabusReview))
 router.patch("/syllabus/extracted-items/:id", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(updateExtractedItem))
+router.post("/syllabus/extracted-items/approve-bulk", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(approveExtractedItems))
 router.post("/syllabus/extracted-items/:id/approve", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(approveExtractedItem))
 router.post("/syllabus/extracted-items/:id/reject", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(rejectExtractedItem))
 router.post("/syllabus/extracted-items/:id/merge", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(mergeExtractedItem))
@@ -270,6 +505,7 @@ router.get("/syllabus/manual-entries", requireRole("school_owner", "headteacher"
 router.get("/syllabus/manual-entries/:id", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(getManualSyllabusEntry))
 router.post("/syllabus/manual-entries", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(createManualSyllabusEntry))
 router.patch("/syllabus/manual-entries/:id", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(updateManualSyllabusEntry))
+router.delete("/syllabus/manual-entries/:id", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(deleteManualSyllabusEntry))
 router.post("/syllabus/manual-entries/:id/approve", requireRole("school_owner", "headteacher"), asyncHandler(approveManualSyllabusEntry))
 router.post("/syllabus/manual-entries/:id/reject", requireRole("school_owner", "headteacher"), asyncHandler(rejectManualSyllabusEntry))
 router.get("/syllabus/topics", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(listSyllabusTopics))
@@ -278,6 +514,7 @@ router.patch("/syllabus/topics/:id", requireRole("school_owner", "headteacher", 
 
 router.get("/questions", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(listQuestions))
 router.post("/questions", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(createQuestion))
+router.post("/questions/source-assessments", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(sourceAssessmentQuestions))
 router.post("/questions/generate-draft", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(generateDraftQuestionBatch))
 router.get("/questions/batches/:id/review", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(getQuestionBatchReview))
 router.patch("/questions/:id", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(updateQuestion))
