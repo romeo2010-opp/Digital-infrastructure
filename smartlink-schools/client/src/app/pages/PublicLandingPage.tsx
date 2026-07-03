@@ -1,4 +1,4 @@
-import { type ChangeEvent, useEffect, useMemo, useState } from 'react'
+import { type ChangeEvent, type ReactNode, useEffect, useMemo, useState } from 'react'
 import '../../styles/publicLanding.css'
 
 const portalDefaultUrl = 'https://portal.publicurl.com'
@@ -199,7 +199,7 @@ function Field({
 }: {
   label: string
   hint?: string
-  children: React.ReactNode
+  children: ReactNode
 }) {
   return (
     <label className="sl-setup-field">
@@ -713,4 +713,3 @@ export function PublicLandingPage({ portalUrl = portalDefaultUrl }: { portalUrl?
     </main>
   )
 }
-

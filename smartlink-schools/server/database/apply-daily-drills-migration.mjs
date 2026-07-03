@@ -27,6 +27,9 @@ try {
     "010_manual_syllabus_entries.sql",
     "011_manual_syllabus_drafts.sql",
     "012_ai_tts_usage.sql",
+    "013_drill_ai_feedback.sql",
+    "014_teacher_lesson_logs_drill_engine.sql",
+    "015_drill_scoring_interventions.sql",
   ]
   for (const migration of migrations) {
     const sqlPath = path.resolve("database", migration)
