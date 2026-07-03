@@ -1,13 +1,32 @@
-import { useEffect, useState } from 'react'
+import { type ChangeEvent, useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router'
-import { ArrowLeft, FileText, Printer } from 'lucide-react'
+import { ArrowLeft, FileText, ImagePlus, PencilLine, Printer, Save } from 'lucide-react'
 import { Button } from '../components/ui/button'
-import { Dialog, DialogContent, DialogTitle } from '../components/ui/dialog'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/dialog'
+import { Input } from '../components/ui/input'
 import { PortalTable } from '../components/PortalTable'
 import { SectionCard } from '../components/SectionCard'
 import { SectionKpiStrip } from '../components/SectionKpiStrip'
 import { usePortal } from '../lib/portalContext'
 import { resolvePortalAssetUrl } from '../lib/portalApi'
+
+const inputClassName = 'h-10 min-w-0 rounded-[7px] border-[#d9dce3] bg-white text-[13px] font-medium text-[#111827]'
+const selectClassName = 'h-10 min-w-0 w-full rounded-[7px] border border-[#d9dce3] bg-white px-3 text-[13px] font-medium text-[#111827] outline-none focus:border-[#111827]/35'
+const fieldLabelClassName = 'grid min-w-0 gap-1.5 text-[11px] font-bold uppercase tracking-[0.08em] text-[#6b7280]'
+
+function readFileAsDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result || ''))
+    reader.onerror = () => reject(new Error('Unable to read image file.'))
+    reader.readAsDataURL(file)
+  })
+}
+
+function dateInputValue(value: any) {
+  if (!value) return ''
+  return String(value).slice(0, 10)
+}
 
 function valueLabel(value: any) {
   return String(value || '-').replace(/_/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase())
@@ -98,15 +117,156 @@ function Row({ label, value }: { label: string; value: any }) {
   )
 }
 
+function EditField({ label, children }: { label: string; children: any }) {
+  return <label className={fieldLabelClassName}>{label}{children}</label>
+}
+
+function EditStudentDialog({
+  open,
+  onOpenChange,
+  form,
+  setForm,
+  classes,
+  photoPreviewUrl,
+  onPhotoChange,
+  onSave,
+  saving,
+  error,
+}: {
+  open: boolean
+  onOpenChange: (value: boolean) => void
+  form: any
+  setForm: (updater: any) => void
+  classes: any[]
+  photoPreviewUrl: string
+  onPhotoChange: (event: ChangeEvent<HTMLInputElement>) => void
+  onSave: () => void
+  saving: boolean
+  error: string
+}) {
+  const update = (key: string, value: any) => setForm((current: any) => ({ ...(current || {}), [key]: value }))
+  const previewUrl = photoPreviewUrl || photoUrlFor(form)
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="flex !w-[min(1040px,calc(100vw-32px))] !max-w-[min(1040px,calc(100vw-32px))] max-h-[calc(100vh-32px)] flex-col overflow-hidden rounded-[10px] border-[#dbe1ea] bg-white p-0 sm:!max-w-[min(1040px,calc(100vw-32px))]">
+        <DialogHeader className="shrink-0 border-b border-[#e2e8f0] px-6 py-4">
+          <DialogTitle className="text-[18px] font-bold tracking-[-0.025em] text-[#111827]">Edit Student Profile</DialogTitle>
+          <DialogDescription className="text-[12px] font-medium text-[#64748b]">Update identity, placement and profile photo details.</DialogDescription>
+        </DialogHeader>
+
+        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+          {error ? <div className="rounded-[6px] border border-[#fecaca] bg-[#fef2f2] px-3 py-2 text-[12px] font-semibold text-[#b91c1c]">{error}</div> : null}
+
+          <div className="grid gap-6 lg:grid-cols-[260px_minmax(0,1fr)]">
+            <div className="grid self-start justify-items-center gap-4 rounded-[8px] border border-[#e2e8f0] bg-[#f8fafc] px-5 py-6 text-center">
+              <div className="grid size-32 place-items-center overflow-hidden rounded-full bg-[#111827] text-[32px] font-bold text-white ring-1 ring-[#dbe1ea]">
+                {previewUrl ? <img src={previewUrl} alt="" className="h-full w-full object-cover" /> : initialsFor(form)}
+              </div>
+              <label className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-[7px] border border-[#d9dce3] bg-white px-4 text-[13px] font-semibold text-[#111827] shadow-sm transition hover:bg-white/80">
+                <ImagePlus className="size-3.5" />
+                Upload Photo
+                <input type="file" accept="image/png,image/jpeg" className="sr-only" onChange={onPhotoChange} />
+              </label>
+              <span className="max-w-[180px] text-[11px] font-medium leading-5 text-[#64748b]">PNG or JPEG, up to 4MB.</span>
+            </div>
+
+            <div className="grid gap-5">
+              <section className="grid gap-3">
+                <div className="text-[12px] font-bold text-[#111827]">Identity</div>
+                <div className="grid min-w-0 gap-4 md:grid-cols-2">
+                  <EditField label="First Name">
+                    <Input value={form?.first_name || ''} onChange={(event) => update('first_name', event.target.value)} className={inputClassName} />
+                  </EditField>
+                  <EditField label="Last Name">
+                    <Input value={form?.last_name || ''} onChange={(event) => update('last_name', event.target.value)} className={inputClassName} />
+                  </EditField>
+                  <EditField label="Date of Birth">
+                    <Input type="date" value={form?.date_of_birth || ''} onChange={(event) => update('date_of_birth', event.target.value)} className={inputClassName} />
+                  </EditField>
+                  <EditField label="Gender">
+                    <select value={form?.gender || ''} onChange={(event) => update('gender', event.target.value)} className={selectClassName}>
+                      <option value="">Select gender</option>
+                      <option value="Female">Female</option>
+                      <option value="Male">Male</option>
+                      <option value="Other">Other</option>
+                    </select>
+                  </EditField>
+                  <EditField label="National ID">
+                    <Input value={form?.national_id || ''} onChange={(event) => update('national_id', event.target.value)} className={inputClassName} />
+                  </EditField>
+                  <EditField label="Status">
+                    <select value={form?.status || 'active'} onChange={(event) => update('status', event.target.value)} className={selectClassName}>
+                      <option value="active">Active</option>
+                      <option value="suspended">Suspended</option>
+                      <option value="transferred_out">Transferred Out</option>
+                      <option value="withdrawn">Withdrawn</option>
+                      <option value="graduated">Graduated</option>
+                      <option value="archived">Archived</option>
+                    </select>
+                  </EditField>
+                </div>
+              </section>
+
+              <section className="grid gap-3 border-t border-[#e2e8f0] pt-5">
+                <div className="text-[12px] font-bold text-[#111827]">Placement</div>
+                <div className="grid min-w-0 gap-4 md:grid-cols-2">
+                  <EditField label="Class">
+                    <select value={form?.class_id || ''} onChange={(event) => update('class_id', event.target.value)} className={selectClassName}>
+                      <option value="">No class assigned</option>
+                      {classes.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+                    </select>
+                  </EditField>
+                  <EditField label="Stream / Section">
+                    <Input value={form?.stream_section || ''} onChange={(event) => update('stream_section', event.target.value)} className={inputClassName} />
+                  </EditField>
+                  <EditField label="Enrollment Date">
+                    <Input type="date" value={form?.enrollment_date || ''} onChange={(event) => update('enrollment_date', event.target.value)} className={inputClassName} />
+                  </EditField>
+                  <EditField label="Student Type">
+                    <select value={form?.student_type || 'new'} onChange={(event) => update('student_type', event.target.value)} className={selectClassName}>
+                      <option value="new">New</option>
+                      <option value="returning">Returning</option>
+                      <option value="transfer">Transfer</option>
+                    </select>
+                  </EditField>
+                  <EditField label="Previous School">
+                    <Input value={form?.previous_school || ''} onChange={(event) => update('previous_school', event.target.value)} className={inputClassName} />
+                  </EditField>
+                </div>
+              </section>
+            </div>
+          </div>
+        </div>
+
+        <DialogFooter className="shrink-0 border-t border-[#e2e8f0] bg-[#f8fafc] px-6 py-4">
+          <Button type="button" variant="outline" onClick={() => onOpenChange(false)} className="h-9 rounded-[7px] text-[12px]" disabled={saving}>Cancel</Button>
+          <Button type="button" onClick={onSave} className="h-9 rounded-[7px] text-[12px]" disabled={saving}>
+            <Save className="size-3.5" />
+            {saving ? 'Saving...' : 'Save Profile'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 export function StudentProfilePage() {
   const { studentId } = useParams()
   const navigate = useNavigate()
   const location = useLocation()
-  const { token, api } = usePortal()
+  const { token, api, user, runAction } = usePortal()
   const [student, setStudent] = useState<any>(null)
   const [error, setError] = useState('')
   const [openingReportId, setOpeningReportId] = useState<any>(null)
   const [photoPreviewOpen, setPhotoPreviewOpen] = useState(false)
+  const [editOpen, setEditOpen] = useState(false)
+  const [editForm, setEditForm] = useState<any>({})
+  const [classes, setClasses] = useState<any[]>([])
+  const [pendingPhoto, setPendingPhoto] = useState<any>(null)
+  const [pendingPhotoPreview, setPendingPhotoPreview] = useState('')
+  const [editError, setEditError] = useState('')
+  const [savingProfile, setSavingProfile] = useState(false)
 
   useEffect(() => {
     if (!token || !studentId) return
@@ -115,10 +275,103 @@ export function StudentProfilePage() {
       .catch((err: any) => setError(err?.message || 'Unable to load student profile.'))
   }, [api, studentId, token])
 
+  useEffect(() => {
+    if (!token || !editOpen) return
+    api.listClasses(token)
+      .then((payload: any) => setClasses(payload?.classes || []))
+      .catch(() => setClasses([]))
+  }, [api, editOpen, token])
+
+  const openEditProfile = () => {
+    if (!student) return
+    setEditError('')
+    setPendingPhoto(null)
+    setPendingPhotoPreview('')
+    setEditForm({
+      id: student.id,
+      class_id: student.class_id || '',
+      first_name: student.first_name || '',
+      last_name: student.last_name || '',
+      date_of_birth: dateInputValue(student.date_of_birth),
+      gender: student.gender || '',
+      national_id: student.national_id || '',
+      profile_photo_url: student.profile_photo_url || student.profilePhotoUrl || '',
+      stream_section: student.stream_section || '',
+      enrollment_date: dateInputValue(student.enrollment_date),
+      student_type: student.student_type || 'new',
+      previous_school: student.previous_school || '',
+      status: student.status || 'active',
+    })
+    setEditOpen(true)
+  }
+
+  const handleEditPhotoChange = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    setEditError('')
+    if (!file) return
+    if (!['image/png', 'image/jpeg'].includes(file.type)) {
+      setEditError('Use a PNG or JPEG image.')
+      return
+    }
+    if (file.size > 4 * 1024 * 1024) {
+      setEditError('Student photo must be 4MB or smaller.')
+      return
+    }
+    try {
+      const dataUrl = await readFileAsDataUrl(file)
+      setPendingPhoto({ file_name: file.name, file_type: file.type, data_url: dataUrl })
+      setPendingPhotoPreview(dataUrl)
+    } catch (err: any) {
+      setEditError(err?.message || 'Unable to read image file.')
+    }
+  }
+
+  const saveEditProfile = async () => {
+    if (!token || !studentId) return
+    setSavingProfile(true)
+    setEditError('')
+    try {
+      await runAction(async () => {
+        let profilePhotoUrl = editForm.profile_photo_url || null
+        if (pendingPhoto) {
+          const uploaded = await api.uploadStudentPhoto(token, pendingPhoto)
+          profilePhotoUrl = uploaded?.profile_photo_url || uploaded?.profilePhotoUrl || profilePhotoUrl
+        }
+        await api.updateStudent(token, studentId, {
+          ...editForm,
+          class_id: editForm.class_id || null,
+          profile_photo_url: profilePhotoUrl,
+        })
+        const fresh = await api.getStudent(token, studentId)
+        setStudent(fresh?.student || null)
+        setEditOpen(false)
+        setPendingPhoto(null)
+        setPendingPhotoPreview('')
+        return fresh
+      }, 'Saving student profile...', { refresh: false })
+    } catch (err: any) {
+      setEditError(err?.message || 'Unable to save student profile.')
+    } finally {
+      setSavingProfile(false)
+    }
+  }
+
   const printProfile = () => window.print()
   const searchQuery = (location.state as any)?.search
   const backPath = (location.state as any)?.fromSearch ? `/search${searchQuery ? `?q=${encodeURIComponent(searchQuery)}` : (window.location.search || '')}` : (location.state as any)?.fromClass ? `/classes/${(location.state as any).fromClass}` : '/students'
   const examReports = student?.exam_reports || student?.results || []
+  const assessmentRows = useMemo(() => {
+    if (student?.assessment_results?.length) return student.assessment_results
+    return (student?.recurring_assessments || []).map((row: any) => ({
+      ...row,
+      source_type: 'recurring_assessment',
+      source_label: 'Recurring assessment',
+      result_date: row.instance_date || row.last_saved_at,
+      percentage: row.score === null || row.score === undefined || !row.total_marks ? null : Number(((Number(row.score) / Number(row.total_marks)) * 100).toFixed(1)),
+    }))
+  }, [student])
+  const canEditProfile = ['school_owner', 'headteacher'].includes(String(user?.role || '').toLowerCase())
   const subjectGradeCount = examReports.reduce((sum: number, report: any) => sum + Number(report.subject_count || report.subjects?.length || 0), 0)
   const openReport = async (report: any) => {
     const reportId = report?.report_card_id || report?.id
@@ -162,6 +415,12 @@ export function StudentProfilePage() {
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
+            {canEditProfile ? (
+              <Button type="button" variant="outline" onClick={openEditProfile} className="h-8 rounded-[5px] text-[12px]">
+                <PencilLine className="size-3.5" />
+                Edit Profile
+              </Button>
+            ) : null}
             <Button type="button" variant="outline" onClick={() => navigate('/results')} className="h-8 rounded-[5px] text-[12px]"><FileText className="size-3.5" /> View Results</Button>
             <Button type="button" onClick={printProfile} className="h-8 rounded-[5px] text-[12px]">
               <Printer className="size-3.5" />
@@ -176,7 +435,7 @@ export function StudentProfilePage() {
       <SectionKpiStrip items={[
         { label: 'Current Class', value: student?.class_name || '-', helper: student?.academic_year_name || 'academic year', delta: student?.term_name || 'term' },
         { label: 'Stream', value: student?.stream_section || '-', helper: 'section', delta: student?.enrollment_status || student?.status || '-' },
-        { label: 'Results', value: examReports.length, helper: 'exam sessions', delta: `${subjectGradeCount} subject grades` },
+        { label: 'Results', value: examReports.length + assessmentRows.length, helper: 'reports and assessments', delta: `${subjectGradeCount} report grades` },
         { label: 'Fees', value: student?.fees?.length || 0, helper: 'fee records', delta: valueLabel(student?.fee_category) },
       ]} />
 
@@ -253,7 +512,7 @@ export function StudentProfilePage() {
           />
         </SectionCard>
 
-        <SectionCard title="Results" subtitle="Exam sessions and official report cards">
+        <SectionCard title="Official Report Cards" subtitle="Exam sessions with generated report cards">
           <PortalTable
             columns={[
               { key: 'academic_year_name', label: 'Year' },
@@ -288,19 +547,21 @@ export function StudentProfilePage() {
           />
         </SectionCard>
 
-        <SectionCard title="Recurring Assessments" subtitle="Weekly tests and classroom checks separate from report cards">
+        <SectionCard title="Assessment Results" subtitle="Mid-term, class tests, assignments and recurring classroom checks">
           <PortalTable
             columns={[
-              { key: 'instance_date', label: 'Date', render: (row) => row.instance_date?.slice?.(0, 10) || row.instance_date },
+              { key: 'result_date', label: 'Date', render: (row) => row.result_date?.slice?.(0, 10) || row.instance_date?.slice?.(0, 10) || row.last_saved_at?.slice?.(0, 10) || '-' },
               { key: 'assessment_name', label: 'Assessment' },
               { key: 'assessment_type', label: 'Type', render: (row) => valueLabel(row.assessment_type) },
               { key: 'subject_name', label: 'Subject' },
+              { key: 'source_label', label: 'Source', render: (row) => row.source_label || '-' },
               { key: 'score', label: 'Score', render: (row) => `${row.score ?? '-'} / ${row.total_marks || '-'}` },
+              { key: 'percentage', label: 'Result', render: (row) => row.percentage === null || row.percentage === undefined ? (row.grade || '-') : `${row.percentage}%${row.grade ? ` · ${row.grade}` : ''}` },
               { key: 'status', label: 'Status', render: (row) => valueLabel(row.status) },
               { key: 'teacher_name', label: 'Teacher', render: (row) => row.teacher_name || '-' },
             ]}
-            rows={student?.recurring_assessments || []}
-            emptyMessage="No recurring assessment progress is available yet."
+            rows={assessmentRows}
+            emptyMessage="No mid-term or classroom assessment results are available yet."
           />
         </SectionCard>
       </div>
@@ -331,6 +592,19 @@ export function StudentProfilePage() {
           />
         </SectionCard>
       </div>
+
+      <EditStudentDialog
+        open={editOpen}
+        onOpenChange={setEditOpen}
+        form={editForm}
+        setForm={setEditForm}
+        classes={classes}
+        photoPreviewUrl={pendingPhotoPreview}
+        onPhotoChange={handleEditPhotoChange}
+        onSave={saveEditProfile}
+        saving={savingProfile}
+        error={editError}
+      />
 
       <Dialog open={photoPreviewOpen} onOpenChange={setPhotoPreviewOpen}>
         <DialogContent className="max-w-[min(760px,calc(100vw-32px))] rounded-[10px] border-[#dbe1ea] bg-white p-4">

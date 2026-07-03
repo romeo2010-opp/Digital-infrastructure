@@ -4,9 +4,12 @@ import {
   BarChart3,
   Bell,
   BookOpenCheck,
+  Building2,
   CalendarClock,
   CalendarDays,
   CalendarCheck,
+  CalendarRange,
+  FlaskConical,
   ClipboardList,
   ChevronLeft,
   ChevronRight,
@@ -23,6 +26,7 @@ import {
   ReceiptText,
   ScrollText,
   Settings,
+  Settings2,
   Sparkles,
   UserCircle2,
   UserRound,
@@ -64,6 +68,9 @@ const groups = [
     label: 'Teaching & Learning',
     items: [
       { label: 'Homework', path: '/homework', icon: BookOpenCheck },
+      { label: 'Lesson Log', path: '/teacher/lesson-log', icon: ClipboardList },
+      { label: 'Timetables', path: '/timetables', icon: CalendarRange },
+      { label: 'Exam Timetables', path: '/exam-timetables', icon: CalendarDays },
       { label: 'Exam Sessions', path: '/exam-sessions', icon: ClipboardList },
       { label: 'Results', path: '/results', icon: ClipboardCheck },
       { label: 'Assessment Insights', path: '/assessment-insights', icon: Sparkles, badge: 'AI' },
@@ -108,6 +115,12 @@ const settingsGroups = [
     label: 'School Setup',
     items: [
       { label: 'School Profile', path: '/settings/organization', icon: Globe2 },
+      { label: 'Features', path: '/settings/features', icon: CalendarRange },
+      { label: 'Academic Config', path: '/settings/academic-configuration', icon: CalendarClock },
+      { label: 'Facilities', path: '/settings/facilities', icon: Building2 },
+      { label: 'Laboratories', path: '/settings/laboratories', icon: FlaskConical },
+      { label: 'Weekly Activities', path: '/settings/weekly-activities', icon: ClipboardList },
+      { label: 'Timetable Rules', path: '/settings/timetable-rules', icon: Settings2 },
       { label: 'Integrations', path: '/settings/integrations', icon: PlugZap },
       { label: 'Data Controls', path: '/settings/data', icon: Database },
     ],
@@ -197,7 +210,7 @@ export function Sidebar({ user }: { user?: any; theme?: 'default' | 'light' }) {
   return (
     <aside
       className={`z-20 flex h-full min-h-0 flex-col overflow-hidden border-r border-[#e2e8f0] bg-white text-[#6b7280] transition-[width,min-width,max-width] duration-200 ${
-        collapsed ? 'w-14 min-w-14 max-w-14' : 'w-[216px] min-w-[216px] max-w-[216px]'
+        collapsed ? 'w-14 min-w-14 max-w-14' : 'w-[256px] min-w-[256px] max-w-[256px]'
       } max-md:w-14 max-md:min-w-14 max-md:max-w-14`}
     >
       <nav className="min-h-0 flex-1 overflow-y-auto px-2 py-3 [scrollbar-width:thin] [scrollbar-color:#cbd5e0_transparent]">

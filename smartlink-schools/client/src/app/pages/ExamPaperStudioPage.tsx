@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router'
-import { FilePlus2, RotateCcw, Search, SlidersHorizontal } from 'lucide-react'
+import { FilePlus2, RotateCcw, Search, SlidersHorizontal, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { PortalTable } from '../components/PortalTable'
 import { SectionCard } from '../components/SectionCard'
@@ -45,6 +45,7 @@ export function ExamPaperStudioPage() {
   const [filtersOpen, setFiltersOpen] = useState(false)
   const [filters, setFilters] = useState<any>({ q: '', status: '', assessment_type: '', class_id: '', subject_id: '', teacher_id: '', include_history: false, include_archived: false })
   const [loading, setLoading] = useState(false)
+  const [deletingId, setDeletingId] = useState<any>('')
   const [error, setError] = useState('')
 
   const load = async (nextFilters = filters) => {
@@ -83,6 +84,23 @@ export function ExamPaperStudioPage() {
     const next = { q: '', status: '', assessment_type: '', class_id: '', subject_id: '', teacher_id: '', include_history: false, include_archived: false }
     setFilters(next)
     load(next)
+  }
+
+  const deleteDraftPaper = async (event: any, row: any) => {
+    event.stopPropagation()
+    if (!token || String(row?.status || '') !== 'draft') return
+    const confirmed = window.confirm(`Delete draft paper "${row.name || 'Untitled paper'}"? This cannot be undone.`)
+    if (!confirmed) return
+    setDeletingId(row.id)
+    try {
+      await api.deleteAssessment(token, row.id)
+      setPapers((current) => current.filter((paper) => String(paper.id) !== String(row.id)))
+      toast.success('Draft paper deleted.')
+    } catch (err: any) {
+      toast.error(err?.message || 'Unable to delete draft paper.')
+    } finally {
+      setDeletingId('')
+    }
   }
 
   return (
@@ -178,6 +196,21 @@ export function ExamPaperStudioPage() {
               { key: 'duration_minutes', label: 'Duration', render: (row) => row.duration_minutes ? `${row.duration_minutes} min` : '-' },
               { key: 'status', label: 'Status', render: (row) => statusLabel(row.status) },
               { key: 'updated_at', label: 'Updated', render: (row) => dateLabel(row.updated_at) },
+              {
+                key: 'actions',
+                label: '',
+                render: (row) => String(row.status || '') === 'draft' ? (
+                  <button
+                    type="button"
+                    className="inline-flex h-7 items-center gap-1 rounded-[4px] border border-[#fecaca] bg-white px-2 text-[11px] font-semibold text-[#b91c1c] transition hover:bg-[#fef2f2] disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={String(deletingId) === String(row.id)}
+                    onClick={(event) => deleteDraftPaper(event, row)}
+                  >
+                    <Trash2 className="size-3" />
+                    {String(deletingId) === String(row.id) ? 'Deleting' : 'Delete'}
+                  </button>
+                ) : null,
+              },
             ]}
           />
         </div>

@@ -535,6 +535,13 @@
   letter-spacing: 0;
 }
 
+.smartlink-shell-scroll {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: auto;
+  scrollbar-gutter: stable;
+  touch-action: pan-y;
+}
+
 .mera-glass,
 .mera-glass-strong {
   position: relative;
@@ -696,6 +703,58 @@
 .mera-route-loading-bar {
   animation: mera-route-loading-slide 1.1s ease-in-out infinite;
   box-shadow: 0 0 16px rgb(17 24 39 / 0.28);
+}
+
+@keyframes smartlink-loader-line {
+  0%, 100% {
+    transform: scaleX(0.56);
+    opacity: 0.42;
+  }
+
+  50% {
+    transform: scaleX(1);
+    opacity: 1;
+  }
+}
+
+@keyframes smartlink-loader-meter {
+  0% {
+    transform: translateX(-110%);
+  }
+
+  100% {
+    transform: translateX(260%);
+  }
+}
+
+.smartlink-loader-glyph span {
+  display: block;
+  height: 2px;
+  width: 24px;
+  transform-origin: left center;
+  border-radius: 999px;
+  background: var(--mera-panel-text);
+  animation: smartlink-loader-line 1.35s ease-in-out infinite;
+}
+
+.smartlink-loader-glyph span:nth-child(2) {
+  width: 18px;
+  animation-delay: 160ms;
+}
+
+.smartlink-loader-glyph span:nth-child(3) {
+  width: 28px;
+  animation-delay: 320ms;
+}
+
+.smartlink-loader-meter::after {
+  display: block;
+  height: 100%;
+  width: 45%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, transparent 0%, #6bdd9e 30%, #111827 100%);
+  content: "";
+  animation: smartlink-loader-meter 1.25s cubic-bezier(0.4, 0, 0.2, 1) infinite;
 }
 
 .mera-login-root {
@@ -1154,6 +1213,8 @@
   .mera-smartlink-scan-ring,
   .mera-smartlink-slow-ring,
   .mera-smartlink-node,
+  .smartlink-loader-glyph span,
+  .smartlink-loader-meter::after,
   .mera-login-visual-node,
   .mera-login-dot-loader span,
   .mera-login-loading-word,

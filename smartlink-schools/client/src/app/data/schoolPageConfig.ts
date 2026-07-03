@@ -29,9 +29,7 @@ export const schoolPages: Record<SchoolPageKey, {
       { key: 'className', label: 'Class' },
       { key: 'gradeLevel', label: 'Grade' },
       { key: 'classTeacher', label: 'Class Teacher' },
-      { key: 'subjectTeachers', label: 'Subject Teachers' },
       { key: 'studentCount', label: 'Students' },
-      { key: 'students', label: 'Students Inside' },
     ],
     sideTitle: 'Class Controls',
     sideItems: [

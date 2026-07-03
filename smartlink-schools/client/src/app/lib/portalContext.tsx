@@ -307,6 +307,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
   const requestRoutePackets = useCallback((pathname: string, options: PacketRequestOptions = {}) => {
     const keys = options.primaryOnly ? routeSyncPacketKeys(pathname) : routePacketKeys(pathname)
     pollingKeysRef.current = keys
+    if (!keys.length) return Promise.resolve([])
     return requestPackets(keys, {
       paramsByKey: options.paramsByKey,
       force: options.force,
@@ -319,6 +320,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
   const refreshVisibleModules = useCallback((options: PacketRequestOptions & { keys?: readonly string[] } = {}) => {
     const keys = normalizePacketKeys(options.keys).length ? normalizePacketKeys(options.keys) : currentRoutePacketKeys()
     pollingKeysRef.current = keys
+    if (!keys.length) return Promise.resolve([])
     return requestPackets(keys, { paramsByKey: options.paramsByKey, force: options.force, timeoutMs: options.timeoutMs, preferHttp: options.preferHttp, reason: options.reason || 'visible-refresh' })
   }, [requestPackets])
 
@@ -478,7 +480,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
             return
           }
           if (message?.type === 'mera_portal_invalidate' || message?.type === 'mera_dashboard_refresh') {
-            const keys = normalizePacketKeys(message.keys).length ? normalizePacketKeys(message.keys) : ['nationalOperations']
+            const keys = normalizePacketKeys(message.keys).length ? normalizePacketKeys(message.keys) : currentRoutePacketKeys()
             requestPackets(keys, { reason: 'socket-invalidate', force: true }).catch(() => {})
           }
         } catch {
@@ -537,7 +539,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (!token || typeof window === 'undefined') return undefined
-    const timer = window.setInterval(async () => {
+    const verifySession = async () => {
       const payload = await refreshSession(token)
       if (payload) return
       clearSession()
@@ -547,7 +549,9 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
       setPacketErrors({})
       setSelectedProfile(null)
       setSelectedProfileEnforcement({ items: [] })
-    }, 60000)
+    }
+    verifySession()
+    const timer = window.setInterval(verifySession, 60000)
     return () => window.clearInterval(timer)
   }, [refreshSession, token])
 

@@ -8,15 +8,8 @@ function resolveApiOrigin() {
   if (apiBaseUrl) {
     return new URL(apiBaseUrl, window.location.origin).origin
   }
-  if (typeof window !== 'undefined') {
-    const { hostname, protocol } = window.location
-    const isLocalHost = /^(localhost|127\.0\.0\.1|0\.0\.0\.0)$/i.test(hostname)
-    const isLanAddress = /^(\d{1,3}\.){3}\d{1,3}$/.test(hostname) || hostname.includes(':')
-    if (isLocalHost || isLanAddress) {
-      return `${protocol}//${hostname}:4307`
-    }
-  }
-  return window.location.origin
+  if (typeof window !== 'undefined') return window.location.origin
+  return ''
 }
 
 export function resolvePortalAssetUrl(assetPath: string) {
@@ -165,7 +158,32 @@ export const portalApi = {
     return request('/api/dashboard', { token })
   },
 
-  getPacket(_token: string) {
+  async getPacket(token: string, key?: string, params: Record<string, any> = {}) {
+    if (key === 'schoolDashboard') {
+      const safe = async (loader: () => Promise<any>, fallback: any) => {
+        try {
+          return await loader()
+        } catch {
+          return fallback
+        }
+      }
+      const [dashboard, students, fees, attendance, homework, insights, results, forecasts, today] = await Promise.all([
+        safe(() => portalApi.getSchoolDashboard(token), {}),
+        safe(() => portalApi.listStudents(token, params?.students || {}), { students: [] }),
+        safe(() => portalApi.listFeeAccounts(token), { feeAccounts: [] }),
+        safe(() => portalApi.listAttendance(token, params?.attendance || {}), { attendance: [] }),
+        safe(() => portalApi.listHomework(token), { homework: [] }),
+        safe(() => portalApi.listAssessmentInsights(token), { topics: [] }),
+        safe(() => portalApi.listResults(token), { results: [] }),
+        safe(() => portalApi.listForecasts(token), { forecasts: [] }),
+        safe(() => portalApi.getSchoolToday(token), { today: {} }),
+      ])
+      return { dashboard, students, fees, attendance, homework, insights, results, forecasts, today }
+    }
+    if (key === 'studentPortal') {
+      const response = await portalApi.getStudentPortal(token)
+      return response?.student_portal || response
+    }
     return Promise.resolve({})
   },
 
@@ -197,6 +215,334 @@ export const portalApi = {
     return request('/api/student-portal', { token })
   },
 
+  listTimetables(token: string, filters: Record<string, any> = {}) {
+    return request(`/api/timetables${queryString(filters)}`, { token })
+  },
+
+  getTimetableSetupOptions(token: string) {
+    return request('/api/timetables/setup-options', { token })
+  },
+
+  createTimetable(token: string, payload: any) {
+    return request('/api/timetables', { method: 'POST', token, body: payload })
+  },
+
+  getTimetable(token: string, id: any) {
+    return request(`/api/timetables/${id}`, { token })
+  },
+
+  updateTimetableSetup(token: string, id: any, payload: any) {
+    return request(`/api/timetables/${id}/setup`, { method: 'PATCH', token, body: payload })
+  },
+
+  archiveTimetable(token: string, id: any) {
+    return request(`/api/timetables/${id}/archive`, { method: 'POST', token })
+  },
+
+  listTimetableVersions(token: string, id: any) {
+    return request(`/api/timetables/${id}/versions`, { token })
+  },
+
+  createTimetableVersion(token: string, id: any, payload: any = {}) {
+    return request(`/api/timetables/${id}/versions`, { method: 'POST', token, body: payload })
+  },
+
+  getTimetableVersion(token: string, id: any, versionId: any) {
+    return request(`/api/timetables/${id}/versions/${versionId}`, { token })
+  },
+
+  cloneTimetableVersion(token: string, id: any, versionId: any, payload: any = {}) {
+    return request(`/api/timetables/${id}/versions/${versionId}/clone`, { method: 'POST', token, body: payload })
+  },
+
+  getTimetableReadiness(token: string, id: any, versionId: any) {
+    return request(`/api/timetables/${id}/versions/${versionId}/readiness`, { token })
+  },
+
+  getTimetableFocusReport(token: string, id: any, versionId: any) {
+    return request(`/api/timetables/${id}/versions/${versionId}/focus-report`, { token })
+  },
+
+  getTimetableStreamRuleReport(token: string, id: any, versionId: any) {
+    return request(`/api/timetables/${id}/versions/${versionId}/stream-rule-report`, { token })
+  },
+
+  listTimetableConflicts(token: string, id: any, versionId: any) {
+    return request(`/api/timetables/${id}/versions/${versionId}/conflicts`, { token })
+  },
+
+  validateTimetableEntry(token: string, id: any, versionId: any, payload: any) {
+    return request(`/api/timetables/${id}/versions/${versionId}/validate-entry`, { method: 'POST', token, body: payload })
+  },
+
+  createTimetableEntry(token: string, id: any, versionId: any, payload: any) {
+    return request(`/api/timetables/${id}/versions/${versionId}/entries`, { method: 'POST', token, body: payload })
+  },
+
+  submitTimetableReview(token: string, id: any, versionId: any, payload: any = {}) {
+    return request(`/api/timetables/${id}/versions/${versionId}/submit-review`, { method: 'POST', token, body: payload })
+  },
+
+  requestTimetableChanges(token: string, id: any, versionId: any, payload: any = {}) {
+    return request(`/api/timetables/${id}/versions/${versionId}/request-changes`, { method: 'POST', token, body: payload })
+  },
+
+  approveTimetableVersion(token: string, id: any, versionId: any, payload: any = {}) {
+    return request(`/api/timetables/${id}/versions/${versionId}/approve`, { method: 'POST', token, body: payload })
+  },
+
+  publishTimetableVersion(token: string, id: any, versionId: any, payload: any = {}) {
+    return request(`/api/timetables/${id}/versions/${versionId}/publish`, { method: 'POST', token, body: payload })
+  },
+
+  startTimetableGeneration(token: string, id: any, versionId: any, payload: any = {}) {
+    return request(`/api/timetables/${id}/versions/${versionId}/generate`, { method: 'POST', token, body: payload })
+  },
+
+  completeTimetableWithSolver(token: string, id: any, versionId: any, payload: any = {}) {
+    return request(`/api/timetables/${id}/versions/${versionId}/complete-with-solver`, { method: 'POST', token, body: payload })
+  },
+
+  findTimetableAlternatives(token: string, id: any, versionId: any, payload: any = {}) {
+    return request(`/api/timetables/${id}/versions/${versionId}/find-alternatives`, { method: 'POST', token, body: payload })
+  },
+
+  startExamTimetableGeneration(token: string, id: any, versionId: any, payload: any = {}) {
+    return request(`/api/exam-timetables/${id}/versions/${versionId}/generate-for-scope`, { method: 'POST', token, body: payload })
+  },
+
+  cancelTimetableGenerationJob(token: string, jobId: any) {
+    return request(`/api/timetables/generation-jobs/${jobId}/cancel`, { method: 'POST', token })
+  },
+
+  getTimetableGenerationJob(token: string, jobId: any) {
+    return request(`/api/timetables/generation-jobs/${jobId}`, { token })
+  },
+
+  getTimetableSolverHealth(token: string) {
+    return request('/api/system/timetable-solver/health', { token })
+  },
+
+  getSchoolToday(token: string, filters: Record<string, any> = {}) {
+    return request(`/api/school/today${queryString(filters)}`, { token })
+  },
+
+  listTimetableAudit(token: string, id: any) {
+    return request(`/api/timetables/${id}/audit`, { token })
+  },
+
+  applyWeeklyActivitiesToTimetableVersion(token: string, id: any, versionId: any, payload: any = {}) {
+    return request(`/api/timetables/${id}/versions/${versionId}/apply-weekly-activities`, { method: 'POST', token, body: payload })
+  },
+
+  listBellSchedules(token: string, filters: Record<string, any> = {}) {
+    return request(`/api/scheduling/bell-schedules${queryString(filters)}`, { token })
+  },
+
+  listBellSlotTags(token: string, filters: Record<string, any> = {}) {
+    return request(`/api/scheduling/bell-slot-tags${queryString(filters)}`, { token })
+  },
+
+  setBellScheduleSlotTags(token: string, id: any, payload: any) {
+    return request(`/api/scheduling/bell-schedules/${id}/slot-tags`, { method: 'PUT', token, body: payload })
+  },
+
+  listTimetableDayTemplates(token: string, timetableId: any) {
+    return request(`/api/scheduling/timetables/${timetableId}/day-templates`, { token })
+  },
+
+  setTimetableDayTemplate(token: string, timetableId: any, cycleDayId: any, payload: any) {
+    return request(`/api/scheduling/timetables/${timetableId}/day-templates/${cycleDayId}`, { method: 'PATCH', token, body: payload })
+  },
+
+  createBellSchedule(token: string, payload: any) {
+    return request('/api/scheduling/bell-schedules', { method: 'POST', token, body: payload })
+  },
+
+  updateBellSchedule(token: string, id: any, payload: any) {
+    return request(`/api/scheduling/bell-schedules/${id}`, { method: 'PATCH', token, body: payload })
+  },
+
+  archiveBellSchedule(token: string, id: any) {
+    return request(`/api/scheduling/bell-schedules/${id}/archive`, { method: 'POST', token })
+  },
+
+  createBellScheduleSlot(token: string, id: any, payload: any) {
+    return request(`/api/scheduling/bell-schedules/${id}/slots`, { method: 'POST', token, body: payload })
+  },
+
+  updateBellScheduleSlot(token: string, slotId: any, payload: any) {
+    return request(`/api/scheduling/bell-schedule-slots/${slotId}`, { method: 'PATCH', token, body: payload })
+  },
+
+  deleteBellScheduleSlot(token: string, slotId: any) {
+    return request(`/api/scheduling/bell-schedule-slots/${slotId}`, { method: 'DELETE', token })
+  },
+
+  listSchedulingFacilities(token: string, filters: Record<string, any> = {}) {
+    return request(`/api/scheduling/facilities${queryString(filters)}`, { token })
+  },
+
+  createSchedulingFacility(token: string, payload: any) {
+    return request('/api/scheduling/facilities', { method: 'POST', token, body: payload })
+  },
+
+  getSchedulingFacility(token: string, id: any) {
+    return request(`/api/scheduling/facilities/${id}`, { token })
+  },
+
+  updateSchedulingFacility(token: string, id: any, payload: any) {
+    return request(`/api/scheduling/facilities/${id}`, { method: 'PATCH', token, body: payload })
+  },
+
+  archiveSchedulingFacility(token: string, id: any) {
+    return request(`/api/scheduling/facilities/${id}/archive`, { method: 'POST', token })
+  },
+
+  duplicateSchedulingFacility(token: string, id: any, payload: any = {}) {
+    return request(`/api/scheduling/facilities/${id}/duplicate`, { method: 'POST', token, body: payload })
+  },
+
+  assignFacilityEquipment(token: string, id: any, payload: any) {
+    return request(`/api/scheduling/facilities/${id}/equipment`, { method: 'POST', token, body: payload })
+  },
+
+  setFacilitySubjectEligibility(token: string, id: any, payload: any) {
+    return request(`/api/scheduling/facilities/${id}/subjects`, { method: 'POST', token, body: payload })
+  },
+
+  setFacilityAvailability(token: string, id: any, payload: any) {
+    return request(`/api/scheduling/facilities/${id}/availability`, { method: 'POST', token, body: payload })
+  },
+
+  validateFacilityUse(token: string, payload: any) {
+    return request('/api/scheduling/facilities/validate-use', { method: 'POST', token, body: payload })
+  },
+
+  listFacilityEquipment(token: string, filters: Record<string, any> = {}) {
+    return request(`/api/scheduling/equipment${queryString(filters)}`, { token })
+  },
+
+  createFacilityEquipment(token: string, payload: any) {
+    return request('/api/scheduling/equipment', { method: 'POST', token, body: payload })
+  },
+
+  listWeeklyActivities(token: string, filters: Record<string, any> = {}) {
+    return request(`/api/scheduling/weekly-activities${queryString(filters)}`, { token })
+  },
+
+  createWeeklyActivity(token: string, payload: any) {
+    return request('/api/scheduling/weekly-activities', { method: 'POST', token, body: payload })
+  },
+
+  getWeeklyActivity(token: string, id: any) {
+    return request(`/api/scheduling/weekly-activities/${id}`, { token })
+  },
+
+  updateWeeklyActivity(token: string, id: any, payload: any) {
+    return request(`/api/scheduling/weekly-activities/${id}`, { method: 'PATCH', token, body: payload })
+  },
+
+  archiveWeeklyActivity(token: string, id: any) {
+    return request(`/api/scheduling/weekly-activities/${id}/archive`, { method: 'POST', token })
+  },
+
+  duplicateWeeklyActivity(token: string, id: any, payload: any = {}) {
+    return request(`/api/scheduling/weekly-activities/${id}/duplicate`, { method: 'POST', token, body: payload })
+  },
+
+  validateWeeklyActivity(token: string, payload: any) {
+    return request('/api/scheduling/weekly-activities/validate', { method: 'POST', token, body: payload })
+  },
+
+  listSchedulingOccupancy(token: string, filters: Record<string, any> = {}) {
+    return request(`/api/scheduling/occupancy${queryString(filters)}`, { token })
+  },
+
+  getExamAvailabilityWindows(token: string, filters: Record<string, any> = {}) {
+    return request(`/api/scheduling/exam-availability-windows${queryString(filters)}`, { token })
+  },
+
+  listCurriculumRequirements(token: string, filters: Record<string, any> = {}) {
+    return request(`/api/scheduling/curriculum-requirements${queryString(filters)}`, { token })
+  },
+
+  createCurriculumRequirement(token: string, payload: any) {
+    return request('/api/scheduling/curriculum-requirements', { method: 'POST', token, body: payload })
+  },
+
+  updateCurriculumRequirement(token: string, id: any, payload: any) {
+    return request(`/api/scheduling/curriculum-requirements/${id}`, { method: 'PATCH', token, body: payload })
+  },
+
+  archiveCurriculumRequirement(token: string, id: any) {
+    return request(`/api/scheduling/curriculum-requirements/${id}/archive`, { method: 'POST', token })
+  },
+
+  listSubjectFocusCategories(token: string, filters: Record<string, any> = {}) {
+    return request(`/api/scheduling/subject-focus-categories${queryString(filters)}`, { token })
+  },
+
+  createSubjectFocusCategory(token: string, payload: any) {
+    return request('/api/scheduling/subject-focus-categories', { method: 'POST', token, body: payload })
+  },
+
+  updateSubjectFocusCategory(token: string, id: any, payload: any) {
+    return request(`/api/scheduling/subject-focus-categories/${id}`, { method: 'PATCH', token, body: payload })
+  },
+
+  archiveSubjectFocusCategory(token: string, id: any) {
+    return request(`/api/scheduling/subject-focus-categories/${id}/archive`, { method: 'POST', token })
+  },
+
+  listSubjectFocusAssignments(token: string, filters: Record<string, any> = {}) {
+    return request(`/api/scheduling/subject-focus-assignments${queryString(filters)}`, { token })
+  },
+
+  createSubjectFocusAssignment(token: string, payload: any) {
+    return request('/api/scheduling/subject-focus-assignments', { method: 'POST', token, body: payload })
+  },
+
+  updateSubjectFocusAssignment(token: string, id: any, payload: any) {
+    return request(`/api/scheduling/subject-focus-assignments/${id}`, { method: 'PATCH', token, body: payload })
+  },
+
+  archiveSubjectFocusAssignment(token: string, id: any) {
+    return request(`/api/scheduling/subject-focus-assignments/${id}/archive`, { method: 'POST', token })
+  },
+
+  listSubjectFocusRules(token: string, filters: Record<string, any> = {}) {
+    return request(`/api/scheduling/subject-focus-rules${queryString(filters)}`, { token })
+  },
+
+  createSubjectFocusRule(token: string, payload: any) {
+    return request('/api/scheduling/subject-focus-rules', { method: 'POST', token, body: payload })
+  },
+
+  updateSubjectFocusRule(token: string, id: any, payload: any) {
+    return request(`/api/scheduling/subject-focus-rules/${id}`, { method: 'PATCH', token, body: payload })
+  },
+
+  archiveSubjectFocusRule(token: string, id: any) {
+    return request(`/api/scheduling/subject-focus-rules/${id}/archive`, { method: 'POST', token })
+  },
+
+  listStreamSchedulingRules(token: string, filters: Record<string, any> = {}) {
+    return request(`/api/scheduling/stream-scheduling-rules${queryString(filters)}`, { token })
+  },
+
+  createStreamSchedulingRule(token: string, payload: any) {
+    return request('/api/scheduling/stream-scheduling-rules', { method: 'POST', token, body: payload })
+  },
+
+  updateStreamSchedulingRule(token: string, id: any, payload: any) {
+    return request(`/api/scheduling/stream-scheduling-rules/${id}`, { method: 'PATCH', token, body: payload })
+  },
+
+  archiveStreamSchedulingRule(token: string, id: any) {
+    return request(`/api/scheduling/stream-scheduling-rules/${id}/archive`, { method: 'POST', token })
+  },
+
   reactToAnnouncement(token: string, id: any, payload: any) {
     return request(`/api/student-portal/announcements/${id}/reaction`, { method: 'POST', token, body: payload })
   },
@@ -215,6 +561,10 @@ export const portalApi = {
 
   createStudent(token: string, payload: any) {
     return request('/api/students', { method: 'POST', token, body: payload })
+  },
+
+  updateStudent(token: string, id: any, payload: any) {
+    return request(`/api/students/${id}`, { method: 'PATCH', token, body: payload })
   },
 
   uploadStudentPhoto(token: string, payload: any) {
@@ -283,8 +633,16 @@ export const portalApi = {
     return request(`/api/assessments/${id}/status`, { method: 'POST', token, body: payload })
   },
 
+  deleteAssessment(token: string, id: any) {
+    return request(`/api/assessments/${id}`, { method: 'DELETE', token })
+  },
+
   uploadAssessmentMedia(token: string, id: any, payload: any) {
     return request(`/api/assessments/${id}/media`, { method: 'POST', token, body: payload })
+  },
+
+  exportAssessmentPdf(token: string, id: any, variant: 'student' | 'scheme' = 'student') {
+    return requestBlob(`/api/assessments/${id}/export/pdf${queryString({ variant })}`, { token })
   },
 
   listAssessmentInsights(token: string) {
@@ -311,6 +669,22 @@ export const portalApi = {
     return request('/api/ai/settings', { method: 'PATCH', token, body: payload })
   },
 
+  getSchoolFeatures(token: string) {
+    return request('/api/school/features', { token })
+  },
+
+  updateSchoolFeatures(token: string, payload: any) {
+    return request('/api/school/features', { method: 'PATCH', token, body: payload })
+  },
+
+  getReportSettings(token: string) {
+    return request('/api/school/report-settings', { token })
+  },
+
+  updateReportSettings(token: string, payload: any) {
+    return request('/api/school/report-settings', { method: 'PATCH', token, body: payload })
+  },
+
   getSyllabusSetup(token: string) {
     return request('/api/syllabus/setup', { token })
   },
@@ -321,6 +695,10 @@ export const portalApi = {
 
   uploadSyllabus(token: string, payload: any) {
     return request('/api/syllabus/uploads', { method: 'POST', token, body: payload })
+  },
+
+  deleteSyllabusUpload(token: string, id: any) {
+    return request(`/api/syllabus/uploads/${id}`, { method: 'DELETE', token })
   },
 
   processSyllabusUpload(token: string, id: any) {
@@ -337,6 +715,10 @@ export const portalApi = {
 
   approveExtractedSyllabusItem(token: string, id: any) {
     return request(`/api/syllabus/extracted-items/${id}/approve`, { method: 'POST', token })
+  },
+
+  approveExtractedSyllabusItems(token: string, itemIds: any[]) {
+    return request('/api/syllabus/extracted-items/approve-bulk', { method: 'POST', token, body: { item_ids: itemIds } })
   },
 
   rejectExtractedSyllabusItem(token: string, id: any) {
@@ -361,6 +743,10 @@ export const portalApi = {
 
   updateManualSyllabusEntry(token: string, id: any, payload: any) {
     return request(`/api/syllabus/manual-entries/${id}`, { method: 'PATCH', token, body: payload })
+  },
+
+  deleteManualSyllabusEntry(token: string, id: any) {
+    return request(`/api/syllabus/manual-entries/${id}`, { method: 'DELETE', token })
   },
 
   approveManualSyllabusEntry(token: string, id: any, payload: any = {}) {
@@ -391,6 +777,10 @@ export const portalApi = {
     return request('/api/questions', { method: 'POST', token, body: payload })
   },
 
+  sourceAssessmentQuestions(token: string, payload: any = {}) {
+    return request('/api/questions/source-assessments', { method: 'POST', token, body: payload })
+  },
+
   generateDraftQuestions(token: string, payload: any) {
     return request('/api/questions/generate-draft', { method: 'POST', token, body: payload })
   },
@@ -411,8 +801,56 @@ export const portalApi = {
     return request(`/api/questions/${id}/reject`, { method: 'POST', token })
   },
 
+  getTeacherToday(token: string) {
+    return request('/api/teacher/today', { token })
+  },
+
+  listLessonLogs(token: string, filters: Record<string, any> = {}) {
+    return request(`/api/lesson-logs${queryString(filters)}`, { token })
+  },
+
+  getLessonLog(token: string, id: any) {
+    return request(`/api/lesson-logs/${id}`, { token })
+  },
+
+  getLessonLogSuggestions(token: string, filters: Record<string, any> = {}) {
+    return request(`/api/lesson-logs/suggestions${queryString(filters)}`, { token })
+  },
+
+  createLessonLog(token: string, payload: any) {
+    return request('/api/lesson-logs', { method: 'POST', token, body: payload })
+  },
+
+  updateLessonLog(token: string, id: any, payload: any) {
+    return request(`/api/lesson-logs/${id}`, { method: 'PATCH', token, body: payload })
+  },
+
+  finalizeLessonLog(token: string, id: any) {
+    return request(`/api/lesson-logs/${id}/finalize`, { method: 'POST', token })
+  },
+
+  reopenLessonLog(token: string, id: any, payload: any = {}) {
+    return request(`/api/lesson-logs/${id}/reopen`, { method: 'POST', token, body: payload })
+  },
+
+  cancelLessonLog(token: string, id: any, payload: any = {}) {
+    return request(`/api/lesson-logs/${id}/cancel`, { method: 'POST', token, body: payload })
+  },
+
+  getClassLessonHistory(token: string, classId: any, subjectId: any, filters: Record<string, any> = {}) {
+    return request(`/api/classes/${classId}/subjects/${subjectId}/lesson-history${queryString(filters)}`, { token })
+  },
+
+  getClassSubjectCoverage(token: string, classId: any, subjectId: any) {
+    return request(`/api/classes/${classId}/subjects/${subjectId}/coverage`, { token })
+  },
+
   generateDrill(token: string, studentId: any, payload: any = {}) {
     return request(`/api/drills/generate/${studentId}`, { method: 'POST', token, body: payload })
+  },
+
+  generateClassDrills(token: string, classId: any, payload: any = {}) {
+    return request(`/api/drills/generate/class/${classId}`, { method: 'POST', token, body: payload })
   },
 
   getTodayDrill(token: string, studentId?: any) {

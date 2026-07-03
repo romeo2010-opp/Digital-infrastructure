@@ -1,10 +1,12 @@
 import { type ReactNode, useEffect, useMemo, useState } from 'react'
 import {
   Bell,
+  CalendarRange,
   CheckCircle2,
   Database,
   Download,
   Edit3,
+  FileText,
   Globe2,
   GraduationCap,
   KeyRound,
@@ -28,9 +30,10 @@ import { SectionCard } from '../components/SectionCard'
 import { SectionKpiStrip } from '../components/SectionKpiStrip'
 import { Switch } from '../components/ui/switch'
 import { Toolbar } from '../components/Toolbar'
+import { DEFAULT_SCHOOL_FEATURES, schoolFeatureDefinitions, type SchoolFeatureKey } from '../lib/access'
 import { usePortal } from '../lib/portalContext'
 
-export type SettingsSection = 'preferences' | 'notifications' | 'security' | 'profile' | 'users' | 'audit' | 'organization' | 'integrations' | 'data'
+export type SettingsSection = 'preferences' | 'notifications' | 'security' | 'profile' | 'users' | 'audit' | 'organization' | 'features' | 'integrations' | 'data'
 
 const sectionMeta: Record<SettingsSection, { title: string; subtitle: string; icon: any }> = {
   preferences: { title: 'Preferences', subtitle: 'Set your school workspace density, theme and landing page.', icon: Palette },
@@ -40,6 +43,7 @@ const sectionMeta: Record<SettingsSection, { title: string; subtitle: string; ic
   users: { title: 'Users & Roles', subtitle: 'School staff access, duties and role scope.', icon: Users },
   audit: { title: 'Audit Logs', subtitle: 'Recent changes to school records and settings.', icon: ShieldCheck },
   organization: { title: 'School Profile', subtitle: 'School identity, classes, subjects and academic setup.', icon: GraduationCap },
+  features: { title: 'Feature Assignment', subtitle: 'Enable the timetable modules this school is using.', icon: CalendarRange },
   integrations: { title: 'Integrations', subtitle: 'School communication, payment and reporting connectors.', icon: PlugZap },
   data: { title: 'Data Controls', subtitle: 'Exports, retention and backups for school-only records.', icon: Database },
 }
@@ -56,6 +60,13 @@ const dataRows = [
   { id: 'DATA-002', dataset: 'Fee records', retention: '7 academic years', export: 'CSV/PDF', owner: 'Bursar' },
   { id: 'DATA-003', dataset: 'Attendance registers', retention: '5 academic years', export: 'CSV', owner: 'Headteacher' },
   { id: 'DATA-004', dataset: 'Assessment results', retention: '7 academic years', export: 'PDF/CSV', owner: 'Academic office' },
+]
+
+const fallbackReportTemplates = [
+  { id: 'ria_exact', name: 'RIA exact header', description: 'Uses the Reign International Academy header artwork from the reference report.' },
+  { id: 'smartlink_word', name: 'Word-style crest', description: 'A close Word-export style with a generated school crest and assessment tables.' },
+  { id: 'modern_academic', name: 'Modern academic', description: 'A cleaner leadership report with a restrained school heading.' },
+  { id: 'compact_formal', name: 'Compact formal', description: 'A simpler formal report intended for dense printing and school files.' },
 ]
 
 function Pill({ value }: { value: string }) {
@@ -93,7 +104,7 @@ function selectClassName() {
 }
 
 export function SettingsCenter({ section }: { section: SettingsSection }) {
-  const { user, token, api, preferences, updatePreferences } = usePortal()
+  const { user, token, api, preferences, updatePreferences, refreshSession } = usePortal()
   const meta = sectionMeta[section] || sectionMeta.preferences
   const Icon = meta.icon
   const [savedMessage, setSavedMessage] = useState('')
@@ -114,6 +125,13 @@ export function SettingsCenter({ section }: { section: SettingsSection }) {
   const [policyError, setPolicyError] = useState('')
   const [classLoading, setClassLoading] = useState(false)
   const [policyLoading, setPolicyLoading] = useState(false)
+  const [schoolFeatures, setSchoolFeatures] = useState<Record<SchoolFeatureKey, boolean>>({ ...DEFAULT_SCHOOL_FEATURES })
+  const [featureLoading, setFeatureLoading] = useState(false)
+  const [featureError, setFeatureError] = useState('')
+  const [reportTemplate, setReportTemplate] = useState('ria_exact')
+  const [reportTemplates, setReportTemplates] = useState<any[]>(fallbackReportTemplates)
+  const [reportTemplateLoading, setReportTemplateLoading] = useState(false)
+  const [reportTemplateError, setReportTemplateError] = useState('')
   const [settings, setSettings] = useState({
     appearance: 'light',
     density: 'comfortable',
@@ -252,6 +270,48 @@ export function SettingsCenter({ section }: { section: SettingsSection }) {
   }, [userRows, userSearch])
 
   const canManageSchoolSetup = ['school_owner', 'headteacher'].includes(String(user?.role || '').toLowerCase())
+
+  useEffect(() => {
+    if (!token || section !== 'features') return
+    let cancelled = false
+    setFeatureLoading(true)
+    setFeatureError('')
+    api.getSchoolFeatures(token)
+      .then((payload: any) => {
+        if (!cancelled) setSchoolFeatures({ ...DEFAULT_SCHOOL_FEATURES, ...(payload?.features || {}) })
+      })
+      .catch((err: any) => {
+        if (!cancelled) setFeatureError(err?.message || 'Unable to load school features.')
+      })
+      .finally(() => {
+        if (!cancelled) setFeatureLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [api, section, token])
+
+  useEffect(() => {
+    if (!token || section !== 'organization') return
+    let cancelled = false
+    setReportTemplateLoading(true)
+    setReportTemplateError('')
+    api.getReportSettings(token)
+      .then((payload: any) => {
+        if (cancelled) return
+        setReportTemplate(payload?.selected_template || 'ria_exact')
+        setReportTemplates(Array.isArray(payload?.templates) && payload.templates.length ? payload.templates : fallbackReportTemplates)
+      })
+      .catch((err: any) => {
+        if (!cancelled) setReportTemplateError(err?.message || 'Unable to load report PDF designs.')
+      })
+      .finally(() => {
+        if (!cancelled) setReportTemplateLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [api, section, token])
 
   const updateSetting = (key: keyof typeof settings, value: any) => {
     setSettings((current) => ({ ...current, [key]: value }))
@@ -417,6 +477,42 @@ export function SettingsCenter({ section }: { section: SettingsSection }) {
       setPolicyError(err?.message || 'Unable to save progression policy.')
     } finally {
       setPolicyLoading(false)
+    }
+  }
+
+  const updateFeature = (key: SchoolFeatureKey, value: boolean) => {
+    setSchoolFeatures((current) => ({ ...current, [key]: value }))
+  }
+
+  const saveSchoolFeatures = async () => {
+    if (!token || !canManageSchoolSetup) return
+    setFeatureLoading(true)
+    setFeatureError('')
+    try {
+      const payload = await api.updateSchoolFeatures(token, { features: schoolFeatures })
+      setSchoolFeatures({ ...DEFAULT_SCHOOL_FEATURES, ...(payload?.features || {}) })
+      await refreshSession?.(token)
+      setSavedMessage('Features saved')
+    } catch (err: any) {
+      setFeatureError(err?.message || 'Unable to save school features.')
+    } finally {
+      setFeatureLoading(false)
+    }
+  }
+
+  const saveReportTemplate = async () => {
+    if (!token || !canManageSchoolSetup) return
+    setReportTemplateLoading(true)
+    setReportTemplateError('')
+    try {
+      const payload = await api.updateReportSettings(token, { report_pdf_template: reportTemplate })
+      setReportTemplate(payload?.selected_template || reportTemplate)
+      setReportTemplates(Array.isArray(payload?.templates) && payload.templates.length ? payload.templates : reportTemplates)
+      setSavedMessage('Report design saved')
+    } catch (err: any) {
+      setReportTemplateError(err?.message || 'Unable to save report PDF design.')
+    } finally {
+      setReportTemplateLoading(false)
     }
   }
 
@@ -648,6 +744,44 @@ export function SettingsCenter({ section }: { section: SettingsSection }) {
       const schoolLocation = [user?.schoolCity || user?.school_city, user?.schoolCountry || user?.school_country].filter(Boolean).join(', ') || 'Malawi'
       return (
         <div className="grid gap-3">
+          <SectionCard
+            title="Report PDF Design"
+            subtitle="Choose the results PDF design used when report cards are downloaded."
+            actions={<SaveButton savedMessage={savedMessage} onSave={saveReportTemplate} disabled={!canManageSchoolSetup || reportTemplateLoading} />}
+          >
+            <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-4">
+              {reportTemplates.map((template) => {
+                const selected = reportTemplate === template.id
+                return (
+                  <button
+                    key={template.id}
+                    type="button"
+                    aria-pressed={selected}
+                    disabled={!canManageSchoolSetup || reportTemplateLoading}
+                    onClick={() => setReportTemplate(template.id)}
+                    className={`min-h-[118px] rounded-[6px] border bg-white p-3 text-left transition ${
+                      selected
+                        ? 'border-[#111827] shadow-[inset_0_0_0_1px_#111827]'
+                        : 'border-[#e5e7eb] hover:border-[#9ca3af]'
+                    } disabled:cursor-not-allowed disabled:opacity-70`}
+                  >
+                    <span className="flex items-center justify-between gap-2">
+                      <span className="grid size-8 place-items-center rounded-[5px] bg-[#f3f4f6] text-[#111827]">
+                        <FileText className="size-4" />
+                      </span>
+                      <span className={`rounded-[4px] px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.06em] ${selected ? 'bg-[#111827] text-white' : 'bg-[#f3f4f6] text-[#6b7280]'}`}>
+                        {selected ? 'Selected' : 'Option'}
+                      </span>
+                    </span>
+                    <span className="mt-3 block text-[12px] font-bold text-[#111827]">{template.name}</span>
+                    <span className="mt-1 block text-[11px] leading-5 text-[#6b7280]">{template.description}</span>
+                  </button>
+                )
+              })}
+            </div>
+            {reportTemplateError ? <div className="mx-4 mb-4 rounded-[5px] border border-[#fecaca] bg-[#fef2f2] px-3 py-2 text-[12px] font-semibold text-[#b91c1c]">{reportTemplateError}</div> : null}
+          </SectionCard>
+
           <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_360px]">
             <SectionCard title="School Details" subtitle="Identity used across receipts, reports and parent communication.">
               <div className="grid gap-3 p-4 sm:grid-cols-2">
@@ -863,6 +997,48 @@ export function SettingsCenter({ section }: { section: SettingsSection }) {
       )
     }
 
+    if (section === 'features') {
+      return (
+        <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_340px]">
+          <SectionCard
+            title="School Feature Assignment"
+            subtitle="Switch timetable modules on only when the school is ready to use them."
+            actions={<SaveButton savedMessage={savedMessage} onSave={saveSchoolFeatures} disabled={!canManageSchoolSetup || featureLoading} />}
+          >
+            <div className="divide-y divide-[var(--mera-panel-border-soft)]">
+              {schoolFeatureDefinitions.map((feature) => (
+                <SettingRow key={feature.key} label={feature.title} detail={feature.detail}>
+                  <div className="flex items-center justify-end gap-3">
+                    <span className="hidden text-right text-[10px] font-bold uppercase tracking-[0.08em] text-[#9ca3af] sm:block">{feature.audience}</span>
+                    <Switch
+                      checked={schoolFeatures[feature.key]}
+                      disabled={!canManageSchoolSetup || featureLoading}
+                      onCheckedChange={(value) => updateFeature(feature.key, value)}
+                    />
+                  </div>
+                </SettingRow>
+              ))}
+            </div>
+            {featureError ? <div className="mx-4 mb-4 rounded-[5px] border border-[#fecaca] bg-[#fef2f2] px-3 py-2 text-[12px] font-semibold text-[#b91c1c]">{featureError}</div> : null}
+          </SectionCard>
+
+          <SectionCard title="Assigned Modules" subtitle="Current timetable feature state for this school.">
+            <div className="grid gap-2 p-4">
+              {schoolFeatureDefinitions.map((feature) => (
+                <div key={feature.key} className="flex items-center justify-between gap-3 rounded-[5px] border border-[#e5e7eb] bg-white px-3 py-2">
+                  <div className="min-w-0">
+                    <div className="truncate text-[12px] font-semibold text-[#111827]">{feature.title}</div>
+                    <div className="mt-0.5 truncate text-[11px] text-[#6b7280]">{feature.audience}</div>
+                  </div>
+                  <Pill value={schoolFeatures[feature.key] ? 'Enabled' : 'Disabled'} />
+                </div>
+              ))}
+            </div>
+          </SectionCard>
+        </div>
+      )
+    }
+
     if (section === 'integrations') {
       return (
         <div className="grid gap-3">
@@ -998,9 +1174,9 @@ export function SettingsCenter({ section }: { section: SettingsSection }) {
   )
 }
 
-function SaveButton({ savedMessage, onSave }: { savedMessage: string; onSave: () => void }) {
+function SaveButton({ savedMessage, onSave, disabled = false }: { savedMessage: string; onSave: () => void; disabled?: boolean }) {
   return (
-    <Button type="button" onClick={onSave} className="h-8 rounded-[5px] px-3 text-[12px]">
+    <Button type="button" onClick={onSave} disabled={disabled} className="h-8 rounded-[5px] px-3 text-[12px]">
       <Save className="size-3.5" />
       {savedMessage || 'Save'}
     </Button>

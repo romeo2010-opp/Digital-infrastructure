@@ -5,6 +5,7 @@ import { Sidebar } from './components/Sidebar'
 import { PageHeader } from './components/PageHeader'
 import { LoginScreen } from './components/LoginScreen'
 import { ActionLoadingOverlay } from './components/ActionLoadingOverlay'
+import { SmartLinkLoadingState } from './components/SmartLinkLoadingState'
 import { Button } from './components/ui/button'
 import { Input } from './components/ui/input'
 import { Toaster } from './components/ui/sonner'
@@ -28,6 +29,12 @@ import { TeacherProfilePage } from './pages/TeacherProfilePage'
 import { TeachersPage } from './pages/TeachersPage'
 import { SyllabusIntelligencePage } from './pages/SyllabusIntelligencePage'
 import { SyllabusComposerPage } from './pages/SyllabusComposerPage'
+import { QuestionBatchEditorPage } from './pages/QuestionBatchEditorPage'
+import { QuestionBankPage } from './pages/QuestionBankPage'
+import { TeacherLessonLogPage } from './pages/TeacherLessonLogPage'
+import { TimetablingPage } from './pages/TimetablingPage'
+import { SchedulingSettingsPage } from './pages/SchedulingSettingsPage'
+import { PublicLandingPage } from './pages/PublicLandingPage'
 
 const routeMeta = [
   { path: '/dashboard', title: 'School Dashboard', subtitle: 'Students, fees, attendance and academic progress' },
@@ -46,14 +53,28 @@ const routeMeta = [
   { path: '/attendance', title: 'Attendance', subtitle: 'Daily registers, absence alerts and class trends' },
   { path: '/homework', title: 'Homework', subtitle: 'Assignments, due dates and reminders' },
   { path: '/exam-sessions', title: 'Exam Sessions', subtitle: 'End-of-term exam sessions, papers, timetables and report cards' },
+  { path: '/timetables', title: 'Timetables', subtitle: 'School timetable setup, versions, conflicts and publication' },
+  { path: '/exam-timetables', title: 'Exam Timetables', subtitle: 'Exam scheduling, rooms, invigilation and publication' },
+  { path: '/my-timetable', title: 'My Timetable', subtitle: 'Published lessons and changes' },
+  { path: '/my-exams', title: 'My Exams', subtitle: 'Published examination schedule' },
+  { path: '/my-invigilation', title: 'My Invigilation', subtitle: 'Assigned invigilation duties' },
   { path: '/results', title: 'Results', subtitle: 'Marks entry, report cards and academic review' },
   { path: '/assessment-insights', title: 'Assessment Insights', subtitle: 'Weak-topic analysis and learner support' },
+  { path: '/teacher/lesson-log', title: 'Teacher Lesson Log', subtitle: 'Actual teaching coverage, drafts and Daily Drill generation' },
   { path: '/syllabus', title: 'Syllabus Intelligence', subtitle: 'Uploads, topic maps, question bank and drills' },
+  { path: '/questions/bank', title: 'Question Bank', subtitle: 'Questions, answers and explanations' },
+  { path: '/questions/batches/', title: 'AI Draft Batch', subtitle: 'Review generated questions and explanations' },
   { path: '/exam-builder', title: 'Assessment Builder', subtitle: 'Exam topics, marks and difficulty review' },
   { path: '/daily-drill', title: 'Daily Drill', subtitle: 'Personalized practice from weak topics' },
   { path: '/exam-forecast', title: 'Exam Forecast', subtitle: 'Topic priority for exam preparation' },
   { path: '/messages', title: 'Messages', subtitle: 'Parent and staff communication' },
   { path: '/reports', title: 'Reports', subtitle: 'Academic, attendance and finance summaries' },
+  { path: '/settings/features', title: 'Feature Assignment', subtitle: 'Enable timetable modules for this school' },
+  { path: '/settings/academic-configuration', title: 'Academic Configuration', subtitle: 'Years, terms, teaching days and bell schedules' },
+  { path: '/settings/facilities', title: 'Facilities and Resources', subtitle: 'Rooms, shared equipment and reservable school spaces' },
+  { path: '/settings/laboratories', title: 'Laboratories', subtitle: 'Practical rooms, subject support and exam readiness' },
+  { path: '/settings/weekly-activities', title: 'Weekly Activities', subtitle: 'Assembly, chapel, clubs, tests and recurring school events' },
+  { path: '/settings/timetable-rules', title: 'Timetable Rules', subtitle: 'Scheduling rules, occupancy and exam resource controls' },
   { path: '/settings', title: 'Settings', subtitle: 'School workspace preferences and controls' },
 ] as const
 
@@ -271,11 +292,41 @@ function SchoolRoutes({ landingPath }: { landingPath: string }) {
       <Route path="/attendance" element={<SchoolWorkspace pageKey="attendance" />} />
       <Route path="/homework" element={<SchoolWorkspace pageKey="homework" />} />
       <Route path="/exam-sessions" element={<ExamSessionsPage />} />
+      <Route path="/timetables" element={<TimetablingPage />} />
+      <Route path="/timetables/new" element={<TimetablingPage />} />
+      <Route path="/timetables/:id/setup" element={<TimetablingPage />} />
+      <Route path="/timetables/:id/versions" element={<TimetablingPage />} />
+      <Route path="/timetables/:id/versions/:versionId" element={<TimetablingPage />} />
+      <Route path="/timetables/:id/versions/:versionId/edit" element={<TimetablingPage />} />
+      <Route path="/exam-timetables" element={<TimetablingPage />} />
+      <Route path="/exam-timetables/new" element={<TimetablingPage />} />
+      <Route path="/exam-timetables/:id/setup" element={<TimetablingPage />} />
+      <Route path="/exam-timetables/:id/clashes" element={<TimetablingPage />} />
+      <Route path="/exam-timetables/:id/versions" element={<TimetablingPage />} />
+      <Route path="/exam-timetables/:id/versions/:versionId" element={<TimetablingPage />} />
+      <Route path="/exam-timetables/:id/versions/:versionId/edit" element={<TimetablingPage />} />
+      <Route path="/exam-timetables/:id/rooms" element={<TimetablingPage />} />
+      <Route path="/exam-timetables/:id/invigilators" element={<TimetablingPage />} />
+      <Route path="/exam-timetables/:id/seating" element={<TimetablingPage />} />
+      <Route path="/exam-timetables/:id/review" element={<TimetablingPage />} />
+      <Route path="/exam-timetables/:id/reports" element={<TimetablingPage />} />
+      <Route path="/my-timetable" element={<TimetablingPage personal />} />
+      <Route path="/my-exams" element={<TimetablingPage personal />} />
+      <Route path="/my-invigilation" element={<TimetablingPage personal />} />
       <Route path="/results" element={<ResultsEntryPage />} />
+      <Route path="/results/:assessmentId" element={<ResultsEntryPage />} />
       <Route path="/assessment-insights" element={<SchoolWorkspace pageKey="assessmentInsights" />} />
+      <Route path="/teacher/lesson-log" element={<TeacherLessonLogPage />} />
+      <Route path="/teacher/lesson-log/new" element={<TeacherLessonLogPage />} />
+      <Route path="/teacher/lesson-log/:lessonLogId" element={<TeacherLessonLogPage />} />
+      <Route path="/teacher/lesson-log/:lessonLogId/edit" element={<TeacherLessonLogPage />} />
+      <Route path="/teacher/classes/:classId/lesson-history" element={<TeacherLessonLogPage />} />
+      <Route path="/teacher/classes/:classId/subjects/:subjectId/coverage" element={<TeacherLessonLogPage />} />
       <Route path="/syllabus" element={<SyllabusIntelligencePage />} />
       <Route path="/syllabus/create" element={<SyllabusComposerPage />} />
       <Route path="/syllabus/create/:entryId" element={<SyllabusComposerPage />} />
+      <Route path="/questions/bank" element={<QuestionBankPage />} />
+      <Route path="/questions/batches/:batchId" element={<QuestionBatchEditorPage />} />
       <Route path="/exam-builder" element={<ExamPaperStudioPage />} />
       <Route path="/exam-builder/new" element={<ExamPaperDocumentPage />} />
       <Route path="/exam-builder/:assessmentId" element={<ExamPaperDocumentPage />} />
@@ -291,6 +342,12 @@ function SchoolRoutes({ landingPath }: { landingPath: string }) {
       <Route path="/settings/users" element={<SettingsCenter section="users" />} />
       <Route path="/settings/audit" element={<SettingsCenter section="audit" />} />
       <Route path="/settings/organization" element={<SettingsCenter section="organization" />} />
+      <Route path="/settings/features" element={<SettingsCenter section="features" />} />
+      <Route path="/settings/academic-configuration" element={<SchedulingSettingsPage section="academic-configuration" />} />
+      <Route path="/settings/facilities" element={<SchedulingSettingsPage section="facilities" />} />
+      <Route path="/settings/laboratories" element={<SchedulingSettingsPage section="laboratories" />} />
+      <Route path="/settings/weekly-activities" element={<SchedulingSettingsPage section="weekly-activities" />} />
+      <Route path="/settings/timetable-rules" element={<SchedulingSettingsPage section="timetable-rules" />} />
       <Route path="/settings/integrations" element={<SettingsCenter section="integrations" />} />
       <Route path="/settings/data" element={<SettingsCenter section="data" />} />
 
@@ -309,14 +366,11 @@ function routePacketLoading(pathname: string, data: any, packetStatus: Record<st
 function RouteDataActivity({ active }: { active: boolean }) {
   return (
     <div
-      className={`pointer-events-none absolute inset-x-0 top-0 z-30 transition-all duration-300 ease-out ${
-        active ? 'translate-y-0 opacity-100' : '-translate-y-1 opacity-0'
+      className={`absolute inset-0 z-30 grid place-items-center bg-white/75 p-4 backdrop-blur-[1px] transition-all duration-300 ease-out ${
+        active ? 'pointer-events-auto translate-y-0 opacity-100' : 'pointer-events-none -translate-y-1 opacity-0'
       }`}
     >
-      <div className="h-0.5 overflow-hidden bg-[#e2e8f0]">
-        <div className="mera-route-loading-bar h-full w-1/3 bg-[#111827]" />
-      </div>
-      <div className="h-10 bg-linear-to-b from-white/70 to-transparent" />
+      <SmartLinkLoadingState variant="inline" label="Loading page data" detail="Preparing the latest school records." />
     </div>
   )
 }
@@ -437,11 +491,14 @@ function PortalShell() {
   const isDashboardRoute = location.pathname === '/dashboard'
   const isExamPaperDocumentRoute = /^\/exam-builder\/(new|[^/]+)$/.test(location.pathname)
   const isSyllabusComposerRoute = /^\/syllabus\/create(\/[^/]+)?$/.test(location.pathname)
+  const isQuestionBatchEditorRoute = /^\/questions\/batches\/[^/]+$/.test(location.pathname)
+  const isQuestionBankRoute = location.pathname === '/questions/bank'
+  const isResultsSheetRoute = /^\/results\/[^/]+$/.test(location.pathname)
   const syncCurrentPage = () => requestRoutePackets(location.pathname, { force: true, primaryOnly: true, preferHttp: true, timeoutMs: 4500, reason: 'school-topbar-sync' })
 
-  if (isExamPaperDocumentRoute || isSyllabusComposerRoute) {
+  if (isExamPaperDocumentRoute || isSyllabusComposerRoute || isQuestionBatchEditorRoute || isQuestionBankRoute || isResultsSheetRoute) {
     return (
-      <div className="h-screen overflow-hidden bg-[#eef1f5] text-[#111827]">
+      <div className={`h-screen bg-[#eef1f5] text-[#111827] ${isResultsSheetRoute ? 'overflow-y-auto overflow-x-hidden overscroll-contain' : 'overflow-hidden'}`}>
         <ActionLoadingOverlay visible={actionLoading} label={actionLabel} />
         <SchoolRoutes landingPath={landingPath} />
       </div>
@@ -464,7 +521,7 @@ function PortalShell() {
       {isDashboardRoute ? <DashboardViewStrip /> : null}
       <div className="flex min-h-0 flex-1 overflow-hidden bg-transparent">
         <Sidebar user={user} />
-        <main className="relative min-w-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain">
+        <main className="smartlink-shell-scroll relative min-w-0 flex-1 overflow-y-scroll overflow-x-hidden">
           <RouteDataActivity active={routeLoading.missing} />
           <div className={`min-h-full transition-[opacity,transform] duration-300 ease-out ${routeLoading.missing ? 'opacity-[0.96]' : 'opacity-100'}`}>
             <SchoolRoutes landingPath={landingPath} />
@@ -475,12 +532,39 @@ function PortalShell() {
   )
 }
 
+function publicPortalUrl() {
+  if (typeof window === 'undefined') return 'https://portal.publicurl.com'
+  const protocol = window.location.protocol || 'https:'
+  const hostname = window.location.hostname.toLowerCase()
+  if (hostname === 'publicurl.com' || hostname === 'www.publicurl.com') return `${protocol}//portal.publicurl.com`
+  if (hostname === 'portal.publicurl.com') return `${protocol}//portal.publicurl.com`
+  return '/'
+}
+
+function shouldRenderPublicSite() {
+  if (typeof window === 'undefined') return false
+  const hostname = window.location.hostname.toLowerCase()
+  const publicHosts = new Set(['publicurl.com', 'www.publicurl.com'])
+  const localHosts = new Set(['localhost', '127.0.0.1', '0.0.0.0'])
+  if (publicHosts.has(hostname)) return true
+  return localHosts.has(hostname) && window.location.pathname.startsWith('/public')
+}
+
 export default function App() {
+  if (shouldRenderPublicSite()) {
+    return (
+      <>
+        <PublicLandingPage portalUrl={publicPortalUrl()} />
+        <Toaster />
+      </>
+    )
+  }
+
   return (
     <PortalProvider>
       <BrowserRouter>
         <PortalShell />
-        <Toaster position="top-right" richColors closeButton />
+        <Toaster />
       </BrowserRouter>
     </PortalProvider>
   )

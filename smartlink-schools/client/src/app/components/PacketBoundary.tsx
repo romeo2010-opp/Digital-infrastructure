@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
-import { PanelSkeleton } from './LiveDataSkeleton'
 import { usePortal } from '../lib/portalContext'
 import { normalizePacketKeys, type MeraPacketKey } from '../lib/packetRegistry'
+import { SmartLinkLoadingState } from './SmartLinkLoadingState'
 
 function hasPacketValue(data: any, key: MeraPacketKey) {
   return Object.prototype.hasOwnProperty.call(data || {}, key) && data?.[key] !== undefined
@@ -25,7 +25,7 @@ export function PacketBoundary({
   const missingLoading = keys.some((key) => packetStatus[key] === 'loading' && !hasPacketValue(data, key))
   const firstErrorKey = keys.find((key) => packetStatus[key] === 'error' || packetStatus[key] === 'forbidden')
 
-  if (missingLoading) return <>{skeleton || <PanelSkeleton />}</>
+  if (missingLoading) return <>{skeleton || <SmartLinkLoadingState label="Loading school data" detail="Preparing the latest records for this view." />}</>
   if (firstErrorKey && errorFallback) return <>{errorFallback}</>
   if (firstErrorKey) {
     return (

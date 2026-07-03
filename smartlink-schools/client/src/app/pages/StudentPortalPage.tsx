@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
+  ArrowDownRight,
   ArrowLeft,
+  ArrowUpRight,
+  Award,
   BarChart3,
   Bell,
   Brain,
@@ -14,18 +17,23 @@ import {
   Clock,
   Crown,
   FileText,
+  Flame,
   HelpCircle,
   Heart,
   Home,
   Lightbulb,
   Lock,
   LogOut,
+  Medal,
+  Minus,
   NotebookTabs,
   Phone,
   RefreshCcw,
   Smile,
+  Sparkles,
   ThumbsUp,
   TrendingUp,
+  Trophy,
   UserCircle2,
   Volume2,
   Wallet,
@@ -43,6 +51,7 @@ type PortalView =
   | "attendance"
   | "timetable"
   | "drills"
+  | "ranking"
   | "notices"
   | "profile"
   | "plus";
@@ -73,6 +82,7 @@ const secondaryNav: Array<{
 }> = [
   { id: "timetable", label: "Schedule", icon: CalendarDays },
   { id: "drills", label: "Practice", icon: Brain },
+  { id: "ranking", label: "Ranking", icon: Trophy },
   { id: "notices", label: "Notices", icon: Bell },
   { id: "profile", label: "Profile", icon: UserCircle2 },
   { id: "plus", label: "Plus", icon: Crown },
@@ -91,6 +101,7 @@ const desktopNavGroups: Array<{
       { id: "results", label: "Results", icon: BarChart3 },
       { id: "homework", label: "Homework", icon: NotebookTabs },
       { id: "drills", label: "Daily drills", icon: Brain },
+      { id: "ranking", label: "Ranking", icon: Trophy },
       { id: "attendance", label: "Attendance", icon: CalendarCheck },
       { id: "timetable", label: "Timetable", icon: Clock },
     ],
@@ -108,6 +119,40 @@ const desktopNavGroups: Array<{
   },
 ];
 
+const celebrationStyles: Record<
+  string,
+  { badge: string; gradient: string; iconText: string; icon: any; accent: any }
+> = {
+  first_drill: {
+    badge: "First drill",
+    gradient: "from-[#16A34A] via-[#22C55E] to-[#0F766E]",
+    iconText: "text-[#15803D]",
+    icon: Sparkles,
+    accent: Check,
+  },
+  streak_started: {
+    badge: "Streak started",
+    gradient: "from-[#F97316] via-[#F59E0B] to-[#B45309]",
+    iconText: "text-[#C2410C]",
+    icon: Flame,
+    accent: Trophy,
+  },
+  rank_climb: {
+    badge: "Rank climb",
+    gradient: "from-[#2563EB] via-[#7C3AED] to-[#4338CA]",
+    iconText: "text-[#4F46E5]",
+    icon: TrendingUp,
+    accent: ArrowUpRight,
+  },
+  default: {
+    badge: "Daily Drill",
+    gradient: "from-[#334155] via-[#475569] to-[#111827]",
+    iconText: "text-[#334155]",
+    icon: Medal,
+    accent: Trophy,
+  },
+};
+
 const viewTitles: Record<PortalView, string> = {
   home: "Overview",
   results: "Academic results",
@@ -116,6 +161,7 @@ const viewTitles: Record<PortalView, string> = {
   attendance: "Attendance",
   timetable: "Timetable",
   drills: "Daily drills",
+  ranking: "Class ranking",
   notices: "Notices",
   profile: "Personal profile",
   plus: "SmartLink Plus",
@@ -344,6 +390,55 @@ function drillScoreTone(value: any) {
   if (number >= 70) return "text-[#0F6E56]";
   if (number >= 50) return "text-[#BA7517]";
   return "text-[#993C1D]";
+}
+
+function drillAnswerReview(question: any) {
+  const maxMarks = Math.max(1, Number(question?.marks || 1));
+  const hasMarks =
+    question?.marks_awarded !== null && question?.marks_awarded !== undefined;
+  const marksAwarded = hasMarks ? Number(question.marks_awarded || 0) : null;
+  const fullCredit =
+    question?.is_correct === 1 ||
+    question?.is_correct === true ||
+    (marksAwarded !== null && marksAwarded >= maxMarks);
+  const partialCredit = !fullCredit && marksAwarded !== null && marksAwarded > 0;
+  if (fullCredit) {
+    return {
+      label: "Correct",
+      badgeClass: "bg-[#E1F5EE] text-[#085041]",
+      panelClass: "border-[#C7EBDD] bg-[#F1FBF6] text-[#085041]",
+      feedback:
+        question?.ai_feedback ||
+        "Nice work. Your answer matches the expected idea.",
+      marksAwarded,
+      maxMarks,
+    };
+  }
+  if (partialCredit) {
+    return {
+      label: "Partly right",
+      badgeClass: "bg-[#FFF4D8] text-[#8A5A00]",
+      panelClass: "border-[#F3D58A] bg-[#FFF9E8] text-[#6F4A00]",
+      feedback:
+        question?.ai_feedback ||
+        "You have part of the idea. Add more detail to make the answer complete.",
+      marksAwarded,
+      maxMarks,
+    };
+  }
+  return {
+    label:
+      question?.mistake_type === "teacher_review_required"
+        ? "Teacher review"
+        : "Needs work",
+    badgeClass: "bg-[#FCEBEB] text-[#791F1F]",
+    panelClass: "border-[#F1CACA] bg-[#FFF4F4] text-[#791F1F]",
+    feedback:
+      question?.ai_feedback ||
+      "Review the explanation below, then try to connect your answer to the main idea.",
+    marksAwarded,
+    maxMarks,
+  };
 }
 
 function StatCard({
@@ -947,7 +1042,7 @@ function AiExplanationResponse({
 }
 
 export function StudentPortalPage() {
-  const { api, token, user, logout } = usePortal();
+  const { api, token, user, logout, data } = usePortal();
   const [payload, setPayload] = useState<any>(null);
   const [activeView, setActiveView] = useState<PortalView>("home");
   const [loading, setLoading] = useState(false);
@@ -972,6 +1067,9 @@ export function StudentPortalPage() {
   });
   const [payStep, setPayStep] = useState<PayFlowStep>("none");
   const [selectedMethod, setSelectedMethod] = useState("Airtel Money");
+  const [celebrationOverlay, setCelebrationOverlay] = useState<any>(null);
+  const [celebrationQueue, setCelebrationQueue] = useState<any[]>([]);
+  const queuedCelebrationKeysRef = useRef<Set<string>>(new Set());
 
   const cacheKey = useMemo(() => {
     const id = user?.studentId || user?.studentCode || user?.id || "student";
@@ -1070,6 +1168,17 @@ export function StudentPortalPage() {
   }, [cacheKey, token]);
 
   useEffect(() => {
+    if (!data?.studentPortal) return;
+    setPayload(data.studentPortal);
+    setOffline(false);
+    try {
+      window.localStorage.setItem(cacheKey, JSON.stringify(data.studentPortal));
+    } catch {
+      // Local storage can be unavailable in private browsing.
+    }
+  }, [cacheKey, data?.studentPortal]);
+
+  useEffect(() => {
     try {
       const cached = window.localStorage.getItem(drillCacheKey);
       if (cached) {
@@ -1101,6 +1210,68 @@ export function StudentPortalPage() {
   };
   const timetable = payload?.timetable?.entries || [];
   const notices = payload?.notices?.items || [];
+  const ranking = payload?.ranking || {
+    leaderboard: [],
+    movements: [],
+    awards: [],
+    summary: {},
+  };
+  const currentRankingRow =
+    (ranking.leaderboard || []).find((row: any) => row.is_current_student) ||
+    null;
+  const rankingCelebrations = Array.isArray(ranking.celebrations)
+    ? ranking.celebrations
+    : Array.isArray(currentRankingRow?.celebrations)
+      ? currentRankingRow.celebrations
+      : [];
+  const rankingCelebrationKeys = rankingCelebrations
+    .map((event: any) => event?.key)
+    .filter(Boolean)
+    .join("|");
+
+  useEffect(() => {
+    if (!rankingCelebrations.length || typeof window === "undefined") return;
+    const unseenEvents = rankingCelebrations.filter((event: any) => {
+      const key = String(event?.key || "");
+      if (!key || queuedCelebrationKeysRef.current.has(key)) return false;
+      const storageKey = `smartlink.schools.celebration.${key}`;
+      let alreadySeen = false;
+      try {
+        alreadySeen = window.localStorage.getItem(storageKey) === "seen";
+      } catch {
+        alreadySeen = false;
+      }
+      if (alreadySeen) return false;
+      queuedCelebrationKeysRef.current.add(key);
+      return true;
+    });
+    if (unseenEvents.length) {
+      setCelebrationQueue((currentQueue) => [...currentQueue, ...unseenEvents]);
+    }
+  }, [rankingCelebrationKeys]);
+
+  useEffect(() => {
+    if (celebrationOverlay || !celebrationQueue.length) return;
+    const [nextCelebration, ...remainingQueue] = celebrationQueue;
+    setCelebrationOverlay(nextCelebration);
+    setCelebrationQueue(remainingQueue);
+  }, [celebrationOverlay, celebrationQueue]);
+
+  const closeCelebrationOverlay = () => {
+    const key = celebrationOverlay?.key;
+    try {
+      if (key && typeof window !== "undefined") {
+        window.localStorage.setItem(
+          `smartlink.schools.celebration.${key}`,
+          "seen",
+        );
+      }
+    } catch {
+      // Celebration de-duping is best-effort.
+    }
+    setCelebrationOverlay(null);
+  };
+
   const announcements = notices
     .filter((notice: any) => notice.source === "announcement")
     .sort((a: any, b: any) =>
@@ -1258,6 +1429,7 @@ export function StudentPortalPage() {
         }
       }
       await loadTodayDrill({ silent: true });
+      await loadPortal({ silent: true });
       toast.success("Daily drill submitted.");
     } catch (submitError: any) {
       toast.error(submitError?.message || "Unable to submit this drill.");
@@ -1951,7 +2123,7 @@ export function StudentPortalPage() {
           <div className="grid gap-3">
             <EmptyState
               label={
-                drillPayload?.action_required || "No daily drill is ready yet."
+                drillPayload?.action_required || "No Daily Drill is ready yet. Your teacher may need to approve practice questions first."
               }
             />
             <button
@@ -2025,8 +2197,7 @@ export function StudentPortalPage() {
                 const draftAnswer =
                   drillAnswers[key] ?? question.student_answer ?? "";
                 const answered = drillQuestionAnswered(question);
-                const correct =
-                  question.is_correct === 1 || question.is_correct === true;
+                const reviewState = drillAnswerReview(question);
                 const explanation = drillExplanations[key];
                 return (
                   <div
@@ -2058,9 +2229,9 @@ export function StudentPortalPage() {
                       </div>
                       {drillComplete ? (
                         <span
-                          className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${correct ? "bg-[#E1F5EE] text-[#085041]" : "bg-[#FCEBEB] text-[#791F1F]"}`}
+                          className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${reviewState.badgeClass}`}
                         >
-                          {correct ? "Correct" : "Review"}
+                          {reviewState.label}
                         </span>
                       ) : answered ? (
                         <span className="rounded-full bg-[#E6F1FB] px-2 py-0.5 text-[10px] font-medium text-[#0C447C]">
@@ -2145,13 +2316,20 @@ export function StudentPortalPage() {
 
                     {drillComplete ? (
                       <div className="mt-3 rounded-[8px] bg-[#F8F7F2] p-2.5">
-                        <div className="mb-1 flex flex-wrap items-center gap-2 text-[10px] font-medium text-[#6f6d67]">
-                          <span>
-                            Your answer: {question.student_answer || "-"}
-                          </span>
-                          <span>
-                            Correct answer: {question.correct_answer || "-"}
-                          </span>
+                        <div className="mb-2 grid gap-2">
+                          <div className="flex flex-wrap items-center gap-2 text-[10px] font-medium text-[#6f6d67]">
+                            <span>
+                              Your answer: {question.student_answer || "-"}
+                            </span>
+                            {reviewState.marksAwarded !== null ? (
+                              <span>
+                                Score: {reviewState.marksAwarded}/{reviewState.maxMarks}
+                              </span>
+                            ) : null}
+                          </div>
+                          <div className={`rounded-[8px] border px-3 py-2 text-[11px] leading-4 ${reviewState.panelClass}`}>
+                            {reviewState.feedback}
+                          </div>
                         </div>
                         {question.explanation ? (
                           <div className="text-[11px] leading-4 text-[#6f6d67]">
@@ -2277,6 +2455,257 @@ export function StudentPortalPage() {
       </Card>
     </>
   );
+
+  const renderRanking = () => {
+    const rows = ranking.leaderboard || [];
+    const hasCompletedDrills = rows.some((row: any) => Number(row.completed_drills || 0) > 0);
+    const movements = ranking.movements || [];
+    const awards = ranking.awards || [];
+    const summary = ranking.summary || {};
+    const currentRow =
+      rows.find((row: any) => row.is_current_student) || null;
+    const medalClass = (medal: any) => {
+      if (medal === "gold") return "bg-[#FAEEDA] text-[#8A5A00]";
+      if (medal === "silver") return "bg-[#EEF1F5] text-[#58616F]";
+      if (medal === "bronze") return "bg-[#F7E6D7] text-[#8A3F16]";
+      return "bg-[#F1F0EA] text-[#6f6d67]";
+    };
+    const movementView = (row: any) => {
+      const movement = Number(row.movement || 0);
+      if (movement > 0) {
+        return {
+          Icon: ArrowUpRight,
+          label: `Up ${movement}`,
+          className: "text-[#0B7A52]",
+        };
+      }
+      if (movement < 0) {
+        return {
+          Icon: ArrowDownRight,
+          label: `Down ${Math.abs(movement)}`,
+          className: "text-[#B42318]",
+        };
+      }
+      return {
+        Icon: Minus,
+        label: row.movement_direction === "new" ? "New" : "Steady",
+        className: "text-[#6f6d67]",
+      };
+    };
+
+    return (
+      <>
+        <div className="mb-3 grid grid-cols-2 gap-2 lg:max-w-[720px] lg:grid-cols-4">
+          <StatCard
+            label="Your rank"
+            value={summary.current_position || "-"}
+            suffix={summary.current_position && summary.class_size ? `/${summary.class_size}` : ""}
+            sub="Daily Drill class table"
+            tone="positive"
+          />
+          <StatCard
+            label="Average"
+            value={
+              summary.current_average !== null &&
+              summary.current_average !== undefined
+                ? percent(summary.current_average).replace("%", "")
+                : "-"
+            }
+            suffix={
+              summary.current_average !== null &&
+              summary.current_average !== undefined
+                ? "%"
+                : ""
+            }
+            sub={`${summary.current_completed || 0} completed`}
+          />
+          <StatCard
+            label="Movement"
+            value={
+              Number(summary.current_movement || 0) > 0
+                ? `+${summary.current_movement}`
+                : summary.current_movement || "-"
+            }
+            sub="Recent position change"
+            tone={Number(summary.current_movement || 0) < 0 ? "negative" : "positive"}
+          />
+          <StatCard
+            label="Leader"
+            value={
+              summary.leader_average !== null &&
+              summary.leader_average !== undefined
+                ? percent(summary.leader_average).replace("%", "")
+                : "-"
+            }
+            suffix={
+              summary.leader_average !== null &&
+              summary.leader_average !== undefined
+                ? "%"
+                : ""
+            }
+            sub={summary.leader_name || "No leader yet"}
+          />
+        </div>
+
+        {currentRow?.award ? (
+          <Card title="Your award">
+            <div className="flex items-center gap-3 rounded-[10px] border border-[#D9E9D3] bg-[#F1FAF4] p-3">
+              <div className="grid size-10 place-items-center rounded-full bg-white text-[#0B7A52]">
+                <Award className="size-5" />
+              </div>
+              <div>
+                <div className="text-[13px] font-semibold text-[#20201d]">
+                  {currentRow.award}
+                </div>
+                <div className="mt-0.5 text-[11px] leading-4 text-[#5F7568]">
+                  Keep going. This award is based only on Daily Drill practice.
+                </div>
+              </div>
+            </div>
+          </Card>
+        ) : null}
+
+        <Card title={`${ranking.class_name || "Class"} Daily Drill ranking`}>
+          {rows.length ? (
+            <div className="grid gap-2">
+              {rows.map((row: any) => {
+                const movement = movementView(row);
+                const MovementIcon = movement.Icon;
+                return (
+                  <div
+                    key={row.student_id}
+                    className={`flex items-center gap-2 rounded-[10px] border px-3 py-2 ${
+                      row.is_current_student
+                        ? "border-[#185FA5] bg-[#E6F1FB]"
+                        : "border-[#E7E5DE] bg-white"
+                    }`}
+                  >
+                    <div
+                      className={`grid size-8 shrink-0 place-items-center rounded-full text-[12px] font-semibold ${
+                        row.medal ? medalClass(row.medal) : "bg-[#F1F0EA] text-[#20201d]"
+                      }`}
+                    >
+                      {row.medal ? <Medal className="size-4" /> : row.position || "-"}
+                    </div>
+                    <StudentAvatar
+                      profile={row}
+                      user={user}
+                      className="size-8"
+                      textClassName="text-[11px]"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex min-w-0 items-center gap-1.5">
+                        <span className="truncate text-[12px] font-medium text-[#20201d]">
+                          {row.full_name}
+                        </span>
+                        {row.medal ? (
+                          <span className={`inline-flex h-5 items-center gap-1 rounded-full px-1.5 text-[9px] font-semibold uppercase ${medalClass(row.medal)}`}>
+                            <Trophy className="size-3" />
+                            {row.medal}
+                          </span>
+                        ) : null}
+                      </div>
+                      <div className="mt-0.5 text-[10px] text-[#8c8982]">
+                        {row.completed_drills} completed -{" "}
+                        {row.latest_drill_date
+                          ? `last ${shortDate(row.latest_drill_date)}`
+                          : "no completed drill yet"}
+                      </div>
+                    </div>
+                    <div className="grid justify-items-end gap-0.5">
+                      <div className="text-[13px] font-medium text-[#20201d]">
+                        {row.average_score !== null &&
+                        row.average_score !== undefined
+                          ? percent(row.average_score)
+                          : "-"}
+                      </div>
+                      <div
+                        className={`inline-flex items-center gap-0.5 text-[10px] font-medium ${movement.className}`}
+                      >
+                        {Number(row.completed_drills || 0) > 0 ? (
+                          <>
+                            <MovementIcon className="size-3" />
+                            {movement.label}
+                          </>
+                        ) : "No drills"}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <EmptyState label="No classmates are available for this ranking yet." />
+          )}
+        </Card>
+
+        <Card title="Recent movements">
+          {hasCompletedDrills && movements.length ? (
+            <div className="grid gap-2">
+              {movements.map((row: any) => {
+                const movement = movementView(row);
+                const MovementIcon = movement.Icon;
+                return (
+                  <div
+                    key={`movement-${row.student_id}`}
+                    className="flex items-center justify-between gap-3 border-b border-[#E7E5DE] py-2 last:border-b-0"
+                  >
+                    <div className="min-w-0">
+                      <div className="truncate text-[12px] font-medium text-[#20201d]">
+                        {row.full_name}
+                      </div>
+                      <div className="mt-0.5 text-[10px] text-[#8c8982]">
+                        Position {row.position}
+                        {row.previous_position
+                          ? ` from ${row.previous_position}`
+                          : ""}
+                      </div>
+                    </div>
+                    <span
+                      className={`inline-flex items-center gap-1 text-[12px] font-medium ${movement.className}`}
+                    >
+                      <MovementIcon className="size-4" />
+                      {movement.label}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <EmptyState label="Movements appear after the class has enough recent Daily Drill history." />
+          )}
+        </Card>
+
+        <Card title="Improvement awards">
+          {hasCompletedDrills && awards.length ? (
+            <div className="grid gap-2">
+              {awards.map((row: any) => (
+                <div
+                  key={`award-${row.student_id}`}
+                  className="flex items-center gap-2 rounded-[10px] border border-[#D9E9D3] bg-[#F8FCF9] px-3 py-2"
+                >
+                  <div className="grid size-8 place-items-center rounded-full bg-white text-[#0B7A52]">
+                    <Award className="size-4" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-[12px] font-medium text-[#20201d]">
+                      {row.full_name}
+                    </div>
+                    <div className="mt-0.5 text-[10px] text-[#6f6d67]">
+                      {row.award} - {row.improvement_points > 0 ? "+" : ""}
+                      {row.improvement_points || 0} points
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <EmptyState label="Improvement awards appear when scores start climbing." />
+          )}
+        </Card>
+      </>
+    );
+  };
 
   const renderNotices = () => (
     <Card title="Notices and announcements">
@@ -2439,6 +2868,7 @@ export function StudentPortalPage() {
     if (activeView === "attendance") return renderAttendance();
     if (activeView === "timetable") return renderTimetable();
     if (activeView === "drills") return renderDrills();
+    if (activeView === "ranking") return renderRanking();
     if (activeView === "notices") return renderNotices();
     if (activeView === "profile") return renderProfile();
     if (activeView === "plus") return renderPlus();
@@ -2656,10 +3086,85 @@ export function StudentPortalPage() {
     </>
   );
 
+  const renderCelebrationOverlay = () => {
+    if (!celebrationOverlay) return null;
+    const style =
+      celebrationStyles[String(celebrationOverlay.type || "")] ||
+      celebrationStyles.default;
+    const Icon = style.icon;
+    const AccentIcon = style.accent;
+    const stats = Array.isArray(celebrationOverlay.stats)
+      ? celebrationOverlay.stats.slice(0, 2)
+      : [];
+    const visibleStats =
+      stats.length > 0
+        ? stats
+        : [
+            { label: "Completed", value: "Daily Drill" },
+            { label: "Ranking", value: "Updated" },
+          ];
+    return (
+      <div className="fixed inset-0 z-50 grid place-items-center bg-[#111827]/70 px-4 py-6 backdrop-blur-sm">
+        <div className="w-full max-w-[380px] overflow-hidden rounded-[24px] border border-white/40 bg-[#FFFCF4] text-center shadow-2xl">
+          <div className={`relative grid place-items-center bg-linear-to-br ${style.gradient} px-6 pb-8 pt-9 text-white`}>
+            <div className="absolute left-7 top-8 size-2 rounded-full bg-white/70" />
+            <div className="absolute right-10 top-6 size-3 rounded-full bg-white/60" />
+            <div className="absolute bottom-8 left-12 size-2.5 rounded-full bg-white/50" />
+            <div className="grid size-28 place-items-center rounded-full border-[6px] border-white/70 bg-white/20 shadow-[0_14px_30px_rgba(92,55,10,0.28)]">
+              <div className={`grid size-20 place-items-center rounded-full bg-white ${style.iconText} shadow-inner`}>
+                <Icon className="size-10" />
+              </div>
+            </div>
+            <div className="mt-4 inline-flex items-center gap-1.5 rounded-full bg-white/20 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.08em]">
+              <AccentIcon className="size-3.5" />
+              {style.badge}
+            </div>
+          </div>
+          <div className="px-5 pb-5 pt-4">
+            <h2 className="text-[22px] font-semibold tracking-[0] text-[#20201d]">
+              {celebrationOverlay.title || "Daily Drill progress"}
+            </h2>
+            <p className="mx-auto mt-2 max-w-[300px] text-[12px] leading-5 text-[#6f6d67]">
+              {celebrationOverlay.message ||
+                "Your Daily Drill progress has been updated."}
+            </p>
+            <div
+              className={`mt-4 grid gap-2 ${
+                visibleStats.length === 1 ? "grid-cols-1" : "grid-cols-2"
+              }`}
+            >
+              {visibleStats.map((stat: any, index: number) => (
+                <div
+                  key={`${stat.label || "stat"}-${index}`}
+                  className="min-w-0 rounded-[12px] border border-[#E7E5DE] bg-white px-3 py-2"
+                >
+                  <div className="break-words text-[20px] font-semibold text-[#20201d]">
+                    {stat.value || "-"}
+                  </div>
+                  <div className="mt-0.5 break-words text-[10px] font-medium text-[#8c8982]">
+                    {stat.label || "Progress"}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={closeCelebrationOverlay}
+              className="mt-4 h-10 w-full rounded-[12px] bg-[#20201d] text-[13px] font-semibold text-white"
+            >
+              Keep practising
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   const activeTitle = viewTitles[activeView] || "Overview";
 
   return (
     <div className="min-h-screen bg-[#F4F5F2] text-[#20201d]">
+      {renderCelebrationOverlay()}
       <div className="lg:hidden sm:px-4 sm:py-3">
         <div className="mx-auto min-h-screen w-full max-w-[430px] overflow-hidden bg-[#F4F5F2] sm:min-h-0 sm:rounded-[24px] sm:border sm:border-[#DFDDD5] sm:shadow-sm">
           <header className="sticky top-0 z-30 border-b border-[#DFDDD5] bg-white px-4 pb-3 pt-3.5">

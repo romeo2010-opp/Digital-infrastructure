@@ -26,6 +26,9 @@ export default defineConfig(({ mode }) => {
       allowedHosts: useWideAllowedHosts
         ? true
         : [
+            "publicurl.com",
+            "portal.publicurl.com",
+            ".publicurl.com",
             ".trycloudflare.com",
             ".ngrok-free.app",
             ".ngrok.app",
@@ -40,6 +43,11 @@ export default defineConfig(({ mode }) => {
           secure: false,
         },
         "/api": {
+          target: devApiTarget,
+          changeOrigin: true,
+          secure: false,
+        },
+        "/uploads": {
           target: devApiTarget,
           changeOrigin: true,
           secure: false,

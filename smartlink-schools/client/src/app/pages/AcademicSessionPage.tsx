@@ -7,6 +7,7 @@ import { Input } from '../components/ui/input'
 import { PortalTable } from '../components/PortalTable'
 import { SectionCard } from '../components/SectionCard'
 import { SectionKpiStrip } from '../components/SectionKpiStrip'
+import { SmartLinkLoadingState } from '../components/SmartLinkLoadingState'
 import { usePortal } from '../lib/portalContext'
 
 function today() {
@@ -47,14 +48,7 @@ function actionText(value: any) {
 }
 
 function LoadingPanel({ label = 'Loading...' }: { label?: string }) {
-  return (
-    <div className="grid min-h-[220px] place-items-center rounded-[8px] border border-[#e2e8f0] bg-white">
-      <div className="inline-flex items-center gap-2 text-[13px] font-semibold text-[#475569]">
-        <Loader2 className="size-4 animate-spin" />
-        {label}
-      </div>
-    </div>
-  )
+  return <SmartLinkLoadingState label={label} detail="Preparing academic records for this workspace." />
 }
 
 function StatusTile({ label, value }: { label: string; value: any }) {

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import { CheckCircle2, RotateCcw, Save, Send } from 'lucide-react'
+import { ArrowLeft, CheckCircle2, Download, Eye, PencilLine, Printer, RotateCcw, Save, Search, Send } from 'lucide-react'
+import { useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
 import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
@@ -8,6 +9,7 @@ import { SectionCard } from '../components/SectionCard'
 import { SectionKpiStrip } from '../components/SectionKpiStrip'
 import { usePortal } from '../lib/portalContext'
 
+const GREENHILL_LOGO_URL = '/greenhill-logo.png'
 const selectClassName = 'h-8 w-full rounded-[5px] border border-[#d9dce3] bg-white px-2 text-[12px] font-medium text-[#111827] outline-none focus:border-[#111827]/35'
 const labelClass = 'grid gap-1.5 text-[11px] font-bold uppercase tracking-[0.08em] text-[#6b7280]'
 
@@ -19,15 +21,421 @@ function statusLabel(value: any) {
   return String(value || 'draft').replace(/_/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase())
 }
 
+function hasScore(value: any) {
+  return value !== '' && value !== null && value !== undefined
+}
+
+function gradeForPercentage(value: any) {
+  const percentage = Number(value)
+  if (!Number.isFinite(percentage)) return ''
+  if (percentage >= 80) return 'A'
+  if (percentage >= 70) return 'B'
+  if (percentage >= 60) return 'C'
+  if (percentage >= 50) return 'D'
+  return 'E'
+}
+
+function aggregatePointForPercentage(value: any) {
+  const percentage = Number(value)
+  if (!Number.isFinite(percentage)) return ''
+  if (percentage >= 80) return 1
+  if (percentage >= 70) return 2
+  if (percentage >= 60) return 3
+  if (percentage >= 55) return 4
+  if (percentage >= 50) return 5
+  if (percentage >= 45) return 6
+  if (percentage >= 40) return 7
+  if (percentage >= 34) return 8
+  return 9
+}
+
+function percentageForScore(score: any, totalMarks: any) {
+  const numericScore = validScoreValue(score, totalMarks)
+  const numericTotal = Number(totalMarks || 0)
+  if (numericScore === null || !Number.isFinite(numericTotal) || numericTotal <= 0) return null
+  return Number(((numericScore / numericTotal) * 100).toFixed(1))
+}
+
+function validScoreValue(score: any, totalMarks: any) {
+  if (!hasScore(score)) return null
+  const numericScore = Number(score)
+  const numericTotal = Number(totalMarks || 0)
+  if (!Number.isFinite(numericScore) || !Number.isFinite(numericTotal) || numericTotal <= 0) return null
+  if (numericScore < 0 || numericScore > numericTotal) return null
+  return numericScore
+}
+
+function isInvalidScore(score: any, totalMarks: any) {
+  if (!hasScore(score)) return false
+  const numericScore = Number(score)
+  const numericTotal = Number(totalMarks || 0)
+  return !Number.isFinite(numericScore) || !Number.isFinite(numericTotal) || numericTotal <= 0 || numericScore < 0 || numericScore > numericTotal
+}
+
+function gradeForScore(score: any, totalMarks: any) {
+  const percentage = percentageForScore(score, totalMarks)
+  return percentage === null ? '' : gradeForPercentage(percentage)
+}
+
+function gradeToneClass(grade: any, percentage?: any, invalid = false) {
+  if (invalid) return 'border-[#ef4444] bg-[#fef2f2] text-[#991b1b]'
+  const value = String(grade || gradeForPercentage(percentage)).toUpperCase()
+  if (value === 'A') return 'border-[#34d399] bg-[#ecfdf5] text-[#065f46]'
+  if (value === 'B') return 'border-[#60a5fa] bg-[#eff6ff] text-[#1d4ed8]'
+  if (value === 'C') return 'border-[#fbbf24] bg-[#fffbeb] text-[#92400e]'
+  if (value === 'D') return 'border-[#fb7185] bg-[#fff1f2] text-[#9f1239]'
+  if (value === 'E' || value === 'F') return 'border-[#f87171] bg-[#fef2f2] text-[#991b1b]'
+  return 'border-[#d9dce3] bg-white text-[#111827]'
+}
+
+function StatusPill({ value }: { value: any }) {
+  const status = String(value || 'not_started').toLowerCase()
+  const tone = ['approved', 'results_approved', 'locked'].includes(status)
+    ? 'border-[#bbf7d0] bg-[#f0fdf4] text-[#166534]'
+    : ['submitted', 'results_submitted', 'marking'].includes(status)
+      ? 'border-[#bfdbfe] bg-[#eff6ff] text-[#1d4ed8]'
+      : ['returned', 'draft'].includes(status)
+        ? 'border-[#fed7aa] bg-[#fff7ed] text-[#c2410c]'
+        : 'border-[#e5e7eb] bg-[#f9fafb] text-[#4b5563]'
+  return <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${tone}`}>{statusLabel(status)}</span>
+}
+
+function GradePill({ grade, percentage }: { grade: any; percentage?: any }) {
+  const value = String(grade || gradeForPercentage(percentage) || '-').toUpperCase()
+  return <span className={`inline-flex min-w-8 justify-center rounded-[4px] border px-2 py-0.5 text-[11px] font-bold ${gradeToneClass(value, percentage)}`}>{value}</span>
+}
+
+function assessmentBatch(row: any) {
+  return row?.batch || null
+}
+
+function assessmentHasSavedResults(row: any) {
+  const batch = assessmentBatch(row)
+  return Boolean(batch?.id || Number(batch?.completed_marks || batch?.saved_marks || 0) > 0)
+}
+
+function assessmentSubmittedLike(row: any) {
+  const batchStatus = String(assessmentBatch(row)?.status || '').toLowerCase()
+  const assessmentStatus = String(row?.status || '').toLowerCase()
+  return ['submitted', 'approved', 'locked'].includes(batchStatus) || ['results_submitted', 'results_approved', 'locked'].includes(assessmentStatus)
+}
+
+function assessmentActionLabel(row: any) {
+  const batchStatus = String(assessmentBatch(row)?.status || '').toLowerCase()
+  if (assessmentSubmittedLike(row)) return 'View'
+  if (batchStatus === 'returned') return 'Correct'
+  if (assessmentHasSavedResults(row)) return 'Continue'
+  return 'Enter'
+}
+
+function latestAssessmentTime(row: any) {
+  const batch = assessmentBatch(row) || {}
+  const raw = batch.updated_at || batch.submitted_at || batch.approved_at || row.updated_at || row.created_at
+  const parsed = raw ? Date.parse(raw) : NaN
+  return Number.isFinite(parsed) ? parsed : Number(row.id || 0)
+}
+
+function studentName(row: any) {
+  return [row.first_name, row.last_name].filter(Boolean).join(' ') || row.name || '-'
+}
+
+function surnameFirstName(row: any) {
+  return [row.last_name, row.first_name].filter(Boolean).join(' ') || studentName(row)
+}
+
+function subjectCode(value: any) {
+  const words = String(value || 'SUB')
+    .replace(/[^a-z0-9\s/]/gi, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+  if (!words.length) return 'SUB'
+  if (words.length > 1) return words.map((word) => word[0]).join('/').toUpperCase().slice(0, 5)
+  return words[0].slice(0, 3).toUpperCase()
+}
+
+function escapeHtml(value: any) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;')
+}
+
+function printableRows(rows: any[], totalMarks: any) {
+  const computed = rows.map((row) => {
+    const score = validScoreValue(row.score, totalMarks)
+    const percentage = score === null ? null : percentageForScore(score, totalMarks)
+    return {
+      row,
+      score,
+      percentage,
+      grade: percentage === null ? '' : gradeForPercentage(percentage),
+      aggregate: percentage === null ? '' : aggregatePointForPercentage(percentage),
+      remark: percentage === null ? '' : Number(percentage) >= 50 ? 'PASS' : 'FAIL',
+    }
+  })
+  const ranked = [...computed].sort((a, b) => {
+    const aScore = a.percentage === null ? -1 : Number(a.percentage)
+    const bScore = b.percentage === null ? -1 : Number(b.percentage)
+    return bScore - aScore || surnameFirstName(a.row).localeCompare(surnameFirstName(b.row))
+  })
+  let previousScore: number | null = null
+  let previousPosition = 0
+  ranked.forEach((entry, index) => {
+    if (entry.percentage === null) {
+      ;(entry as any).position = ''
+      return
+    }
+    const rounded = Math.round(Number(entry.percentage))
+    if (previousScore === rounded) {
+      ;(entry as any).position = previousPosition
+    } else {
+      previousScore = rounded
+      previousPosition = index + 1
+      ;(entry as any).position = previousPosition
+    }
+  })
+  return ranked
+}
+
+function safeFileName(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'marksheet'
+}
+
+function buildMarksheetHtml({
+  logoSrc,
+  rows,
+  totalMarks,
+  subjectName,
+  className,
+  paperName,
+  termName,
+  examSessionName,
+}: {
+  logoSrc: string
+  rows: any[]
+  totalMarks: number
+  subjectName: string
+  className: string
+  paperName: string
+  termName: string
+  examSessionName: string
+}) {
+  const code = subjectCode(subjectName)
+  const ranked = printableRows(rows, totalMarks)
+  const totalTookExam = ranked.filter((entry) => entry.score !== null).length
+  const passed = ranked.filter((entry) => entry.remark === 'PASS').length
+  const failed = ranked.filter((entry) => entry.remark === 'FAIL').length
+  const passRate = totalTookExam ? Math.round((passed / totalTookExam) * 100) : 0
+  const title = `${className} ${paperName} Results`
+  const subtitle = [examSessionName, termName].filter(Boolean).join(' - ')
+  const bodyRows = ranked.map((entry, index) => `
+    <tr>
+      <td class="center">${index + 1}</td>
+      <td class="center">${escapeHtml(entry.row.student_id || entry.row.admission_no || '')}</td>
+      <td>${escapeHtml(surnameFirstName(entry.row).toUpperCase())}</td>
+      <td class="center">${entry.score === null ? '' : escapeHtml(entry.score)}</td>
+      <td class="center strong">${entry.score === null ? '' : escapeHtml(entry.score)}</td>
+      <td class="center strong">${entry.percentage === null ? '' : Math.round(Number(entry.percentage))}</td>
+      <td class="center strong">${escapeHtml(entry.aggregate)}</td>
+      <td class="center strong">${escapeHtml((entry as any).position)}</td>
+      <td class="strong">${escapeHtml(entry.remark)}</td>
+    </tr>
+  `).join('')
+
+  return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>${escapeHtml(title)}</title>
+  <style>
+    @page { size: A4 landscape; margin: 10mm; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #fff; color: #000; font-family: Arial, Helvetica, sans-serif; }
+    .sheet { width: 100%; min-height: 100vh; padding: 18px 22px 14px; }
+    .heading { display: grid; grid-template-columns: 92px 1fr; align-items: center; gap: 26px; border: 3px solid #000; border-radius: 18px; padding: 18px 24px; margin-bottom: 32px; }
+    .heading img { width: 82px; height: 82px; object-fit: contain; }
+    h1 { margin: 0 0 22px; font-size: 31px; line-height: 1; letter-spacing: 0.02em; font-weight: 900; }
+    h2 { margin: 0; font-size: 28px; line-height: 1.05; letter-spacing: 0.02em; font-weight: 900; }
+    .meta { margin-top: 8px; font-size: 12px; font-weight: 700; text-transform: uppercase; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; line-height: 1.05; }
+    th, td { border: 1px solid #000; padding: 5px 5px; vertical-align: middle; }
+    th { background: #cfcfcf; text-align: center; font-size: 15px; font-weight: 900; }
+    tbody tr:nth-child(even) td { background: #dedede; }
+    .center { text-align: center; }
+    .strong { font-weight: 900; }
+    .name { width: 290px; text-align: left; }
+    .footer { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; margin-top: 16px; border-top: 1px solid #000; padding-top: 7px; font-size: 12px; font-style: italic; font-weight: 700; }
+    .footer span:nth-child(2) { font-size: 13px; }
+    .summary { margin-top: 26px; width: 360px; font-size: 13px; font-weight: 800; }
+    .summary div { display: grid; grid-template-columns: 1fr 80px; gap: 24px; padding: 3px 0; }
+  </style>
+</head>
+<body>
+  <main class="sheet">
+    <section class="heading">
+      <img src="${escapeHtml(logoSrc || GREENHILL_LOGO_URL)}" alt="Greenhill logo" />
+      <div>
+        <h1>GREENHILL SECONDARY SCHOOL</h1>
+        <h2>${escapeHtml(title.toUpperCase())}</h2>
+        ${subtitle ? `<div class="meta">${escapeHtml(subtitle)}</div>` : ''}
+      </div>
+    </section>
+    <table>
+      <thead>
+        <tr>
+          <th></th>
+          <th>ID</th>
+          <th class="name">NAME (SURNAME FIRST)</th>
+          <th>${escapeHtml(code)}</th>
+          <th>TOTAL</th>
+          <th>AVG</th>
+          <th>AGGR</th>
+          <th>POS</th>
+          <th>REMARK</th>
+        </tr>
+      </thead>
+      <tbody>${bodyRows}</tbody>
+    </table>
+    <section class="summary">
+      <div><span>TOTAL TOOK EXAM:</span><span>${totalTookExam}</span></div>
+      <div><span>TOTAL PASSED:</span><span>${passed}</span></div>
+      <div><span>TOTAL FAILED:</span><span>${failed}</span></div>
+      <div><span>PASS RATE:</span><span>${passRate}%</span></div>
+    </section>
+    <footer class="footer">
+      <span>${escapeHtml(title)}</span>
+      <span>Page 1 of 1</span>
+      <span></span>
+    </footer>
+  </main>
+</body>
+</html>`
+}
+
+function MarksheetPrintPreview({
+  logoSrc,
+  rows,
+  totalMarks,
+  subjectName,
+  className,
+  paperName,
+  termName,
+  examSessionName,
+}: {
+  logoSrc: string
+  rows: any[]
+  totalMarks: number
+  subjectName: string
+  className: string
+  paperName: string
+  termName: string
+  examSessionName: string
+}) {
+  const code = subjectCode(subjectName)
+  const ranked = printableRows(rows, totalMarks)
+  const title = `${className} ${paperName} Results`
+  const subtitle = [examSessionName, termName].filter(Boolean).join(' - ')
+  const totalTookExam = ranked.filter((entry) => entry.score !== null).length
+  const passed = ranked.filter((entry) => entry.remark === 'PASS').length
+  const failed = ranked.filter((entry) => entry.remark === 'FAIL').length
+  const passRate = totalTookExam ? Math.round((passed / totalTookExam) * 100) : 0
+
+  return (
+    <section id="greenhill-print-area" className="rounded-[8px] border border-[#d1d5db] bg-white p-4 shadow-[var(--mera-shadow-card)] print:rounded-none print:border-0 print:p-0 print:shadow-none">
+      <style>{`
+        #greenhill-print-area .greenhill-report-table { width: 100%; border-collapse: collapse; color: #000; font-family: Arial, Helvetica, sans-serif; font-size: 13px; line-height: 1.05; }
+        #greenhill-print-area .greenhill-report-table th,
+        #greenhill-print-area .greenhill-report-table td { border: 1px solid #000; padding: 5px 5px; vertical-align: middle; }
+        #greenhill-print-area .greenhill-report-table th { background: #cfcfcf; text-align: center; font-weight: 900; font-size: 14px; }
+        #greenhill-print-area .greenhill-report-table tbody tr:nth-child(even) td { background: #dedede; }
+        @media print {
+          @page { size: A4 landscape; margin: 10mm; }
+          body * { visibility: hidden !important; }
+          #greenhill-print-area, #greenhill-print-area * { visibility: visible !important; }
+          #greenhill-print-area { position: absolute; inset: 0 auto auto 0; width: 100%; background: #fff; }
+          .no-print { display: none !important; }
+        }
+      `}</style>
+      <div className="mx-auto max-w-[1180px] bg-white text-[#000] print:max-w-none">
+        <header className="mb-7 grid grid-cols-[80px_1fr] items-center gap-6 rounded-[18px] border-[3px] border-[#000] px-6 py-5">
+          <img src={logoSrc || GREENHILL_LOGO_URL} alt="Greenhill logo" className="size-20 object-contain" />
+          <div>
+            <h2 className="m-0 text-[30px] font-black uppercase leading-none tracking-[0.02em] text-[#000]">Greenhill Secondary School</h2>
+            <h3 className="m-0 mt-5 text-[26px] font-black uppercase leading-none tracking-[0.02em] text-[#000]">{title}</h3>
+            {subtitle ? <p className="m-0 mt-2 text-[11px] font-bold uppercase tracking-[0.08em] text-[#111]">{subtitle}</p> : null}
+          </div>
+        </header>
+
+        <div className="overflow-x-auto">
+          <table className="greenhill-report-table min-w-[880px]">
+            <thead>
+              <tr>
+                <th className="w-10"></th>
+                <th>ID</th>
+                <th className="min-w-[280px]">NAME (SURNAME FIRST)</th>
+                <th>{code}</th>
+                <th>TOTAL</th>
+                <th>AVG</th>
+                <th>AGGR</th>
+                <th>POS</th>
+                <th>REMARK</th>
+              </tr>
+            </thead>
+            <tbody>
+              {ranked.length ? ranked.map((entry, index) => (
+                <tr key={entry.row.id || index}>
+                  <td className="text-center">{index + 1}</td>
+                  <td className="text-center">{entry.row.student_id || entry.row.admission_no || ''}</td>
+                  <td>{surnameFirstName(entry.row).toUpperCase()}</td>
+                  <td className="text-center">{entry.score ?? ''}</td>
+                  <td className="text-center font-black">{entry.score ?? ''}</td>
+                  <td className="text-center font-black">{entry.percentage === null ? '' : Math.round(Number(entry.percentage))}</td>
+                  <td className="text-center font-black">{entry.aggregate}</td>
+                  <td className="text-center font-black">{(entry as any).position}</td>
+                  <td className="font-black">{entry.remark}</td>
+                </tr>
+              )) : (
+                <tr><td colSpan={9} className="py-8 text-center">No marks entered yet.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        <section className="mt-6 grid w-full max-w-[360px] gap-1 text-[12px] font-black uppercase">
+          <div className="grid grid-cols-[1fr_90px]"><span>Total took exam:</span><span>{totalTookExam}</span></div>
+          <div className="grid grid-cols-[1fr_90px]"><span>Total passed:</span><span>{passed}</span></div>
+          <div className="grid grid-cols-[1fr_90px]"><span>Total failed:</span><span>{failed}</span></div>
+          <div className="grid grid-cols-[1fr_90px]"><span>Pass rate:</span><span>{passRate}%</span></div>
+        </section>
+
+        <footer className="mt-4 grid grid-cols-[1fr_auto_1fr] border-t border-[#000] pt-2 text-[12px] font-bold italic text-[#333]">
+          <span>{title}</span>
+          <span>Page 1 of 1</span>
+          <span />
+        </footer>
+      </div>
+    </section>
+  )
+}
+
 export function ResultsEntryPage() {
   const { token, api, user } = usePortal()
+  const navigate = useNavigate()
+  const { assessmentId: routeAssessmentId } = useParams()
+  const isSheetPage = Boolean(routeAssessmentId)
   const [setup, setSetup] = useState<any>({})
-  const [filters, setFilters] = useState<any>({ academic_year_id: '', term_id: '', exam_session_id: '', class_id: '', subject_id: '' })
-  const [selectedAssessmentId, setSelectedAssessmentId] = useState('')
+  const [filters, setFilters] = useState<any>({ exam_session_id: '', class_id: '', subject_id: '' })
+  const [assessmentQuery, setAssessmentQuery] = useState('')
+  const [selectedAssessmentId, setSelectedAssessmentId] = useState(routeAssessmentId ? String(routeAssessmentId) : '')
   const [sheet, setSheet] = useState<any>(null)
-  const [classSheet, setClassSheet] = useState<any>(null)
-  const [classSheetLoading, setClassSheetLoading] = useState(false)
+  const [sheetLoading, setSheetLoading] = useState(false)
   const [rows, setRows] = useState<any[]>([])
+  const [studentQuery, setStudentQuery] = useState('')
+  const [gradeFilter, setGradeFilter] = useState('all')
+  const [logoDataUrl, setLogoDataUrl] = useState('')
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
   const [unsaved, setUnsaved] = useState(false)
@@ -35,60 +443,200 @@ export function ResultsEntryPage() {
 
   const role = String(user?.role || '').toLowerCase()
   const canApprove = ['school_owner', 'headteacher'].includes(role)
-  const filteredAssessments = useMemo(() => {
-    return (setup.assessments || []).filter((row: any) => {
-      if (filters.academic_year_id && String(row.academic_year_id) !== String(filters.academic_year_id)) return false
-      if (filters.term_id && String(row.term_id) !== String(filters.term_id)) return false
-      if (filters.exam_session_id && String(row.exam_session_id || '') !== String(filters.exam_session_id)) return false
-      if (filters.class_id && String(row.class_id) !== String(filters.class_id)) return false
-      if (filters.subject_id && String(row.subject_id) !== String(filters.subject_id)) return false
-      return true
+  const session = setup?.session || {}
+  const activeYearId = String(session.academic_year_id || '')
+  const activeTermId = String(session.term_id || '')
+  const activeAcademicLabel = [session.academic_year?.name, session.term?.name].filter(Boolean).join(' - ') || 'Active academic session'
+
+  const batchByAssessmentId = useMemo(() => {
+    const map = new Map<string, any>()
+    ;(setup.batches || []).forEach((batch: any) => {
+      const key = String(batch.assessment_id || '')
+      if (!key) return
+      const current = map.get(key)
+      if (!current || latestAssessmentTime({ id: key, batch }) >= latestAssessmentTime({ id: key, batch: current })) {
+        map.set(key, batch)
+      }
     })
-  }, [filters, setup.assessments])
-  const selectedAssessment = useMemo(() => filteredAssessments.find((row: any) => String(row.id) === selectedAssessmentId), [filteredAssessments, selectedAssessmentId])
-  const batch = sheet?.batch
-  const teacherLocked = role === 'teacher' && ['submitted', 'approved', 'locked'].includes(String(batch?.status || ''))
+    return map
+  }, [setup.batches])
+
+  const assessmentRows = useMemo(() => {
+    return (setup.assessments || [])
+      .map((row: any) => ({
+        ...row,
+        batch: batchByAssessmentId.get(String(row.id)) || null,
+      }))
+      .filter((row: any) => {
+        if (activeYearId && String(row.academic_year_id || '') !== activeYearId) return false
+        if (activeTermId && String(row.term_id || '') !== activeTermId) return false
+        return true
+      })
+      .sort((a: any, b: any) => {
+        const activeDiff = Number(String(b.term_id || '') === activeTermId) - Number(String(a.term_id || '') === activeTermId)
+        if (activeDiff) return activeDiff
+        const savedDiff = Number(assessmentHasSavedResults(b)) - Number(assessmentHasSavedResults(a))
+        if (savedDiff) return savedDiff
+        const timeDiff = latestAssessmentTime(b) - latestAssessmentTime(a)
+        if (timeDiff) return timeDiff
+        return Number(b.id || 0) - Number(a.id || 0)
+      })
+  }, [activeTermId, activeYearId, batchByAssessmentId, setup.assessments])
+
+  const filteredAssessments = useMemo(() => {
+    const query = assessmentQuery.trim().toLowerCase()
+    return assessmentRows.filter((row: any) => {
+      if (filters.exam_session_id && String(row.exam_session_id || '') !== String(filters.exam_session_id)) return false
+      if (filters.class_id && String(row.class_id || '') !== String(filters.class_id)) return false
+      if (filters.subject_id && String(row.subject_id || '') !== String(filters.subject_id)) return false
+      if (!query) return true
+      const searchable = [
+        row.name,
+        row.assessment_name,
+        row.class_name,
+        row.subject_name,
+        row.term_label,
+        row.term_name,
+        row.exam_session_name,
+        row.status,
+        assessmentBatch(row)?.status,
+      ].join(' ').toLowerCase()
+      return searchable.includes(query)
+    })
+  }, [assessmentQuery, assessmentRows, filters])
+
+  const selectedAssessment = useMemo(
+    () => assessmentRows.find((row: any) => String(row.id) === selectedAssessmentId) || sheet?.assessment || null,
+    [assessmentRows, selectedAssessmentId, sheet?.assessment],
+  )
+  const batch = sheet?.batch || selectedAssessment?.batch || null
+  const totalMarks = Number(selectedAssessment?.total_marks || sheet?.assessment?.total_marks || 0)
+  const sheetAssessment = selectedAssessment || sheet?.assessment || {}
+  const subjectName = sheetAssessment?.subject_name || sheet?.assessment?.subject_name || '-'
+  const className = sheetAssessment?.class_name || sheet?.assessment?.class_name || '-'
+  const paperName = sheetAssessment?.name || sheetAssessment?.assessment_name || sheet?.assessment?.name || '-'
+  const examSessionName = sheetAssessment?.exam_session_name || sheet?.assessment?.exam_session_name || ''
+  const termName = sheetAssessment?.term_label || sheetAssessment?.term_name || sheet?.assessment?.term_name || '-'
+  const sheetReadOnly = assessmentSubmittedLike({ ...sheetAssessment, batch }) || ['locked', 'archived'].includes(String(sheetAssessment?.status || '').toLowerCase())
+
+  const visibleSheetRows = useMemo(() => {
+    const query = studentQuery.trim().toLowerCase()
+    return rows.filter((row) => {
+      const scoreGrade = gradeForScore(row.score, totalMarks)
+      if (gradeFilter !== 'all' && scoreGrade !== gradeFilter) return false
+      if (!query) return true
+      const searchable = [studentName(row), row.student_id, row.admission_no, row.stream_section, row.class_name].join(' ').toLowerCase()
+      return searchable.includes(query)
+    })
+  }, [gradeFilter, rows, studentQuery, totalMarks])
+
+  const validScoredRows = rows.filter((row) => validScoreValue(row.score, totalMarks) !== null)
+  const completed = rows.filter((row) => hasScore(row.score)).length
+  const invalidCount = rows.filter((row) => isInvalidScore(row.score, totalMarks)).length
+  const percentages = validScoredRows
+    .map((row) => percentageForScore(row.score, totalMarks))
+    .filter((value): value is number => value !== null)
+  const totalTookExam = percentages.length
+  const classAverage = percentages.length ? Number((percentages.reduce((sum, value) => sum + value, 0) / percentages.length).toFixed(0)) : 0
+  const averageRawScore = validScoredRows.length ? Number((validScoredRows.reduce((sum, row) => sum + Number(row.score || 0), 0) / validScoredRows.length).toFixed(0)) : 0
+  const passCount = percentages.filter((value) => value >= 50).length
+  const passRate = totalTookExam ? Math.round((passCount / totalTookExam) * 100) : 0
+  const atRiskCount = percentages.filter((value) => value < 50).length
+  const submittedCount = assessmentRows.filter((row: any) => assessmentSubmittedLike(row)).length
+  const openEntryCount = assessmentRows.filter((row: any) => !assessmentSubmittedLike(row)).length
+
+  const kpiItems = [
+    {
+      label: 'Assessments',
+      value: assessmentRows.length,
+      helper: role === 'teacher' ? 'assigned to you' : 'role visible',
+      delta: activeAcademicLabel,
+    },
+    {
+      label: 'Submitted',
+      value: submittedCount,
+      helper: 'viewable results',
+      delta: 'latest first',
+      tone: submittedCount ? ('good' as const) : ('neutral' as const),
+    },
+    {
+      label: 'Open Entry',
+      value: openEntryCount,
+      helper: 'enter or continue',
+      delta: openEntryCount ? 'needs marks' : 'clear',
+      tone: openEntryCount ? ('warn' as const) : ('good' as const),
+    },
+    {
+      label: 'Selected Sheet',
+      value: selectedAssessmentId ? `${totalTookExam}/${rows.length}` : 'None',
+      helper: selectedAssessmentId ? paperName : 'choose an assessment',
+      delta: selectedAssessmentId ? (sheetReadOnly ? 'view only' : 'editable') : 'not opened',
+    },
+  ]
+
+  const sheetKpis = [
+    { label: 'Class average', value: `${classAverage}%`, helper: `${totalTookExam}/${rows.length} took exam`, delta: completed !== totalTookExam ? `${completed} entered` : 'updates as you type' },
+    { label: 'Pass rate', value: `${passRate}%`, helper: `${passCount}/${totalTookExam} passing students`, delta: 'passing / took exam', tone: passRate >= 70 ? ('good' as const) : passRate >= 50 ? ('warn' as const) : ('bad' as const) },
+    { label: 'Students at risk', value: atRiskCount, helper: 'valid scores below pass mark', delta: 'review before submit', tone: atRiskCount ? ('warn' as const) : ('good' as const) },
+    { label: 'Invalid scores', value: invalidCount, helper: `outside 0-${totalMarks || '-'}`, delta: invalidCount ? 'fix needed' : 'ready', tone: invalidCount ? ('bad' as const) : ('good' as const) },
+  ]
 
   const refreshSetup = async () => {
     if (!token) return
     const payload = await api.listResultsSetup(token)
     setSetup(payload)
-    setFilters((current: any) => ({
-      academic_year_id: current.academic_year_id || String(payload?.session?.academic_year_id || payload?.years?.[0]?.id || ''),
-      term_id: current.term_id || String(payload?.session?.term_id || payload?.terms?.[0]?.id || ''),
-      exam_session_id: current.exam_session_id || String(payload?.exam_sessions?.[0]?.id || ''),
-      class_id: current.class_id || (canApprove ? String(payload?.classes?.[0]?.id || '') : ''),
-      subject_id: current.subject_id,
-    }))
-    if (!canApprove && !selectedAssessmentId && payload.assessments?.[0]) setSelectedAssessmentId(String(payload.assessments[0].id))
   }
 
   const loadSheet = async (assessmentId = selectedAssessmentId) => {
-    if (!token || !assessmentId) return
+    if (!token || !assessmentId) return null
     const payload = await api.getResultSheet(token, { assessment_id: assessmentId })
     setSheet(payload)
     setRows(payload?.rows || [])
     setUnsaved(false)
+    setStudentQuery('')
+    setGradeFilter('all')
+    return payload
   }
 
-  const loadClassSheet = async (nextFilters = filters) => {
-    if (!token || !nextFilters.academic_year_id || !nextFilters.term_id || !nextFilters.class_id) return
-    setClassSheetLoading(true)
-    setError('')
-    try {
-      const payload = await api.getClassResultSheet(token, {
-        academic_year_id: nextFilters.academic_year_id,
-        term_id: nextFilters.term_id,
-        exam_session_id: nextFilters.exam_session_id,
-        class_id: nextFilters.class_id,
-      })
-      setClassSheet(payload)
-    } catch (err: any) {
-      setClassSheet(null)
-      setError(err?.message || 'Unable to load class result sheet.')
-    } finally {
-      setClassSheetLoading(false)
+  const openAssessmentSheet = (row: any) => {
+    const assessmentId = String(row?.id || '')
+    if (!assessmentId) return
+    navigate(`/results/${assessmentId}`)
+  }
+
+  const downloadMarksheet = () => {
+    if (!rows.length) {
+      toast.error('Load a marksheet before downloading.')
+      return
     }
+    const html = buildMarksheetHtml({
+      logoSrc: logoDataUrl || GREENHILL_LOGO_URL,
+      rows,
+      totalMarks,
+      subjectName,
+      className,
+      paperName,
+      termName,
+      examSessionName,
+    })
+    const blob = new Blob([html], { type: 'text/html;charset=utf-8' })
+    const href = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = href
+    link.download = `${safeFileName(`greenhill-${className}-${paperName}-marksheet`)}.html`
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    URL.revokeObjectURL(href)
+    toast.success('Marksheet downloaded.')
+  }
+
+  const printMarksheet = () => {
+    if (!rows.length) {
+      toast.error('Load a marksheet before printing.')
+      return
+    }
+    window.print()
   }
 
   useEffect(() => {
@@ -97,27 +645,53 @@ export function ResultsEntryPage() {
   }, [token])
 
   useEffect(() => {
-    if (!canApprove && selectedAssessmentId) loadSheet(selectedAssessmentId).catch((err: any) => setError(err?.message || 'Unable to load result sheet.'))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedAssessmentId, canApprove])
+    fetch(GREENHILL_LOGO_URL)
+      .then((response) => response.blob())
+      .then((blob) => new Promise<string>((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => resolve(String(reader.result || ''))
+        reader.onerror = reject
+        reader.readAsDataURL(blob)
+      }))
+      .then(setLogoDataUrl)
+      .catch(() => setLogoDataUrl(''))
+  }, [])
 
   useEffect(() => {
-    if (!canApprove) return
-    if (!filters.academic_year_id || !filters.term_id || !filters.class_id) return
-    loadClassSheet().catch(() => {})
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canApprove, filters.academic_year_id, filters.term_id, filters.exam_session_id, filters.class_id])
-
-  useEffect(() => {
-    if (canApprove) return
-    if (!filteredAssessments.length) {
-      if (selectedAssessmentId) setSelectedAssessmentId('')
+    if (!routeAssessmentId) {
+      setSelectedAssessmentId('')
+      setSheet(null)
+      setRows([])
+      setUnsaved(false)
       return
     }
-    if (!filteredAssessments.some((row: any) => String(row.id) === String(selectedAssessmentId))) {
-      setSelectedAssessmentId(String(filteredAssessments[0].id))
+    setSelectedAssessmentId(String(routeAssessmentId))
+    if (!token) return
+    setSheetLoading(true)
+    setError('')
+    loadSheet(String(routeAssessmentId))
+      .catch((err: any) => {
+        setSheet(null)
+        setRows([])
+        const nextError = err?.message || 'Unable to load result sheet.'
+        setError(nextError)
+        toast.error(nextError)
+      })
+      .finally(() => setSheetLoading(false))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [routeAssessmentId, token])
+
+  useEffect(() => {
+    if (isSheetPage) return
+    if (!selectedAssessmentId) return
+    if (!assessmentRows.length) return
+    if (!assessmentRows.some((row: any) => String(row.id) === selectedAssessmentId)) {
+      setSelectedAssessmentId('')
+      setSheet(null)
+      setRows([])
+      setUnsaved(false)
     }
-  }, [canApprove, filteredAssessments, selectedAssessmentId])
+  }, [assessmentRows, isSheetPage, selectedAssessmentId])
 
   const updateRow = (studentId: any, patch: any) => {
     setRows((current) => current.map((row) => Number(row.id) === Number(studentId) ? { ...row, ...patch } : row))
@@ -132,7 +706,7 @@ export function ResultsEntryPage() {
       await api.saveResultDraft(token, { assessment_id: selectedAssessmentId, entries: rows.map((row) => ({ student_id: row.id, enrollment_id: row.enrollment_id, score: row.score, comment: row.comment })) })
       setMessage('Draft results saved.')
       toast.success('Draft results saved.')
-      await loadSheet()
+      await loadSheet(selectedAssessmentId)
       await refreshSetup()
     } catch (err: any) {
       const nextError = err?.message || 'Unable to save draft results.'
@@ -150,7 +724,7 @@ export function ResultsEntryPage() {
       await api.submitResults(token, { assessment_id: selectedAssessmentId, entries: rows.map((row) => ({ student_id: row.id, enrollment_id: row.enrollment_id, score: row.score, comment: row.comment })) })
       setMessage('Results submitted for approval.')
       toast.success('Results submitted for approval.')
-      await loadSheet()
+      await loadSheet(selectedAssessmentId)
       await refreshSetup()
     } catch (err: any) {
       const nextError = err?.message || 'Unable to submit final results.'
@@ -168,8 +742,7 @@ export function ResultsEntryPage() {
       setMessage('Result batch approved.')
       toast.success('Result batch approved.')
       await refreshSetup()
-      if (canApprove) await loadClassSheet()
-      else await loadSheet()
+      if (selectedAssessmentId) await loadSheet(selectedAssessmentId)
     } catch (err: any) {
       const nextError = err?.message || 'Unable to approve result batch.'
       setError(nextError)
@@ -191,8 +764,7 @@ export function ResultsEntryPage() {
       setMessage('Result batch returned for correction.')
       toast.success('Result batch returned for correction.')
       await refreshSetup()
-      if (canApprove) await loadClassSheet()
-      else await loadSheet()
+      if (selectedAssessmentId) await loadSheet(selectedAssessmentId)
     } catch (err: any) {
       const nextError = err?.message || 'Unable to return result batch.'
       setError(nextError)
@@ -200,35 +772,154 @@ export function ResultsEntryPage() {
     }
   }
 
-  const completed = rows.filter((row) => row.score !== '' && row.score !== null && row.score !== undefined).length
-  const totalMarks = Number(selectedAssessment?.total_marks || sheet?.assessment?.total_marks || 0)
-  const sheetAssessment = selectedAssessment || sheet?.assessment || {}
-  const subjectName = sheetAssessment?.subject_name || sheet?.assessment?.subject_name || '-'
-  const className = sheetAssessment?.class_name || sheet?.assessment?.class_name || '-'
-  const paperName = sheetAssessment?.name || sheetAssessment?.assessment_name || sheet?.assessment?.name || '-'
-  const examSessionName = sheetAssessment?.exam_session_name || sheet?.assessment?.exam_session_name || ''
-  const termName = sheetAssessment?.term_label || sheetAssessment?.term_name || sheet?.assessment?.term_name || '-'
-  const assessmentType = sheetAssessment?.assessment_type ? statusLabel(sheetAssessment.assessment_type) : 'Assessment'
-  const marksHeader = subjectName && subjectName !== '-' ? `${subjectName} Score / ${totalMarks || '-'}` : `Score / ${totalMarks || '-'}`
-  const classPapers = classSheet?.papers || []
-  const classRows = classSheet?.rows || []
-  const classSummary = classSheet?.summary || {}
-  const selectedClassName = classSheet?.class?.name || (setup.classes || []).find((row: any) => String(row.id) === String(filters.class_id))?.name || '-'
-  const selectedExamName = classSheet?.exam_session?.name || (setup.exam_sessions || []).find((row: any) => String(row.id) === String(filters.exam_session_id))?.name || 'All assessments'
-  const kpiItems = canApprove
-    ? [
-      { label: 'Class', value: selectedClassName, helper: selectedExamName, delta: classSheetLoading ? 'loading' : 'loaded' },
-      { label: 'Students', value: classSummary.students || classRows.length || 0, helper: 'active enrollment', delta: 'current term' },
-      { label: 'Subjects / Papers', value: classSummary.papers || classPapers.length || 0, helper: 'visible columns', delta: 'class sheet' },
-      { label: 'Complete Students', value: classSummary.complete_students || 0, helper: 'all marks entered', delta: `${classSummary.missing_marks || 0} missing marks` },
-    ]
-    : [
-      { label: 'Assessments', value: filteredAssessments.length || 0, helper: role === 'teacher' ? 'assigned only' : 'whole school', delta: 'filtered' },
-      { label: 'Subject', value: subjectName, helper: className, delta: assessmentType },
-      { label: 'Paper', value: paperName, helper: examSessionName || termName, delta: statusLabel(batch?.status) },
-      { label: 'Completed Marks', value: `${completed}/${rows.length}`, helper: 'current sheet', delta: rows.length ? `${Math.round((completed / rows.length) * 100)}%` : '0%' },
-      { label: 'Sheet Status', value: statusLabel(batch?.status), helper: selectedAssessment?.status ? statusLabel(selectedAssessment.status) : 'workflow', delta: teacherLocked ? 'locked' : 'editable' },
-    ]
+  if (isSheetPage) {
+    return (
+      <div className="min-h-screen bg-[#eef1f5] text-[#111827]">
+        <header className="no-print sticky top-0 z-30 border-b border-[#d9dce3] bg-white/95 px-4 py-3 shadow-sm backdrop-blur">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-3">
+              <button
+                type="button"
+                onClick={() => navigate('/results')}
+                className="grid size-9 shrink-0 place-items-center rounded-[5px] border border-[#d9dce3] bg-white text-[#374151] hover:bg-[#f9fafb]"
+                aria-label="Back to results"
+              >
+                <ArrowLeft className="size-4" />
+              </button>
+              <div className="min-w-0">
+                <p className="text-[11px] font-bold uppercase tracking-[0.1em] text-[#6b7280]">Greenhill marksheet</p>
+                <h1 className="truncate text-[20px] font-semibold tracking-[-0.035em] text-[#111827]">{className} - {paperName}</h1>
+                <p className="truncate text-[12px] font-medium text-[#6b7280]">{subjectName} - {termName}{examSessionName ? ` - ${examSessionName}` : ''}</p>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {unsaved ? <span className="rounded-[5px] border border-[#fed7aa] bg-[#fff7ed] px-3 py-2 text-[12px] font-semibold text-[#c2410c]">Unsaved changes</span> : null}
+              <Button type="button" variant="outline" className="h-9 rounded-[5px] text-[12px]" onClick={downloadMarksheet}><Download className="size-3.5" /> Download marksheet</Button>
+              <Button type="button" variant="outline" className="h-9 rounded-[5px] text-[12px]" onClick={printMarksheet}><Printer className="size-3.5" /> Print / Save PDF</Button>
+              <Button disabled={!rows.length || sheetReadOnly} type="button" variant="outline" className="h-9 rounded-[5px] text-[12px]" onClick={saveDraft}><Save className="size-3.5" /> Save draft</Button>
+              <Button disabled={!rows.length || sheetReadOnly} type="button" className="h-9 rounded-[5px] text-[12px]" onClick={submitFinal}><Send className="size-3.5" /> Submit results</Button>
+            </div>
+          </div>
+        </header>
+
+        <main className="grid gap-4 p-4">
+          {error ? <div className="no-print rounded-[6px] border border-[#fecaca] bg-[#fef2f2] px-3 py-2 text-[12px] font-semibold text-[#b91c1c]">{error}</div> : null}
+          {message ? <div className="no-print rounded-[6px] border border-[#bbf7d0] bg-[#f0fdf4] px-3 py-2 text-[12px] font-semibold text-[#166534]">{message}</div> : null}
+
+          <div className="no-print">
+            <SectionKpiStrip items={sheetKpis} />
+          </div>
+
+          <SectionCard
+            title="Marks Entry"
+            subtitle={sheetLoading ? 'Loading marksheet...' : sheetReadOnly ? 'Submitted or approved sheets are view only.' : 'Enter marks and the grade-colored cells update immediately.'}
+            actions={<StatusPill value={batch?.status || sheetAssessment?.status || 'draft'} />}
+            className="no-print"
+          >
+            <div className="grid gap-3 p-4">
+              <div className="flex flex-wrap items-end justify-between gap-3 rounded-[6px] border border-[#d9dce3] bg-[#fafafa] p-3">
+                <div className="grid gap-2 md:grid-cols-[minmax(240px,360px)_150px]">
+                  <label className="relative grid gap-1.5 text-[11px] font-bold uppercase tracking-[0.08em] text-[#6b7280]">
+                    Find student
+                    <Search className="absolute bottom-2 left-3 size-3.5 text-[#9ca3af]" />
+                    <Input className="h-8 pl-8 text-[12px]" placeholder="Find student..." value={studentQuery} onChange={(event) => setStudentQuery(event.target.value)} />
+                  </label>
+                  <Field label="Grade">
+                    <select className={selectClassName} value={gradeFilter} onChange={(event) => setGradeFilter(event.target.value)}>
+                      <option value="all">All grades</option>
+                      {['A', 'B', 'C', 'D', 'E'].map((grade) => <option key={grade} value={grade}>{grade}</option>)}
+                    </select>
+                  </Field>
+                </div>
+                <div className="text-[12px] font-semibold text-[#6b7280]">{completed}/{rows.length} students scored</div>
+              </div>
+
+              <div className="overflow-x-auto rounded-[6px] border border-[#d9dce3] bg-white">
+                <div>
+                  <table className="w-full min-w-[920px] text-left text-[12px]">
+                    <thead className="sticky top-0 z-10 bg-[#fafafa] text-[#6b7280] shadow-[0_1px_0_0_#e5e7eb]">
+                      <tr>
+                        <th className="w-12 px-3 py-2 font-medium">#</th>
+                        <th className="px-3 py-2 font-medium">Student ID</th>
+                        <th className="px-3 py-2 font-medium">Name</th>
+                        <th className="px-3 py-2 text-center font-medium">{subjectName} /{totalMarks || '-'}</th>
+                        <th className="px-3 py-2 text-center font-medium">Avg %</th>
+                        <th className="px-3 py-2 text-center font-medium">Grade</th>
+                        <th className="px-3 py-2 font-medium">Status</th>
+                        <th className="px-3 py-2 font-medium">Comment</th>
+                        <th className="px-3 py-2 font-medium">Last Saved</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {visibleSheetRows.length ? visibleSheetRows.map((row, index) => {
+                        const score = row.score === '' ? '' : Number(row.score)
+                        const invalid = isInvalidScore(row.score, totalMarks)
+                        const percentage = percentageForScore(row.score, totalMarks)
+                        const grade = gradeForScore(row.score, totalMarks)
+                        const scoreTone = gradeToneClass(grade, percentage, invalid)
+                        return (
+                          <tr key={row.id} className="border-b border-[#eef2f7] text-[#111827] last:border-0 hover:bg-[#fafafa]">
+                            <td className="px-3 py-2 text-[#8b8b8b]">{index + 1}</td>
+                            <td className="px-3 py-2 text-[#8b8b8b]">{row.student_id || row.admission_no}</td>
+                            <td className="px-3 py-2">
+                              <span className="block font-semibold text-[#0f172a]">{studentName(row)}</span>
+                              <span className="text-[11px] text-[#8b8b8b]">{row.stream_section || row.class_name || '-'}</span>
+                            </td>
+                            <td className="px-3 py-2">
+                              <Input
+                                disabled={sheetReadOnly}
+                                type="number"
+                                min="0"
+                                max={totalMarks || undefined}
+                                className={`mx-auto h-8 w-24 rounded-[5px] border text-center text-[12px] font-bold shadow-none ${scoreTone}`}
+                                value={row.score ?? ''}
+                                onChange={(event) => updateRow(row.id, { score: event.target.value })}
+                              />
+                            </td>
+                            <td className="px-3 py-2 text-center font-medium">{percentage === null ? '-' : `${Math.round(percentage)}%`}</td>
+                            <td className="px-3 py-2 text-center"><GradePill grade={grade} percentage={percentage} /></td>
+                            <td className="px-3 py-2"><StatusPill value={row.status || batch?.status || 'draft'} /></td>
+                            <td className="px-3 py-2">
+                              <Input disabled={sheetReadOnly} className="h-8 min-w-[180px] rounded-[5px] bg-white text-[12px]" value={row.comment || ''} onChange={(event) => updateRow(row.id, { comment: event.target.value })} />
+                            </td>
+                            <td className="px-3 py-2 text-[#6b7280]">{row.last_saved_at ? new Date(row.last_saved_at).toLocaleString() : '-'}</td>
+                          </tr>
+                        )
+                      }) : (
+                        <tr><td className="px-3 py-8 text-center text-[#6b7280]" colSpan={9}>{sheetLoading ? 'Loading marksheet...' : 'No students match this marksheet filter.'}</td></tr>
+                      )}
+                    </tbody>
+                    {rows.length ? (
+                      <tfoot className="border-t border-[#e5e7eb] bg-[#f8fafc] text-[#0f172a]">
+                        <tr>
+                          <td className="px-3 py-2 font-bold" colSpan={3}>Class average</td>
+                          <td className="px-3 py-2 text-center font-bold">{averageRawScore || '-'}</td>
+                          <td className="px-3 py-2 text-center font-bold">{classAverage || '-'}%</td>
+                          <td className="px-3 py-2 text-center"><GradePill grade={classAverage ? gradeForPercentage(classAverage) : ''} percentage={classAverage} /></td>
+                          <td className="px-3 py-2" colSpan={3}>{sheetReadOnly ? 'View only' : `${completed}/${rows.length} students scored`}</td>
+                        </tr>
+                      </tfoot>
+                    ) : null}
+                  </table>
+                </div>
+              </div>
+            </div>
+          </SectionCard>
+
+          <MarksheetPrintPreview
+            logoSrc={logoDataUrl || GREENHILL_LOGO_URL}
+            rows={rows}
+            totalMarks={totalMarks}
+            subjectName={subjectName}
+            className={className}
+            paperName={paperName}
+            termName={termName}
+            examSessionName={examSessionName}
+          />
+        </main>
+      </div>
+    )
+  }
 
   return (
     <div className="grid gap-3 p-4">
@@ -236,9 +927,8 @@ export function ResultsEntryPage() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h1 className="text-[22px] font-semibold tracking-[-0.035em] text-[var(--mera-panel-text)]">Results</h1>
-            <p className="mt-1 max-w-3xl text-[13px] leading-5 text-[var(--mera-panel-text-muted)]">Excel-like marks entry with draft save, final submission and headteacher approval.</p>
+            <p className="mt-1 max-w-3xl text-[13px] leading-5 text-[var(--mera-panel-text-muted)]">Select an active-term assessment, then open its dedicated Greenhill marksheet page.</p>
           </div>
-          {unsaved ? <span className="rounded-[5px] border border-[#fed7aa] bg-[#fff7ed] px-3 py-2 text-[12px] font-semibold text-[#c2410c]">Unsaved changes</span> : null}
         </div>
       </section>
 
@@ -247,235 +937,90 @@ export function ResultsEntryPage() {
       {error ? <div className="rounded-[6px] border border-[#fecaca] bg-[#fef2f2] px-3 py-2 text-[12px] font-semibold text-[#b91c1c]">{error}</div> : null}
       {message ? <div className="rounded-[6px] border border-[#bbf7d0] bg-[#f0fdf4] px-3 py-2 text-[12px] font-semibold text-[#166534]">{message}</div> : null}
 
-      {canApprove ? (
-        <>
-          <SectionCard title="Class Results Setup" subtitle="Headteacher view shows every subject and grade for the selected class.">
-            <div className="grid gap-3 p-4 md:grid-cols-4">
-              <Field label="Academic Year">
-                <select className={selectClassName} value={filters.academic_year_id} onChange={(event) => setFilters({ ...filters, academic_year_id: event.target.value })}>
-                  <option value="">Select year</option>
-                  {(setup.years || []).map((row: any) => <option key={row.id} value={row.id}>{row.name}</option>)}
-                </select>
-              </Field>
-              <Field label="Term">
-                <select className={selectClassName} value={filters.term_id} onChange={(event) => setFilters({ ...filters, term_id: event.target.value })}>
-                  <option value="">Select term</option>
-                  {(setup.terms || []).map((row: any) => <option key={row.id} value={row.id}>{row.academic_year_name || ''} {row.name}</option>)}
-                </select>
-              </Field>
-              <Field label="Exam Session">
-                <select className={selectClassName} value={filters.exam_session_id} onChange={(event) => setFilters({ ...filters, exam_session_id: event.target.value })}>
-                  <option value="">All assessments</option>
-                  {(setup.exam_sessions || []).map((row: any) => <option key={row.id} value={row.id}>{row.name}</option>)}
-                </select>
-              </Field>
-              <Field label="Class">
-                <select className={selectClassName} value={filters.class_id} onChange={(event) => setFilters({ ...filters, class_id: event.target.value })}>
-                  <option value="">Select class</option>
-                  {(setup.classes || []).map((row: any) => <option key={row.id} value={row.id}>{row.name}</option>)}
-                </select>
-              </Field>
-            </div>
-          </SectionCard>
+      <SectionCard
+        title="Assessment Selection"
+        subtitle={`${activeAcademicLabel} - ${role === 'teacher' ? 'Assigned assessments only' : 'All role-visible assessments'}`}
+        actions={<span className="rounded-full border border-[#dbeafe] bg-[#eff6ff] px-2.5 py-1 text-[11px] font-semibold text-[#1d4ed8]">{filteredAssessments.length} shown</span>}
+      >
+        <div className="grid gap-3 p-4">
+          <div className="grid gap-3 lg:grid-cols-[minmax(260px,1fr)_180px_180px_180px]">
+            <label className="relative grid gap-1.5 text-[11px] font-bold uppercase tracking-[0.08em] text-[#6b7280]">
+              Find assessment
+              <Search className="absolute bottom-2 left-3 size-3.5 text-[#9ca3af]" />
+              <Input className="h-8 pl-8 text-[12px]" placeholder="Search by name, class or subject..." value={assessmentQuery} onChange={(event) => setAssessmentQuery(event.target.value)} />
+            </label>
+            <Field label="Exam Session">
+              <select className={selectClassName} value={filters.exam_session_id} onChange={(event) => setFilters({ ...filters, exam_session_id: event.target.value })}>
+                <option value="">All sessions</option>
+                {(setup.exam_sessions || []).map((row: any) => <option key={row.id} value={row.id}>{row.name}</option>)}
+              </select>
+            </Field>
+            <Field label="Class">
+              <select className={selectClassName} value={filters.class_id} onChange={(event) => setFilters({ ...filters, class_id: event.target.value })}>
+                <option value="">All classes</option>
+                {(setup.classes || []).map((row: any) => <option key={row.id} value={row.id}>{row.name}</option>)}
+              </select>
+            </Field>
+            <Field label="Subject">
+              <select className={selectClassName} value={filters.subject_id} onChange={(event) => setFilters({ ...filters, subject_id: event.target.value })}>
+                <option value="">All subjects</option>
+                {(setup.subjects || []).map((row: any) => <option key={row.id} value={row.id}>{row.name}</option>)}
+              </select>
+            </Field>
+          </div>
 
-          <SectionCard title={`${selectedClassName} Class Results Sheet`} subtitle="Each subject column shows score, grade and current result status.">
-            <div className="overflow-hidden">
-              <div className="grid gap-2 border-b border-[#e2e8f0] bg-[#fafafa] p-3 md:grid-cols-4">
-                <div className="rounded-[6px] border border-[#dddddd] bg-white px-3 py-2">
-                  <p className="text-[10px] font-medium uppercase tracking-[0.08em] text-[#8b8b8b]">Class</p>
-                  <p className="mt-1 truncate text-[14px] font-medium text-[#171717]">{selectedClassName}</p>
-                </div>
-                <div className="rounded-[6px] border border-[#dddddd] bg-white px-3 py-2">
-                  <p className="text-[10px] font-medium uppercase tracking-[0.08em] text-[#8b8b8b]">Exam Session</p>
-                  <p className="mt-1 truncate text-[14px] font-medium text-[#171717]">{selectedExamName}</p>
-                </div>
-                <div className="rounded-[6px] border border-[#dddddd] bg-white px-3 py-2">
-                  <p className="text-[10px] font-medium uppercase tracking-[0.08em] text-[#8b8b8b]">Papers</p>
-                  <p className="mt-1 truncate text-[14px] font-medium text-[#171717]">{classPapers.length}</p>
-                </div>
-                <div className="rounded-[6px] border border-[#dddddd] bg-white px-3 py-2">
-                  <p className="text-[10px] font-medium uppercase tracking-[0.08em] text-[#8b8b8b]">Missing Marks</p>
-                  <p className="mt-1 truncate text-[14px] font-medium text-[#171717]">{classSummary.missing_marks || 0}</p>
-                </div>
-              </div>
-              <div className="max-h-[66vh] overflow-auto">
-                <table className="w-full min-w-[980px] text-left text-[12px]">
-                  <thead className="sticky top-0 z-10 bg-[#111827] text-white">
-                    <tr>
-                      <th className="sticky left-0 z-20 min-w-[120px] bg-[#111827] px-3 py-2">Student ID</th>
-                      <th className="sticky left-[120px] z-20 min-w-[190px] bg-[#111827] px-3 py-2">Student Name</th>
-                      <th className="px-3 py-2">Stream</th>
-                      {classPapers.map((paper: any) => (
-                        <th key={paper.id} className="min-w-[150px] px-3 py-2">
-                          <span className="block text-[12px] font-semibold">{paper.subject_name}</span>
-                          <span className="block text-[10px] font-medium text-white/70">{paper.assessment_name} / {paper.total_marks}</span>
-                        </th>
-                      ))}
-                      <th className="px-3 py-2">Average</th>
-                      <th className="px-3 py-2">Grade</th>
-                      <th className="px-3 py-2">Missing</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {classRows.length ? classRows.map((row: any, index: number) => (
-                      <tr key={row.id} className={`${index % 2 === 0 ? 'bg-[#f3f4f6]' : 'bg-[#d1d5db]'} border-b border-white/70 text-[#111827]`}>
-                        <td className={`sticky left-0 z-10 px-3 py-2 font-semibold ${index % 2 === 0 ? 'bg-[#f3f4f6]' : 'bg-[#d1d5db]'}`}>{row.student_id || row.admission_no}</td>
-                        <td className={`sticky left-[120px] z-10 px-3 py-2 font-semibold ${index % 2 === 0 ? 'bg-[#f3f4f6]' : 'bg-[#d1d5db]'}`}>{row.last_name}, {row.first_name}</td>
-                        <td className="px-3 py-2">{row.stream_section || '-'}</td>
-                        {classPapers.map((paper: any) => {
-                          const result = row.results?.[paper.id]
-                          return (
-                            <td key={`${row.id}-${paper.id}`} className="px-3 py-2">
-                              {result ? (
-                                <div className="grid gap-0.5">
-                                  <span className="font-semibold">{result.score ?? '-'} / {paper.total_marks}</span>
-                                  <span className="text-[11px] text-[#374151]">{result.grade || '-'} · {statusLabel(result.status)}</span>
-                                </div>
-                              ) : (
-                                <span className="rounded-full border border-[#fecaca] bg-[#fef2f2] px-2 py-0.5 text-[11px] font-semibold text-[#b91c1c]">Missing</span>
-                              )}
-                            </td>
-                          )
-                        })}
-                        <td className="px-3 py-2 font-semibold">{row.average_score === null || row.average_score === undefined ? '-' : `${row.average_score}%`}</td>
-                        <td className="px-3 py-2 font-semibold">{row.average_grade || '-'}</td>
-                        <td className="px-3 py-2">{row.missing_subjects || 0}</td>
-                      </tr>
-                    )) : (
-                      <tr><td className="px-3 py-8 text-center text-[#6b7280]" colSpan={Math.max(7, classPapers.length + 6)}>{classSheetLoading ? 'Loading class results...' : 'Select a class to view all subject results.'}</td></tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </SectionCard>
-        </>
-      ) : (
-        <>
-          <SectionCard title="Sheet Setup" subtitle="Teachers only see assigned classes, subjects and assessments">
-            <div className="grid gap-3 p-4 md:grid-cols-3 xl:grid-cols-6">
-              <Field label="Academic Year">
-                <select className={selectClassName} value={filters.academic_year_id} onChange={(event) => setFilters({ ...filters, academic_year_id: event.target.value })}>
-                  <option value="">All years</option>
-                  {(setup.years || []).map((row: any) => <option key={row.id} value={row.id}>{row.name}</option>)}
-                </select>
-              </Field>
-              <Field label="Term">
-                <select className={selectClassName} value={filters.term_id} onChange={(event) => setFilters({ ...filters, term_id: event.target.value })}>
-                  <option value="">All terms</option>
-                  {(setup.terms || []).map((row: any) => <option key={row.id} value={row.id}>{row.academic_year_name || ''} {row.name}</option>)}
-                </select>
-              </Field>
-              <Field label="Exam Session">
-                <select className={selectClassName} value={filters.exam_session_id} onChange={(event) => setFilters({ ...filters, exam_session_id: event.target.value })}>
-                  <option value="">All assessments</option>
-                  {(setup.exam_sessions || []).map((row: any) => <option key={row.id} value={row.id}>{row.name}</option>)}
-                </select>
-              </Field>
-              <Field label="Class">
-                <select className={selectClassName} value={filters.class_id} onChange={(event) => setFilters({ ...filters, class_id: event.target.value })}>
-                  <option value="">All classes</option>
-                  {(setup.classes || []).map((row: any) => <option key={row.id} value={row.id}>{row.name}</option>)}
-                </select>
-              </Field>
-              <Field label="Subject">
-                <select className={selectClassName} value={filters.subject_id} onChange={(event) => setFilters({ ...filters, subject_id: event.target.value })}>
-                  <option value="">All subjects</option>
-                  {(setup.subjects || []).map((row: any) => <option key={row.id} value={row.id}>{row.name}</option>)}
-                </select>
-              </Field>
-              <Field label="Assessment">
-                <select className={selectClassName} value={selectedAssessmentId} onChange={(event) => setSelectedAssessmentId(event.target.value)}>
-                  <option value="">Select assessment</option>
-                  {filteredAssessments.map((row: any) => (
-                    <option key={row.id} value={row.id}>{row.exam_session_name ? `${row.exam_session_name} · ` : ''}{row.class_name} · {row.subject_name} · {row.name}</option>
-                  ))}
-                </select>
-              </Field>
-            </div>
-          </SectionCard>
-
-          <SectionCard title={subjectName && subjectName !== '-' ? `${subjectName} Mark Sheet` : 'Marks Entry Sheet'} subtitle="Rows are sorted alphabetically by student last name">
-            <div className="overflow-hidden">
-              <div className="grid gap-2 border-b border-[#e2e8f0] bg-[#fafafa] p-3 md:grid-cols-4">
-                <div className="rounded-[6px] border border-[#dddddd] bg-white px-3 py-2">
-                  <p className="text-[10px] font-medium uppercase tracking-[0.08em] text-[#8b8b8b]">Subject</p>
-                  <p className="mt-1 truncate text-[14px] font-medium text-[#171717]">{subjectName}</p>
-                </div>
-                <div className="rounded-[6px] border border-[#dddddd] bg-white px-3 py-2">
-                  <p className="text-[10px] font-medium uppercase tracking-[0.08em] text-[#8b8b8b]">Paper</p>
-                  <p className="mt-1 truncate text-[14px] font-medium text-[#171717]">{paperName}</p>
-                </div>
-                <div className="rounded-[6px] border border-[#dddddd] bg-white px-3 py-2">
-                  <p className="text-[10px] font-medium uppercase tracking-[0.08em] text-[#8b8b8b]">Exam Session</p>
-                  <p className="mt-1 truncate text-[14px] font-medium text-[#171717]">{examSessionName || '-'}</p>
-                </div>
-                <div className="rounded-[6px] border border-[#dddddd] bg-white px-3 py-2">
-                  <p className="text-[10px] font-medium uppercase tracking-[0.08em] text-[#8b8b8b]">Class / Term</p>
-                  <p className="mt-1 truncate text-[14px] font-medium text-[#171717]">{className} · {termName}</p>
-                </div>
-              </div>
-              <div className="max-h-[60vh] overflow-auto">
-                <table className="w-full min-w-[760px] text-left text-[12px]">
-                  <thead className="sticky top-0 z-10 bg-[#111827] text-white">
-                    <tr>
-                      <th className="px-3 py-2">Student ID</th>
-                      <th className="px-3 py-2">Student Name</th>
-                      <th className="px-3 py-2">Class</th>
-                      <th className="px-3 py-2">Stream</th>
-                      <th className="px-3 py-2">Enrollment</th>
-                      <th className="px-3 py-2">{marksHeader}</th>
-                      <th className="px-3 py-2">Grade</th>
-                      <th className="px-3 py-2">Comment</th>
-                      <th className="px-3 py-2">Status</th>
-                      <th className="px-3 py-2">Last Saved</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rows.length ? rows.map((row, index) => {
-                      const score = row.score === '' ? '' : Number(row.score)
-                      const invalid = score !== '' && (score < 0 || score > totalMarks)
-                      return (
-                        <tr key={row.id} className={`${index % 2 === 0 ? 'bg-[#f3f4f6]' : 'bg-[#d1d5db]'} border-b border-white/70 text-[#111827]`}>
-                          <td className="px-3 py-2 font-semibold">{row.student_id || row.admission_no}</td>
-                          <td className="px-3 py-2 font-semibold">{row.last_name}, {row.first_name}</td>
-                          <td className="px-3 py-2">{row.class_name}</td>
-                          <td className="px-3 py-2">{row.stream_section || '-'}</td>
-                          <td className="px-3 py-2">{statusLabel(row.enrollment_status)}</td>
-                          <td className="px-3 py-2">
-                            <Input
-                              disabled={teacherLocked}
-                              type="number"
-                              min="0"
-                              max={totalMarks || undefined}
-                              className={`h-8 w-24 bg-white text-[12px] ${invalid ? 'border-[#dc2626] text-[#dc2626]' : ''}`}
-                              value={row.score ?? ''}
-                              onChange={(event) => updateRow(row.id, { score: event.target.value })}
-                            />
-                          </td>
-                          <td className="px-3 py-2 font-semibold">{row.grade || '-'}</td>
-                          <td className="px-3 py-2"><Input disabled={teacherLocked} className="h-8 bg-white text-[12px]" value={row.comment || ''} onChange={(event) => updateRow(row.id, { comment: event.target.value })} /></td>
-                          <td className="px-3 py-2">{statusLabel(row.status)}</td>
-                          <td className="px-3 py-2">{row.last_saved_at ? new Date(row.last_saved_at).toLocaleString() : '-'}</td>
-                        </tr>
-                      )
-                    }) : (
-                      <tr><td className="px-3 py-8 text-center text-[#6b7280]" colSpan={10}>Select an assessment to load students.</td></tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[#e2e8f0] p-3">
-                <span className="text-[12px] font-medium text-[#6b7280]">{teacherLocked ? 'This sheet is locked for teacher editing.' : 'Drafts persist until final submission.'}</span>
-                <div className="flex gap-2">
-                  <Button disabled={!rows.length || teacherLocked} type="button" variant="outline" className="h-8 rounded-[5px] text-[12px]" onClick={saveDraft}><Save className="size-3.5" /> Save Draft</Button>
-                  <Button disabled={!rows.length || teacherLocked} type="button" className="h-8 rounded-[5px] text-[12px]" onClick={submitFinal}><Send className="size-3.5" /> Submit Final</Button>
-                </div>
-              </div>
-            </div>
-          </SectionCard>
-        </>
-      )}
+          <PortalTable
+            columns={[
+              {
+                key: 'name',
+                label: 'Name',
+                render: (row) => (
+                  <div className="grid gap-1">
+                    <span className="font-semibold text-[#111827]">{row.name || row.assessment_name || '-'}</span>
+                    <span className="text-[11px] font-medium text-[#6b7280]">{row.subject_name || '-'}{row.exam_session_name ? ` - ${row.exam_session_name}` : ''}</span>
+                  </div>
+                ),
+              },
+              { key: 'class_name', label: 'Class', render: (row) => row.class_name || '-' },
+              {
+                key: 'term',
+                label: 'Term',
+                render: (row) => (
+                  <div className="grid gap-1">
+                    <span>{row.term_label || row.term_name || termName || '-'}</span>
+                    <StatusPill value={assessmentBatch(row)?.status || row.status || 'not_started'} />
+                  </div>
+                ),
+              },
+              {
+                key: 'action',
+                label: 'Action',
+                render: (row) => {
+                  const isView = assessmentActionLabel(row) === 'View'
+                  const Icon = isView ? Eye : PencilLine
+                  return (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={isView ? 'outline' : 'default'}
+                      className="h-8 rounded-[5px] px-3 text-[12px]"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        openAssessmentSheet(row)
+                      }}
+                    >
+                      <Icon className="size-3.5" />
+                      {assessmentActionLabel(row)}
+                    </Button>
+                  )
+                },
+              },
+            ]}
+            rows={filteredAssessments}
+            emptyMessage={setup.setup_required ? (session.message || 'Set up an active academic year and term to view assessments.') : 'No assessments found for the active academic session.'}
+          />
+        </div>
+      </SectionCard>
 
       {canApprove ? (
         <SectionCard title="Headteacher Results Overview" subtitle="Submitted batches can be approved or returned for correction">
@@ -489,14 +1034,17 @@ export function ResultsEntryPage() {
                 { key: 'class_name', label: 'Class' },
                 { key: 'subject_name', label: 'Subject' },
                 { key: 'teacher_name', label: 'Teacher' },
-                { key: 'status', label: 'Status', render: (row) => statusLabel(row.status) },
+                { key: 'status', label: 'Status', render: (row) => <StatusPill value={row.status} /> },
                 { key: 'completed_marks', label: 'Saved Marks' },
-                { key: 'actions', label: 'Actions', render: (row) => (
-                  <span className="inline-flex gap-1">
-                    <button type="button" className="grid size-7 place-items-center rounded-[4px] border border-[#bbf7d0] text-[#15803d]" onClick={(event) => { event.stopPropagation(); approveBatch(row) }} aria-label="Approve batch"><CheckCircle2 className="size-3.5" /></button>
-                    <button type="button" className="grid size-7 place-items-center rounded-[4px] border border-[#fed7aa] text-[#c2410c]" onClick={(event) => { event.stopPropagation(); returnBatch(row) }} aria-label="Return batch"><RotateCcw className="size-3.5" /></button>
-                  </span>
-                ) },
+                { key: 'actions', label: 'Actions', render: (row) => {
+                  const ready = String(row.status || '').toLowerCase() === 'submitted'
+                  return (
+                    <span className="inline-flex gap-1">
+                      <button disabled={!ready} type="button" className="grid size-7 place-items-center rounded-[4px] border border-[#bbf7d0] text-[#15803d] disabled:opacity-40" onClick={(event) => { event.stopPropagation(); approveBatch(row) }} aria-label="Approve batch"><CheckCircle2 className="size-3.5" /></button>
+                      <button disabled={!ready} type="button" className="grid size-7 place-items-center rounded-[4px] border border-[#fed7aa] text-[#c2410c] disabled:opacity-40" onClick={(event) => { event.stopPropagation(); returnBatch(row) }} aria-label="Return batch"><RotateCcw className="size-3.5" /></button>
+                    </span>
+                  )
+                } },
               ]}
               rows={setup.batches || []}
               emptyMessage="No result batches have been saved yet."
