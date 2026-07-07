@@ -9,7 +9,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
+COPY scripts ./scripts
 
 EXPOSE 7317
 
-CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-7317}"]
+CMD ["sh", "scripts/start.sh"]
