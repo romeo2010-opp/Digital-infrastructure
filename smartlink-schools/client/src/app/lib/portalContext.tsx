@@ -2,6 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import { toast } from 'sonner'
 import { canAccessPath, firstAccessiblePath, hasAnyPermission, hasPermission } from './access'
 import { clearSession, portalApi, readStoredSession, resolvePortalWebSocketUrl, storeSession } from './portalApi'
+import { writeLastLoginAppearance } from './loginAppearanceCache'
 import { MERA_PACKET_KEYS, filterPacketKeysForUser, normalizePacketKeys, routePacketKeys, routeSyncPacketKeys, type MeraPacketKey, type MeraPacketStatus, type MeraRealtimeMode } from './packetRegistry'
 
 const PortalContext = createContext<any>(null)
@@ -20,14 +21,32 @@ const defaultPreferences = {
   sessionTimeout: '30',
   requireStepUp: true,
   trustedDevice: false,
+  dashboardBackgroundEnabled: false,
+  dashboardBackgroundImage: '',
+  dashboardBackgroundName: '',
+  dashboardBackgroundMode: 'cover',
+  dashboardBackgroundX: 50,
+  dashboardBackgroundY: 50,
+  dashboardBackgroundScale: 100,
+  dashboardBackgroundDim: 74,
+  transparentSectionsEnabled: true,
+  sectionTransparency: 18,
+  sectionBlur: 10,
+  accentTone: 'smartlink',
+  pageRhythm: 'balanced',
+  numberEmphasis: 'standard',
+  dashboardFocus: 'standard',
+  motionStyle: 'calm',
 }
 
 const SOCKET_TIMEOUT_MS = 5000
-const POLL_INTERVAL_MS = 30000
+const POLL_INTERVAL_MS = 12000
 const HEARTBEAT_INTERVAL_MS = 25000
-const FALLBACK_RECONNECT_INTERVAL_MS = 10000
+const FALLBACK_RECONNECT_INTERVAL_MS = 7000
 const RETRY_BACKOFF_MS = [2000, 5000, 10000, 15000]
 const PACKET_REQUEST_TIMEOUT_MS = 10000
+const INVALIDATION_DEBOUNCE_MS = 250
+const PORTAL_RESOURCE_KEYS = new Set(['preferences', 'schoolData', 'studentPortal', 'timetables', 'examLab'])
 type PacketRequestOptions = {
   paramsByKey?: Record<string, any>
   reason?: string
@@ -54,6 +73,11 @@ function hasPacketValue(data: any, key: string) {
   return Object.prototype.hasOwnProperty.call(data || {}, key) && data?.[key] !== undefined
 }
 
+function normalizePortalResources(resources?: readonly string[] | string | null): string[] {
+  const raw = Array.isArray(resources) ? resources : String(resources || '').split(',')
+  return [...new Set(raw.map((resource) => String(resource || '').trim()).filter((resource) => PORTAL_RESOURCE_KEYS.has(resource)))]
+}
+
 export function PortalProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<any>(() => readStoredSession())
   const [data, setData] = useState<any>({})
@@ -69,6 +93,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
   const [loginSuccessGate, setLoginSuccessGate] = useState(false)
   const [loginPreloadSettled, setLoginPreloadSettled] = useState(false)
   const [realtimePulse, setRealtimePulse] = useState(0)
+  const [portalSyncEvent, setPortalSyncEvent] = useState<any>({ pulse: 0, keys: [], resources: [], reason: '' })
   const [error, setError] = useState('')
   const [loginError, setLoginError] = useState('')
   const [pendingLoginChallenge, setPendingLoginChallenge] = useState<any>(null)
@@ -81,6 +106,8 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
   const actionLoadingRef = useRef(false)
   const socketRef = useRef<WebSocket | null>(null)
   const pendingPacketRequestsRef = useRef(new Map<string, { keys: MeraPacketKey[]; resolve: (value: any) => void; timer?: number }>())
+  const pendingInvalidationKeysRef = useRef<MeraPacketKey[]>([])
+  const invalidationTimerRef = useRef(0)
   const pollingKeysRef = useRef<MeraPacketKey[]>([])
   const httpRequestSeqRef = useRef(0)
   const dataRef = useRef<any>({})
@@ -98,20 +125,18 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     if (typeof document === 'undefined') return
     const root = document.documentElement
     const appearance = String(preferences?.appearance || 'light') as MeraAppearance
-    const useBlackTheme = appearance === 'dark'
+    const useBlackTheme = appearance === 'dark' || appearance === 'black-white'
 
     if (useBlackTheme) {
       root.classList.add('dark')
       root.dataset.meraTheme = 'black'
       root.dataset.theme = 'dark'
-      window.localStorage?.setItem('sl-theme', 'black')
       return
     }
 
     root.classList.remove('dark')
     delete root.dataset.meraTheme
     delete root.dataset.theme
-    window.localStorage?.setItem('sl-theme', 'light')
   }, [preferences?.appearance])
 
   const refreshSession = useCallback(async (accessToken = token) => {
@@ -324,13 +349,55 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     return requestPackets(keys, { paramsByKey: options.paramsByKey, force: options.force, timeoutMs: options.timeoutMs, preferHttp: options.preferHttp, reason: options.reason || 'visible-refresh' })
   }, [requestPackets])
 
-  useEffect(() => {
-    if (!token || typeof window === 'undefined') {
-      setRealtimeMode('disabled')
-      return undefined
+  const loadPreferences = useCallback(async (options: { quiet?: boolean } = {}) => {
+    if (!token) {
+      setPreferences(defaultPreferences)
+      return defaultPreferences
     }
 
-    if (!currentRoutePacketKeys().length) {
+    const quiet = Boolean(options.quiet)
+    if (!quiet) setPreferencesLoading(true)
+    try {
+      const payload = await portalApi.getMyPreferences(token)
+      const merged = { ...defaultPreferences, ...(payload || {}) }
+      setPreferences(merged)
+      writeLastLoginAppearance(merged, user)
+      return merged
+    } catch {
+      if (!quiet) setPreferences(defaultPreferences)
+      return null
+    } finally {
+      if (!quiet) setPreferencesLoading(false)
+    }
+  }, [token, user])
+
+  const schedulePacketInvalidation = useCallback((keysInput?: readonly string[] | string | null, reason = 'socket-invalidate') => {
+    const keys = filterPacketKeysForUser(normalizePacketKeys(keysInput), user)
+    if (!keys.length) return
+
+    pendingInvalidationKeysRef.current = Array.from(new Set([
+      ...pendingInvalidationKeysRef.current,
+      ...keys,
+    ]))
+
+    if (typeof window === 'undefined') {
+      const packetKeys = pendingInvalidationKeysRef.current
+      pendingInvalidationKeysRef.current = []
+      requestPackets(packetKeys, { reason, force: true }).catch(() => {})
+      return
+    }
+
+    if (invalidationTimerRef.current) window.clearTimeout(invalidationTimerRef.current)
+    invalidationTimerRef.current = window.setTimeout(() => {
+      const packetKeys = pendingInvalidationKeysRef.current
+      pendingInvalidationKeysRef.current = []
+      invalidationTimerRef.current = 0
+      requestPackets(packetKeys, { reason, force: true }).catch(() => {})
+    }, INVALIDATION_DEBOUNCE_MS)
+  }, [requestPackets, user])
+
+  useEffect(() => {
+    if (!token || typeof window === 'undefined') {
       setRealtimeMode('disabled')
       return undefined
     }
@@ -480,8 +547,23 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
             return
           }
           if (message?.type === 'mera_portal_invalidate' || message?.type === 'mera_dashboard_refresh') {
-            const keys = normalizePacketKeys(message.keys).length ? normalizePacketKeys(message.keys) : currentRoutePacketKeys()
-            requestPackets(keys, { reason: 'socket-invalidate', force: true }).catch(() => {})
+            const resources = normalizePortalResources(message.resources)
+            const explicitKeys = normalizePacketKeys(message.keys)
+            const keys = explicitKeys.length ? explicitKeys : resources.length ? [] : currentRoutePacketKeys()
+            const reason = String(message.reason || 'socket-invalidate')
+            const isMutation = reason !== 'server-push' && (resources.length || keys.length)
+            if (isMutation) {
+              setPortalSyncEvent({
+                pulse: Date.now(),
+                keys,
+                resources,
+                reason,
+              })
+            }
+            if (resources.includes('preferences')) {
+              loadPreferences({ quiet: true }).catch(() => {})
+            }
+            schedulePacketInvalidation(keys, reason)
           }
         } catch {
           // Ignore malformed realtime messages.
@@ -524,6 +606,9 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
       active = false
       clearTimer(connectTimeout)
       clearTimer(reconnectTimer)
+      clearTimer(invalidationTimerRef.current)
+      invalidationTimerRef.current = 0
+      pendingInvalidationKeysRef.current = []
       clearIntervalTimer(fallbackPollTimer)
       clearIntervalTimer(fallbackReconnectTimer)
       clearIntervalTimer(heartbeatTimer)
@@ -535,7 +620,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
       pendingPacketRequestsRef.current.clear()
       stopSocket()
     }
-  }, [applyPacketResult, completePacketRequest, fetchPacketsViaHttp, requestPackets, token])
+  }, [applyPacketResult, completePacketRequest, fetchPacketsViaHttp, loadPreferences, requestPackets, schedulePacketInvalidation, token])
 
   useEffect(() => {
     if (!token || typeof window === 'undefined') return undefined
@@ -561,26 +646,8 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
       return
     }
 
-    let cancelled = false
-    const loadPreferences = async () => {
-      setPreferencesLoading(true)
-      try {
-        const payload = await portalApi.getMyPreferences(token)
-        if (!cancelled && payload) {
-          setPreferences({ ...defaultPreferences, ...payload })
-        }
-      } catch {
-        if (!cancelled) setPreferences(defaultPreferences)
-      } finally {
-        if (!cancelled) setPreferencesLoading(false)
-      }
-    }
-
-    loadPreferences()
-    return () => {
-      cancelled = true
-    }
-  }, [token])
+    loadPreferences().catch(() => {})
+  }, [loadPreferences, token])
 
   const preloadLoginPackets = useCallback(async (accessToken: string, preloadUser?: any) => {
     if (!accessToken) {
@@ -653,6 +720,9 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     setLoginPreloadSettled(false)
     try {
       const payload = await portalApi.login(credentials)
+      if (payload?.ai && payload.ai.online === false) {
+        toast.warning(payload.ai.message || 'AI is not online right now. Manual workflows are still available.')
+      }
       if (payload?.challengeRequired) {
         setPendingLoginChallenge(payload)
         return payload
@@ -732,6 +802,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     setSelectedProfile(null)
     setSelectedProfileEnforcement({ items: [] })
     setRealtimeMode('disabled')
+    setPortalSyncEvent({ pulse: 0, keys: [], resources: [], reason: '' })
   }
 
   const changePassword = async (payload: { current_password: string; new_password: string; confirm_password?: string }) => {
@@ -802,6 +873,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
       const result = await portalApi.updateMyPreferences(token, preferencePatch)
       const merged = { ...defaultPreferences, ...result }
       setPreferences(merged)
+      writeLastLoginAppearance(merged, user)
       toast.success('Preferences saved.')
       return merged
     } catch (actionError: any) {
@@ -817,6 +889,11 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
   }
 
   const setAppearance = (appearance: MeraAppearance) => updatePreferences({ appearance })
+
+  const previewPreferences = useCallback((patch: any) => {
+    if (!patch || typeof patch !== 'object') return
+    setPreferences((current: any) => ({ ...current, ...patch }))
+  }, [])
 
   const updatePortalData = (updater: (current: any) => any) => {
     setData((current: any) => updater(current))
@@ -861,6 +938,8 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
       packetErrors,
       realtimeMode,
       realtimePulse,
+      portalSyncEvent,
+      portalMutationPulse: portalSyncEvent.pulse,
       loading: loading || packetLoading,
       snapshotLoading: packetLoading,
       hasLoadedSnapshot: Boolean(token),
@@ -902,6 +981,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
       runAction,
       updatePortalData,
       updatePreferences,
+      previewPreferences,
       setAppearance,
       openProfile,
       hasPermission: (permission: any) => hasPermission(user, permission),
@@ -912,7 +992,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
         portalApi.getHoardingWatchlistDetail(token, stationPublicId),
       api: portalApi,
     }),
-    [session, user, token, data, packetStatus, packetErrors, realtimeMode, realtimePulse, loading, packetLoading, liveDataLoading, actionLoading, actionLabel, bootLoading, loginSuccessGate, loginPreloadSettled, error, loginError, pendingLoginChallenge, selectedProfile, selectedProfileEnforcement, preferences, preferencesLoading, requestPackets, requestRoutePackets, refreshVisibleModules, refreshSession, usePortalPacket, openProfile, finishLoginSuccessGate],
+    [session, user, token, data, packetStatus, packetErrors, realtimeMode, realtimePulse, portalSyncEvent, loading, packetLoading, liveDataLoading, actionLoading, actionLabel, bootLoading, loginSuccessGate, loginPreloadSettled, error, loginError, pendingLoginChallenge, selectedProfile, selectedProfileEnforcement, preferences, preferencesLoading, requestPackets, requestRoutePackets, refreshVisibleModules, refreshSession, usePortalPacket, openProfile, finishLoginSuccessGate, previewPreferences],
   )
 
   return <PortalContext.Provider value={value}>{children}</PortalContext.Provider>

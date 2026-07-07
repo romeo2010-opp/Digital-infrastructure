@@ -68,6 +68,7 @@ export function SchoolActionModal({
   const [classes, setClasses] = useState<any[]>([])
   const [subjects, setSubjects] = useState<any[]>([])
   const [feeAccounts, setFeeAccounts] = useState<any[]>([])
+  const [financeInvoices, setFinanceInvoices] = useState<any[]>([])
   const [attendanceRows, setAttendanceRows] = useState<any[]>([])
   const [staff, setStaff] = useState<any[]>([])
   const [messageImageUploading, setMessageImageUploading] = useState(false)
@@ -83,8 +84,12 @@ export function SchoolActionModal({
     date_of_birth: '',
     gender: '',
     fee_account_id: '',
+    invoice_id: '',
+    invoice_no: '',
     amount: '',
     payment_method: 'cash',
+    payment_date: today(),
+    allow_overpayment: false,
     reference: '',
     student_id: '',
     status: 'present',
@@ -121,13 +126,15 @@ export function SchoolActionModal({
       api.listClasses?.(token).catch(() => ({ classes: [] })),
       api.listSubjects?.(token).catch(() => ({ subjects: [] })),
       api.listFeeAccounts?.(token).catch(() => ({ feeAccounts: [] })),
+      api.listFinanceInvoices?.(token).catch(() => ({ invoices: [] })),
       api.listAttendance?.(token).catch(() => ({ attendance: [] })),
       api.listUsers?.(token).catch(() => ({ users: [] })),
-    ]).then(([classPayload, subjectPayload, feePayload, attendancePayload, userPayload]) => {
+    ]).then(([classPayload, subjectPayload, feePayload, invoicePayload, attendancePayload, userPayload]) => {
       if (cancelled) return
       setClasses(classPayload?.classes || [])
       setSubjects(subjectPayload?.subjects || [])
       setFeeAccounts(feePayload?.feeAccounts || [])
+      setFinanceInvoices(invoicePayload?.invoices || [])
       setAttendanceRows(attendancePayload?.attendance || [])
       setStaff(userPayload?.users || [])
     })
@@ -140,8 +147,54 @@ export function SchoolActionModal({
     () => attendanceRows.find((row) => String(row.student_id) === String(form.student_id)),
     [attendanceRows, form.student_id],
   )
+  const selectedInvoice = useMemo(
+    () => financeInvoices.find((row) => String(row.id) === String(form.invoice_id) || String(row.invoice_no || '').toLowerCase() === String(form.invoice_no || '').trim().toLowerCase()),
+    [financeInvoices, form.invoice_id, form.invoice_no],
+  )
+  const selectedFeeAccount = useMemo(
+    () => feeAccounts.find((row) => String(row.id) === String(form.fee_account_id)),
+    [feeAccounts, form.fee_account_id],
+  )
+  const selectedClass = useMemo(
+    () => classes.find((row) => String(row.id) === String(form.class_id)),
+    [classes, form.class_id],
+  )
+  const homeworkSubjectOptions = useMemo(() => {
+    const assignments = Array.isArray(selectedClass?.subject_assignments) ? selectedClass.subject_assignments : []
+    const assignedSubjects = assignments
+      .filter((row: any) => row.subject_id && row.subject_name)
+      .map((row: any) => ({ id: row.subject_id, name: row.subject_name }))
+    const source = assignedSubjects.length ? assignedSubjects : subjects
+    const seen = new Set<string>()
+    return source.filter((row: any) => {
+      const key = String(row.id)
+      if (!key || seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+  }, [selectedClass, subjects])
+  const homeworkSubjectHint = selectedClass?.subject_assignments?.length
+    ? 'Showing subjects assigned to this class.'
+    : 'Showing all school subjects for this class.'
 
   const update = (key: string, value: any) => setForm((current: any) => ({ ...current, [key]: value }))
+  const selectHomeworkClass = (value: string) => {
+    setForm((current: any) => ({ ...current, class_id: value, subject_id: '' }))
+  }
+
+  const selectInvoiceNumber = (value: string) => {
+    const invoice = financeInvoices.find((row) => String(row.invoice_no || '').toLowerCase() === value.trim().toLowerCase())
+    setForm((current: any) => ({
+      ...current,
+      invoice_no: value,
+      invoice_id: invoice?.id || '',
+      fee_account_id: invoice?.fee_account_id || current.fee_account_id,
+      amount: invoice && !current.amount
+        ? String(Math.max(0, Number(invoice.total_amount || 0) - Number(invoice.amount_paid || 0)))
+        : current.amount,
+      reference: invoice && !current.reference ? invoice.invoice_no : current.reference,
+    }))
+  }
 
   const toggleClassId = (classId: any) => {
     const value = String(classId)
@@ -214,8 +267,12 @@ export function SchoolActionModal({
       if (action === 'payment') {
         return api.recordPayment(token, {
           fee_account_id: form.fee_account_id,
+          invoice_id: form.invoice_id || null,
+          invoice_no: form.invoice_no || null,
           amount: Number(form.amount || 0),
           payment_method: form.payment_method,
+          payment_date: form.payment_date || today(),
+          allow_overpayment: Boolean(form.allow_overpayment),
           reference: form.reference || null,
         })
       }
@@ -358,19 +415,62 @@ export function SchoolActionModal({
 
         {action === 'payment' ? (
           <div className="grid gap-3 sm:grid-cols-2">
-            <select required className={selectClassName()} value={form.fee_account_id} onChange={(event) => update('fee_account_id', event.target.value)}>
+            <label className={`${labelClassName()} sm:col-span-2`}>
+              Invoice number
+              <Input
+                list="finance-invoice-number-options"
+                placeholder="Type invoice number, e.g. INV-2026-T1-000125"
+                value={form.invoice_no}
+                onChange={(event) => selectInvoiceNumber(event.target.value)}
+                className="h-8 text-[12px]"
+              />
+              <datalist id="finance-invoice-number-options">
+                {financeInvoices.slice(0, 120).map((row) => (
+                  <option key={row.id} value={row.invoice_no}>
+                    {row.first_name} {row.last_name} - MWK {Number(Number(row.total_amount || 0) - Number(row.amount_paid || 0)).toLocaleString()}
+                  </option>
+                ))}
+              </datalist>
+            </label>
+            {selectedInvoice ? (
+              <div className="sm:col-span-2 rounded-[6px] border border-[#dce3ed] bg-[#f8fafc] px-3 py-2 text-[12px] font-medium text-[#475569]">
+                <span className="font-semibold text-[#0f172a]">{selectedInvoice.invoice_no}</span>
+                {' '}for {selectedInvoice.first_name} {selectedInvoice.last_name}
+                {' '}has MWK {Number(Number(selectedInvoice.total_amount || 0) - Number(selectedInvoice.amount_paid || 0)).toLocaleString()} remaining.
+              </div>
+            ) : null}
+            <select required={!form.invoice_no} className={selectClassName()} value={form.fee_account_id} onChange={(event) => update('fee_account_id', event.target.value)}>
               <option value="">Select fee account</option>
               {feeAccounts.map((row) => (
                 <option key={row.id} value={row.id}>{row.first_name} {row.last_name} - MWK {Number(row.balance || 0).toLocaleString()}</option>
               ))}
             </select>
-            <Input required type="number" placeholder="Amount" value={form.amount} onChange={(event) => update('amount', event.target.value)} className="h-8 text-[12px]" />
+            {selectedFeeAccount && !selectedInvoice ? (
+              <div className="sm:col-span-2 rounded-[6px] border border-[#dce3ed] bg-[#f8fafc] px-3 py-2 text-[12px] font-medium text-[#475569]">
+                {selectedFeeAccount.first_name} {selectedFeeAccount.last_name}
+                {' '}has MWK {Number(selectedFeeAccount.balance || 0).toLocaleString()} outstanding.
+              </div>
+            ) : null}
+            <Input required type="number" min="1" step="0.01" placeholder="Amount" value={form.amount} onChange={(event) => update('amount', event.target.value)} className="h-8 text-[12px]" />
+            <Input required type="date" value={form.payment_date} onChange={(event) => update('payment_date', event.target.value)} className="h-8 text-[12px]" />
             <select className={selectClassName()} value={form.payment_method} onChange={(event) => update('payment_method', event.target.value)}>
               <option value="cash">Cash</option>
               <option value="bank_transfer">Bank transfer</option>
               <option value="mobile_money">Mobile money</option>
+              <option value="cheque">Cheque</option>
+              <option value="pos_card">POS card</option>
+              <option value="other">Other</option>
             </select>
             <Input placeholder="Reference" value={form.reference} onChange={(event) => update('reference', event.target.value)} className="h-8 text-[12px]" />
+            <label className="sm:col-span-2 flex items-start gap-2 rounded-[6px] border border-[#e2e8f0] bg-[#f8fafc] px-3 py-2 text-[12px] font-medium text-[#475569]">
+              <input
+                type="checkbox"
+                checked={Boolean(form.allow_overpayment)}
+                onChange={(event) => update('allow_overpayment', event.target.checked)}
+                className="mt-0.5 size-3.5"
+              />
+              <span>Allow overpayment only when intentionally recording a credit on this learner account.</span>
+            </label>
           </div>
         ) : null}
 
@@ -392,11 +492,32 @@ export function SchoolActionModal({
 
         {action === 'homework' ? (
           <div className="grid gap-3 sm:grid-cols-2">
-            {classSelect}
-            {subjectSelect}
+            <label className={labelClassName()}>
+              Class
+              <select required className={selectClassName()} value={form.class_id} onChange={(event) => selectHomeworkClass(event.target.value)}>
+                <option value="">Select class</option>
+                {classes.map((row) => <option key={row.id} value={row.id}>{row.name}</option>)}
+              </select>
+            </label>
+            <label className={labelClassName()}>
+              Subject
+              <select required className={selectClassName()} value={form.subject_id} onChange={(event) => update('subject_id', event.target.value)} disabled={!form.class_id}>
+                <option value="">{form.class_id ? 'Select subject' : 'Select class first'}</option>
+                {homeworkSubjectOptions.map((row: any) => <option key={row.id} value={row.id}>{row.name}</option>)}
+              </select>
+            </label>
+            <div className="sm:col-span-2 rounded-[6px] border border-[#dce3ed] bg-[#f8fafc] px-3 py-2 text-[12px] font-medium text-[#475569]">
+              {form.class_id ? homeworkSubjectHint : 'Choose a class first so the assignment can be linked to the right learners.'}
+            </div>
             <Input required placeholder="Homework title" value={form.title} onChange={(event) => update('title', event.target.value)} className="h-8 text-[12px] sm:col-span-2" />
-            <Input type="date" value={form.due_date} onChange={(event) => update('due_date', event.target.value)} className="h-8 text-[12px]" />
-            <Input placeholder="Instructions" value={form.instructions} onChange={(event) => update('instructions', event.target.value)} className="h-8 text-[12px]" />
+            <label className={labelClassName()}>
+              Due date
+              <Input required type="date" value={form.due_date} onChange={(event) => update('due_date', event.target.value)} className="h-8 text-[12px]" />
+            </label>
+            <label className={labelClassName()}>
+              Instructions
+              <Input placeholder="Instructions" value={form.instructions} onChange={(event) => update('instructions', event.target.value)} className="h-8 text-[12px]" />
+            </label>
           </div>
         ) : null}
 

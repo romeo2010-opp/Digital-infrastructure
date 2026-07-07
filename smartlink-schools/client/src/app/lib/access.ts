@@ -133,22 +133,13 @@ const roleRoutePrefixes: Record<string, string[]> = {
   school_owner: ['/'],
   headteacher: ['/'],
   bursar: [
-    '/dashboard',
-    '/search',
-    '/classes',
-    '/students',
-    '/parents',
-    '/calendar',
-    '/timetables',
     '/fees',
-    '/messages',
-    '/reports',
+    '/exam-intelligence',
     '/settings/profile',
     '/settings/preferences',
+    '/settings/personalized',
     '/settings/notifications',
     '/settings/security',
-    '/settings/audit',
-    '/settings/data',
   ],
   teacher: [
     '/dashboard',
@@ -176,19 +167,21 @@ const roleRoutePrefixes: Record<string, string[]> = {
     '/exam-builder',
     '/daily-drill',
     '/exam-forecast',
+    '/exam-intelligence',
     '/messages',
     '/reports',
     '/settings/profile',
     '/settings/preferences',
+    '/settings/personalized',
     '/settings/notifications',
     '/settings/security',
   ],
-  parent: ['/dashboard', '/my-timetable', '/my-exams', '/homework', '/messages', '/settings/profile', '/settings/preferences', '/settings/notifications', '/settings/security'],
-  student: ['/student-portal', '/my-timetable', '/my-exams', '/settings/profile', '/settings/preferences', '/settings/security'],
+  parent: ['/dashboard', '/my-timetable', '/my-exams', '/homework', '/exam-intelligence', '/messages', '/settings/profile', '/settings/preferences', '/settings/personalized', '/settings/notifications', '/settings/security'],
+  student: ['/student-portal', '/my-timetable', '/my-exams', '/exam-intelligence', '/settings/profile', '/settings/preferences', '/settings/personalized', '/settings/security'],
 }
 
 const roleLandingPath: Record<string, string> = {
-  bursar: '/fees',
+  bursar: '/fees/dashboard',
   teacher: '/dashboard',
   parent: '/homework',
   student: '/student-portal',
@@ -198,8 +191,13 @@ function roleFor(user: any) {
   return String(user?.role || '').toLowerCase()
 }
 
+const internalRouteRoles = new Set(['super_admin', 'founder', 'developer', 'system_admin'])
+
 export function canAccessPath(user: any, pathname = '/') {
   const role = roleFor(user)
+  if (pathname === '/internal' || pathname.startsWith('/internal/')) {
+    return internalRouteRoles.has(role)
+  }
   const prefixes = roleRoutePrefixes[role] || roleRoutePrefixes.teacher
   const roleAllowed = prefixes.includes('/') || prefixes.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`))
   return roleAllowed && routeFeatureEnabled(user, pathname)

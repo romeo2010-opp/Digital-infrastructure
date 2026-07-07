@@ -684,7 +684,7 @@ function ManualEntryForm({ detail, version, options, mode, loading, canManage, o
 }
 
 export function TimetablingPage({ personal = false }: { personal?: boolean }) {
-  const { api, token, user } = usePortal()
+  const { api, token, user, portalSyncEvent } = usePortal()
   const location = useLocation()
   const navigate = useNavigate()
   const params = useParams()
@@ -800,6 +800,13 @@ export function TimetablingPage({ personal = false }: { personal?: boolean }) {
     loadAll()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, mode, timetableId, params.versionId, personal])
+
+  useEffect(() => {
+    if (personal || !portalSyncEvent?.pulse) return
+    if (!portalSyncEvent.resources?.includes('timetables')) return
+    loadAll()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [portalSyncEvent?.pulse])
 
   useEffect(() => {
     if (!classOptions.length) {

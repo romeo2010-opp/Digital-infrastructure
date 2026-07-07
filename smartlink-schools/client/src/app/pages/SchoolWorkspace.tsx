@@ -196,6 +196,46 @@ function buildKpis(pageKey: SchoolPageKey, rows: any[]) {
       },
     ];
   }
+  if (pageKey === "homework") {
+    const assigned = rows.reduce((sum, row) => sum + Number(row.rawAssigned || 0), 0);
+    const submitted = rows.reduce((sum, row) => sum + Number(row.rawSubmitted || 0), 0);
+    const dueSoon = rows.filter((row) => {
+      const dueDate = row.rawDue ? new Date(row.rawDue) : null;
+      if (!dueDate || Number.isNaN(dueDate.getTime())) return false;
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const diffDays = Math.round((dueDate.getTime() - today.getTime()) / 86400000);
+      return diffDays >= 0 && diffDays <= 7;
+    }).length;
+    return [
+      {
+        label: "Assignments",
+        value: rows.length,
+        helper: "current term",
+        delta: "live rows",
+      },
+      {
+        label: "Learners Assigned",
+        value: assigned,
+        helper: "pending rows",
+        delta: "class scope",
+        tone: "good" as const,
+      },
+      {
+        label: "Submitted",
+        value: submitted,
+        helper: "learner work",
+        delta: assigned ? percent((submitted / assigned) * 100) : "0.0%",
+      },
+      {
+        label: "Due This Week",
+        value: dueSoon,
+        helper: "assignments",
+        delta: "reminder queue",
+        tone: dueSoon ? ("warn" as const) : ("good" as const),
+      },
+    ];
+  }
   return [
     {
       label: "Records",
@@ -264,6 +304,11 @@ function mapRows(pageKey: SchoolPageKey, payload: any) {
       className: row.class_name,
       subject: row.subject_name,
       due: normalizeDate(row.due_date),
+      rawDue: row.due_date,
+      assigned: Number(row.assigned_count || 0).toLocaleString(),
+      rawAssigned: Number(row.assigned_count || 0),
+      submitted: Number(row.submitted_count || 0).toLocaleString(),
+      rawSubmitted: Number(row.submitted_count || 0),
       status: row.status,
     }));
   }
@@ -395,7 +440,7 @@ export function SchoolWorkspace({
   const navigate = useNavigate();
   const location = useLocation();
   const initialSearchQuery = searchParams.get("q") || "";
-  const { token, api, user } = usePortal();
+  const { token, api, user, portalSyncEvent } = usePortal();
   const page = pageKey === "search" ? null : schoolPages[pageKey];
   const [rows, setRows] = useState<any[]>([]);
   const [searchRows, setSearchRows] = useState<any[]>([]);
@@ -432,6 +477,13 @@ export function SchoolWorkspace({
     refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, pageKey]);
+
+  useEffect(() => {
+    if (!portalSyncEvent?.pulse || pageKey === "search") return;
+    if (!portalSyncEvent.resources?.includes("schoolData")) return;
+    refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [portalSyncEvent?.pulse]);
 
   useEffect(() => {
     if (pageKey !== "search") return;

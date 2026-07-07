@@ -62,6 +62,7 @@ async function request(pathname: string, { method = 'GET', body, token, isForm =
   const response = await fetch(`${resolveApiOrigin()}${pathname}`, {
     method,
     signal,
+    credentials: 'include',
     headers: {
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(body && !isForm ? { 'Content-Type': 'application/json' } : {}),
@@ -77,6 +78,7 @@ async function requestBlob(pathname: string, { method = 'GET', body, token, isFo
   const response = await fetch(`${resolveApiOrigin()}${pathname}`, {
     method,
     signal,
+    credentials: 'include',
     headers: {
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(body && !isForm ? { 'Content-Type': 'application/json' } : {}),
@@ -101,29 +103,20 @@ function queryString(filters: Record<string, any> = {}) {
   return query ? `?${query}` : ''
 }
 
-const localPreferencesKey = 'smartlink.schools.preferences'
-
-function readLocalPreferences() {
-  if (typeof window === 'undefined') return {}
-  try {
-    return JSON.parse(window.localStorage.getItem(localPreferencesKey) || '{}')
-  } catch {
-    return {}
-  }
-}
-
-function writeLocalPreferences(patch: any) {
-  if (typeof window === 'undefined') return patch || {}
-  const next = { ...readLocalPreferences(), ...(patch || {}) }
-  window.localStorage.setItem(localPreferencesKey, JSON.stringify(next))
-  return next
-}
-
 export const portalApi = {
+  getLoginAppearance() {
+    return request('/api/auth/login-appearance')
+  },
+
+  lookupLoginAppearance(payload: { email?: string; studentCode?: string; student_code?: string; loginType?: string; login_type?: string }) {
+    return request('/api/auth/login-appearance/lookup', { method: 'POST', body: payload })
+  },
+
   login(credentials: { email?: string; studentCode?: string; student_code?: string; password: string; role?: string; loginType?: string; login_type?: string }) {
     return request('/api/auth/login', { method: 'POST', body: credentials }).then((payload: any) => ({
       accessToken: payload?.token || payload?.accessToken,
       user: payload?.user,
+      ai: payload?.ai || null,
     }))
   },
 
@@ -187,12 +180,12 @@ export const portalApi = {
     return Promise.resolve({})
   },
 
-  getMyPreferences(_token: string) {
-    return Promise.resolve(readLocalPreferences())
+  getMyPreferences(token: string) {
+    return request('/api/preferences/me', { token })
   },
 
-  updateMyPreferences(_token: string, payload: any) {
-    return Promise.resolve(writeLocalPreferences(payload))
+  updateMyPreferences(token: string, payload: any) {
+    return request('/api/preferences/me', { method: 'PATCH', token, body: payload })
   },
 
   listSessions() {
@@ -571,12 +564,120 @@ export const portalApi = {
     return request('/api/students/photo', { method: 'POST', token, body: payload })
   },
 
-  listFeeAccounts(token: string) {
-    return request('/api/fees', { token })
+  getBursarDashboard(token: string, filters: Record<string, any> = {}) {
+    return request(`/api/fees/dashboard${queryString(filters)}`, { token })
+  },
+
+  listFeeAccounts(token: string, filters: Record<string, any> = {}) {
+    return request(`/api/fees/accounts${queryString(filters)}`, { token })
+  },
+
+  getFeeAccount(token: string, id: any) {
+    return request(`/api/fees/accounts/${id}`, { token })
+  },
+
+  syncFeeAccounts(token: string) {
+    return request('/api/fees/accounts/sync', { method: 'POST', token })
+  },
+
+  listFeeStructures(token: string) {
+    return request('/api/fees/structures', { token })
+  },
+
+  createFeeStructure(token: string, payload: any) {
+    return request('/api/fees/structures', { method: 'POST', token, body: payload })
+  },
+
+  applyFeeStructure(token: string, id: any, payload: any = {}) {
+    return request(`/api/fees/structures/${id}/apply`, { method: 'POST', token, body: payload })
+  },
+
+  listFinanceInvoices(token: string, filters: Record<string, any> = {}) {
+    return request(`/api/fees/invoices${queryString(filters)}`, { token })
+  },
+
+  generateFinanceInvoices(token: string, payload: any) {
+    return request('/api/fees/invoices/generate', { method: 'POST', token, body: payload })
+  },
+
+  listFinancePayments(token: string, filters: Record<string, any> = {}) {
+    return request(`/api/fees/payments${queryString(filters)}`, { token })
   },
 
   recordPayment(token: string, payload: any) {
     return request('/api/fees/payments', { method: 'POST', token, body: payload })
+  },
+
+  reverseFinancePayment(token: string, id: any, payload: any) {
+    return request(`/api/fees/payments/${id}/reverse`, { method: 'POST', token, body: payload })
+  },
+
+  downloadPaymentReceiptPdf(token: string, id: any) {
+    return requestBlob(`/api/fees/payments/${id}/receipt.pdf`, { token })
+  },
+
+  listFinanceArrears(token: string, filters: Record<string, any> = {}) {
+    return request(`/api/fees/arrears${queryString(filters)}`, { token })
+  },
+
+  listPaymentPlans(token: string) {
+    return request('/api/fees/payment-plans', { token })
+  },
+
+  createPaymentPlan(token: string, payload: any) {
+    return request('/api/fees/payment-plans', { method: 'POST', token, body: payload })
+  },
+
+  listFinanceDiscounts(token: string) {
+    return request('/api/fees/discounts', { token })
+  },
+
+  createFinanceDiscount(token: string, payload: any) {
+    return request('/api/fees/discounts', { method: 'POST', token, body: payload })
+  },
+
+  transitionFinanceDiscount(token: string, id: any, action: 'approve' | 'reject') {
+    return request(`/api/fees/discounts/${id}/${action}`, { method: 'POST', token })
+  },
+
+  listFinanceExpenses(token: string) {
+    return request('/api/fees/expenses', { token })
+  },
+
+  createFinanceExpense(token: string, payload: any) {
+    return request('/api/fees/expenses', { method: 'POST', token, body: payload })
+  },
+
+  transitionFinanceExpense(token: string, id: any, action: 'approve' | 'reject' | 'pay') {
+    return request(`/api/fees/expenses/${id}/${action}`, { method: 'POST', token })
+  },
+
+  getFinanceReports(token: string, filters: Record<string, any> = {}) {
+    return request(`/api/fees/reports${queryString(filters)}`, { token })
+  },
+
+  downloadFinanceReportCsv(token: string, filters: Record<string, any> = {}) {
+    return requestBlob(`/api/fees/reports${queryString({ ...filters, format: 'csv' })}`, { token })
+  },
+
+  listFinanceAuditLogs(token: string) {
+    return request('/api/fees/audit', { token })
+  },
+
+  getFinanceReconciliation(token: string) {
+    return request('/api/fees/reconciliation', { token })
+  },
+
+  importBankTransactions(token: string, payload: any) {
+    return request('/api/fees/reconciliation/import', { method: 'POST', token, body: payload })
+  },
+
+  matchBankTransaction(token: string, id: any, payload: any) {
+    return request(`/api/fees/reconciliation/${id}/match`, { method: 'POST', token, body: payload })
+  },
+
+  transitionBankTransaction(token: string, id: any, action: 'unmatch' | 'ignore', payload: any) {
+    return request(`/api/fees/reconciliation/${id}/${action}`, { method: 'POST', token, body: payload })
   },
 
   listAttendance(token: string, filters: Record<string, any> = {}) {
@@ -1167,6 +1268,98 @@ export const portalApi = {
 
   fullSearch(token: string, filters: Record<string, any> = {}, signal?: AbortSignal) {
     return request(`/api/search${queryString(filters)}`, { token, signal })
+  },
+
+  getExamLabDashboard(token: string, filters: Record<string, any> = {}) {
+    return request(`/api/internal/exam-lab/dashboard${queryString(filters)}`, { token })
+  },
+
+  getExamLabCoverage(token: string, filters: Record<string, any> = {}) {
+    return request(`/api/internal/exam-lab/coverage${queryString(filters)}`, { token })
+  },
+
+  updateExamLabCoverageNote(token: string, payload: any) {
+    return request('/api/internal/exam-lab/coverage', { method: 'PATCH', token, body: payload })
+  },
+
+  uploadExamLabPaper(token: string, payload: any) {
+    return request('/api/internal/exam-lab/papers', { method: 'POST', token, body: payload })
+  },
+
+  startExamLabExtraction(token: string, paperId: any, payload: any = {}) {
+    return request(`/api/internal/exam-lab/papers/${paperId}/extract`, { method: 'POST', token, body: payload })
+  },
+
+  getExamLabPaperReview(token: string, paperId: any) {
+    return request(`/api/internal/exam-lab/papers/${paperId}/review`, { token })
+  },
+
+  updateExamLabCandidate(token: string, candidateId: any, payload: any) {
+    return request(`/api/internal/exam-lab/candidates/${candidateId}`, { method: 'PATCH', token, body: payload })
+  },
+
+  acceptExamLabCandidate(token: string, candidateId: any, payload: any = {}) {
+    return request(`/api/internal/exam-lab/candidates/${candidateId}/accept`, { method: 'POST', token, body: payload })
+  },
+
+  listExamLabQuestions(token: string, filters: Record<string, any> = {}) {
+    return request(`/api/internal/exam-lab/questions${queryString(filters)}`, { token })
+  },
+
+  createExamLabQuestion(token: string, payload: any) {
+    return request('/api/internal/exam-lab/questions', { method: 'POST', token, body: payload })
+  },
+
+  updateExamLabQuestion(token: string, questionId: any, payload: any) {
+    return request(`/api/internal/exam-lab/questions/${questionId}`, { method: 'PATCH', token, body: payload })
+  },
+
+  archiveExamLabQuestion(token: string, questionId: any) {
+    return request(`/api/internal/exam-lab/questions/${questionId}/archive`, { method: 'POST', token })
+  },
+
+  getExamLabTopicMap(token: string, filters: Record<string, any> = {}) {
+    return request(`/api/internal/exam-lab/topic-map${queryString(filters)}`, { token })
+  },
+
+  saveExamLabTopic(token: string, payload: any) {
+    return request(payload?.id ? `/api/internal/exam-lab/topics/${payload.id}` : '/api/internal/exam-lab/topics', { method: payload?.id ? 'PATCH' : 'POST', token, body: payload })
+  },
+
+  saveExamLabSubtopic(token: string, payload: any) {
+    return request(payload?.id ? `/api/internal/exam-lab/subtopics/${payload.id}` : '/api/internal/exam-lab/subtopics', { method: payload?.id ? 'PATCH' : 'POST', token, body: payload })
+  },
+
+  saveExamLabSkill(token: string, payload: any) {
+    return request(payload?.id ? `/api/internal/exam-lab/skills/${payload.id}` : '/api/internal/exam-lab/skills', { method: payload?.id ? 'PATCH' : 'POST', token, body: payload })
+  },
+
+  archiveExamLabTopicEntity(token: string, entityType: string, id: any) {
+    return request(`/api/internal/exam-lab/topic-map/${entityType}/${id}/archive`, { method: 'POST', token })
+  },
+
+  createExamLabMarkScheme(token: string, payload: any) {
+    return request('/api/internal/exam-lab/mark-schemes', { method: 'POST', token, body: payload })
+  },
+
+  listExamLabBacktests(token: string, filters: Record<string, any> = {}) {
+    return request(`/api/internal/exam-lab/backtests${queryString(filters)}`, { token })
+  },
+
+  runExamLabBacktest(token: string, payload: any) {
+    return request('/api/internal/exam-lab/backtests', { method: 'POST', token, body: payload })
+  },
+
+  listExamLabPredictionReports(token: string, filters: Record<string, any> = {}) {
+    return request(`/api/internal/exam-lab/reports${queryString(filters)}`, { token })
+  },
+
+  generateExamLabPredictionReport(token: string, payload: any) {
+    return request('/api/internal/exam-lab/reports', { method: 'POST', token, body: payload })
+  },
+
+  suggestExamLabQuestionTags(token: string, payload: any) {
+    return request('/api/internal/exam-lab/ai/suggest-tags', { method: 'POST', token, body: payload })
   },
 
   searchSuggestions() {

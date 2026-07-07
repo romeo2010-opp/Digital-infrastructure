@@ -247,20 +247,27 @@
 
 :root[data-mera-theme="black"] .text-\[\#111827\],
 :root[data-mera-theme="black"] .text-\[\#111111\],
+:root[data-mera-theme="black"] .text-\[\#0f172a\],
+:root[data-mera-theme="black"] .text-\[\#020617\],
 :root[data-mera-theme="black"] .text-slate-900,
 :root[data-mera-theme="black"] .text-slate-800 {
   color: var(--mera-panel-text) !important;
 }
 
+:root[data-mera-theme="black"] .text-\[\#334155\],
 :root[data-mera-theme="black"] .text-\[\#374151\],
+:root[data-mera-theme="black"] .text-\[\#475569\],
 :root[data-mera-theme="black"] .text-\[\#4b5563\],
+:root[data-mera-theme="black"] .text-\[\#64748b\],
 :root[data-mera-theme="black"] .text-slate-700,
 :root[data-mera-theme="black"] .text-slate-600 {
   color: var(--mera-panel-text-soft) !important;
 }
 
 :root[data-mera-theme="black"] .text-\[\#6b7280\],
+:root[data-mera-theme="black"] .text-\[\#94a3b8\],
 :root[data-mera-theme="black"] .text-\[\#9ca3af\],
+:root[data-mera-theme="black"] .text-\[\#cbd5e1\],
 :root[data-mera-theme="black"] .text-slate-500,
 :root[data-mera-theme="black"] .text-slate-400 {
   color: var(--mera-panel-text-muted) !important;
@@ -268,9 +275,14 @@
 
 :root[data-mera-theme="black"] .text-\[\#2563eb\],
 :root[data-mera-theme="black"] .text-\[\#1d4ed8\],
+:root[data-mera-theme="black"] .text-\[\#1e3a8a\],
+:root[data-mera-theme="black"] .text-\[\#1557dc\],
+:root[data-mera-theme="black"] .text-\[\#1677ff\],
 :root[data-mera-theme="black"] .text-blue-700,
 :root[data-mera-theme="black"] .text-blue-800,
 :root[data-mera-theme="black"] .hover\:text-\[\#2563eb\]:hover,
+:root[data-mera-theme="black"] .hover\:text-\[\#1557dc\]:hover,
+:root[data-mera-theme="black"] .hover\:text-\[\#1677ff\]:hover,
 :root[data-mera-theme="black"] .hover\:text-blue-700:hover,
 :root[data-mera-theme="black"] .fill-\[\#111827\] {
   color: var(--mera-info) !important;
@@ -295,6 +307,9 @@
 :root[data-mera-theme="black"] .border-\[\#e5e7eb\],
 :root[data-mera-theme="black"] .border-\[\#e2e8f0\],
 :root[data-mera-theme="black"] .border-\[\#f1f5f9\],
+:root[data-mera-theme="black"] .border-\[\#dce3ed\],
+:root[data-mera-theme="black"] .border-\[\#d7dde6\],
+:root[data-mera-theme="black"] .border-\[\#eef2f7\],
 :root[data-mera-theme="black"] .border-slate-200,
 :root[data-mera-theme="black"] .border-blue-200 {
   border-color: var(--mera-panel-border) !important;
@@ -331,16 +346,15 @@
 
 :root[data-mera-theme="black"] .smartlink-reference-login,
 .smartlink-reference-login {
-  background: #eeeeee !important;
-  color: #191919 !important;
+  background-color: #eeeeee;
+  color: var(--login-text, #191919);
   font-family: Poppins, "Geist Variable", Geist, Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important;
   letter-spacing: 0 !important;
 }
 
 :root[data-mera-theme="black"] .smartlink-reference-login section,
 .smartlink-reference-login section {
-  background: #ffffff !important;
-  color: #191919 !important;
+  color: var(--login-text, #191919);
 }
 
 :root[data-mera-theme="black"] .smartlink-reference-login h1,
@@ -358,23 +372,29 @@
 
 :root[data-mera-theme="black"] .smartlink-reference-login input,
 .smartlink-reference-login input {
-  background: #ffffff !important;
-  border-color: #dddddd !important;
-  color: #171717 !important;
+  background: var(--login-input-bg, #ffffff) !important;
+  border-color: var(--login-input-border, #dddddd) !important;
+  color: var(--login-text, #171717) !important;
   box-shadow: 0 1px 4px rgb(0 0 0 / 0.09) !important;
 }
 
 :root[data-mera-theme="black"] .smartlink-reference-login input::placeholder,
 .smartlink-reference-login input::placeholder {
-  color: #a4a4a4 !important;
+  color: var(--login-muted, #a4a4a4) !important;
 }
 
 :root[data-mera-theme="black"] .smartlink-reference-login button[type="submit"],
 .smartlink-reference-login button[type="submit"] {
-  background: #6bdd9e !important;
-  border-color: #6bdd9e !important;
-  color: #111111 !important;
+  background: var(--login-accent, #6bdd9e) !important;
+  border-color: var(--login-accent, #6bdd9e) !important;
+  color: var(--login-accent-foreground, #111111) !important;
   box-shadow: none !important;
+}
+
+:root[data-mera-theme="black"] .smartlink-reference-login button[type="submit"]:hover,
+.smartlink-reference-login button[type="submit"]:hover {
+  background: var(--login-accent-hover, #5dd38f) !important;
+  border-color: var(--login-accent-hover, #5dd38f) !important;
 }
 @theme inline {
   --color-background: var(--background);
@@ -536,10 +556,325 @@
 }
 
 .smartlink-shell-scroll {
+  background: var(--mera-app-bg);
   -webkit-overflow-scrolling: touch;
   overscroll-behavior-y: auto;
   scrollbar-gutter: stable;
   touch-action: pan-y;
+  --sl-personal-accent: #0f766e;
+  --sl-personal-panel-alpha: 1;
+  --sl-personal-panel-blur: 10px;
+}
+
+.smartlink-shell-scroll[data-personalized-accent="navy"] {
+  --sl-personal-accent: #111827;
+}
+
+.smartlink-shell-scroll[data-personalized-accent="emerald"] {
+  --sl-personal-accent: #047857;
+}
+
+.smartlink-shell-scroll[data-personalized-accent="graphite"] {
+  --sl-personal-accent: #334155;
+}
+
+.smartlink-shell-scroll[data-personalized-accent="copper"] {
+  --sl-personal-accent: #b45309;
+}
+
+.smartlink-personalized-content {
+  position: relative;
+  z-index: 1;
+}
+
+.smartlink-shell-scroll[data-personalized-background="image"] .smartlink-personalized-content > [class*="bg-"] {
+  background: transparent !important;
+}
+
+.smartlink-personalized-range {
+  --range-progress: 0%;
+  --range-track: color-mix(in srgb, var(--sl-personal-accent) 10%, #e7eaef);
+  --range-track-border: rgb(15 23 42 / 0.08);
+  --range-thumb-border: #ffffff;
+  --range-thumb-shadow: 0 5px 14px rgb(15 23 42 / 0.2), 0 0 0 1px rgb(15 23 42 / 0.08);
+  width: 100%;
+  height: 22px;
+  margin: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.smartlink-personalized-range:focus {
+  outline: none;
+}
+
+.smartlink-personalized-range:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--sl-personal-accent) 48%, transparent);
+  outline-offset: 3px;
+  border-radius: 999px;
+}
+
+.smartlink-personalized-range::-webkit-slider-runnable-track {
+  height: 8px;
+  border: 1px solid var(--range-track-border);
+  border-radius: 999px;
+  background:
+    linear-gradient(90deg, var(--sl-personal-accent) 0 var(--range-progress), var(--range-track) var(--range-progress) 100%);
+  box-shadow: inset 0 1px 2px rgb(15 23 42 / 0.08);
+}
+
+.smartlink-personalized-range::-webkit-slider-thumb {
+  width: 18px;
+  height: 18px;
+  margin-top: -6px;
+  border: 3px solid var(--range-thumb-border);
+  border-radius: 999px;
+  background: var(--sl-personal-accent);
+  box-shadow: var(--range-thumb-shadow);
+  appearance: none;
+  -webkit-appearance: none;
+  transition: transform 160ms ease, box-shadow 160ms ease;
+}
+
+.smartlink-personalized-range:hover::-webkit-slider-thumb {
+  transform: scale(1.08);
+  box-shadow: 0 7px 18px rgb(15 23 42 / 0.24), 0 0 0 5px color-mix(in srgb, var(--sl-personal-accent) 14%, transparent);
+}
+
+.smartlink-personalized-range::-moz-range-track {
+  height: 8px;
+  border: 1px solid var(--range-track-border);
+  border-radius: 999px;
+  background: var(--range-track);
+  box-shadow: inset 0 1px 2px rgb(15 23 42 / 0.08);
+}
+
+.smartlink-personalized-range::-moz-range-progress {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--sl-personal-accent);
+}
+
+.smartlink-personalized-range::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border: 3px solid var(--range-thumb-border);
+  border-radius: 999px;
+  background: var(--sl-personal-accent);
+  box-shadow: var(--range-thumb-shadow);
+  transition: transform 160ms ease, box-shadow 160ms ease;
+}
+
+.smartlink-personalized-range:hover::-moz-range-thumb {
+  transform: scale(1.08);
+  box-shadow: 0 7px 18px rgb(15 23 42 / 0.24), 0 0 0 5px color-mix(in srgb, var(--sl-personal-accent) 14%, transparent);
+}
+
+[data-theme="dark"] .smartlink-personalized-range {
+  --range-track: color-mix(in srgb, var(--sl-personal-accent) 16%, #4a4841);
+  --range-track-border: rgb(232 226 215 / 0.12);
+  --range-thumb-border: #242421;
+  --range-thumb-shadow: 0 7px 18px rgb(0 0 0 / 0.36), 0 0 0 1px rgb(232 226 215 / 0.16);
+}
+
+.smartlink-shell-scroll[data-personalized-accent] .smartlink-personalized-content [class*="bg-[#0f766e]"],
+.smartlink-shell-scroll[data-personalized-accent] .smartlink-personalized-content [class*="bg-[#14b8a6]"],
+.smartlink-shell-scroll[data-personalized-accent] .smartlink-personalized-content [class*="bg-[#6bdd9e]"] {
+  background-color: var(--sl-personal-accent) !important;
+}
+
+.smartlink-shell-scroll[data-personalized-accent] .smartlink-personalized-content [class*="text-[#0f766e]"],
+.smartlink-shell-scroll[data-personalized-accent] .smartlink-personalized-content [class*="text-[#059669]"] {
+  color: var(--sl-personal-accent) !important;
+}
+
+.smartlink-shell-scroll[data-personalized-accent] .smartlink-personalized-content [class*="border-[#0f766e]"],
+.smartlink-shell-scroll[data-personalized-accent] .smartlink-personalized-content [class*="border-[#99f6e4]"] {
+  border-color: color-mix(in srgb, var(--sl-personal-accent) 42%, transparent) !important;
+}
+
+.smartlink-shell-scroll[data-personalized-accent] .smartlink-personalized-content button:focus-visible,
+.smartlink-shell-scroll[data-personalized-accent] .smartlink-personalized-content input:focus-visible,
+.smartlink-shell-scroll[data-personalized-accent] .smartlink-personalized-content select:focus-visible,
+.smartlink-shell-scroll[data-personalized-accent] .smartlink-personalized-content textarea:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--sl-personal-accent) 55%, transparent);
+  outline-offset: 2px;
+}
+
+.smartlink-shell-scroll[data-personalized-panels="soft"] .smartlink-personalized-content section[class*="border"],
+.smartlink-shell-scroll[data-personalized-panels="soft"] .smartlink-personalized-content article[class*="border"],
+.smartlink-shell-scroll[data-personalized-panels="soft"] .smartlink-personalized-content div[class*="rounded"][class*="border"] {
+  background-color: rgb(255 255 255 / var(--sl-personal-panel-alpha)) !important;
+  border-color: rgb(226 232 240 / 0.42) !important;
+  backdrop-filter: blur(var(--sl-personal-panel-blur));
+  box-shadow: 0 10px 26px rgb(15 23 42 / 0.07) !important;
+}
+
+[data-theme="dark"] .smartlink-shell-scroll[data-personalized-panels="soft"] .smartlink-personalized-content section[class*="border"],
+[data-theme="dark"] .smartlink-shell-scroll[data-personalized-panels="soft"] .smartlink-personalized-content article[class*="border"],
+[data-theme="dark"] .smartlink-shell-scroll[data-personalized-panels="soft"] .smartlink-personalized-content div[class*="rounded"][class*="border"] {
+  background-color: rgb(36 36 33 / var(--sl-personal-panel-alpha)) !important;
+  border-color: rgb(232 226 215 / 0.16) !important;
+}
+
+.smartlink-shell-scroll[data-personalized-panels="soft"] .smartlink-personalized-content header[class*="border-b"],
+.smartlink-shell-scroll[data-personalized-panels="soft"] .smartlink-personalized-content div[class*="border-t"],
+.smartlink-shell-scroll[data-personalized-panels="soft"] .smartlink-personalized-content tr[class*="border-b"] {
+  border-color: rgb(226 232 240 / 0.36) !important;
+}
+
+.smartlink-personalized-content .school-operations-now {
+  background-color: rgb(255 255 255 / max(var(--sl-personal-panel-alpha), 0.82)) !important;
+  border-color: rgb(226 232 240 / 0.58) !important;
+}
+
+.smartlink-personalized-content .school-operations-now > header {
+  background: linear-gradient(180deg, rgb(255 255 255 / 0.78), rgb(248 250 252 / 0.64)) !important;
+}
+
+.smartlink-personalized-content .school-operations-band,
+.smartlink-personalized-content .school-ops-metric-strip {
+  background: linear-gradient(180deg, rgb(248 250 252 / 0.76), rgb(255 255 255 / 0.52)) !important;
+}
+
+.smartlink-personalized-content .school-ops-live-card,
+.smartlink-personalized-content .school-ops-day-card,
+.smartlink-personalized-content .school-ops-next-card,
+.smartlink-personalized-content .school-ops-mini-stat,
+.smartlink-personalized-content .school-ops-metric-card,
+.smartlink-personalized-content .school-ops-flow-row,
+.smartlink-personalized-content .school-ops-empty {
+  background-color: rgb(255 255 255 / max(var(--sl-personal-panel-alpha), 0.76)) !important;
+  border-color: rgb(203 213 225 / 0.58) !important;
+  box-shadow: 0 10px 24px rgb(15 23 42 / 0.06) !important;
+}
+
+.smartlink-personalized-content .school-ops-next-card,
+.smartlink-personalized-content .school-ops-flow-row,
+.smartlink-personalized-content .school-ops-empty {
+  background-color: rgb(248 250 252 / max(var(--sl-personal-panel-alpha), 0.74)) !important;
+}
+
+.smartlink-personalized-content .school-operations-now .school-ops-track {
+  background-color: rgb(226 232 240 / 0.88) !important;
+  box-shadow: none !important;
+}
+
+.smartlink-personalized-content .school-operations-now .school-ops-accent {
+  color: var(--sl-personal-accent) !important;
+}
+
+.smartlink-personalized-content .school-operations-now .school-ops-accent[class*="bg-"],
+.smartlink-personalized-content .school-operations-now [class*="bg-[#0f766e]"] {
+  background-color: var(--sl-personal-accent) !important;
+}
+
+[data-theme="dark"] .smartlink-personalized-content .school-operations-now {
+  background-color: rgb(24 24 22 / max(var(--sl-personal-panel-alpha), 0.82)) !important;
+  border-color: rgb(212 212 205 / 0.2) !important;
+}
+
+[data-theme="dark"] .smartlink-personalized-content .school-operations-now > header,
+[data-theme="dark"] .smartlink-personalized-content .school-operations-band,
+[data-theme="dark"] .smartlink-personalized-content .school-ops-metric-strip {
+  background: linear-gradient(180deg, rgb(24 24 22 / 0.78), rgb(36 36 33 / 0.58)) !important;
+}
+
+[data-theme="dark"] .smartlink-personalized-content .school-ops-live-card,
+[data-theme="dark"] .smartlink-personalized-content .school-ops-day-card,
+[data-theme="dark"] .smartlink-personalized-content .school-ops-next-card,
+[data-theme="dark"] .smartlink-personalized-content .school-ops-mini-stat,
+[data-theme="dark"] .smartlink-personalized-content .school-ops-metric-card,
+[data-theme="dark"] .smartlink-personalized-content .school-ops-flow-row,
+[data-theme="dark"] .smartlink-personalized-content .school-ops-empty {
+  background-color: rgb(24 24 22 / max(var(--sl-personal-panel-alpha), 0.72)) !important;
+  border-color: rgb(212 212 205 / 0.22) !important;
+  box-shadow: 0 12px 28px rgb(0 0 0 / 0.2) !important;
+}
+
+[data-theme="dark"] .smartlink-personalized-content .school-operations-now .text-\[\#0f172a\],
+[data-theme="dark"] .smartlink-personalized-content .school-operations-now .text-\[\#111111\] {
+  color: #f8fafc !important;
+}
+
+[data-theme="dark"] .smartlink-personalized-content .school-operations-now .school-ops-muted,
+[data-theme="dark"] .smartlink-personalized-content .school-operations-now .text-\[\#475569\],
+[data-theme="dark"] .smartlink-personalized-content .school-operations-now .text-\[\#64748b\] {
+  color: #cbd5e1 !important;
+}
+
+[data-theme="dark"] .smartlink-personalized-content .school-operations-now .school-ops-label {
+  color: #94a3b8 !important;
+}
+
+[data-theme="dark"] .smartlink-personalized-content .school-operations-now .school-ops-track {
+  background-color: rgb(68 68 62 / 0.88) !important;
+}
+
+.smartlink-shell-scroll[data-personalized-rhythm="compact"] .smartlink-personalized-content {
+  --sl-personal-page-gap: 0.75rem;
+}
+
+.smartlink-shell-scroll[data-personalized-rhythm="spacious"] .smartlink-personalized-content {
+  --sl-personal-page-gap: 1.25rem;
+}
+
+.smartlink-shell-scroll[data-personalized-rhythm="compact"] .smartlink-personalized-content > .grid,
+.smartlink-shell-scroll[data-personalized-rhythm="compact"] .smartlink-personalized-content > div > .grid {
+  gap: 0.75rem !important;
+}
+
+.smartlink-shell-scroll[data-personalized-rhythm="compact"] .smartlink-personalized-content [class*=" p-5"],
+.smartlink-shell-scroll[data-personalized-rhythm="compact"] .smartlink-personalized-content [class*=" p-4"] {
+  padding: 0.875rem !important;
+}
+
+.smartlink-shell-scroll[data-personalized-rhythm="spacious"] .smartlink-personalized-content > .grid,
+.smartlink-shell-scroll[data-personalized-rhythm="spacious"] .smartlink-personalized-content > div > .grid {
+  gap: 1.25rem !important;
+}
+
+.smartlink-shell-scroll[data-personalized-rhythm="spacious"] .smartlink-personalized-content [class*=" p-5"],
+.smartlink-shell-scroll[data-personalized-rhythm="spacious"] .smartlink-personalized-content [class*=" p-4"] {
+  padding: 1.25rem !important;
+}
+
+.smartlink-shell-scroll[data-personalized-motion="calm"] .smartlink-personalized-content button {
+  transition-duration: 180ms;
+}
+
+.smartlink-shell-scroll[data-personalized-motion="reduced"] *,
+.smartlink-shell-scroll[data-personalized-motion="reduced"] *::before,
+.smartlink-shell-scroll[data-personalized-motion="reduced"] *::after {
+  transition-duration: 0.01ms !important;
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+}
+
+.smartlink-shell-scroll[data-personalized-number="strong"] .smartlink-personalized-content [class*="tracking-"] {
+  font-weight: 650;
+}
+
+.smartlink-shell-scroll[data-personalized-number="quiet"] .smartlink-personalized-content [class*="tracking-"] {
+  font-weight: 500;
+}
+
+.smartlink-shell-scroll[data-personalized-focus="focused"] .smartlink-personalized-content section,
+.smartlink-shell-scroll[data-personalized-focus="focused"] .smartlink-personalized-content article {
+  box-shadow: 0 8px 20px rgb(15 23 42 / 0.055) !important;
+}
+
+.smartlink-shell-scroll[data-personalized-focus="executive"] .smartlink-personalized-content section,
+.smartlink-shell-scroll[data-personalized-focus="executive"] .smartlink-personalized-content article {
+  border-radius: 10px !important;
+  box-shadow: 0 12px 30px rgb(15 23 42 / 0.075) !important;
+}
+
+.smartlink-shell-scroll[data-personalized-focus="executive"] .smartlink-personalized-content h1 {
+  font-size: clamp(1.55rem, 2vw, 2rem);
 }
 
 .mera-glass,

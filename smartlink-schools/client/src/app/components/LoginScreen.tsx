@@ -3,6 +3,7 @@ import { ArrowLeft } from 'lucide-react'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { InputOTP, InputOTPGroup, InputOTPSlot } from './ui/input-otp'
+import { readLastLoginAppearance } from '../lib/loginAppearanceCache'
 
 type LoginChallenge = {
   challengeId: string
@@ -15,9 +16,22 @@ const loginFont = {
   fontFamily: 'Poppins, "Geist Variable", Geist, Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
 }
 
-const fieldLabelClass = 'mb-1.5 block text-[13px] font-semibold leading-none text-[#202020]'
-const inputClass = 'h-9 rounded-[6px] border-[#dddddd] bg-white px-3 text-[13px] font-medium text-[#171717] shadow-[0_1px_4px_rgba(0,0,0,0.09)] placeholder:text-[#a4a4a4] focus-visible:border-[#b8b8b8] focus-visible:ring-0'
+const fieldLabelClass = 'mb-1.5 block text-[13px] font-semibold leading-none text-[var(--login-text)]'
+const inputClass = 'h-9 rounded-[6px] border-[color:var(--login-input-border)] bg-[var(--login-input-bg)] px-3 text-[13px] font-medium text-[var(--login-text)] shadow-[0_1px_4px_rgba(0,0,0,0.09)] placeholder:text-[var(--login-muted)] focus-visible:border-[color:var(--login-focus-border)] focus-visible:ring-0'
 const primaryButtonClass = 'h-9 rounded-[6px] border-0 bg-[#6bdd9e] text-[14px] font-semibold text-[#111111] shadow-none transition hover:bg-[#5dd38f] active:translate-y-px'
+const loginAccentPalette: Record<string, { accent: string; hover: string; foreground: string }> = {
+  smartlink: { accent: '#6bdd9e', hover: '#5dd38f', foreground: '#111111' },
+  navy: { accent: '#111827', hover: '#1f2937', foreground: '#ffffff' },
+  emerald: { accent: '#047857', hover: '#065f46', foreground: '#ffffff' },
+  graphite: { accent: '#334155', hover: '#1f2937', foreground: '#ffffff' },
+  copper: { accent: '#b45309', hover: '#92400e', foreground: '#ffffff' },
+}
+
+function boundedNumber(value: any, fallback: number, min: number, max: number) {
+  const number = Number(value)
+  if (!Number.isFinite(number)) return fallback
+  return Math.max(min, Math.min(max, number))
+}
 
 export function LoginScreen({
   onLogin,
@@ -49,6 +63,7 @@ export function LoginScreen({
   const [code, setCode] = useState('')
   const [trustDevice, setTrustDevice] = useState(false)
   const [now, setNow] = useState(() => Date.now())
+  const [loginAppearance] = useState<any>(() => readLastLoginAppearance())
 
   useEffect(() => {
     if (!pendingChallenge) return undefined
@@ -79,6 +94,51 @@ export function LoginScreen({
   const showSuccessStep = Boolean(successGate)
   const showCodeStep = !showSuccessStep && Boolean(pendingChallenge?.challengeId)
   const isStudentMode = mode === 'student'
+  const hasLoginWallpaper = Boolean(loginAppearance?.dashboardBackgroundImage && loginAppearance?.dashboardBackgroundEnabled !== false)
+  const loginDim = boundedNumber(loginAppearance?.dashboardBackgroundDim, 74, 0, 92) / 100
+  const transparentLoginForm = Boolean(loginAppearance?.transparentSectionsEnabled)
+  const cardAlpha = transparentLoginForm
+    ? Math.max(0.45, Math.min(1, 1 - boundedNumber(loginAppearance?.sectionTransparency, 0, 0, 75) / 100))
+    : 1
+  const sectionBlur = transparentLoginForm ? boundedNumber(loginAppearance?.sectionBlur, 10, 0, 28) : 0
+  const useDarkLoginText = ['dark', 'black-white'].includes(String(loginAppearance?.appearance || ''))
+  const loginAccent = loginAccentPalette[String(loginAppearance?.accentTone || 'smartlink')] || loginAccentPalette.smartlink
+  const rootStyle = useMemo(() => {
+    const base: any = {
+      ...loginFont,
+      '--login-text': useDarkLoginText ? '#f7f7f2' : '#191919',
+      '--login-muted': useDarkLoginText ? '#d6d6cf' : '#747474',
+      '--login-link': loginAccent.accent,
+      '--login-accent': loginAccent.accent,
+      '--login-accent-hover': loginAccent.hover,
+      '--login-accent-foreground': loginAccent.foreground,
+      '--login-input-bg': useDarkLoginText ? 'rgba(20,20,18,0.58)' : 'rgba(255,255,255,0.86)',
+      '--login-input-border': useDarkLoginText ? 'rgba(255,255,255,0.24)' : 'rgba(210,210,210,0.86)',
+      '--login-focus-border': loginAccent.accent,
+    }
+    if (!hasLoginWallpaper) {
+      return {
+        ...base,
+        backgroundColor: useDarkLoginText ? '#1c1c1a' : '#eeeeee',
+      }
+    }
+    return {
+      ...base,
+      backgroundImage: `linear-gradient(rgba(0,0,0,${loginDim}), rgba(0,0,0,${loginDim})), url("${loginAppearance.dashboardBackgroundImage}")`,
+      backgroundPosition: `${boundedNumber(loginAppearance?.dashboardBackgroundX, 50, 0, 100)}% ${boundedNumber(loginAppearance?.dashboardBackgroundY, 50, 0, 100)}%`,
+      backgroundSize: loginAppearance?.dashboardBackgroundMode === 'custom' ? `${boundedNumber(loginAppearance?.dashboardBackgroundScale, 100, 20, 300)}% auto` : String(loginAppearance?.dashboardBackgroundMode || 'cover'),
+      backgroundRepeat: 'no-repeat',
+      backgroundAttachment: 'fixed',
+      backgroundColor: '#1c1c1a',
+    }
+  }, [cardAlpha, hasLoginWallpaper, loginAccent, loginAppearance, loginDim, useDarkLoginText])
+  const cardStyle = useMemo(() => ({
+    backgroundColor: useDarkLoginText ? `rgba(26,26,24,${cardAlpha})` : `rgba(255,255,255,${cardAlpha})`,
+    border: transparentLoginForm ? `1px solid ${useDarkLoginText ? 'rgba(255,255,255,0.22)' : 'rgba(255,255,255,0.58)'}` : '1px solid transparent',
+    backdropFilter: transparentLoginForm ? `blur(${sectionBlur}px)` : undefined,
+    WebkitBackdropFilter: transparentLoginForm ? `blur(${sectionBlur}px)` : undefined,
+    boxShadow: transparentLoginForm ? '0 24px 80px rgba(0,0,0,0.24)' : 'none',
+  }), [cardAlpha, sectionBlur, transparentLoginForm, useDarkLoginText])
 
   const switchMode = (nextMode: 'student' | 'staff') => {
     setMode(nextMode)
@@ -86,13 +146,13 @@ export function LoginScreen({
   }
 
   return (
-    <main className="smartlink-reference-login mera-login-root flex min-h-screen w-full items-center justify-center bg-[#eeeeee] px-4 py-8 text-[#191919]" style={loginFont}>
-      <section className="w-full max-w-[385px] rounded-[15px] bg-white px-7 py-8 shadow-none sm:px-8">
+    <main className="smartlink-reference-login mera-login-root flex min-h-screen w-full items-center justify-center bg-[#eeeeee] bg-cover px-4 py-8 text-[var(--login-text)] transition-[background-image,background-color] duration-300" style={rootStyle}>
+      <section className="w-full max-w-[385px] rounded-[15px] px-7 py-8 sm:px-8" style={cardStyle}>
         <header className="text-center">
-          <h1 className="m-0 text-[19px] font-medium uppercase leading-6 tracking-[0.035em] text-[#171717]">
+          <h1 className="m-0 text-[19px] font-medium uppercase leading-6 tracking-[0.035em] text-[var(--login-text)]">
             {showSuccessStep ? 'SMARTLINK SCHOOLS' : showCodeStep ? 'SMARTLINK SCHOOLS - VERIFY' : 'SMARTLINK SCHOOLS - PORTAL'}
           </h1>
-          <p className="mx-auto mt-1.5 max-w-[275px] text-[13px] font-normal leading-5 text-[#8b8b8b]">
+          <p className="mx-auto mt-1.5 max-w-[275px] text-[13px] font-normal leading-5 text-[var(--login-muted)]">
             {showSuccessStep
               ? successLoading ? 'Preparing your school workspace' : 'Opening your school workspace'
               : showCodeStep
@@ -106,7 +166,7 @@ export function LoginScreen({
         {showSuccessStep ? (
           <div className="mt-9 grid justify-items-center gap-4">
             <span className="size-9 animate-spin rounded-full border-2 border-[#dddddd] border-t-[#6bdd9e]" aria-hidden="true" />
-            <p className="m-0 text-[13px] font-semibold text-[#171717]">{successLoading ? 'Loading...' : 'Access approved'}</p>
+            <p className="m-0 text-[13px] font-semibold text-[var(--login-text)]">{successLoading ? 'Loading...' : 'Access approved'}</p>
           </div>
         ) : showCodeStep ? (
           <form
@@ -126,15 +186,15 @@ export function LoginScreen({
                       // eslint-disable-next-line react/no-array-index-key
                       key={index}
                       index={index}
-                      className="h-10 w-10 rounded-[6px] border border-[#dddddd] bg-white text-[15px] font-semibold text-[#171717] shadow-[0_1px_4px_rgba(0,0,0,0.09)] first:rounded-[6px] first:border last:rounded-[6px] focus:border-[#b8b8b8] focus:ring-0"
+                      className="h-10 w-10 rounded-[6px] border border-[color:var(--login-input-border)] bg-[var(--login-input-bg)] text-[15px] font-semibold text-[var(--login-text)] shadow-[0_1px_4px_rgba(0,0,0,0.09)] first:rounded-[6px] first:border last:rounded-[6px] focus:border-[color:var(--login-focus-border)] focus:ring-0"
                     />
                   ))}
                 </InputOTPGroup>
               </InputOTP>
-              {expiryLabel ? <p className="m-0 mt-2 text-[12px] leading-5 text-[#8b8b8b]">Code expires at {expiryLabel}.</p> : null}
+              {expiryLabel ? <p className="m-0 mt-2 text-[12px] leading-5 text-[var(--login-muted)]">Code expires at {expiryLabel}.</p> : null}
             </div>
 
-            <label className="flex items-start gap-2 text-[12px] leading-5 text-[#4d4d4d]">
+            <label className="flex items-start gap-2 text-[12px] leading-5 text-[var(--login-muted)]">
               <input
                 type="checkbox"
                 checked={trustDevice}
@@ -151,7 +211,7 @@ export function LoginScreen({
             </Button>
 
             <div className="flex items-center justify-between gap-3 text-[13px]">
-              <button type="button" onClick={onCancelCode} className="inline-flex items-center gap-1.5 font-medium text-[#171717] hover:underline">
+              <button type="button" onClick={onCancelCode} className="inline-flex items-center gap-1.5 font-medium text-[var(--login-text)] hover:underline">
                 <ArrowLeft className="size-3.5" />
                 Change email
               </button>
@@ -159,7 +219,7 @@ export function LoginScreen({
                 type="button"
                 onClick={() => onResendCode({ challengeId: pendingChallenge?.challengeId })}
                 disabled={loading || resendWait > 0}
-                className="font-medium text-[#1677ff] hover:underline disabled:text-[#9b9b9b] disabled:no-underline"
+                className="font-medium text-[var(--login-link)] hover:underline disabled:text-[#9b9b9b] disabled:no-underline"
               >
                 {resendWait > 0 ? `Resend in ${resendWait}s` : 'Resend code'}
               </button>
@@ -224,11 +284,11 @@ export function LoginScreen({
               {loading ? 'Signing in...' : isStudentMode ? 'Student Login' : 'Staff Login'}
             </Button>
 
-            <p className="m-0 pt-1 text-center text-[13px] font-normal leading-5 text-[#191919]">
+            <p className="m-0 pt-1 text-center text-[13px] font-normal leading-5 text-[var(--login-text)]">
               {isStudentMode ? 'Are you an admin?' : 'Student or guardian?'}{' '}
               <button
                 type="button"
-                className="font-normal text-[#1677ff] hover:underline"
+                className="font-normal text-[var(--login-link)] hover:underline"
                 onClick={() => switchMode(isStudentMode ? 'staff' : 'student')}
               >
                 {isStudentMode ? 'Click Here' : 'Student Login'}

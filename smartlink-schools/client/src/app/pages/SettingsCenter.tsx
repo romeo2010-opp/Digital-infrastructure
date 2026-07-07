@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useMemo, useState } from 'react'
+import { type CSSProperties, type ChangeEvent, type ReactNode, useEffect, useMemo, useState } from 'react'
 import {
   Bell,
   CalendarRange,
@@ -33,10 +33,11 @@ import { Toolbar } from '../components/Toolbar'
 import { DEFAULT_SCHOOL_FEATURES, schoolFeatureDefinitions, type SchoolFeatureKey } from '../lib/access'
 import { usePortal } from '../lib/portalContext'
 
-export type SettingsSection = 'preferences' | 'notifications' | 'security' | 'profile' | 'users' | 'audit' | 'organization' | 'features' | 'integrations' | 'data'
+export type SettingsSection = 'preferences' | 'personalized' | 'notifications' | 'security' | 'profile' | 'users' | 'audit' | 'organization' | 'features' | 'integrations' | 'data'
 
 const sectionMeta: Record<SettingsSection, { title: string; subtitle: string; icon: any }> = {
   preferences: { title: 'Preferences', subtitle: 'Set your school workspace density, theme and landing page.', icon: Palette },
+  personalized: { title: 'Personalized', subtitle: 'Customize the dashboard canvas, panels and workspace feel.', icon: Palette },
   notifications: { title: 'Notifications', subtitle: 'Choose which school events should alert staff.', icon: Bell },
   security: { title: 'Security', subtitle: 'Protect school records and account sessions.', icon: Lock },
   profile: { title: 'Profile', subtitle: 'Personal account details for this school workspace.', icon: UserCircle2 },
@@ -103,8 +104,125 @@ function selectClassName() {
   return 'h-8 w-full rounded-[5px] border border-[#d9dce3] bg-white px-2 text-[12px] font-medium text-[#111827] outline-none focus:border-[#111827]/35'
 }
 
+function money(value: any) {
+  return `MWK ${Number(value || 0).toLocaleString()}`
+}
+
+function rangeClassName() {
+  return 'smartlink-personalized-range'
+}
+
+function rangeStyle(value: any, min: number, max: number): CSSProperties {
+  const number = Number(value)
+  const safeValue = Number.isFinite(number) ? number : min
+  const percent = max > min ? ((Math.max(min, Math.min(max, safeValue)) - min) / (max - min)) * 100 : 0
+  return { '--range-progress': `${percent}%` } as CSSProperties
+}
+
+const personalizedImageMaxInputBytes = 8 * 1024 * 1024
+const personalizedImageTargetBytes = 620 * 1024
+const personalizedImageMaxEdge = 1600
+
+function canvasToBlob(canvas: HTMLCanvasElement, type: string, quality: number) {
+  return new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob)
+      else reject(new Error('Unable to prepare the selected image.'))
+    }, type, quality)
+  })
+}
+
+function blobToDataUrl(blob: Blob) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result || ''))
+    reader.onerror = () => reject(new Error('Unable to read the selected image.'))
+    reader.readAsDataURL(blob)
+  })
+}
+
+function loadImageElement(file: File) {
+  return new Promise<HTMLImageElement>((resolve, reject) => {
+    const url = URL.createObjectURL(file)
+    const image = new Image()
+    image.onload = () => {
+      URL.revokeObjectURL(url)
+      resolve(image)
+    }
+    image.onerror = () => {
+      URL.revokeObjectURL(url)
+      reject(new Error('Unable to load the selected image.'))
+    }
+    image.src = url
+  })
+}
+
+async function readPersonalizedImage(file: File) {
+  if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
+    throw new Error('Use a PNG, JPEG, or WebP image.')
+  }
+  if (file.size > personalizedImageMaxInputBytes) {
+    throw new Error('Use an image smaller than 8MB so it can be optimized for your SmartLink profile.')
+  }
+
+  const image = await loadImageElement(file)
+  const sourceWidth = image.naturalWidth || image.width
+  const sourceHeight = image.naturalHeight || image.height
+  if (!sourceWidth || !sourceHeight) throw new Error('Unable to read the selected image dimensions.')
+
+  let scale = Math.min(1, personalizedImageMaxEdge / Math.max(sourceWidth, sourceHeight))
+  let outputType = 'image/webp'
+  let outputBlob: Blob | null = null
+
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    const width = Math.max(1, Math.round(sourceWidth * scale))
+    const height = Math.max(1, Math.round(sourceHeight * scale))
+    const canvas = document.createElement('canvas')
+    canvas.width = width
+    canvas.height = height
+    const context = canvas.getContext('2d')
+    if (!context) throw new Error('Unable to optimize the selected image.')
+    context.imageSmoothingEnabled = true
+    context.imageSmoothingQuality = 'high'
+    context.drawImage(image, 0, 0, width, height)
+
+    try {
+      outputBlob = await canvasToBlob(canvas, outputType, Math.max(0.58, 0.78 - attempt * 0.05))
+    } catch {
+      outputType = 'image/jpeg'
+      outputBlob = await canvasToBlob(canvas, outputType, Math.max(0.62, 0.78 - attempt * 0.05))
+    }
+
+    if (outputBlob.size <= personalizedImageTargetBytes) break
+    scale *= 0.82
+  }
+
+  if (!outputBlob || outputBlob.size > personalizedImageTargetBytes) {
+    throw new Error('Use a simpler image or crop it smaller before uploading.')
+  }
+
+  return blobToDataUrl(outputBlob)
+}
+
+function readLegacyPersonalizedImage(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
+      reject(new Error('Use a PNG, JPEG, or WebP image.'))
+      return
+    }
+    if (file.size > 2.5 * 1024 * 1024) {
+      reject(new Error('Use an image smaller than 2.5MB so it can be saved to your SmartLink profile.'))
+      return
+    }
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result || ''))
+    reader.onerror = () => reject(new Error('Unable to read the selected image.'))
+    reader.readAsDataURL(file)
+  })
+}
+
 export function SettingsCenter({ section }: { section: SettingsSection }) {
-  const { user, token, api, preferences, updatePreferences, refreshSession } = usePortal()
+  const { user, token, api, preferences, updatePreferences, previewPreferences, refreshSession } = usePortal()
   const meta = sectionMeta[section] || sectionMeta.preferences
   const Icon = meta.icon
   const [savedMessage, setSavedMessage] = useState('')
@@ -145,13 +263,29 @@ export function SettingsCenter({ section }: { section: SettingsSection }) {
     sessionTimeout: '30',
     requireStepUp: true,
     trustedDevice: false,
+    dashboardBackgroundEnabled: false,
+    dashboardBackgroundImage: '',
+    dashboardBackgroundName: '',
+    dashboardBackgroundMode: 'cover',
+    dashboardBackgroundX: 50,
+    dashboardBackgroundY: 50,
+    dashboardBackgroundScale: 100,
+    dashboardBackgroundDim: 74,
+    transparentSectionsEnabled: true,
+    sectionTransparency: 18,
+    sectionBlur: 10,
+    accentTone: 'smartlink',
+    pageRhythm: 'balanced',
+    numberEmphasis: 'standard',
+    dashboardFocus: 'standard',
+    motionStyle: 'calm',
   })
 
   useEffect(() => {
     if (!preferences) return
     setSettings((current) => ({
       ...current,
-      appearance: preferences.appearance === 'dark' ? 'black-white' : 'light',
+      appearance: ['dark', 'black-white'].includes(String(preferences.appearance)) ? 'dark' : 'light',
       density: preferences.density || 'comfortable',
       landingPage: preferences.landingPage || 'dashboard',
       compactTables: Boolean(preferences.compactTables),
@@ -163,6 +297,22 @@ export function SettingsCenter({ section }: { section: SettingsSection }) {
       sessionTimeout: String(preferences.sessionTimeout || '30'),
       requireStepUp: preferences.requireStepUp ?? true,
       trustedDevice: Boolean(preferences.trustedDevice),
+      dashboardBackgroundEnabled: Boolean(preferences.dashboardBackgroundEnabled),
+      dashboardBackgroundImage: preferences.dashboardBackgroundImage || '',
+      dashboardBackgroundName: preferences.dashboardBackgroundName || '',
+      dashboardBackgroundMode: preferences.dashboardBackgroundMode || 'cover',
+      dashboardBackgroundX: Number(preferences.dashboardBackgroundX ?? 50),
+      dashboardBackgroundY: Number(preferences.dashboardBackgroundY ?? 50),
+      dashboardBackgroundScale: Number(preferences.dashboardBackgroundScale ?? 100),
+      dashboardBackgroundDim: Number(preferences.dashboardBackgroundDim ?? 74),
+      transparentSectionsEnabled: Boolean(preferences.transparentSectionsEnabled),
+      sectionTransparency: Number(preferences.sectionTransparency ?? 0),
+      sectionBlur: Number(preferences.sectionBlur ?? 10),
+      accentTone: preferences.accentTone || 'smartlink',
+      pageRhythm: preferences.pageRhythm || 'balanced',
+      numberEmphasis: preferences.numberEmphasis || 'standard',
+      dashboardFocus: preferences.dashboardFocus || 'standard',
+      motionStyle: preferences.motionStyle || 'calm',
     }))
   }, [preferences])
 
@@ -314,7 +464,75 @@ export function SettingsCenter({ section }: { section: SettingsSection }) {
   }, [api, section, token])
 
   const updateSetting = (key: keyof typeof settings, value: any) => {
-    setSettings((current) => ({ ...current, [key]: value }))
+    setSettings((current) => {
+      const patch: any = { [key]: value }
+      if (key === 'transparentSectionsEnabled' && value && Number(current.sectionTransparency || 0) <= 0) {
+        patch.sectionTransparency = 18
+      }
+      const next = { ...current, ...patch }
+      if (section === 'personalized') previewPreferences?.(patch)
+      return next
+    })
+  }
+
+  const handlePersonalizedImage = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+    try {
+      const dataUrl = await readPersonalizedImage(file)
+      setSettings((current) => ({
+        ...current,
+        dashboardBackgroundEnabled: true,
+        dashboardBackgroundImage: dataUrl,
+        dashboardBackgroundName: file.name,
+      }))
+      previewPreferences?.({
+        dashboardBackgroundEnabled: true,
+        dashboardBackgroundImage: dataUrl,
+        dashboardBackgroundName: file.name,
+      })
+      setSavedMessage('Image ready')
+    } catch (err: any) {
+      setSavedMessage(err?.message || 'Unable to use image')
+      event.target.value = ''
+    }
+  }
+
+  const clearPersonalizedImage = () => {
+    setSettings((current) => ({
+      ...current,
+      dashboardBackgroundEnabled: false,
+      dashboardBackgroundImage: '',
+      dashboardBackgroundName: '',
+    }))
+    previewPreferences?.({
+      dashboardBackgroundEnabled: false,
+      dashboardBackgroundImage: '',
+      dashboardBackgroundName: '',
+    })
+  }
+
+  const resetPersonalizedLook = () => {
+    const patch = {
+      dashboardBackgroundEnabled: false,
+      dashboardBackgroundImage: '',
+      dashboardBackgroundName: '',
+      dashboardBackgroundMode: 'cover',
+      dashboardBackgroundX: 50,
+      dashboardBackgroundY: 50,
+      dashboardBackgroundScale: 100,
+      dashboardBackgroundDim: 74,
+      transparentSectionsEnabled: false,
+      sectionTransparency: 0,
+      sectionBlur: 10,
+      accentTone: 'smartlink',
+      pageRhythm: 'balanced',
+      numberEmphasis: 'standard',
+      dashboardFocus: 'standard',
+      motionStyle: 'calm',
+    }
+    setSettings((current) => ({ ...current, ...patch }))
+    previewPreferences?.(patch)
   }
 
   const savePreferences = async () => {
@@ -322,7 +540,7 @@ export function SettingsCenter({ section }: { section: SettingsSection }) {
       await updatePreferences?.(settings)
       setSavedMessage('Saved')
     } catch {
-      setSavedMessage('Saved locally')
+      setSavedMessage('Save failed')
     }
   }
 
@@ -550,6 +768,207 @@ export function SettingsCenter({ section }: { section: SettingsSection }) {
             <Switch checked={settings.compactTables} onCheckedChange={(value) => updateSetting('compactTables', value)} />
           </SettingRow>
         </SectionCard>
+      )
+    }
+
+    if (section === 'personalized') {
+      const previewImageStyle = settings.dashboardBackgroundImage
+        ? {
+            backgroundImage: `linear-gradient(rgba(0, 0, 0, ${Number(settings.dashboardBackgroundDim || 0) / 100}), rgba(0, 0, 0, ${Number(settings.dashboardBackgroundDim || 0) / 100})), url("${settings.dashboardBackgroundImage}")`,
+            backgroundPosition: `${settings.dashboardBackgroundX}% ${settings.dashboardBackgroundY}%`,
+            backgroundSize: settings.dashboardBackgroundMode === 'custom' ? `${settings.dashboardBackgroundScale}% auto` : settings.dashboardBackgroundMode,
+          }
+        : undefined
+      const panelAlpha = settings.transparentSectionsEnabled
+        ? Math.max(0.55, Math.min(1, 1 - Number(settings.sectionTransparency || 0) / 100))
+        : 1
+
+      return (
+        <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_420px]">
+          <SectionCard
+            title="Personalized Workspace"
+            subtitle="Tune the dashboard canvas and page surfaces for this user."
+            actions={<SaveButton savedMessage={savedMessage} onSave={savePreferences} />}
+          >
+            <div className="grid gap-4 p-4">
+              <div className="grid gap-3 md:grid-cols-2">
+                <SettingRow label="Portal theme" detail="Choose the overall workspace mode.">
+                  <select className={selectClassName()} value={settings.appearance} onChange={(event) => updateSetting('appearance', event.target.value)}>
+                    <option value="light">Light</option>
+                    <option value="dark">Dark</option>
+                  </select>
+                </SettingRow>
+                <SettingRow label="Dashboard focus" detail="Decide how much visual emphasis the dashboard should use.">
+                  <select className={selectClassName()} value={settings.dashboardFocus} onChange={(event) => updateSetting('dashboardFocus', event.target.value)}>
+                    <option value="standard">Standard finance view</option>
+                    <option value="focused">Focused decision view</option>
+                    <option value="executive">Executive overview</option>
+                  </select>
+                </SettingRow>
+              </div>
+
+              <div className="rounded-[8px] border border-[#dce3ed] bg-[#f8fafc] p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <div className="text-[12px] font-semibold text-[#0f172a]">Page background image</div>
+                    <p className="mt-1 text-[11px] leading-5 text-[#64748b]">Applies inside portal pages only. The sidebar stays clean and stable.</p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label className="inline-flex h-8 cursor-pointer items-center rounded-[5px] border border-[#d7dde6] bg-white px-3 text-[12px] font-semibold text-[#334155] transition hover:border-[#0f766e]/40 hover:bg-[#f0fdfa]">
+                      Upload image
+                      <input type="file" accept="image/png,image/jpeg,image/webp" className="sr-only" onChange={handlePersonalizedImage} />
+                    </label>
+                    {settings.dashboardBackgroundImage ? (
+                      <button type="button" onClick={clearPersonalizedImage} className="inline-flex h-8 items-center rounded-[5px] border border-[#fed7aa] bg-white px-3 text-[12px] font-semibold text-[#9a3412]">
+                        Remove
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+                <div className="mt-3 flex flex-wrap items-center gap-3 text-[11px] font-medium text-[#64748b]">
+                  <label className="inline-flex items-center gap-2">
+                    <Switch checked={settings.dashboardBackgroundEnabled} onCheckedChange={(value) => updateSetting('dashboardBackgroundEnabled', value)} />
+                    Show image background
+                  </label>
+                  <span>{settings.dashboardBackgroundName || 'No image selected'}</span>
+                </div>
+              </div>
+
+              <div className="grid gap-3 md:grid-cols-2">
+                <SettingRow label="Image fit" detail="Use cover for polished full-page art or custom for precise placement.">
+                  <select className={selectClassName()} value={settings.dashboardBackgroundMode} onChange={(event) => updateSetting('dashboardBackgroundMode', event.target.value)}>
+                    <option value="cover">Cover page</option>
+                    <option value="contain">Contain image</option>
+                    <option value="custom">Custom scale</option>
+                  </select>
+                </SettingRow>
+                <SettingRow label="Accent tone" detail="Subtle color cue for selected controls and personalized surfaces.">
+                  <select className={selectClassName()} value={settings.accentTone} onChange={(event) => updateSetting('accentTone', event.target.value)}>
+                    <option value="smartlink">SmartLink teal</option>
+                    <option value="navy">Executive navy</option>
+                    <option value="emerald">Emerald ledger</option>
+                    <option value="graphite">Graphite neutral</option>
+                    <option value="copper">Copper finance</option>
+                  </select>
+                </SettingRow>
+              </div>
+
+              <div className="rounded-[8px] border border-[#dce3ed] bg-white p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <div className="text-[12px] font-semibold text-[#0f172a]">Transparent sections</div>
+                    <p className="mt-1 text-[11px] leading-5 text-[#64748b]">Make every page section and card softly transparent over the canvas.</p>
+                  </div>
+                  <Switch checked={settings.transparentSectionsEnabled} onCheckedChange={(value) => updateSetting('transparentSectionsEnabled', value)} />
+                </div>
+              </div>
+
+              <div className="grid gap-4 rounded-[8px] border border-[#dce3ed] bg-white p-4 md:grid-cols-2">
+                <label className="grid gap-2 text-[11px] font-bold uppercase tracking-[0.08em] text-[#64748b]">
+                  Horizontal position: {settings.dashboardBackgroundX}%
+                  <input type="range" min="0" max="100" value={settings.dashboardBackgroundX} onChange={(event) => updateSetting('dashboardBackgroundX', Number(event.target.value))} className={rangeClassName()} style={rangeStyle(settings.dashboardBackgroundX, 0, 100)} />
+                </label>
+                <label className="grid gap-2 text-[11px] font-bold uppercase tracking-[0.08em] text-[#64748b]">
+                  Vertical position: {settings.dashboardBackgroundY}%
+                  <input type="range" min="0" max="100" value={settings.dashboardBackgroundY} onChange={(event) => updateSetting('dashboardBackgroundY', Number(event.target.value))} className={rangeClassName()} style={rangeStyle(settings.dashboardBackgroundY, 0, 100)} />
+                </label>
+                <label className="grid gap-2 text-[11px] font-bold uppercase tracking-[0.08em] text-[#64748b]">
+                  Custom scale: {settings.dashboardBackgroundScale}%
+                  <input type="range" min="60" max="180" value={settings.dashboardBackgroundScale} onChange={(event) => updateSetting('dashboardBackgroundScale', Number(event.target.value))} className={rangeClassName()} style={rangeStyle(settings.dashboardBackgroundScale, 60, 180)} />
+                </label>
+                <label className="grid gap-2 text-[11px] font-bold uppercase tracking-[0.08em] text-[#64748b]">
+                  Background quietness: {settings.dashboardBackgroundDim}%
+                  <input type="range" min="35" max="88" value={settings.dashboardBackgroundDim} onChange={(event) => updateSetting('dashboardBackgroundDim', Number(event.target.value))} className={rangeClassName()} style={rangeStyle(settings.dashboardBackgroundDim, 35, 88)} />
+                </label>
+                <label className="grid gap-2 text-[11px] font-bold uppercase tracking-[0.08em] text-[#64748b]">
+                  Section transparency: {settings.sectionTransparency}%
+                  <input type="range" min="0" max="35" value={settings.sectionTransparency} onChange={(event) => updateSetting('sectionTransparency', Number(event.target.value))} className={rangeClassName()} style={rangeStyle(settings.sectionTransparency, 0, 35)} />
+                </label>
+                <label className="grid gap-2 text-[11px] font-bold uppercase tracking-[0.08em] text-[#64748b]">
+                  Section glass blur: {settings.sectionBlur}px
+                  <input type="range" min="0" max="22" value={settings.sectionBlur} onChange={(event) => updateSetting('sectionBlur', Number(event.target.value))} className={rangeClassName()} style={rangeStyle(settings.sectionBlur, 0, 22)} />
+                </label>
+              </div>
+
+              <div className="grid gap-3 md:grid-cols-3">
+                <SettingRow label="Page rhythm" detail="Choose how spacious dashboard sections feel.">
+                  <select className={selectClassName()} value={settings.pageRhythm} onChange={(event) => updateSetting('pageRhythm', event.target.value)}>
+                    <option value="balanced">Balanced</option>
+                    <option value="compact">Efficient</option>
+                    <option value="spacious">Spacious</option>
+                  </select>
+                </SettingRow>
+                <SettingRow label="Number emphasis" detail="Make finance numbers calmer or more prominent.">
+                  <select className={selectClassName()} value={settings.numberEmphasis} onChange={(event) => updateSetting('numberEmphasis', event.target.value)}>
+                    <option value="standard">Standard</option>
+                    <option value="strong">Strong</option>
+                    <option value="quiet">Quiet</option>
+                  </select>
+                </SettingRow>
+                <SettingRow label="Motion style" detail="Control animation intensity across personalized pages.">
+                  <select className={selectClassName()} value={settings.motionStyle} onChange={(event) => updateSetting('motionStyle', event.target.value)}>
+                    <option value="calm">Calm</option>
+                    <option value="standard">Standard</option>
+                    <option value="reduced">Reduced</option>
+                  </select>
+                </SettingRow>
+              </div>
+
+              <div className="flex flex-wrap justify-between gap-2 border-t border-[#eef2f7] pt-3">
+                <button type="button" onClick={resetPersonalizedLook} className="inline-flex h-8 items-center rounded-[5px] border border-[#d7dde6] bg-white px-3 text-[12px] font-semibold text-[#475569]">
+                  Reset personalized look
+                </button>
+                <div className="text-[11px] font-medium leading-5 text-[#64748b]">Changes are saved to this user profile and applied to the page canvas.</div>
+              </div>
+            </div>
+          </SectionCard>
+
+          <SectionCard title="Live Preview" subtitle="A close preview of the page canvas and section transparency.">
+            <div className="p-4">
+              <div className="overflow-hidden rounded-[10px] border border-[#dce3ed] bg-[#111827] p-3 shadow-sm">
+                <div className="relative min-h-[360px] overflow-hidden rounded-[8px] bg-[#eef2f7]" style={previewImageStyle}>
+                  <div className="absolute inset-0 bg-gradient-to-b from-white/10 to-white/0" />
+                  <div className="relative grid gap-3 p-4">
+                    <div className="flex items-center justify-between gap-3 rounded-[7px] border border-white/30 bg-white/80 px-3 py-2 backdrop-blur">
+                      <div>
+                        <div className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#64748b]">Preview</div>
+                        <div className="mt-1 text-[14px] font-semibold text-[#0f172a]">Bursar Dashboard</div>
+                      </div>
+                      <span className="rounded-full bg-[#0f766e] px-2 py-1 text-[10px] font-bold text-white">{settings.accentTone}</span>
+                    </div>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      {['Expected fees', 'Outstanding'].map((label, index) => (
+                        <div key={label} className="rounded-[7px] border border-white/35 p-3 shadow-sm" style={{ backgroundColor: `rgba(255,255,255,${panelAlpha})`, backdropFilter: `blur(${settings.sectionBlur}px)` }}>
+                          <div className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#64748b]">{label}</div>
+                          <div className={`mt-2 font-semibold text-[#0f172a] ${settings.numberEmphasis === 'strong' ? 'text-[22px]' : settings.numberEmphasis === 'quiet' ? 'text-[16px]' : 'text-[19px]'}`}>
+                            {index ? money(13000000) : money(24500000)}
+                          </div>
+                          <div className="mt-2 h-1.5 rounded-full bg-[#e2e8f0]">
+                            <div className="h-full rounded-full bg-[#0f766e]" style={{ width: index ? '44%' : '68%' }} />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="rounded-[7px] border border-white/35 p-3" style={{ backgroundColor: `rgba(255,255,255,${panelAlpha})`, backdropFilter: `blur(${settings.sectionBlur}px)` }}>
+                      <div className="flex items-center justify-between text-[12px] font-semibold text-[#334155]">
+                        <span>Attention queue</span>
+                        <span className="text-[#0f766e]">Ready</span>
+                      </div>
+                      <div className="mt-3 grid gap-2">
+                        {['Unpaid accounts', 'Overdue learners', 'Receipts ready'].map((item) => (
+                          <div key={item} className="flex items-center justify-between border-t border-[#e2e8f0]/80 pt-2 text-[11px] font-medium text-[#64748b]">
+                            <span>{item}</span>
+                            <span className="font-semibold text-[#0f172a]">View</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </SectionCard>
+        </div>
       )
     }
 

@@ -88,6 +88,29 @@ function canDeleteSyllabusUpload(user: any, row: any) {
   return row?.processing_status !== 'approved'
 }
 
+function reviewUploadWithCounts(payload: any) {
+  if (!payload?.upload) return null
+  const items = payload?.items || []
+  return {
+    ...payload.upload,
+    extracted_items: items.length,
+    pending_items: items.filter((item: any) => item.status === 'pending_review').length,
+    approved_items: items.filter((item: any) => item.status === 'approved').length,
+  }
+}
+
+function isCompletedSyllabusExtractionUpload(upload: any) {
+  if (!upload) return false
+  const status = String(upload.processing_status || '').toLowerCase()
+  const pendingItems = Number(upload.pending_items || 0)
+  const approvedItems = Number(upload.approved_items || 0)
+  return status === 'approved' || (pendingItems === 0 && approvedItems > 0)
+}
+
+function needsSyllabusExtractionAttention(upload: any) {
+  return Boolean(upload) && !isCompletedSyllabusExtractionUpload(upload)
+}
+
 export function SyllabusIntelligencePage() {
   const { token, api, user } = usePortal()
   const navigate = useNavigate()
@@ -191,13 +214,18 @@ export function SyllabusIntelligencePage() {
   const reviewItems = review?.items || []
   const pendingReviewItems = reviewItems.filter((item: any) => item.status === 'pending_review')
   const selectedReviewItems = reviewItems.filter((item: any) => selectedReviewIds.includes(String(item.id)) && item.status === 'pending_review')
-  const activeUpload = review?.upload || uploads[0] || null
+  const reviewUpload = reviewUploadWithCounts(review)
+  const activeUpload = needsSyllabusExtractionAttention(reviewUpload)
+    ? reviewUpload
+    : uploads.find(needsSyllabusExtractionAttention) || null
+  const completedExtractionCount = uploads.filter(isCompletedSyllabusExtractionUpload).length
+  const idlePipelineDetail = completedExtractionCount ? 'Ready for next material' : 'Awaiting material'
   const activeExtractionSummary = activeUpload?.extraction_summary_json || {}
   const activePipelineSteps = [
     {
       id: 'upload',
       label: 'Upload',
-      detail: activeUpload ? activeUpload.original_filename : 'Awaiting material',
+      detail: activeUpload ? activeUpload.original_filename : idlePipelineDetail,
       state: activeUpload ? 'complete' : 'waiting',
     },
     {
@@ -229,15 +257,33 @@ export function SyllabusIntelligencePage() {
   }
   const activeReviewDocument = review?.upload ? documentForUpload(review.upload) : null
 
+  const resetExtractionSection = () => {
+    setReview(null)
+    setSelectedReviewIds([])
+    setPipelineModalOpen(false)
+    setUploadFile(null)
+    setUploadText('')
+  }
+
+  const resetExtractionSectionIfComplete = (payload: any) => {
+    const upload = reviewUploadWithCounts(payload)
+    if (!isCompletedSyllabusExtractionUpload(upload)) return false
+    resetExtractionSection()
+    return true
+  }
+
   const openReview = async (uploadId: any) => {
     if (!token) return
     setBusy(true)
     try {
-      setReview(await api.getSyllabusReview(token, uploadId))
+      const payload = await api.getSyllabusReview(token, uploadId)
+      setReview(payload)
       setSelectedReviewIds([])
       setActiveTab('uploads')
+      return payload
     } catch (err: any) {
       toast.error(err?.message || 'Unable to open review.')
+      return null
     } finally {
       setBusy(false)
     }
@@ -265,8 +311,9 @@ export function SyllabusIntelligencePage() {
       const response = await api.approveExtractedSyllabusItems(token, ids)
       toast.success(`${response?.approved_items || ids.length} selected item${ids.length === 1 ? '' : 's'} approved and added to the syllabus document.`)
       setSelectedReviewIds([])
-      await openReview(review.upload.id)
+      const nextReview = await openReview(review.upload.id)
       await load()
+      resetExtractionSectionIfComplete(nextReview)
     } catch (err: any) {
       toast.error(err?.message || 'Unable to approve selected items.')
     } finally {
@@ -389,8 +436,9 @@ export function SyllabusIntelligencePage() {
     try {
       await api.approveExtractedSyllabusItem(token, item.id)
       toast.success(`${valueLabel(item.item_type)} approved.`)
-      await openReview(item.upload_id)
+      const nextReview = await openReview(item.upload_id)
       await load()
+      resetExtractionSectionIfComplete(nextReview)
     } catch (err: any) {
       toast.error(err?.message || 'Unable to approve item.')
     } finally {
@@ -424,8 +472,9 @@ export function SyllabusIntelligencePage() {
       await api.approveExtractedSyllabusItems(token, rows.map((row: any) => row.id))
       toast.success(`${rows.length} high-confidence items approved.`)
       setSelectedReviewIds([])
-      await openReview(review.upload.id)
+      const nextReview = await openReview(review.upload.id)
       await load()
+      resetExtractionSectionIfComplete(nextReview)
     } catch (err: any) {
       toast.error(err?.message || 'Unable to approve high-confidence items.')
     } finally {
@@ -558,7 +607,11 @@ export function SyllabusIntelligencePage() {
             ))}
           </div>
           <div className="rounded-[6px] border border-[#e2e8f0] bg-[#f8fafc] px-3 py-2 text-[12px] font-semibold text-[#475569]">
-            {activeUpload ? `${activeUpload.original_filename || 'Latest upload'} / ${valueLabel(activeUpload.processing_status)}` : 'No material uploaded yet.'}
+            {activeUpload
+              ? `${activeUpload.original_filename || 'Latest upload'} / ${valueLabel(activeUpload.processing_status)}`
+              : completedExtractionCount
+                ? `${completedExtractionCount} completed extraction${completedExtractionCount === 1 ? '' : 's'}. Ready for next material.`
+                : 'No material uploaded yet.'}
           </div>
           {activeExtractionSummary?.warnings?.length ? (
             <div className="rounded-[5px] border border-[#fed7aa] bg-[#fff7ed] px-3 py-2 text-[12px] font-semibold text-[#9a3412] lg:col-span-2">
@@ -655,7 +708,7 @@ export function SyllabusIntelligencePage() {
                   <FileText className="size-4 text-[#2563eb]" />
                   Current Material
                 </div>
-                <div className="mt-3 text-[13px] font-semibold leading-5 text-[#111827]">{activeUpload?.original_filename || 'Awaiting upload'}</div>
+                <div className="mt-3 text-[13px] font-semibold leading-5 text-[#111827]">{activeUpload?.original_filename || (completedExtractionCount ? 'Ready for next upload' : 'Awaiting upload')}</div>
                 <div className="mt-2 text-[11px] font-medium leading-5 text-[#64748b]">
                   {activeUpload ? `${Number(activeUpload.extracted_items || review?.items?.length || 0)} extracted item${Number(activeUpload.extracted_items || review?.items?.length || 0) === 1 ? '' : 's'} / ${Number(activeUpload.pending_items || 0)} pending review` : 'Choose a file or paste text to begin extraction.'}
                 </div>

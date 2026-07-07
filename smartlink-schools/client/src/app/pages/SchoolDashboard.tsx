@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router'
 import { Activity, AlertTriangle, ArrowRight, BookOpen, BookOpenCheck, CalendarCheck, Clock3, FlaskConical, GraduationCap, MessageSquare, ReceiptText, School, Sparkles, UsersRound } from 'lucide-react'
+import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from 'recharts'
 import { PortalTable } from '../components/PortalTable'
 import { SchoolActionModal, type SchoolActionKind } from '../components/SchoolActionModal'
 import { SectionCard } from '../components/SectionCard'
@@ -28,6 +29,7 @@ const homeworkColumns = [
   { key: 'className', label: 'Class' },
   { key: 'subject', label: 'Subject' },
   { key: 'due', label: 'Due' },
+  { key: 'assigned', label: 'Assigned' },
   { key: 'status', label: 'Status' },
 ]
 
@@ -153,6 +155,42 @@ function countLabel(count: number, singular: string, plural = `${singular}s`) {
   return `${count} ${count === 1 ? singular : plural}`
 }
 
+function genderLabel(value: any) {
+  const text = String(value || '').trim().toLowerCase()
+  if (!text) return 'Not captured'
+  if (['female', 'f', 'girl'].includes(text)) return 'Female'
+  if (['male', 'm', 'boy'].includes(text)) return 'Male'
+  return pretty(text)
+}
+
+const genderColors: Record<string, string> = {
+  Female: '#0f766e',
+  Male: '#1557dc',
+  'Not Captured': '#94a3b8',
+  'Not captured': '#94a3b8',
+}
+
+function buildGenderRows(students: any[] = []) {
+  const counts = new Map<string, number>()
+  students
+    .filter((student) => !student?.status || String(student.status).toLowerCase() === 'active')
+    .forEach((student) => {
+      const label = genderLabel(student?.gender)
+      counts.set(label, (counts.get(label) || 0) + 1)
+    })
+
+  const rows = Array.from(counts.entries())
+    .map(([label, value]) => ({
+      label,
+      value,
+      color: genderColors[label] || '#64748b',
+    }))
+    .sort((a, b) => b.value - a.value || a.label.localeCompare(b.label))
+
+  if (rows.length) return rows
+  return [{ label: 'No students', value: 1, color: '#cbd5e1', empty: true }]
+}
+
 function lessonClassKey(lesson: any) {
   return String(lesson?.classId || lesson?.className || lesson?.id || '')
 }
@@ -262,6 +300,7 @@ function mapDashboardRows(payloads: any) {
     className: row.class_name,
     subject: row.subject_name,
     due: normalizeDate(row.due_date),
+    assigned: Number(row.assigned_count || 0).toLocaleString(),
     status: row.status,
   }))
 
@@ -385,19 +424,98 @@ function AttendanceRateCard({ dashboard }: { dashboard: any }) {
 
   return (
     <SectionCard title="Attendance Rate" subtitle="Today from attendance records">
-      <div className="grid gap-4 p-4 md:grid-cols-[150px_minmax(0,1fr)] xl:grid-cols-1 2xl:grid-cols-[150px_minmax(0,1fr)]">
-        <div className="grid size-36 place-items-center rounded-full" style={{ background: `conic-gradient(#1557dc 0 ${rate}%, #f59e0b ${rate}% ${lateStop}%, #ef4444 ${lateStop}% 100%)` }}>
-          <div className="grid size-24 place-items-center rounded-full bg-white text-center">
+      <div className="grid justify-items-center gap-4 p-4">
+        <div className="grid size-40 place-items-center rounded-full shadow-[inset_0_0_0_1px_rgba(15,23,42,0.08),0_18px_36px_rgba(15,23,42,0.08)]" style={{ background: `conic-gradient(#1557dc 0 ${rate}%, #f59e0b ${rate}% ${lateStop}%, #ef4444 ${lateStop}% 100%)` }}>
+          <div className="grid size-28 place-items-center rounded-full bg-white text-center">
             <div>
               <strong className="block text-[26px] font-bold tracking-[-0.04em] text-[#111827]">{percent(rate)}</strong>
               <span className="text-[11px] font-bold text-[#1557dc]">{rate >= 90 ? 'Excellent' : 'Review'}</span>
             </div>
           </div>
         </div>
-        <div className="grid content-center gap-3 text-[12px]">
-          <div className="flex items-center justify-between gap-2"><span className="font-semibold text-[#111827]">Present</span><span className="text-[#6b7280]">{present.toLocaleString()}</span></div>
-          <div className="flex items-center justify-between gap-2"><span className="font-semibold text-[#111827]">Late</span><span className="text-[#6b7280]">{late.toLocaleString()}</span></div>
-          <div className="flex items-center justify-between gap-2"><span className="font-semibold text-[#111827]">Absent</span><span className="text-[#6b7280]">{absent.toLocaleString()}</span></div>
+        <div className="grid w-full max-w-[430px] gap-2 text-[12px] sm:grid-cols-3">
+          {[
+            ['Present', present, '#1557dc'],
+            ['Late', late, '#f59e0b'],
+            ['Absent', absent, '#ef4444'],
+          ].map(([label, value, color]) => (
+            <div key={String(label)} className="rounded-[6px] border border-[var(--mera-panel-border)] bg-[var(--mera-panel-muted)] px-3 py-2 text-center">
+              <div className="mx-auto mb-1 size-2 rounded-full" style={{ backgroundColor: String(color) }} />
+              <div className="text-[11px] font-bold uppercase tracking-[0.08em] text-[var(--mera-panel-text-muted)]">{label}</div>
+              <div className="mt-1 text-[15px] font-black text-[var(--mera-panel-text)]">{Number(value).toLocaleString()}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </SectionCard>
+  )
+}
+
+function StudentGenderPieCard({ rows }: { rows: Array<{ label: string; value: number; color: string; empty?: boolean }> }) {
+  const visibleRows = rows.filter((row) => !row.empty)
+  const total = visibleRows.reduce((sum, row) => sum + Number(row.value || 0), 0)
+
+  return (
+    <SectionCard title="Student Gender Mix" subtitle="Active learners by captured gender">
+      <div className="grid gap-4 p-4 lg:grid-cols-[minmax(260px,0.82fr)_minmax(0,1fr)] lg:items-center">
+        <div className="relative mx-auto grid h-[230px] w-full max-w-[320px] place-items-center">
+          <ResponsiveContainer width="100%" height="100%">
+            <PieChart margin={{ top: 4, right: 4, bottom: 4, left: 4 }}>
+              <Pie
+                data={rows}
+                dataKey="value"
+                nameKey="label"
+                cx="50%"
+                cy="50%"
+                innerRadius={62}
+                outerRadius={94}
+                paddingAngle={2}
+                stroke="var(--mera-panel)"
+                strokeWidth={4}
+                isAnimationActive={false}
+              >
+                {rows.map((entry) => (
+                  <Cell key={entry.label} fill={entry.color} />
+                ))}
+              </Pie>
+              <Tooltip
+                formatter={(value: any, _name: any, props: any) => [`${Number(value || 0).toLocaleString()} learners`, props?.payload?.label || 'Students']}
+                contentStyle={{
+                  background: 'var(--mera-chart-tooltip-bg)',
+                  border: '1px solid var(--mera-chart-tooltip-border)',
+                  borderRadius: 6,
+                  color: 'var(--mera-chart-tooltip-text)',
+                  fontSize: 12,
+                }}
+              />
+            </PieChart>
+          </ResponsiveContainer>
+          <div className="pointer-events-none absolute inset-0 grid place-items-center text-center">
+            <div>
+              <div className="text-[27px] font-black leading-none text-[var(--mera-panel-text)]">{total.toLocaleString()}</div>
+              <div className="mt-1 text-[10px] font-bold uppercase tracking-[0.08em] text-[var(--mera-panel-text-muted)]">Students</div>
+            </div>
+          </div>
+        </div>
+        <div className="grid gap-2">
+          {(visibleRows.length ? visibleRows : [{ label: 'No captured gender data', value: 0, color: '#94a3b8' }]).map((row) => {
+            const share = total ? Math.round((Number(row.value || 0) / total) * 100) : 0
+            return (
+              <div key={row.label} className="rounded-[7px] border border-[var(--mera-panel-border)] bg-[var(--mera-panel-muted)] px-3 py-2.5">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="size-2.5 shrink-0 rounded-full" style={{ backgroundColor: row.color }} />
+                    <span className="truncate text-[12px] font-bold text-[var(--mera-panel-text)]">{row.label}</span>
+                  </div>
+                  <span className="text-[12px] font-black text-[var(--mera-panel-text)]">{Number(row.value || 0).toLocaleString()}</span>
+                </div>
+                <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-[var(--mera-control-muted)]">
+                  <span className="block h-full rounded-full" style={{ width: `${share}%`, backgroundColor: row.color }} />
+                </div>
+                <div className="mt-1 text-[10px] font-semibold text-[var(--mera-panel-text-muted)]">{share}% of active learners</div>
+              </div>
+            )
+          })}
         </div>
       </div>
     </SectionCard>
@@ -539,8 +657,8 @@ function TodayIntelligenceCard({ todayPayload, user }: { todayPayload: any; user
       detail: countLabel(classesWriting.length, 'class', 'classes'),
       icon: GraduationCap,
       progress: clampPercent((classesWriting.length / Math.max(classesWriting.length + classesLearningNow.length, 1)) * 100),
-      barClass: 'bg-[#111111]',
-      iconClass: 'text-[#111111]',
+      barClass: 'bg-[#0f172a]',
+      iconClass: 'text-[#0f172a]',
     },
     {
       label: 'Labs active',
@@ -557,58 +675,59 @@ function TodayIntelligenceCard({ todayPayload, user }: { todayPayload: any; user
       title="School Operations Now"
       subtitle="Live timetable state, next lessons, alerts and operating mode"
       actions={<span className={`rounded-[5px] border px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.06em] ${statusTone(today.schoolStatus)}`}>{status}</span>}
+      className="school-operations-now"
     >
-      <div className="border-b border-[#ded8cd] bg-[#f6f4ef] px-4 py-4">
+      <div className="school-operations-band border-b border-[#e2e8f0] bg-[#f8fafc] px-4 py-4">
         <div className="grid gap-3 xl:grid-cols-[minmax(0,1.18fr)_minmax(300px,0.82fr)]">
-          <div className="overflow-hidden rounded-[8px] border border-[#202020] bg-[#111111] text-white shadow-[0_16px_30px_rgba(17,17,17,0.16)]">
+          <div className="school-ops-live-card overflow-hidden rounded-[8px] border border-[#dbe3ee] bg-white text-[#0f172a] shadow-[0_16px_30px_rgba(15,23,42,0.08)]">
             <div className="grid gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_260px]">
               <div className="min-w-0">
-                <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.08em] text-[#c9c2b6]">
-                  <Activity className="size-3.5 text-[#6bdd9e]" />
+                <div className="school-ops-label flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.08em] text-[#64748b]">
+                  <Activity className="school-ops-accent size-3.5 text-[#0f766e]" />
                   Current operating mode
                 </div>
-                <div className="mt-2 text-[24px] font-black leading-tight tracking-[0] text-white">{operatingMode}</div>
-                <div className="mt-2 max-w-2xl text-[12px] font-medium leading-5 text-[#ded8cd]">
+                <div className="mt-2 text-[24px] font-black leading-tight tracking-[0] text-[#0f172a]">{operatingMode}</div>
+                <div className="school-ops-muted mt-2 max-w-2xl text-[12px] font-medium leading-5 text-[#475569]">
                   {classesLearningNow.length ? `${countLabel(classesLearningNow.length, 'class', 'classes')} active now across the published timetable.${overlapCount ? ` ${countLabel(overlapCount, 'overlapping entry', 'overlapping entries')} collapsed.` : ''}` : 'No class lesson is active at this exact time.'}
                 </div>
                 <div className="mt-5">
-                  <div className="flex items-center justify-between gap-3 text-[11px] font-bold text-[#ded8cd]">
+                  <div className="school-ops-muted flex items-center justify-between gap-3 text-[11px] font-bold text-[#475569]">
                     <span>Live timetable load</span>
-                    <span className="text-[#6bdd9e]">{activeLoad}%</span>
+                    <span className="school-ops-accent text-[#0f766e]">{activeLoad}%</span>
                   </div>
-                  <div className="mt-2 h-2 overflow-hidden rounded-full bg-white/15">
-                    <span className="block h-full rounded-full bg-[#6bdd9e]" style={{ width: `${activeLoad}%` }} />
+                  <div className="school-ops-track mt-2 h-2 overflow-hidden rounded-full bg-[#e2e8f0]">
+                    <span className="block h-full rounded-full bg-[#0f766e]" style={{ width: `${activeLoad}%` }} />
                   </div>
                 </div>
               </div>
-              <div className="rounded-[7px] border border-white/10 bg-white/10 p-3">
-                <div className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#c9c2b6]">Next lesson</div>
-                <div className="mt-2 truncate text-[14px] font-bold text-white">
+              <div className="school-ops-next-card rounded-[7px] border border-[#dbe3ee] bg-[#f8fafc] p-3">
+                <div className="school-ops-label text-[10px] font-bold uppercase tracking-[0.08em] text-[#64748b]">Next lesson</div>
+                <div className="mt-2 truncate text-[14px] font-bold text-[#0f172a]">
                   {nextLesson ? `${shortTime(lessonStartTime(nextLesson))} / ${nextLesson.className || 'Class'}` : 'None left'}
                 </div>
-                <div className="mt-1 truncate text-[11px] font-medium text-[#ded8cd]">
+                <div className="school-ops-muted mt-1 truncate text-[11px] font-medium text-[#475569]">
                   {nextLesson ? `${nextLesson.subjectName || nextLesson.title || 'Lesson'}${nextLesson.teacherName ? ` with ${nextLesson.teacherName}` : ''}` : 'The published timetable has no remaining blocks today.'}
                 </div>
-                <div className="mt-4 rounded-[6px] border border-white/10 bg-black/20 px-3 py-2">
-                  <div className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#c9c2b6]">Classes active</div>
-                  <div className="mt-1 text-[20px] font-black leading-none text-[#6bdd9e]">{classesLearningNow.length}</div>
+                <div className="school-ops-mini-stat mt-4 rounded-[6px] border border-[#dbe3ee] bg-white px-3 py-2">
+                  <div className="school-ops-label text-[10px] font-bold uppercase tracking-[0.08em] text-[#64748b]">Classes active</div>
+                  <div className="school-ops-accent mt-1 text-[20px] font-black leading-none text-[#0f766e]">{classesLearningNow.length}</div>
                 </div>
               </div>
             </div>
-            <div className="grid gap-2 border-t border-white/10 bg-white/[0.04] p-3 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="school-ops-metric-strip grid gap-2 border-t border-[#e2e8f0] bg-[#f8fafc] p-3 sm:grid-cols-2 xl:grid-cols-4">
               {metrics.map((item) => {
                 const Icon = item.icon
                 return (
-                  <div key={item.label} className="rounded-[7px] border border-[#ded8cd] bg-white p-3 shadow-[0_1px_0_rgba(17,17,17,0.04)]">
+                  <div key={item.label} className="school-ops-metric-card rounded-[7px] border border-[#dbe3ee] bg-white p-3 shadow-[0_1px_0_rgba(15,23,42,0.04)]">
                     <div className="flex items-center justify-between gap-2">
-                      <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#6f6758]">{item.label}</span>
+                      <span className="school-ops-label text-[10px] font-bold uppercase tracking-[0.08em] text-[#64748b]">{item.label}</span>
                       <Icon className={`size-3.5 ${item.iconClass}`} />
                     </div>
                     <div className="mt-2 flex items-end gap-2">
-                      <span className="text-[24px] font-black leading-none text-[#111111]">{item.value}</span>
-                      <span className="pb-0.5 text-[10px] font-semibold text-[#6f6758]">{item.detail}</span>
+                      <span className="text-[24px] font-black leading-none text-[#0f172a]">{item.value}</span>
+                      <span className="school-ops-muted pb-0.5 text-[10px] font-semibold text-[#64748b]">{item.detail}</span>
                     </div>
-                    <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-[#eee9df]">
+                    <div className="school-ops-track mt-3 h-1.5 overflow-hidden rounded-full bg-[#e2e8f0]">
                       <span className={`block h-full rounded-full ${item.barClass}`} style={{ width: `${item.progress}%` }} />
                     </div>
                   </div>
@@ -616,13 +735,13 @@ function TodayIntelligenceCard({ todayPayload, user }: { todayPayload: any; user
               })}
             </div>
           </div>
-          <div className="rounded-[8px] border border-[#ded8cd] bg-white p-4 shadow-[0_1px_0_rgba(17,17,17,0.04)]">
+          <div className="school-ops-day-card rounded-[8px] border border-[#dbe3ee] bg-white p-4 shadow-[0_1px_0_rgba(15,23,42,0.04)]">
             <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.08em] text-[#6f6758]">
-                <Clock3 className="size-3.5 text-[#111111]" />
+              <div className="school-ops-label flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.08em] text-[#64748b]">
+                <Clock3 className="size-3.5 text-[#0f172a]" />
                 Day flow
               </div>
-              <span className="rounded-full border border-[#ded8cd] bg-[#f6f4ef] px-2.5 py-1 text-[10px] font-bold text-[#6f6758]">
+              <span className="school-ops-chip rounded-full border border-[#dbe3ee] bg-[#f8fafc] px-2.5 py-1 text-[10px] font-bold text-[#475569]">
                 {upcomingLessons.length ? 'Next blocks' : classesLearningNow.length ? 'Live blocks' : 'Clear'}
               </span>
             </div>
@@ -631,22 +750,22 @@ function TodayIntelligenceCard({ todayPayload, user }: { todayPayload: any; user
                 const isLive = !upcomingLessons.length && classesLearningNow.length > 0
                 const progress = isLive ? Math.max(8, lessonProgress(lesson)) : 0
                 return (
-                  <div key={`${lesson.id || index}-${lesson.classId || lesson.className || 'class'}`} className="grid grid-cols-[58px_minmax(0,1fr)] items-center gap-3 rounded-[7px] border border-[#e7e0d4] bg-[#fcfbf8] px-3 py-2.5">
+                  <div key={`${lesson.id || index}-${lesson.classId || lesson.className || 'class'}`} className="school-ops-flow-row grid grid-cols-[58px_minmax(0,1fr)] items-center gap-3 rounded-[7px] border border-[#dbe3ee] bg-[#f8fafc] px-3 py-2.5">
                     <div className="grid gap-1">
-                      <div className="text-[11px] font-black text-[#111111]">{shortTime(lessonStartTime(lesson))}</div>
-                      <div className={`h-1 rounded-full ${isLive ? 'bg-[#6bdd9e]' : 'bg-[#d8d0c2]'}`} />
+                      <div className="text-[11px] font-black text-[#0f172a]">{shortTime(lessonStartTime(lesson))}</div>
+                      <div className={`h-1 rounded-full ${isLive ? 'bg-[#0f766e]' : 'bg-[#cbd5e1]'}`} />
                     </div>
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
-                        <div className="truncate text-[12px] font-bold text-[#111111]">{lessonTitle(lesson)}</div>
-                        <span className={`shrink-0 rounded-full px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.06em] ${isLive ? 'bg-[#eafff4] text-[#047857]' : 'bg-[#f0ede6] text-[#6f6758]'}`}>
+                        <div className="truncate text-[12px] font-bold text-[#0f172a]">{lessonTitle(lesson)}</div>
+                        <span className={`shrink-0 rounded-full px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.06em] ${isLive ? 'bg-[#ecfdf5] text-[#047857]' : 'bg-[#eef2f7] text-[#475569]'}`}>
                           {isLive ? 'Live' : 'Next'}
                         </span>
                       </div>
-                      <div className="mt-1 truncate text-[11px] font-medium text-[#6f6758]">{lesson.teacherName || 'Unassigned teacher'}{lesson.facilityName ? ` / ${lesson.facilityName}` : ''}</div>
+                      <div className="school-ops-muted mt-1 truncate text-[11px] font-medium text-[#64748b]">{lesson.teacherName || 'Unassigned teacher'}{lesson.facilityName ? ` / ${lesson.facilityName}` : ''}</div>
                       {isLive ? (
-                        <div className="mt-2 h-1 overflow-hidden rounded-full bg-[#eee9df]">
-                          <span className="block h-full rounded-full bg-[#6bdd9e]" style={{ width: `${progress}%` }} />
+                        <div className="school-ops-track mt-2 h-1 overflow-hidden rounded-full bg-[#e2e8f0]">
+                          <span className="block h-full rounded-full bg-[#0f766e]" style={{ width: `${progress}%` }} />
                         </div>
                       ) : null}
                     </div>
@@ -654,55 +773,55 @@ function TodayIntelligenceCard({ todayPayload, user }: { todayPayload: any; user
                 )
               })}
               {!upcomingLessons.length && !classesLearningNow.length ? (
-                <div className="rounded-[7px] border border-dashed border-[#d8d0c2] bg-[#fcfbf8] px-3 py-4 text-[12px] font-semibold text-[#6f6758]">No remaining timetable lessons for today.</div>
+                <div className="school-ops-empty rounded-[7px] border border-dashed border-[#cbd5e1] bg-[#f8fafc] px-3 py-4 text-[12px] font-semibold text-[#475569]">No remaining timetable lessons for today.</div>
               ) : null}
             </div>
           </div>
         </div>
       </div>
       {isTeacher ? (
-        <div className="grid gap-3 border-b border-[#ded8cd] bg-[#f6f4ef] p-4 md:grid-cols-2">
-          <div className="rounded-[8px] border border-[#ded8cd] bg-white px-4 py-3 shadow-[0_1px_0_rgba(17,17,17,0.04)]">
-            <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.08em] text-[#6f6758]">
+        <div className="school-operations-band grid gap-3 border-b border-[#e2e8f0] bg-[#f8fafc] p-4 md:grid-cols-2">
+          <div className="school-ops-flow-row rounded-[8px] border border-[#dbe3ee] bg-white px-4 py-3 shadow-[0_1px_0_rgba(15,23,42,0.04)]">
+            <div className="school-ops-label flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.08em] text-[#64748b]">
               <BookOpenCheck className="size-3.5" />
               Your active lesson
             </div>
             {teacherActiveLesson ? (
               <div className="mt-2">
-                <div className="text-[15px] font-bold text-[#111111]">{lessonTitle(teacherActiveLesson)}</div>
-                <div className="mt-1 text-[12px] font-medium text-[#6f6758]">{lessonTimeRange(teacherActiveLesson)}{teacherActiveLesson.facilityName ? ` / ${teacherActiveLesson.facilityName}` : ''}</div>
+                <div className="text-[15px] font-bold text-[#0f172a]">{lessonTitle(teacherActiveLesson)}</div>
+                <div className="school-ops-muted mt-1 text-[12px] font-medium text-[#64748b]">{lessonTimeRange(teacherActiveLesson)}{teacherActiveLesson.facilityName ? ` / ${teacherActiveLesson.facilityName}` : ''}</div>
               </div>
             ) : (
-              <div className="mt-2 text-[12px] font-medium text-[#6f6758]">No active lesson for you right now.</div>
+              <div className="school-ops-muted mt-2 text-[12px] font-medium text-[#64748b]">No active lesson for you right now.</div>
             )}
           </div>
-          <div className="rounded-[8px] border border-[#ded8cd] bg-white px-4 py-3 shadow-[0_1px_0_rgba(17,17,17,0.04)]">
-            <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.08em] text-[#6f6758]">
+          <div className="school-ops-flow-row rounded-[8px] border border-[#dbe3ee] bg-white px-4 py-3 shadow-[0_1px_0_rgba(15,23,42,0.04)]">
+            <div className="school-ops-label flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.08em] text-[#64748b]">
               <ArrowRight className="size-3.5" />
               Up next
             </div>
             {teacherUpcomingLesson ? (
               <div className="mt-2">
-                <div className="text-[15px] font-bold text-[#111111]">{lessonTitle(teacherUpcomingLesson)}</div>
-                <div className="mt-1 text-[12px] font-medium text-[#6f6758]">{lessonTimeRange(teacherUpcomingLesson)}{teacherUpcomingLesson.facilityName ? ` / ${teacherUpcomingLesson.facilityName}` : ''}</div>
+                <div className="text-[15px] font-bold text-[#0f172a]">{lessonTitle(teacherUpcomingLesson)}</div>
+                <div className="school-ops-muted mt-1 text-[12px] font-medium text-[#64748b]">{lessonTimeRange(teacherUpcomingLesson)}{teacherUpcomingLesson.facilityName ? ` / ${teacherUpcomingLesson.facilityName}` : ''}</div>
               </div>
             ) : (
-              <div className="mt-2 text-[12px] font-medium text-[#6f6758]">No upcoming lesson left in today’s published timetable.</div>
+              <div className="school-ops-muted mt-2 text-[12px] font-medium text-[#64748b]">No upcoming lesson left in today’s published timetable.</div>
             )}
           </div>
         </div>
       ) : null}
       <div className="grid gap-3 p-4">
         <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.08em] text-[#6f6758]">
-            <UsersRound className="size-3.5 text-[#111111]" />
+          <div className="school-ops-label flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.08em] text-[#64748b]">
+            <UsersRound className="size-3.5 text-[#0f172a]" />
             Classes learning now
           </div>
           <div className="flex flex-wrap justify-end gap-2">
             {overlapCount ? (
               <div className="rounded-full border border-[#f4d4aa] bg-[#fff7ed] px-2.5 py-1 text-[11px] font-bold text-[#92400e]">{countLabel(overlapCount, 'overlap')}</div>
             ) : null}
-            <div className="rounded-full border border-[#ded8cd] bg-[#f6f4ef] px-2.5 py-1 text-[11px] font-bold text-[#6f6758]">
+            <div className="school-ops-chip rounded-full border border-[#dbe3ee] bg-[#f8fafc] px-2.5 py-1 text-[11px] font-bold text-[#475569]">
               {classesContinuing.length ? `${classesLearningNow.length}/${classesContinuing.length} classes active` : `${classesLearningNow.length} active classes`}
             </div>
           </div>
@@ -717,24 +836,24 @@ function TodayIntelligenceCard({ todayPayload, user }: { todayPayload: any; user
             {classesLearningNow.slice(0, 9).map((lesson: any) => {
               const progress = Math.max(8, lessonProgress(lesson))
               return (
-                <div key={`${lesson.id || lesson.classId || lesson.className}-${lesson.subjectName || lesson.title || 'lesson'}`} className="overflow-hidden rounded-[8px] border border-[#ded8cd] bg-white shadow-[0_1px_0_rgba(17,17,17,0.04)]">
-                  <div className="h-1 bg-[#111111]" />
+                <div key={`${lesson.id || lesson.classId || lesson.className}-${lesson.subjectName || lesson.title || 'lesson'}`} className="school-ops-flow-row overflow-hidden rounded-[8px] border border-[#dbe3ee] bg-white shadow-[0_1px_0_rgba(15,23,42,0.04)]">
+                  <div className="h-1 bg-[#0f766e]" />
                   <div className="p-3">
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
-                        <div className="truncate text-[13px] font-black text-[#111111]">{lesson.className || 'Class'}</div>
-                        <div className="mt-1 truncate text-[12px] font-semibold text-[#5b554b]">{lesson.subjectName || lesson.title || 'Lesson'}</div>
+                        <div className="truncate text-[13px] font-black text-[#0f172a]">{lesson.className || 'Class'}</div>
+                        <div className="school-ops-muted mt-1 truncate text-[12px] font-semibold text-[#475569]">{lesson.subjectName || lesson.title || 'Lesson'}</div>
                       </div>
-                      <div className="rounded-full border border-[#ded8cd] bg-[#f6f4ef] px-2 py-1 text-[11px] font-black text-[#111111]">{lessonTimeRange(lesson)}</div>
+                      <div className="school-ops-chip rounded-full border border-[#dbe3ee] bg-[#f8fafc] px-2 py-1 text-[11px] font-black text-[#0f172a]">{lessonTimeRange(lesson)}</div>
                     </div>
-                    <div className="mt-3 flex items-center gap-2 text-[11px] font-medium text-[#6f6758]">
+                    <div className="school-ops-muted mt-3 flex items-center gap-2 text-[11px] font-medium text-[#64748b]">
                       <School className="size-3.5" />
                       <span className="truncate">{lesson.teacherName || 'Unassigned teacher'}{lesson.facilityName ? ` / ${lesson.facilityName}` : ''}</span>
                     </div>
-                    <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-[#eee9df]">
-                      <span className="block h-full rounded-full bg-[#6bdd9e]" style={{ width: `${progress}%` }} />
+                    <div className="school-ops-track mt-3 h-1.5 overflow-hidden rounded-full bg-[#e2e8f0]">
+                      <span className="block h-full rounded-full bg-[#0f766e]" style={{ width: `${progress}%` }} />
                     </div>
-                    <div className="mt-2 flex items-center justify-between gap-2 text-[10px] font-bold text-[#6f6758]">
+                    <div className="school-ops-muted mt-2 flex items-center justify-between gap-2 text-[10px] font-bold text-[#64748b]">
                       <span>{progress}% complete</span>
                       <span>Live</span>
                     </div>
@@ -744,31 +863,31 @@ function TodayIntelligenceCard({ todayPayload, user }: { todayPayload: any; user
             })}
           </div>
         ) : (
-          <div className="rounded-[8px] border border-dashed border-[#d8d0c2] bg-[#f6f4ef] px-4 py-4 text-[12px] font-semibold text-[#6f6758]">
+          <div className="school-ops-empty rounded-[8px] border border-dashed border-[#cbd5e1] bg-[#f8fafc] px-4 py-4 text-[12px] font-semibold text-[#475569]">
             No class is inside a published lesson at this exact time. {nextLesson ? `Next lesson starts at ${shortTime(lessonStartTime(nextLesson))} for ${nextLesson.className || 'a class'}.` : 'No upcoming lessons remain today.'}
           </div>
         )}
       </div>
-      <div className="grid gap-3 border-t border-[#ded8cd] bg-[#f6f4ef] p-4 lg:grid-cols-2">
+      <div className="school-operations-band grid gap-3 border-t border-[#e2e8f0] bg-[#f8fafc] p-4 lg:grid-cols-2">
         <div className="grid gap-2">
-          <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.08em] text-[#6f6758]">
+          <div className="school-ops-label flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.08em] text-[#64748b]">
             <AlertTriangle className="size-3.5 text-[#92400e]" />
             Alerts
           </div>
           {alerts.length ? alerts.slice(0, 3).map((item: any) => (
-            <div key={`${item.code}-${item.message}`} className="rounded-[7px] border border-[#f4d4aa] bg-white px-3 py-2 text-[12px] font-semibold text-[#92400e]">
+            <div key={`${item.code}-${item.message}`} className="school-ops-flow-row rounded-[7px] border border-[#fed7aa] bg-white px-3 py-2 text-[12px] font-semibold text-[#92400e]">
               {item.message}
             </div>
-          )) : <div className="rounded-[7px] border border-[#ded8cd] bg-white px-3 py-2 text-[12px] font-semibold text-[#6f6758]">No operational alerts for the current snapshot.</div>}
+          )) : <div className="school-ops-flow-row rounded-[7px] border border-[#dbe3ee] bg-white px-3 py-2 text-[12px] font-semibold text-[#475569]">No operational alerts for the current snapshot.</div>}
         </div>
         <div className="grid gap-2">
-          <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.08em] text-[#6f6758]">
-            <MessageSquare className="size-3.5 text-[#111111]" />
+          <div className="school-ops-label flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.08em] text-[#64748b]">
+            <MessageSquare className="size-3.5 text-[#0f172a]" />
             Recommendations
           </div>
           {(today.recommendations || []).length ? today.recommendations.slice(0, 3).map((item: string) => (
-            <div key={item} className="rounded-[7px] border border-[#ded8cd] bg-white px-3 py-2 text-[12px] font-semibold text-[#33302b]">{item}</div>
-          )) : <div className="rounded-[7px] border border-[#ded8cd] bg-white px-3 py-2 text-[12px] font-semibold text-[#6f6758]">No recommended action right now.</div>}
+            <div key={item} className="school-ops-flow-row rounded-[7px] border border-[#dbe3ee] bg-white px-3 py-2 text-[12px] font-semibold text-[#334155]">{item}</div>
+          )) : <div className="school-ops-flow-row rounded-[7px] border border-[#dbe3ee] bg-white px-3 py-2 text-[12px] font-semibold text-[#475569]">No recommended action right now.</div>}
         </div>
       </div>
     </SectionCard>
@@ -849,6 +968,7 @@ export function SchoolDashboard() {
   const role = String(user?.role || '').toLowerCase()
   const showFees = ['super_admin', 'school_owner', 'headteacher', 'bursar'].includes(role)
   const kpis = useMemo(() => buildKpis(dashboard, rows, showFees), [dashboard, rows, showFees])
+  const genderRows = useMemo(() => buildGenderRows(payloads.students?.students || []), [payloads.students])
 
   const openAction = (nextAction: SchoolActionKind) => {
     setAction(nextAction)
@@ -915,14 +1035,18 @@ export function SchoolDashboard() {
 
       {view === 'school-overview' ? (
         <>
-          <TodayIntelligenceCard todayPayload={payloads.today} user={user} />
           <SectionKpiStrip items={kpis} />
-          <div className="grid gap-3 xl:grid-cols-[0.85fr_1fr]">
+          <TodayIntelligenceCard todayPayload={payloads.today} user={user} />
+          <div className="grid gap-3 xl:grid-cols-[0.78fr_1.22fr]">
             <AttendanceRateCard dashboard={dashboard} />
-            <RecentStudentsCard rows={rows.students} />
+            <StudentGenderPieCard rows={genderRows} />
           </div>
           <div className="grid gap-3 xl:grid-cols-[1fr_0.85fr]">
+            <RecentStudentsCard rows={rows.students} />
             <HomeworkCard rows={rows.homework} />
+          </div>
+          <div className="grid gap-3 xl:grid-cols-[1fr_0.85fr]">
+            <InsightsCard rows={rows.insights} />
             <ShortcutsCard onAction={openAction} />
           </div>
         </>

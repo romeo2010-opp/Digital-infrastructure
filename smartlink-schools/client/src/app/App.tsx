@@ -1,5 +1,5 @@
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router'
-import { type FormEvent, useEffect, useState } from 'react'
+import { type CSSProperties, type FormEvent, useEffect, useState } from 'react'
 import { BookOpenCheck, CalendarCheck, GraduationCap, KeyRound, LayoutDashboard, RefreshCcw, ReceiptText } from 'lucide-react'
 import { Sidebar } from './components/Sidebar'
 import { PageHeader } from './components/PageHeader'
@@ -35,6 +35,9 @@ import { TeacherLessonLogPage } from './pages/TeacherLessonLogPage'
 import { TimetablingPage } from './pages/TimetablingPage'
 import { SchedulingSettingsPage } from './pages/SchedulingSettingsPage'
 import { PublicLandingPage } from './pages/PublicLandingPage'
+import { BursarFinancePage } from './pages/BursarFinancePage'
+import { ExamIntelligenceComingSoonPage } from './pages/ExamIntelligenceComingSoonPage'
+import { ExamIntelligenceLabPage } from './pages/ExamIntelligenceLabPage'
 
 const routeMeta = [
   { path: '/dashboard', title: 'School Dashboard', subtitle: 'Students, fees, attendance and academic progress' },
@@ -49,7 +52,21 @@ const routeMeta = [
   { path: '/students/', title: 'Student Profile', subtitle: 'Student identity, guardians, class and fee profile' },
   { path: '/parents', title: 'Parents', subtitle: 'Guardian contacts and communication preferences' },
   { path: '/calendar', title: 'School Calendar', subtitle: 'Events, recurring assessments and term timeline' },
-  { path: '/fees', title: 'Fees', subtitle: 'Payments, balances, receipts and reminders' },
+  { path: '/fees/dashboard', title: 'Bursar Dashboard', subtitle: 'Collections, arrears, cash movement and daily finance signals' },
+  { path: '/fees/accounts', title: 'Student Accounts', subtitle: 'Learner balances, guardians and fee account health' },
+  { path: '/fees/invoices', title: 'Invoices', subtitle: 'Generated invoices, due dates and current term billing' },
+  { path: '/fees/payments', title: 'Payments', subtitle: 'Posted payments, methods, references and staff activity' },
+  { path: '/fees/receipts', title: 'Receipts', subtitle: 'Receipt numbers, balances after payment and issue-ready history' },
+  { path: '/fees/arrears', title: 'Arrears', subtitle: 'Overdue balances, days overdue and risk level' },
+  { path: '/fees/payment-plans', title: 'Payment Plans', subtitle: 'Installment agreements and overdue installment value' },
+  { path: '/fees/fee-structures', title: 'Fee Structures', subtitle: 'Reusable fee templates for terms and billing runs' },
+  { path: '/fees/discounts', title: 'Discounts & Waivers', subtitle: 'Scholarships, hardship waivers and reductions' },
+  { path: '/fees/expenses', title: 'Expenses', subtitle: 'Operational spend, suppliers and approval status' },
+  { path: '/fees/suppliers', title: 'Suppliers', subtitle: 'Supplier spend summary from finance expenses' },
+  { path: '/fees/reconciliation', title: 'Bank Reconciliation', subtitle: 'Unmatched receipts, bank transactions and reconciliation status' },
+  { path: '/fees/reports', title: 'Finance Reports', subtitle: 'Collections, invoice, expense and balance reporting' },
+  { path: '/fees/settings', title: 'Finance Settings', subtitle: 'Receipt controls, approvals, reminders and audit posture' },
+  { path: '/fees', title: 'Bursar Dashboard', subtitle: 'Collections, receipts, invoices, arrears and finance controls' },
   { path: '/attendance', title: 'Attendance', subtitle: 'Daily registers, absence alerts and class trends' },
   { path: '/homework', title: 'Homework', subtitle: 'Assignments, due dates and reminders' },
   { path: '/exam-sessions', title: 'Exam Sessions', subtitle: 'End-of-term exam sessions, papers, timetables and report cards' },
@@ -67,9 +84,12 @@ const routeMeta = [
   { path: '/exam-builder', title: 'Assessment Builder', subtitle: 'Exam topics, marks and difficulty review' },
   { path: '/daily-drill', title: 'Daily Drill', subtitle: 'Personalized practice from weak topics' },
   { path: '/exam-forecast', title: 'Exam Forecast', subtitle: 'Topic priority for exam preparation' },
+  { path: '/exam-intelligence', title: 'Exam Intelligence', subtitle: 'Coming soon exam analytics and revision intelligence' },
+  { path: '/internal/exam-lab', title: 'SmartLink Exam Intelligence Lab', subtitle: 'Internal dataset creation, extraction review, tagging and backtesting' },
   { path: '/messages', title: 'Messages', subtitle: 'Parent and staff communication' },
   { path: '/reports', title: 'Reports', subtitle: 'Academic, attendance and finance summaries' },
   { path: '/settings/features', title: 'Feature Assignment', subtitle: 'Enable timetable modules for this school' },
+  { path: '/settings/personalized', title: 'Personalized', subtitle: 'Dashboard canvas, page transparency and workspace feel' },
   { path: '/settings/academic-configuration', title: 'Academic Configuration', subtitle: 'Years, terms, teaching days and bell schedules' },
   { path: '/settings/facilities', title: 'Facilities and Resources', subtitle: 'Rooms, shared equipment and reservable school spaces' },
   { path: '/settings/laboratories', title: 'Laboratories', subtitle: 'Practical rooms, subject support and exam readiness' },
@@ -288,7 +308,8 @@ function SchoolRoutes({ landingPath }: { landingPath: string }) {
       <Route path="/students/:studentId" element={<StudentProfilePage />} />
       <Route path="/parents" element={<SchoolWorkspace pageKey="parents" />} />
       <Route path="/calendar" element={<SchoolCalendarPage />} />
-      <Route path="/fees" element={<SchoolWorkspace pageKey="fees" />} />
+      <Route path="/fees" element={<BursarFinancePage />} />
+      <Route path="/fees/:financeSection" element={<BursarFinancePage />} />
       <Route path="/attendance" element={<SchoolWorkspace pageKey="attendance" />} />
       <Route path="/homework" element={<SchoolWorkspace pageKey="homework" />} />
       <Route path="/exam-sessions" element={<ExamSessionsPage />} />
@@ -332,10 +353,21 @@ function SchoolRoutes({ landingPath }: { landingPath: string }) {
       <Route path="/exam-builder/:assessmentId" element={<ExamPaperDocumentPage />} />
       <Route path="/daily-drill" element={<SyllabusIntelligencePage />} />
       <Route path="/exam-forecast" element={<SchoolWorkspace pageKey="examForecast" />} />
+      <Route path="/exam-intelligence" element={<ExamIntelligenceComingSoonPage />} />
+      <Route path="/internal/exam-lab" element={<ExamIntelligenceLabPage />} />
+      <Route path="/internal/exam-lab/coverage" element={<ExamIntelligenceLabPage />} />
+      <Route path="/internal/exam-lab/upload" element={<ExamIntelligenceLabPage />} />
+      <Route path="/internal/exam-lab/questions" element={<ExamIntelligenceLabPage />} />
+      <Route path="/internal/exam-lab/tagging" element={<ExamIntelligenceLabPage />} />
+      <Route path="/internal/exam-lab/topic-map" element={<ExamIntelligenceLabPage />} />
+      <Route path="/internal/exam-lab/backtesting" element={<ExamIntelligenceLabPage />} />
+      <Route path="/internal/exam-lab/reports" element={<ExamIntelligenceLabPage />} />
+      <Route path="/internal/exam-lab/papers/:paperId/review" element={<ExamIntelligenceLabPage />} />
       <Route path="/messages" element={<SchoolWorkspace pageKey="messages" />} />
       <Route path="/reports" element={<SchoolWorkspace pageKey="reports" />} />
       <Route path="/settings" element={<Navigate to="/settings/preferences" replace />} />
       <Route path="/settings/preferences" element={<SettingsCenter section="preferences" />} />
+      <Route path="/settings/personalized" element={<SettingsCenter section="personalized" />} />
       <Route path="/settings/notifications" element={<SettingsCenter section="notifications" />} />
       <Route path="/settings/security" element={<SettingsCenter section="security" />} />
       <Route path="/settings/profile" element={<SettingsCenter section="profile" />} />
@@ -495,6 +527,28 @@ function PortalShell() {
   const isQuestionBankRoute = location.pathname === '/questions/bank'
   const isResultsSheetRoute = /^\/results\/[^/]+$/.test(location.pathname)
   const syncCurrentPage = () => requestRoutePackets(location.pathname, { force: true, primaryOnly: true, preferHttp: true, timeoutMs: 4500, reason: 'school-topbar-sync' })
+  const hasPersonalizedImage = Boolean(preferences?.dashboardBackgroundImage && preferences?.dashboardBackgroundEnabled !== false)
+  const transparentSectionsEnabled = Boolean(preferences?.transparentSectionsEnabled)
+  const backgroundDim = Math.max(0.3, Math.min(0.92, Number(preferences?.dashboardBackgroundDim ?? 74) / 100))
+  const contentBackgroundStyle: CSSProperties = hasPersonalizedImage
+    ? {
+        backgroundImage: `linear-gradient(rgba(0,0,0,${backgroundDim}), rgba(0,0,0,${backgroundDim})), url("${preferences.dashboardBackgroundImage}")`,
+        backgroundPosition: `${Number(preferences?.dashboardBackgroundX ?? 50)}% ${Number(preferences?.dashboardBackgroundY ?? 50)}%`,
+        backgroundSize: preferences?.dashboardBackgroundMode === 'custom' ? `${Number(preferences?.dashboardBackgroundScale ?? 100)}% auto` : String(preferences?.dashboardBackgroundMode || 'cover'),
+        backgroundAttachment: 'fixed',
+        backgroundRepeat: 'no-repeat',
+        backgroundColor: 'var(--mera-app-bg)',
+      }
+    : {
+        backgroundImage: 'none',
+        backgroundColor: 'var(--mera-app-bg)',
+      }
+  const panelAlpha = transparentSectionsEnabled ? Math.max(0.55, Math.min(1, 1 - Number(preferences?.sectionTransparency || 0) / 100)) : 1
+  const personalizedShellStyle = {
+    '--sl-personal-panel-alpha': String(panelAlpha),
+    '--sl-personal-panel-blur': `${Number(preferences?.sectionBlur ?? 10)}px`,
+    ...(contentBackgroundStyle || {}),
+  } as CSSProperties
 
   if (isExamPaperDocumentRoute || isSyllabusComposerRoute || isQuestionBatchEditorRoute || isQuestionBankRoute || isResultsSheetRoute) {
     return (
@@ -521,9 +575,19 @@ function PortalShell() {
       {isDashboardRoute ? <DashboardViewStrip /> : null}
       <div className="flex min-h-0 flex-1 overflow-hidden bg-transparent">
         <Sidebar user={user} />
-        <main className="smartlink-shell-scroll relative min-w-0 flex-1 overflow-y-scroll overflow-x-hidden">
+        <main
+          className="smartlink-shell-scroll relative min-w-0 flex-1 overflow-y-scroll overflow-x-hidden"
+          data-personalized-background={hasPersonalizedImage ? 'image' : 'none'}
+          data-personalized-panels={transparentSectionsEnabled ? 'soft' : 'solid'}
+          data-personalized-accent={String(preferences?.accentTone || 'smartlink')}
+          data-personalized-rhythm={String(preferences?.pageRhythm || 'balanced')}
+          data-personalized-number={String(preferences?.numberEmphasis || 'standard')}
+          data-personalized-motion={String(preferences?.motionStyle || 'calm')}
+          data-personalized-focus={String(preferences?.dashboardFocus || 'standard')}
+          style={personalizedShellStyle}
+        >
           <RouteDataActivity active={routeLoading.missing} />
-          <div className={`min-h-full transition-[opacity,transform] duration-300 ease-out ${routeLoading.missing ? 'opacity-[0.96]' : 'opacity-100'}`}>
+          <div className={`smartlink-personalized-content min-h-full transition-[opacity,transform] duration-300 ease-out ${routeLoading.missing ? 'opacity-[0.96]' : 'opacity-100'}`}>
             <SchoolRoutes landingPath={landingPath} />
           </div>
         </main>
@@ -547,7 +611,7 @@ function shouldRenderPublicSite() {
   const publicHosts = new Set(['publicurl.com', 'www.publicurl.com'])
   const localHosts = new Set(['localhost', '127.0.0.1', '0.0.0.0'])
   if (publicHosts.has(hostname)) return true
-  return localHosts.has(hostname) && window.location.pathname.startsWith('/public')
+  return localHosts.has(hostname) && (window.location.pathname.startsWith('/public') || window.location.pathname.startsWith('/setup'))
 }
 
 export default function App() {

@@ -103,6 +103,8 @@ export const schoolPages: Record<SchoolPageKey, {
       { key: 'className', label: 'Class' },
       { key: 'subject', label: 'Subject' },
       { key: 'due', label: 'Due' },
+      { key: 'assigned', label: 'Assigned' },
+      { key: 'submitted', label: 'Submitted' },
       { key: 'status', label: 'Status' },
     ],
     sideTitle: 'Teacher Queue',

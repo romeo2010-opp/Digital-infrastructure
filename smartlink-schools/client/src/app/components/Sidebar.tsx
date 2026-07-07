@@ -1,7 +1,9 @@
 import { useState } from 'react'
 import {
+  AlertTriangle,
   ArrowLeft,
   BarChart3,
+  Banknote,
   Bell,
   BookOpenCheck,
   Building2,
@@ -16,9 +18,11 @@ import {
   ClipboardCheck,
   Database,
   FileBarChart,
+  FileText,
   Globe2,
   GraduationCap,
   LayoutDashboard,
+  Landmark,
   Lock,
   MessageSquare,
   Palette,
@@ -27,10 +31,12 @@ import {
   ScrollText,
   Settings,
   Settings2,
+  ShieldCheck,
   Sparkles,
   UserCircle2,
   UserRound,
   Users,
+  WalletCards,
 } from 'lucide-react'
 import { useLocation, useNavigate } from 'react-router'
 import { canAccessPath } from '../lib/access'
@@ -49,6 +55,54 @@ const studentPortalItem = {
   path: '/student-portal',
   icon: GraduationCap,
 }
+
+const financeItem = {
+  label: 'Finance',
+  path: '/fees/dashboard',
+  icon: ReceiptText,
+}
+
+const bursarGroups = [
+  {
+    label: 'Overview',
+    items: [
+      { label: 'Dashboard', path: '/fees/dashboard', icon: LayoutDashboard },
+    ],
+  },
+  {
+    label: 'Manage',
+    items: [
+      { label: 'Student Accounts', path: '/fees/accounts', icon: WalletCards },
+      { label: 'Invoices', path: '/fees/invoices', icon: FileText },
+      { label: 'Payments', path: '/fees/payments', icon: Banknote },
+      { label: 'Receipts', path: '/fees/receipts', icon: ReceiptText },
+      { label: 'Arrears', path: '/fees/arrears', icon: AlertTriangle },
+      { label: 'Payment Plans', path: '/fees/payment-plans', icon: CalendarClock },
+    ],
+  },
+  {
+    label: 'Setup',
+    items: [
+      { label: 'Fee Structures', path: '/fees/fee-structures', icon: Database },
+      { label: 'Discounts & Waivers', path: '/fees/discounts', icon: ShieldCheck },
+      { label: 'Expenses', path: '/fees/expenses', icon: Banknote },
+      { label: 'Suppliers', path: '/fees/suppliers', icon: Users },
+    ],
+  },
+  {
+    label: 'Reconciliation',
+    items: [
+      { label: 'Bank Reconciliation', path: '/fees/reconciliation', icon: Landmark },
+    ],
+  },
+  {
+    label: 'Reports',
+    items: [
+      { label: 'Reports', path: '/fees/reports', icon: FileBarChart },
+      { label: 'Finance Settings', path: '/fees/settings', icon: Settings },
+    ],
+  },
+] as const
 
 const groups = [
   {
@@ -78,6 +132,7 @@ const groups = [
       { label: 'Assessment Builder', path: '/exam-builder', icon: ClipboardCheck },
       { label: 'Daily Drill', path: '/daily-drill', icon: BookOpenCheck },
       { label: 'Exam Forecast', path: '/exam-forecast', icon: BarChart3 },
+      { label: 'Exam Intelligence', path: '/exam-intelligence', icon: FlaskConical, badge: 'Soon' },
     ],
   },
   {
@@ -95,6 +150,7 @@ const settingsGroups = [
     items: [
       { label: 'Profile', path: '/settings/profile', icon: UserCircle2 },
       { label: 'Preferences', path: '/settings/preferences', icon: Palette },
+      { label: 'Personalized', path: '/settings/personalized', icon: Palette },
       { label: 'Notifications', path: '/settings/notifications', icon: Bell },
     ],
   },
@@ -171,7 +227,13 @@ export function Sidebar({ user }: { user?: any; theme?: 'default' | 'light' }) {
   const userInitials = initialsFor(user)
   const displayName = displayNameFor(user)
   const roleName = roleNameFor(user)
-  const primaryItem = canAccessPath(user, dashboardItem.path) ? dashboardItem : canAccessPath(user, studentPortalItem.path) ? studentPortalItem : dashboardItem
+  const primaryItem = canAccessPath(user, dashboardItem.path)
+    ? dashboardItem
+    : canAccessPath(user, studentPortalItem.path)
+      ? studentPortalItem
+      : canAccessPath(user, financeItem.path)
+        ? financeItem
+        : dashboardItem
   const PrimaryIcon = primaryItem.icon
   const settingsMode = location.pathname.startsWith('/settings')
 
@@ -206,6 +268,108 @@ export function Sidebar({ user }: { user?: any; theme?: 'default' | 'light' }) {
       active ? 'bg-[#111111] text-white shadow-[0_6px_14px_rgba(0,0,0,0.12)]' : 'text-[#6b7280] hover:bg-[#f7f8fa] hover:text-[#111827]'
     }`
   const labelClass = `${collapsed ? 'hidden' : 'block'} min-w-0 truncate max-md:hidden`
+  const isBursarPortal = String(user?.role || '').toLowerCase() === 'bursar' && !settingsMode
+
+  if (isBursarPortal) {
+    const bursarNavItemClass = (active: boolean) =>
+      `relative flex h-8 w-full items-center gap-2 rounded-[5px] text-left text-[12px] font-medium tracking-[-0.012em] transition ${
+        collapsed ? 'justify-center px-0' : 'px-3'
+      } max-md:justify-center max-md:px-0 ${
+        active
+          ? 'bg-[#111111] text-white shadow-[0_6px_14px_rgba(0,0,0,0.12)]'
+          : 'text-[#6b7280] hover:bg-[#f7f8fa] hover:text-[#111827]'
+      }`
+
+    return (
+      <aside
+        className={`z-20 flex h-full min-h-0 flex-col overflow-hidden border-r border-[#e2e8f0] bg-white text-[#6b7280] transition-[width,min-width,max-width] duration-200 ${
+          collapsed ? 'w-14 min-w-14 max-w-14' : 'w-[256px] min-w-[256px] max-w-[256px]'
+        } max-md:w-14 max-md:min-w-14 max-md:max-w-14`}
+      >
+        <div className={`shrink-0 border-b border-[#e2e8f0] px-3 py-3 ${collapsed ? 'grid place-items-center' : ''} max-md:grid max-md:place-items-center`}>
+          <button
+            type="button"
+            onClick={() => openPath('/fees/dashboard')}
+            title="Bursar workspace"
+            aria-label="Bursar workspace"
+            className={`flex min-w-0 items-center gap-3 rounded-[8px] text-left ${collapsed ? 'justify-center' : 'w-full'} max-md:justify-center`}
+          >
+            <span className="grid size-8 shrink-0 place-items-center rounded-[7px] bg-[#111827] text-white">
+              <ReceiptText className="size-4" />
+            </span>
+            <span className={`${collapsed ? 'hidden' : 'min-w-0'} max-md:hidden`}>
+              <span className="block truncate text-[14px] font-semibold tracking-[-0.03em] text-[#111827]">Bursar Workspace</span>
+              <span className="mt-0.5 block truncate text-[10px] font-bold uppercase tracking-[0.16em] text-[#9ca3af]">SmartLink Schools</span>
+            </span>
+          </button>
+        </div>
+
+        <nav className="min-h-0 flex-1 overflow-y-auto px-2 py-3 [scrollbar-width:thin] [scrollbar-color:#cbd5e0_transparent]">
+          <div className="grid gap-2">
+            {bursarGroups.map((group) => {
+              const items = allowedItems(group.items)
+              if (!items.length) return null
+              return (
+                <section key={group.label} className="min-w-0">
+                  <div className={`${collapsed ? 'mx-auto h-px w-7 bg-[#e2e8f0]' : 'px-2.5 pb-0.5 text-[9px] font-bold uppercase tracking-[0.12em] text-[#9ca3af]'} max-md:mx-auto max-md:h-px max-md:w-7 max-md:bg-[#e2e8f0] max-md:px-0 max-md:pb-0`}>
+                    <span className={`${collapsed ? 'hidden' : ''} max-md:hidden`}>{group.label}</span>
+                  </div>
+                  <div className="grid gap-0.5">
+                    {items.map((item) => {
+                      const Icon = item.icon
+                      const active = item.path === '/fees/dashboard'
+                        ? location.pathname === '/fees' || location.pathname === '/fees/dashboard'
+                        : location.pathname === item.path || location.pathname.startsWith(`${item.path}/`)
+                      return (
+                        <button
+                          key={`${item.path}-${item.label}`}
+                          type="button"
+                          onClick={() => openPath(item.path)}
+                          title={item.label}
+                          aria-label={item.label}
+                          className={bursarNavItemClass(active)}
+                        >
+                          <Icon className="size-4 shrink-0" />
+                          <span className={labelClass}>{item.label}</span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </section>
+              )
+            })}
+          </div>
+        </nav>
+
+        <div className="grid shrink-0 gap-1.5 border-t border-[#e2e8f0] px-2 py-2">
+          <button
+            type="button"
+            onClick={toggleCollapsed}
+            title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            className={`relative flex h-8 w-full items-center gap-2 rounded-[5px] text-left text-[12px] font-medium tracking-[-0.012em] text-[#6b7280] transition hover:bg-[#f7f8fa] hover:text-[#111827] ${
+              collapsed ? 'justify-center px-0' : 'px-3'
+            } max-md:hidden`}
+          >
+            {collapsed ? <ChevronRight className="size-4 shrink-0" /> : <ChevronLeft className="size-4 shrink-0" />}
+            <span className={labelClass}>{collapsed ? 'Expand' : 'Collapse'}</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => openPath('/settings/profile')}
+            className={`flex h-10 items-center gap-2 rounded-[5px] text-left transition hover:bg-[#f7f8fa] ${collapsed ? 'justify-center px-0' : 'px-2'} max-md:justify-center max-md:px-0`}
+            title={displayName}
+          >
+            <span className="grid size-8 shrink-0 place-items-center rounded-full bg-[#111827] text-[11px] font-bold text-white">{userInitials || 'B'}</span>
+            <span className={`${collapsed ? 'hidden' : 'min-w-0 flex-1'} max-md:hidden`}>
+              <span className="block truncate text-[13px] font-semibold text-[#111827]">{displayName}</span>
+              <span className="mt-0.5 block truncate text-[11px] font-medium text-[#9ca3af]">{roleName}</span>
+            </span>
+          </button>
+        </div>
+      </aside>
+    )
+  }
 
   return (
     <aside
