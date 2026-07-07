@@ -241,7 +241,7 @@ CREATE TABLE IF NOT EXISTS fee_accounts (
   term_name VARCHAR(80) NOT NULL,
   amount_due DECIMAL(14,2) NOT NULL DEFAULT 0,
   amount_paid DECIMAL(14,2) NOT NULL DEFAULT 0,
-  status ENUM('paid', 'partial', 'overdue') NOT NULL DEFAULT 'partial',
+  status ENUM('unpaid', 'paid', 'partial', 'overdue') NOT NULL DEFAULT 'unpaid',
   due_date DATE NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE KEY uq_fee_account_term (school_id, student_id, term_name),
@@ -262,6 +262,15 @@ CREATE TABLE IF NOT EXISTS fee_payments (
   CONSTRAINT fk_fee_payments_school FOREIGN KEY (school_id) REFERENCES schools(id),
   CONSTRAINT fk_fee_payments_account FOREIGN KEY (fee_account_id) REFERENCES fee_accounts(id),
   CONSTRAINT fk_fee_payments_user FOREIGN KEY (recorded_by) REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS finance_sequences (
+  school_id BIGINT UNSIGNED NOT NULL,
+  sequence_key VARCHAR(120) NOT NULL,
+  next_value BIGINT UNSIGNED NOT NULL DEFAULT 1,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (school_id, sequence_key),
+  CONSTRAINT fk_finance_sequences_school FOREIGN KEY (school_id) REFERENCES schools(id)
 );
 
 CREATE TABLE IF NOT EXISTS attendance_records (

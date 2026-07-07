@@ -3,6 +3,8 @@ import { createGeminiProvider, GEMINI_NOT_CONFIGURED_MESSAGE } from "./providers
 import { createNullProvider } from "./providers/nullProvider.js"
 
 export const AI_LIMIT_MESSAGE = "AI limit reached for this school. Existing approved drills still work."
+const DEFAULT_AI_TIMEOUT_MS = 180000
+const DEFAULT_AI_LOGIN_CHECK_TIMEOUT_MS = 15000
 
 let lastConnectionTest = {
   status: null,
@@ -20,22 +22,26 @@ function intFromEnv(value, fallback) {
   return Number.isFinite(number) && number >= 0 ? number : fallback
 }
 
-function aiConfig() {
+function aiConfig(overrides = {}) {
   const provider = String(process.env.AI_PROVIDER || "gemini").toLowerCase()
   return {
     enabled: boolFromEnv(process.env.AI_ENABLED, true),
     provider,
     model: process.env.AI_MODEL || "gemini-2.5-flash",
     apiKey: process.env.GEMINI_API_KEY || "",
-    timeoutMs: intFromEnv(process.env.AI_TIMEOUT_MS, 60000),
+    timeoutMs: intFromEnv(overrides.timeoutMs ?? process.env.AI_TIMEOUT_MS, DEFAULT_AI_TIMEOUT_MS),
     maxRetries: intFromEnv(process.env.AI_MAX_RETRIES, 1),
     logRawResponses: boolFromEnv(process.env.AI_LOG_RAW_RESPONSES, false),
     requireTeacherApproval: boolFromEnv(process.env.AI_REQUIRE_TEACHER_APPROVAL, true),
   }
 }
 
-export function getAiProvider() {
-  const config = aiConfig()
+function aiLoginCheckTimeoutMs() {
+  return intFromEnv(process.env.AI_LOGIN_CHECK_TIMEOUT_MS, DEFAULT_AI_LOGIN_CHECK_TIMEOUT_MS)
+}
+
+export function getAiProvider(overrides = {}) {
+  const config = aiConfig(overrides)
   if (!config.enabled) {
     return createNullProvider({
       ...config,
@@ -189,9 +195,10 @@ async function runStructuredRequest({
   fallback,
   schoolId = null,
   userId = null,
+  timeoutMs = null,
 }) {
-  const config = aiConfig()
-  const provider = getAiProvider()
+  const config = aiConfig({ timeoutMs })
+  const provider = getAiProvider({ timeoutMs })
   const status = await provider.status()
   if (!status.available) {
     return {
@@ -262,15 +269,98 @@ export async function getAiStatus() {
     model: status.model || "gemini-2.5-flash",
     configured: Boolean(status.configured),
     available: Boolean(status.available),
+    online: lastConnectionTest.status === null ? null : lastConnectionTest.status === "ok",
     message: status.message,
     last_test_status: lastConnectionTest.status,
     last_test_error: lastConnectionTest.error,
     last_test_at: lastConnectionTest.checked_at,
+    timeout_ms: aiConfig().timeoutMs,
+    login_check_timeout_ms: aiLoginCheckTimeoutMs(),
+  }
+}
+
+export async function probeAiConnection({ timeoutMs = null } = {}) {
+  const config = aiConfig({ timeoutMs: timeoutMs || aiLoginCheckTimeoutMs() })
+  const provider = getAiProvider({ timeoutMs: config.timeoutMs })
+  const status = await provider.status()
+  const startedAt = Date.now()
+  const checkedAt = new Date().toISOString()
+  if (!status.available) {
+    lastConnectionTest = {
+      status: "failed",
+      error: status.message || GEMINI_NOT_CONFIGURED_MESSAGE,
+      checked_at: checkedAt,
+    }
+    return {
+      ok: false,
+      online: false,
+      provider: status.provider || "gemini",
+      model: status.model || config.model,
+      configured: Boolean(status.configured),
+      message: status.message || GEMINI_NOT_CONFIGURED_MESSAGE,
+      checked_at: checkedAt,
+      response_ms: Date.now() - startedAt,
+      timeout_ms: config.timeoutMs,
+    }
+  }
+
+  try {
+    const result = await provider.generateJson({
+      prompt: "Return JSON with keys ok and message. Message should be SmartLink AI is ready.",
+      schemaHint: '{"ok":true,"message":""}',
+      responseSchema: {
+        type: "OBJECT",
+        properties: {
+          ok: { type: "BOOLEAN" },
+          message: { type: "STRING" },
+        },
+        required: ["ok", "message"],
+      },
+    })
+    const payload = parseJson(result.raw)
+    lastConnectionTest = {
+      status: payload?.ok === false ? "failed" : "ok",
+      error: payload?.ok === false ? payload?.message || "Gemini test failed" : null,
+      checked_at: checkedAt,
+    }
+    return {
+      ok: payload?.ok !== false,
+      online: payload?.ok !== false,
+      provider: result.provider || provider.name,
+      model: result.model || provider.model,
+      configured: true,
+      message: payload?.message || "SmartLink AI is ready.",
+      checked_at: checkedAt,
+      response_ms: Date.now() - startedAt,
+      timeout_ms: config.timeoutMs,
+    }
+  } catch (error) {
+    const message = error?.message || "AI connection check failed"
+    lastConnectionTest = {
+      status: "failed",
+      error: message,
+      checked_at: checkedAt,
+    }
+    return {
+      ok: false,
+      online: false,
+      provider: provider.name,
+      model: provider.model,
+      configured: Boolean(provider.configured),
+      message,
+      checked_at: checkedAt,
+      response_ms: Date.now() - startedAt,
+      timeout_ms: config.timeoutMs,
+    }
   }
 }
 
 export async function extractSyllabusStructure(input = {}) {
   return runStructuredRequest({ ...input, featureName: "syllabus_extraction" })
+}
+
+export async function extractExamPaperQuestions(input = {}) {
+  return runStructuredRequest({ ...input, featureName: "exam_paper_extraction" })
 }
 
 export async function generateQuestionDrafts(input = {}) {
@@ -285,11 +375,12 @@ export async function adaptExplanationForStudent(input = {}) {
   return runStructuredRequest({ ...input, featureName: "explanation_adaptation" })
 }
 
-export async function testConnection({ schoolId = null, userId = null } = {}) {
+export async function testConnection({ schoolId = null, userId = null, timeoutMs = null } = {}) {
   const result = await runStructuredRequest({
     featureName: "ai_test",
     schoolId,
     userId,
+    timeoutMs,
     prompt: "Return JSON with keys ok and message. Message should be SmartLink AI is ready.",
     schemaHint: '{"ok":true,"message":""}',
     responseSchema: {

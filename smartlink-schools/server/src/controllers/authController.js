@@ -1,9 +1,70 @@
 import bcrypt from "bcryptjs"
+import crypto from "crypto"
 import { pool } from "../config/db.js"
 import { signSession } from "../middleware/auth.js"
 import { HttpError } from "../utils/http.js"
 import { getActiveAcademicSession, sessionPayload } from "../services/academicSessionService.js"
 import { getSchoolFeatures } from "../services/schoolFeaturesService.js"
+import { probeAiConnection } from "../services/ai/aiClient.js"
+import { getLoginAppearanceForUser } from "./preferencesController.js"
+
+const LAST_USER_COOKIE = "smartlink_schools_last_user"
+
+function cookieSecret() {
+  return process.env.JWT_SECRET || "smartlink-schools-dev-secret"
+}
+
+function signLastUserSubject(subject) {
+  return crypto.createHmac("sha256", cookieSecret()).update(subject).digest("base64url")
+}
+
+function encodeLastUserCookie(scope, id) {
+  const subject = `${scope}:${Number(id || 0)}`
+  return `${Buffer.from(subject).toString("base64url")}.${signLastUserSubject(subject)}`
+}
+
+function parseCookies(header = "") {
+  return String(header || "").split(";").reduce((cookies, part) => {
+    const index = part.indexOf("=")
+    if (index < 0) return cookies
+    const key = part.slice(0, index).trim()
+    const value = part.slice(index + 1).trim()
+    if (key) cookies[key] = decodeURIComponent(value)
+    return cookies
+  }, {})
+}
+
+function readLastUserCookie(req) {
+  const value = parseCookies(req.headers.cookie || "")[LAST_USER_COOKIE]
+  if (!value || !value.includes(".")) return null
+  const [encodedSubject, signature] = value.split(".")
+  let subject = ""
+  try {
+    subject = Buffer.from(encodedSubject, "base64url").toString("utf8")
+  } catch {
+    return null
+  }
+  const expected = signLastUserSubject(subject)
+  if (signature !== expected) return null
+  const [scope, rawId] = subject.split(":")
+  const id = Number(rawId)
+  if (!["user", "student"].includes(scope) || !Number.isFinite(id) || id <= 0) return null
+  return { scope, id }
+}
+
+function setLastUserCookie(req, res, user) {
+  const scope = user?.role === "student" ? "student" : "user"
+  const value = encodeLastUserCookie(scope, user?.id)
+  const secure = req.secure || String(req.headers["x-forwarded-proto"] || "").includes("https")
+  res.setHeader("Set-Cookie", [
+    `${LAST_USER_COOKIE}=${encodeURIComponent(value)}`,
+    "Path=/api/auth",
+    "Max-Age=31536000",
+    "HttpOnly",
+    "SameSite=Lax",
+    secure ? "Secure" : "",
+  ].filter(Boolean).join("; "))
+}
 
 async function decorateSessionUser(user) {
   if (!user?.schoolId) return user
@@ -177,11 +238,69 @@ export async function login(req, res) {
   }
 
   const decoratedUser = await decorateSessionUser(sessionUser)
-  res.json({ token: signSession(decoratedUser), user: decoratedUser })
+  let ai = null
+  try {
+    ai = await probeAiConnection()
+  } catch (error) {
+    ai = {
+      ok: false,
+      online: false,
+      configured: false,
+      message: error?.message || "AI connection check failed",
+      checked_at: new Date().toISOString(),
+    }
+  }
+  setLastUserCookie(req, res, sessionUser)
+  res.json({ token: signSession(decoratedUser), user: decoratedUser, ai })
+}
+
+export async function loginAppearance(req, res) {
+  const lastUser = readLastUserCookie(req)
+  if (!lastUser) {
+    res.json({ appearance: null })
+    return
+  }
+
+  if (lastUser.scope === "student") {
+    res.json({ appearance: null })
+    return
+  }
+
+  const [rows] = await pool.query(
+    "SELECT id FROM users WHERE id = ? AND is_active = 1 LIMIT 1",
+    [lastUser.id],
+  )
+  res.json({ appearance: rows[0] ? await getLoginAppearanceForUser(lastUser.id) : null })
+}
+
+export async function lookupLoginAppearance(req, res) {
+  const loginType = String(req.body?.login_type || req.body?.loginType || "").toLowerCase()
+  const studentCode = String(req.body?.student_code || req.body?.studentCode || req.body?.admission_no || req.body?.admissionNo || "").trim()
+  const email = String(req.body?.email || "").trim().toLowerCase()
+  const useStudentLookup = loginType === "student" || Boolean(studentCode)
+
+  if (useStudentLookup) {
+    res.json({ appearance: null })
+    return
+  }
+
+  if (email.length < 3 || !email.includes("@")) {
+    res.json({ appearance: null })
+    return
+  }
+
+  const [users] = await pool.query(
+    "SELECT id FROM users WHERE LOWER(email) = ? AND role <> 'student' AND is_active = 1 LIMIT 1",
+    [email],
+  )
+  const userId = Number(users[0]?.id || 0)
+  res.json({ appearance: userId ? await getLoginAppearanceForUser(userId) : null })
 }
 
 export async function me(req, res) {
-  res.json({ user: await decorateSessionUser(req.user) })
+  const user = await decorateSessionUser(req.user)
+  setLastUserCookie(req, res, user)
+  res.json({ user })
 }
 
 function validateNewPassword(password) {
@@ -227,5 +346,6 @@ export async function changePassword(req, res) {
     mustChangePassword: false,
   }
   const decoratedUser = await decorateSessionUser(sessionUser)
+  setLastUserCookie(req, res, sessionUser)
   res.json({ token: signSession(decoratedUser), user: decoratedUser })
 }

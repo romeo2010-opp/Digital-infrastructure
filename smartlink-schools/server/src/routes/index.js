@@ -2,7 +2,36 @@ import { Router } from "express"
 import authRoutes from "./auth.routes.js"
 import { getDashboard } from "../controllers/dashboardController.js"
 import { listStudents, getStudent, createStudent, updateStudent, uploadStudentPhoto } from "../controllers/studentsController.js"
-import { listFeeAccounts, recordPayment } from "../controllers/feesController.js"
+import {
+  applyFeeStructure,
+  createDiscount,
+  createExpense,
+  createFeeStructure,
+  createPaymentPlan,
+  generateInvoices,
+  getBursarDashboard,
+  getFeeAccount,
+  getFinanceReports,
+  getPaymentReceiptPdf,
+  importBankTransactions,
+  listArrears,
+  listDiscounts,
+  listExpenses,
+  listFeeAccounts,
+  listFeeStructures,
+  listFinanceAuditLogs,
+  listInvoices,
+  listPaymentPlans,
+  listPayments,
+  listReconciliation,
+  matchBankTransaction,
+  recordPayment,
+  reversePayment,
+  syncFeeAccounts,
+  transitionBankTransaction,
+  transitionDiscount,
+  transitionExpense,
+} from "../controllers/feesController.js"
 import { listAttendance, markAttendance } from "../controllers/attendanceController.js"
 import { listHomework, createHomework } from "../controllers/homeworkController.js"
 import { listMessages, createMessage, uploadMessageImage } from "../controllers/messagesController.js"
@@ -84,6 +113,7 @@ import {
 import { listForecasts } from "../controllers/forecastController.js"
 import { getAiStatusController, getAiUsageSummaryController, testAiController, updateAiSettingsController } from "../controllers/aiController.js"
 import { getReportPdfSettingsController, updateReportPdfSettingsController } from "../controllers/reportSettingsController.js"
+import { getMyPreferences, updateMyPreferences } from "../controllers/preferencesController.js"
 import {
   approveExtractedItem,
   approveExtractedItems,
@@ -119,6 +149,31 @@ import {
 } from "../controllers/questionsController.js"
 import { adaptQuestionExplanation, flagQuestionExplanation, synthesizeQuestionExplanationSpeech } from "../controllers/explanationsController.js"
 import { getSchoolFeaturesController, updateSchoolFeaturesController } from "../controllers/schoolFeaturesController.js"
+import {
+  acceptExamLabCandidate,
+  archiveExamLabQuestion,
+  archiveExamLabTopicEntity,
+  createExamLabManualQuestion,
+  createExamLabMarkScheme,
+  generateExamLabPredictionReport,
+  getExamLabCoverage,
+  getExamLabDashboard,
+  getExamLabPaperReview,
+  getExamLabTopicMap,
+  listExamLabBacktests,
+  listExamLabPredictionReports,
+  listExamLabQuestions,
+  runExamLabBacktest,
+  saveExamLabSkill,
+  saveExamLabSubtopic,
+  saveExamLabTopic,
+  startExamLabExtraction,
+  suggestExamLabQuestionTags,
+  updateExamLabCandidate,
+  updateExamLabCoverageNote,
+  updateExamLabQuestion,
+  uploadExamLabPaper,
+} from "../controllers/examLabController.js"
 import {
   applyWeeklyActivitiesToVersionController,
   archiveBellScheduleController,
@@ -232,6 +287,7 @@ import {
   updateTeacherAssignment,
 } from "../controllers/teacherAssignmentsController.js"
 import { createTeacher, getTeacher, listTeachers } from "../controllers/teachersController.js"
+import { savePublicSchoolSetupDraft } from "../controllers/publicSetupController.js"
 import {
   approveResultBatch,
   getClassResultSheet,
@@ -257,30 +313,33 @@ import {
   updateSubject,
 } from "../controllers/schoolDataController.js"
 import { requireAuth, requirePasswordReady, requireRole } from "../middleware/auth.js"
+import { portalMutationInvalidationMiddleware } from "../realtime/portalInvalidationMiddleware.js"
 import { asyncHandler } from "../utils/http.js"
 
 const router = Router()
 
 router.use("/auth", authRoutes)
+router.post("/public/school-setup-drafts", asyncHandler(savePublicSchoolSetupDraft))
 router.use(requireAuth)
 router.use(requirePasswordReady)
+router.use(portalMutationInvalidationMiddleware)
 
-router.get("/dashboard", requireRole("school_owner", "headteacher", "teacher", "bursar"), asyncHandler(getDashboard))
+router.get("/dashboard", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(getDashboard))
 router.get("/student-portal", requireRole("student"), asyncHandler(getStudentPortal))
 router.post("/student-portal/announcements/:id/reaction", requireRole("student"), asyncHandler(reactToAnnouncement))
 router.post("/student-portal/announcements/:id/vote", requireRole("student"), asyncHandler(voteAnnouncementPoll))
-router.get("/timetables", requireRole("school_owner", "headteacher", "teacher", "bursar"), asyncHandler(listTimetablesController))
+router.get("/timetables", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(listTimetablesController))
 router.post("/timetables", requireRole("school_owner", "headteacher"), asyncHandler(createTimetableController))
-router.get("/timetables/setup-options", requireRole("school_owner", "headteacher", "teacher", "bursar"), asyncHandler(getTimetableSetupOptionsController))
+router.get("/timetables/setup-options", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(getTimetableSetupOptionsController))
 router.get("/timetables/generation-jobs/:jobId", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(getTimetableGenerationJobController))
 router.post("/timetables/generation-jobs/:jobId/cancel", requireRole("school_owner", "headteacher"), asyncHandler(cancelTimetableGenerationJobController))
-router.get("/timetables/:id", requireRole("school_owner", "headteacher", "teacher", "bursar"), asyncHandler(getTimetableController))
+router.get("/timetables/:id", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(getTimetableController))
 router.patch("/timetables/:id/setup", requireRole("school_owner", "headteacher"), asyncHandler(updateTimetableSetupController))
 router.post("/timetables/:id/archive", requireRole("school_owner", "headteacher"), asyncHandler(archiveTimetableController))
 router.get("/timetables/:id/audit", requireRole("school_owner", "headteacher"), asyncHandler(listTimetableAuditController))
-router.get("/timetables/:id/versions", requireRole("school_owner", "headteacher", "teacher", "bursar"), asyncHandler(listTimetableVersionsController))
+router.get("/timetables/:id/versions", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(listTimetableVersionsController))
 router.post("/timetables/:id/versions", requireRole("school_owner", "headteacher"), asyncHandler(createTimetableVersionController))
-router.get("/timetables/:id/versions/:versionId", requireRole("school_owner", "headteacher", "teacher", "bursar"), asyncHandler(getTimetableVersionController))
+router.get("/timetables/:id/versions/:versionId", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(getTimetableVersionController))
 router.post("/timetables/:id/versions/:versionId/clone", requireRole("school_owner", "headteacher"), asyncHandler(cloneTimetableVersionController))
 router.post("/timetables/:id/versions/:versionId/generate", requireRole("school_owner", "headteacher"), asyncHandler(startTimetableGenerationController))
 router.post("/timetables/:id/versions/:versionId/complete-with-solver", requireRole("school_owner", "headteacher"), asyncHandler(completeTimetableWithSolverController))
@@ -309,14 +368,16 @@ router.get("/ai/usage-summary", requireRole("school_owner", "headteacher"), asyn
 router.patch("/ai/settings", requireRole("school_owner", "headteacher"), asyncHandler(updateAiSettingsController))
 router.get("/school/features", requireRole("school_owner", "headteacher", "teacher", "bursar", "parent", "student"), asyncHandler(getSchoolFeaturesController))
 router.patch("/school/features", requireRole("school_owner", "headteacher"), asyncHandler(updateSchoolFeaturesController))
-router.get("/school/report-settings", requireRole("school_owner", "headteacher", "teacher", "bursar"), asyncHandler(getReportPdfSettingsController))
+router.get("/preferences/me", requireRole("school_owner", "headteacher", "teacher", "bursar", "parent", "student"), asyncHandler(getMyPreferences))
+router.patch("/preferences/me", requireRole("school_owner", "headteacher", "teacher", "bursar", "parent", "student"), asyncHandler(updateMyPreferences))
+router.get("/school/report-settings", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(getReportPdfSettingsController))
 router.patch("/school/report-settings", requireRole("school_owner", "headteacher"), asyncHandler(updateReportPdfSettingsController))
-router.get("/school/today", requireRole("school_owner", "headteacher", "teacher", "bursar", "parent", "student"), asyncHandler(getSchoolTodayController))
-router.get("/school/today/classes/:classId", requireRole("school_owner", "headteacher", "teacher", "bursar", "parent", "student"), asyncHandler(getSchoolTodayClassController))
+router.get("/school/today", requireRole("school_owner", "headteacher", "teacher", "parent", "student"), asyncHandler(getSchoolTodayController))
+router.get("/school/today/classes/:classId", requireRole("school_owner", "headteacher", "teacher", "parent", "student"), asyncHandler(getSchoolTodayClassController))
 router.get("/school/today/teachers/:teacherId", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(getSchoolTodayTeacherController))
-router.get("/school/today/facilities/:facilityId", requireRole("school_owner", "headteacher", "teacher", "bursar"), asyncHandler(getSchoolTodayFacilityController))
-router.get("/school/today/exams", requireRole("school_owner", "headteacher", "teacher", "bursar", "parent", "student"), asyncHandler(getSchoolTodayExamsController))
-router.get("/school/today/alerts", requireRole("school_owner", "headteacher", "teacher", "bursar"), asyncHandler(getSchoolTodayAlertsController))
+router.get("/school/today/facilities/:facilityId", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(getSchoolTodayFacilityController))
+router.get("/school/today/exams", requireRole("school_owner", "headteacher", "teacher", "parent", "student"), asyncHandler(getSchoolTodayExamsController))
+router.get("/school/today/alerts", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(getSchoolTodayAlertsController))
 router.post("/school/today/recalculate", requireRole("school_owner", "headteacher"), asyncHandler(recalculateSchoolTodayController))
 router.get("/scheduling/bell-schedules", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(listBellSchedulesController))
 router.get("/scheduling/bell-slot-tags", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(listBellSlotTagsController))
@@ -349,9 +410,9 @@ router.get("/scheduling/stream-scheduling-rules", requireRole("school_owner", "h
 router.post("/scheduling/stream-scheduling-rules", requireRole("school_owner", "headteacher"), asyncHandler(createStreamSchedulingRuleController))
 router.patch("/scheduling/stream-scheduling-rules/:id", requireRole("school_owner", "headteacher"), asyncHandler(updateStreamSchedulingRuleController))
 router.post("/scheduling/stream-scheduling-rules/:id/archive", requireRole("school_owner", "headteacher"), asyncHandler(archiveStreamSchedulingRuleController))
-router.get("/scheduling/facilities", requireRole("school_owner", "headteacher", "teacher", "bursar"), asyncHandler(listFacilitiesController))
+router.get("/scheduling/facilities", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(listFacilitiesController))
 router.post("/scheduling/facilities", requireRole("school_owner", "headteacher"), asyncHandler(createFacilityController))
-router.get("/scheduling/facilities/:id", requireRole("school_owner", "headteacher", "teacher", "bursar"), asyncHandler(getFacilityController))
+router.get("/scheduling/facilities/:id", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(getFacilityController))
 router.patch("/scheduling/facilities/:id", requireRole("school_owner", "headteacher"), asyncHandler(updateFacilityController))
 router.post("/scheduling/facilities/:id/archive", requireRole("school_owner", "headteacher"), asyncHandler(archiveFacilityController))
 router.post("/scheduling/facilities/:id/duplicate", requireRole("school_owner", "headteacher"), asyncHandler(duplicateFacilityController))
@@ -361,18 +422,18 @@ router.post("/scheduling/facilities/:id/availability", requireRole("school_owner
 router.post("/scheduling/facilities/validate-use", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(validateFacilityUseController))
 router.get("/scheduling/equipment", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(listEquipmentController))
 router.post("/scheduling/equipment", requireRole("school_owner", "headteacher"), asyncHandler(createEquipmentController))
-router.get("/scheduling/weekly-activities", requireRole("school_owner", "headteacher", "teacher", "bursar"), asyncHandler(listWeeklyActivitiesController))
+router.get("/scheduling/weekly-activities", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(listWeeklyActivitiesController))
 router.post("/scheduling/weekly-activities", requireRole("school_owner", "headteacher"), asyncHandler(createWeeklyActivityController))
 router.post("/scheduling/weekly-activities/validate", requireRole("school_owner", "headteacher"), asyncHandler(validateWeeklyActivityController))
-router.get("/scheduling/weekly-activities/:id", requireRole("school_owner", "headteacher", "teacher", "bursar"), asyncHandler(getWeeklyActivityController))
+router.get("/scheduling/weekly-activities/:id", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(getWeeklyActivityController))
 router.patch("/scheduling/weekly-activities/:id", requireRole("school_owner", "headteacher"), asyncHandler(updateWeeklyActivityController))
 router.post("/scheduling/weekly-activities/:id/archive", requireRole("school_owner", "headteacher"), asyncHandler(archiveWeeklyActivityController))
 router.post("/scheduling/weekly-activities/:id/duplicate", requireRole("school_owner", "headteacher"), asyncHandler(duplicateWeeklyActivityController))
-router.get("/scheduling/occupancy", requireRole("school_owner", "headteacher", "teacher", "bursar"), asyncHandler(listOccupancyController))
+router.get("/scheduling/occupancy", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(listOccupancyController))
 router.get("/scheduling/exam-availability-windows", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(calculateExamAvailabilityWindowsController))
-router.get("/classes", requireRole("school_owner", "headteacher", "teacher", "bursar"), asyncHandler(listClasses))
+router.get("/classes", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(listClasses))
 router.post("/classes", requireRole("school_owner", "headteacher"), asyncHandler(createClass))
-router.get("/classes/:id", requireRole("school_owner", "headteacher", "teacher", "bursar"), asyncHandler(getClass))
+router.get("/classes/:id", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(getClass))
 router.get("/academic-sessions", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(getAcademicSessionSummary))
 router.get("/academic-session/current", requireRole("school_owner", "headteacher", "teacher", "bursar"), asyncHandler(getCurrentAcademicSession))
 router.get("/academic-sessions/current", requireRole("school_owner", "headteacher", "teacher", "bursar"), asyncHandler(getCurrentAcademicSession))
@@ -412,8 +473,8 @@ router.post("/exam-sessions/:id/papers/bulk", requireRole("school_owner", "headt
 router.post("/exam-sessions/:id/papers/:paperId/status", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(transitionExamPaper))
 router.post("/exam-sessions/:id/timetable", requireRole("school_owner", "headteacher"), asyncHandler(createTimetableEntry))
 router.delete("/exam-sessions/:id/timetable/:entryId", requireRole("school_owner", "headteacher"), asyncHandler(deleteTimetableEntry))
-router.get("/report-cards/:id/pdf", requireRole("school_owner", "headteacher", "teacher", "bursar", "student"), asyncHandler(getReportCardPdf))
-router.get("/report-cards/:id", requireRole("school_owner", "headteacher", "teacher", "bursar", "student"), asyncHandler(getReportCard))
+router.get("/report-cards/:id/pdf", requireRole("school_owner", "headteacher", "teacher", "student"), asyncHandler(getReportCardPdf))
+router.get("/report-cards/:id", requireRole("school_owner", "headteacher", "teacher", "student"), asyncHandler(getReportCard))
 router.get("/subjects", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(listSubjects))
 router.post("/subjects", requireRole("school_owner", "headteacher"), asyncHandler(createSubject))
 router.patch("/subjects/:id", requireRole("school_owner", "headteacher"), asyncHandler(updateSubject))
@@ -428,12 +489,12 @@ router.post("/results/draft", requireRole("school_owner", "headteacher", "teache
 router.post("/results/submit", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(submitResults))
 router.post("/results/batches/:id/approve", requireRole("school_owner", "headteacher"), asyncHandler(approveResultBatch))
 router.post("/results/batches/:id/return", requireRole("school_owner", "headteacher"), asyncHandler(returnResultBatch))
-router.get("/reports", requireRole("school_owner", "headteacher", "teacher", "bursar"), asyncHandler(listReports))
+router.get("/reports", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(listReports))
 router.get("/users", requireRole("school_owner", "headteacher"), asyncHandler(listUsers))
 router.get("/teachers", requireRole("school_owner", "headteacher"), asyncHandler(listTeachers))
 router.post("/teachers", requireRole("school_owner", "headteacher"), asyncHandler(createTeacher))
 router.get("/teachers/:id", requireRole("school_owner", "headteacher"), asyncHandler(getTeacher))
-router.get("/search", requireRole("school_owner", "headteacher", "teacher", "bursar"), asyncHandler(quickSearch))
+router.get("/search", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(quickSearch))
 router.get("/teacher-assignments", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(listTeacherAssignments))
 router.post("/teacher-assignments", requireRole("school_owner", "headteacher"), asyncHandler(createTeacherAssignment))
 router.patch("/teacher-assignments/:id", requireRole("school_owner", "headteacher"), asyncHandler(updateTeacherAssignment))
@@ -451,20 +512,47 @@ router.post("/lesson-logs/:id/cancel", requireRole("school_owner", "headteacher"
 router.get("/classes/:classId/subjects/:subjectId/lesson-history", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(getClassLessonHistory))
 router.get("/classes/:classId/subjects/:subjectId/coverage", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(getClassSubjectCoverage))
 router.get("/admin/academic/coverage", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(getAcademicCoverage))
-router.get("/students", requireRole("school_owner", "headteacher", "teacher", "bursar"), asyncHandler(listStudents))
-router.get("/students/:id", requireRole("school_owner", "headteacher", "teacher", "bursar"), asyncHandler(getStudent))
+router.get("/students", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(listStudents))
+router.get("/students/:id", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(getStudent))
 router.patch("/students/:id", requireRole("school_owner", "headteacher"), asyncHandler(updateStudent))
 router.post("/students/photo", requireRole("school_owner", "headteacher"), asyncHandler(uploadStudentPhoto))
 router.post("/students", requireRole("school_owner", "headteacher"), asyncHandler(createStudent))
+router.get("/fees/dashboard", requireRole("school_owner", "headteacher", "bursar"), asyncHandler(getBursarDashboard))
 router.get("/fees", requireRole("school_owner", "headteacher", "bursar"), asyncHandler(listFeeAccounts))
+router.get("/fees/accounts", requireRole("school_owner", "headteacher", "bursar"), asyncHandler(listFeeAccounts))
+router.post("/fees/accounts/sync", requireRole("school_owner", "headteacher", "bursar"), asyncHandler(syncFeeAccounts))
+router.get("/fees/accounts/:id", requireRole("school_owner", "headteacher", "bursar"), asyncHandler(getFeeAccount))
+router.get("/fees/structures", requireRole("school_owner", "headteacher", "bursar"), asyncHandler(listFeeStructures))
+router.post("/fees/structures", requireRole("school_owner", "headteacher", "bursar"), asyncHandler(createFeeStructure))
+router.post("/fees/structures/:id/apply", requireRole("school_owner", "headteacher", "bursar"), asyncHandler(applyFeeStructure))
+router.get("/fees/invoices", requireRole("school_owner", "headteacher", "bursar"), asyncHandler(listInvoices))
+router.post("/fees/invoices/generate", requireRole("school_owner", "headteacher", "bursar"), asyncHandler(generateInvoices))
+router.get("/fees/payments", requireRole("school_owner", "headteacher", "bursar"), asyncHandler(listPayments))
 router.post("/fees/payments", requireRole("school_owner", "headteacher", "bursar"), asyncHandler(recordPayment))
+router.get("/fees/payments/:id/receipt.pdf", requireRole("school_owner", "headteacher", "bursar"), asyncHandler(getPaymentReceiptPdf))
+router.post("/fees/payments/:id/reverse", requireRole("school_owner", "headteacher"), asyncHandler(reversePayment))
+router.get("/fees/arrears", requireRole("school_owner", "headteacher", "bursar"), asyncHandler(listArrears))
+router.get("/fees/payment-plans", requireRole("school_owner", "headteacher", "bursar"), asyncHandler(listPaymentPlans))
+router.post("/fees/payment-plans", requireRole("school_owner", "headteacher", "bursar"), asyncHandler(createPaymentPlan))
+router.get("/fees/discounts", requireRole("school_owner", "headteacher", "bursar"), asyncHandler(listDiscounts))
+router.post("/fees/discounts", requireRole("school_owner", "headteacher", "bursar"), asyncHandler(createDiscount))
+router.post("/fees/discounts/:id/:action(approve|reject)", requireRole("school_owner", "headteacher"), asyncHandler(transitionDiscount))
+router.get("/fees/expenses", requireRole("school_owner", "headteacher", "bursar"), asyncHandler(listExpenses))
+router.post("/fees/expenses", requireRole("school_owner", "headteacher", "bursar"), asyncHandler(createExpense))
+router.post("/fees/expenses/:id/:action(approve|reject|pay)", requireRole("school_owner", "headteacher"), asyncHandler(transitionExpense))
+router.get("/fees/reconciliation", requireRole("school_owner", "headteacher", "bursar"), asyncHandler(listReconciliation))
+router.post("/fees/reconciliation/import", requireRole("school_owner", "headteacher", "bursar"), asyncHandler(importBankTransactions))
+router.post("/fees/reconciliation/:id/match", requireRole("school_owner", "headteacher", "bursar"), asyncHandler(matchBankTransaction))
+router.post("/fees/reconciliation/:id/:action(unmatch|ignore)", requireRole("school_owner", "headteacher", "bursar"), asyncHandler(transitionBankTransaction))
+router.get("/fees/reports", requireRole("school_owner", "headteacher", "bursar"), asyncHandler(getFinanceReports))
+router.get("/fees/audit", requireRole("school_owner", "headteacher", "bursar"), asyncHandler(listFinanceAuditLogs))
 router.get("/attendance", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(listAttendance))
 router.post("/attendance", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(markAttendance))
 router.get("/homework", requireRole("school_owner", "headteacher", "teacher", "parent", "student"), asyncHandler(listHomework))
 router.post("/homework", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(createHomework))
-router.get("/messages", requireRole("school_owner", "headteacher", "bursar", "teacher"), asyncHandler(listMessages))
-router.post("/messages/image", requireRole("school_owner", "headteacher", "bursar", "teacher"), asyncHandler(uploadMessageImage))
-router.post("/messages", requireRole("school_owner", "headteacher", "bursar", "teacher"), asyncHandler(createMessage))
+router.get("/messages", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(listMessages))
+router.post("/messages/image", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(uploadMessageImage))
+router.post("/messages", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(createMessage))
 router.get("/assessments/setup", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(getAssessmentBuilderSetup))
 router.get("/assessments", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(listAssessments))
 router.post("/assessments", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(createAssessment))
@@ -489,6 +577,33 @@ router.post("/explanations/speech", requireRole("school_owner", "headteacher", "
 router.get("/teacher/classes/:classId/drill-insights", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(getTeacherDrillInsights))
 router.get("/guardian/students/:studentId/drill-summary", requireRole("school_owner", "headteacher", "teacher", "parent"), asyncHandler(getGuardianDrillSummary))
 router.get("/exam-forecast", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(listForecasts))
+
+router.get("/internal/exam-lab/dashboard", requireRole("super_admin"), asyncHandler(getExamLabDashboard))
+router.get("/internal/exam-lab/coverage", requireRole("super_admin"), asyncHandler(getExamLabCoverage))
+router.patch("/internal/exam-lab/coverage", requireRole("super_admin"), asyncHandler(updateExamLabCoverageNote))
+router.post("/internal/exam-lab/papers", requireRole("super_admin"), asyncHandler(uploadExamLabPaper))
+router.post("/internal/exam-lab/papers/:paperId/extract", requireRole("super_admin"), asyncHandler(startExamLabExtraction))
+router.get("/internal/exam-lab/papers/:paperId/review", requireRole("super_admin"), asyncHandler(getExamLabPaperReview))
+router.patch("/internal/exam-lab/candidates/:candidateId", requireRole("super_admin"), asyncHandler(updateExamLabCandidate))
+router.post("/internal/exam-lab/candidates/:candidateId/accept", requireRole("super_admin"), asyncHandler(acceptExamLabCandidate))
+router.get("/internal/exam-lab/questions", requireRole("super_admin"), asyncHandler(listExamLabQuestions))
+router.post("/internal/exam-lab/questions", requireRole("super_admin"), asyncHandler(createExamLabManualQuestion))
+router.patch("/internal/exam-lab/questions/:questionId", requireRole("super_admin"), asyncHandler(updateExamLabQuestion))
+router.post("/internal/exam-lab/questions/:questionId/archive", requireRole("super_admin"), asyncHandler(archiveExamLabQuestion))
+router.get("/internal/exam-lab/topic-map", requireRole("super_admin"), asyncHandler(getExamLabTopicMap))
+router.post("/internal/exam-lab/topics", requireRole("super_admin"), asyncHandler(saveExamLabTopic))
+router.patch("/internal/exam-lab/topics/:id", requireRole("super_admin"), asyncHandler(saveExamLabTopic))
+router.post("/internal/exam-lab/subtopics", requireRole("super_admin"), asyncHandler(saveExamLabSubtopic))
+router.patch("/internal/exam-lab/subtopics/:id", requireRole("super_admin"), asyncHandler(saveExamLabSubtopic))
+router.post("/internal/exam-lab/skills", requireRole("super_admin"), asyncHandler(saveExamLabSkill))
+router.patch("/internal/exam-lab/skills/:id", requireRole("super_admin"), asyncHandler(saveExamLabSkill))
+router.post("/internal/exam-lab/topic-map/:entityType/:id/archive", requireRole("super_admin"), asyncHandler(archiveExamLabTopicEntity))
+router.post("/internal/exam-lab/mark-schemes", requireRole("super_admin"), asyncHandler(createExamLabMarkScheme))
+router.get("/internal/exam-lab/backtests", requireRole("super_admin"), asyncHandler(listExamLabBacktests))
+router.post("/internal/exam-lab/backtests", requireRole("super_admin"), asyncHandler(runExamLabBacktest))
+router.get("/internal/exam-lab/reports", requireRole("super_admin"), asyncHandler(listExamLabPredictionReports))
+router.post("/internal/exam-lab/reports", requireRole("super_admin"), asyncHandler(generateExamLabPredictionReport))
+router.post("/internal/exam-lab/ai/suggest-tags", requireRole("super_admin"), asyncHandler(suggestExamLabQuestionTags))
 
 router.get("/syllabus/setup", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(getSyllabusSetup))
 router.get("/syllabus/uploads", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(listSyllabusUploads))

@@ -33,7 +33,7 @@ function usageFromGeminiResponse(payload = {}) {
 export function createGeminiProvider(config = {}) {
   const model = config.model || "gemini-2.5-flash"
   const apiKey = config.apiKey || ""
-  const timeoutMs = positiveInt(config.timeoutMs, 60000)
+  const timeoutMs = positiveInt(config.timeoutMs, 180000)
 
   return {
     name: "gemini",

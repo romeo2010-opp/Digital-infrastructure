@@ -6,6 +6,9 @@ import { getPortalPacket, normalizePortalPacketKeys } from "./portalPackets.js"
 const WS_MAGIC = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 const PUSH_INTERVAL_MS = 30000
 const schoolDashboardRoles = new Set(["school_owner", "headteacher", "teacher", "bursar", "super_admin"])
+const schoolResourceRoles = new Set(["school_owner", "headteacher", "teacher", "bursar", "parent", "student", "super_admin"])
+const portalResources = new Set(["preferences", "schoolData", "studentPortal", "timetables", "examLab"])
+const portalClients = new Map()
 
 function acceptKey(key) {
   return crypto.createHash("sha1").update(`${key}${WS_MAGIC}`).digest("base64")
@@ -24,6 +27,97 @@ function sendFrame(socket, payload) {
     header.push(127, 0, 0, 0, 0, (body.length >> 24) & 0xff, (body.length >> 16) & 0xff, (body.length >> 8) & 0xff, body.length & 0xff)
   }
   socket.write(Buffer.concat([Buffer.from(header), body]))
+}
+
+function normalizeId(value) {
+  const number = Number(value)
+  return Number.isFinite(number) && number > 0 ? number : null
+}
+
+function userRole(user) {
+  return String(user?.role || "").toLowerCase()
+}
+
+function packetKeysForUser(user, keys = []) {
+  const requestedKeys = normalizePortalPacketKeys(keys)
+  const role = userRole(user)
+  return requestedKeys.filter((key) => {
+    if (key === "studentPortal") return role === "student"
+    if (key === "schoolDashboard") return schoolDashboardRoles.has(role)
+    return false
+  })
+}
+
+function normalizePortalResources(resources = []) {
+  const raw = Array.isArray(resources) ? resources : String(resources || "").split(",")
+  return [...new Set(raw.map((resource) => String(resource || "").trim()).filter((resource) => portalResources.has(resource)))]
+}
+
+function resourcesForUser(user, resources = []) {
+  const role = userRole(user)
+  return normalizePortalResources(resources).filter((resource) => {
+    if (resource === "preferences") return true
+    if (resource === "examLab") return role === "super_admin"
+    if (resource === "studentPortal") return role === "student"
+    if (resource === "schoolData" || resource === "timetables") return schoolResourceRoles.has(role)
+    return false
+  })
+}
+
+function matchesScope(user, { schoolId = null, userId = null } = {}) {
+  const scopedUserId = normalizeId(userId)
+  const scopedSchoolId = normalizeId(schoolId)
+  const currentRole = userRole(user)
+  if (scopedUserId && normalizeId(user?.id) !== scopedUserId) return false
+  if (!scopedSchoolId || currentRole === "super_admin") return true
+  return normalizeId(user?.schoolId) === scopedSchoolId
+}
+
+export function broadcastPortalInvalidation({
+  schoolId = null,
+  userId = null,
+  keys = [],
+  resources = [],
+  reason = "mutation",
+  actorUserId = null,
+} = {}) {
+  const requestedKeys = normalizePortalPacketKeys(keys)
+  const requestedResources = normalizePortalResources(resources)
+  const at = new Date().toISOString()
+  let sent = 0
+
+  portalClients.forEach((client, socket) => {
+    if (!socket.writable || socket.destroyed) {
+      portalClients.delete(socket)
+      return
+    }
+    if (!matchesScope(client.user, { schoolId, userId })) return
+
+    const permittedKeys = packetKeysForUser(client.user, requestedKeys)
+    const permittedResources = resourcesForUser(client.user, requestedResources)
+    if (!permittedKeys.length && !permittedResources.length) return
+
+    try {
+      sendFrame(socket, {
+        type: "mera_portal_invalidate",
+        keys: permittedKeys,
+        resources: permittedResources,
+        reason,
+        actorUserId: normalizeId(actorUserId),
+        at,
+      })
+      sent += 1
+    } catch {
+      portalClients.delete(socket)
+      try {
+        socket.destroy()
+      } catch {
+        // noop
+      }
+    }
+  })
+
+  return { sent }
 }
 
 function sendClose(socket, code = 1000, reason = "") {
@@ -146,6 +240,8 @@ export function attachPortalWebSocketServer(server) {
     )
 
     let buffered = Buffer.alloc(0)
+    const client = { user, connectedAt: Date.now() }
+    portalClients.set(socket, client)
     const pushTimer = setInterval(() => {
       const role = String(user.role || "").toLowerCase()
       const keys = role === "student" ? ["studentPortal"] : schoolDashboardRoles.has(role) ? ["schoolDashboard"] : []
@@ -183,7 +279,12 @@ export function attachPortalWebSocketServer(server) {
       }
     })
 
-    socket.on("close", () => clearInterval(pushTimer))
-    socket.on("error", () => clearInterval(pushTimer))
+    function cleanup() {
+      clearInterval(pushTimer)
+      portalClients.delete(socket)
+    }
+
+    socket.on("close", cleanup)
+    socket.on("error", cleanup)
   })
 }

@@ -6,6 +6,7 @@ import { HttpError } from "../utils/http.js"
 import { getScopedSchoolId, getTeacherClassIds, scopedInClause } from "../utils/tenantScope.js"
 import { generateStudentId, validateStudentSetupPayload } from "../services/studentSetupService.js"
 import { getActiveAcademicSession, requireActiveAcademicSession, sessionPayload } from "../services/academicSessionService.js"
+import { ensureFeeAccountsForActiveStudents } from "../services/financeAccountService.js"
 import { studentCodeSortSql } from "../utils/studentSort.js"
 
 const STUDENT_PHOTO_TYPES = new Set(["image/png", "image/jpeg"])
@@ -596,6 +597,12 @@ export async function createStudent(req, res) {
         student.enrollmentDate || activeSession.term.start_date,
       ],
     )
+
+    await ensureFeeAccountsForActiveStudents(schoolId, {
+      connection,
+      session: activeSession,
+      studentIds: [dbStudentId],
+    })
 
     await connection.commit()
     res.status(201).json({
