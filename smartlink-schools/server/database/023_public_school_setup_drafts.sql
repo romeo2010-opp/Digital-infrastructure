@@ -1,0 +1,20 @@
+CREATE TABLE IF NOT EXISTS public_school_setup_drafts (
+  id BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+  school_id BIGINT UNSIGNED NULL,
+  owner_user_id BIGINT UNSIGNED NULL,
+  draft_key VARCHAR(80) NOT NULL UNIQUE,
+  status ENUM('DRAFT', 'SUBMITTED') NOT NULL DEFAULT 'DRAFT',
+  school_name VARCHAR(180),
+  manager_name VARCHAR(160),
+  manager_email VARCHAR(190),
+  password_hash VARCHAR(255),
+  payload_json LONGTEXT NOT NULL,
+  source_host VARCHAR(180),
+  submitted_at TIMESTAMP NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  KEY idx_public_school_setup_school (school_id),
+  KEY idx_public_school_setup_owner (owner_user_id),
+  KEY idx_public_school_setup_status (status, updated_at),
+  KEY idx_public_school_setup_manager (manager_email)
+);
