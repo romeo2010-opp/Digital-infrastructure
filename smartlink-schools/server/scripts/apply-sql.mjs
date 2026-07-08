@@ -2,7 +2,9 @@ import fs from "fs"
 import path from "path"
 import mysql from "mysql2/promise"
 
-const files = process.argv.slice(2)
+const args = process.argv.slice(2)
+const relaxedForeignKeys = args.includes("--relaxed-foreign-keys")
+const files = args.filter((arg) => !arg.startsWith("--"))
 const databaseUrl = process.env.DATABASE_URL
 
 if (!databaseUrl) {
@@ -27,6 +29,10 @@ const connection = await mysql.createConnection({
 })
 
 try {
+  if (relaxedForeignKeys) {
+    console.log("Foreign key checks disabled for this import.")
+    await connection.query("SET FOREIGN_KEY_CHECKS = 0")
+  }
   for (const file of files) {
     const filePath = path.resolve(process.cwd(), file)
     const sql = sanitizeSql(fs.readFileSync(filePath, "utf8"))
@@ -37,7 +43,13 @@ try {
     console.log(`Applying ${file}`)
     await connection.query(sql)
   }
+  if (relaxedForeignKeys) {
+    await connection.query("SET FOREIGN_KEY_CHECKS = 1")
+  }
   console.log("Database SQL applied successfully.")
 } finally {
+  if (relaxedForeignKeys) {
+    await connection.query("SET FOREIGN_KEY_CHECKS = 1").catch(() => {})
+  }
   await connection.end()
 }
