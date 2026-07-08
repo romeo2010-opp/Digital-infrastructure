@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "vite build",
+    "build": "echo \"No server build step required\"",
     "db:apply": "node scripts/apply-sql.mjs",
     "dev": "node --watch src/server.js",
     "start": "node src/server.js"
