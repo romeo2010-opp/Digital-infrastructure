@@ -30,6 +30,12 @@ function filePathForRequest(url = "/") {
 }
 
 const server = createServer((req, res) => {
+  if (String(req.url || "").startsWith("/api/")) {
+    res.statusCode = 502
+    res.setHeader("Content-Type", "application/json; charset=utf-8")
+    res.end(JSON.stringify({ message: "API requests must be sent to the SmartLink Schools API service. Check VITE_SCHOOLS_API_BASE_URL and redeploy the web service." }))
+    return
+  }
   const filePath = filePathForRequest(req.url)
   const type = mimeTypes[path.extname(filePath).toLowerCase()] || "application/octet-stream"
   res.setHeader("Content-Type", type)
