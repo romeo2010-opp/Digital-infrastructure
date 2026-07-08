@@ -1,6 +1,6 @@
 [build]
 builder = "RAILPACK"
-buildCommand = ""
+buildCommand = "echo building"
 
 [deploy]
 startCommand = "npm start"
