@@ -24,7 +24,7 @@ Set:
 DATABASE_URL=<railway-mysql-connection-url>
 JWT_SECRET=<long-random-secret>
 CORS_ORIGIN=https://<smartlink-schools-web>.up.railway.app
-TIMETABLE_SOLVER_URL=http://${{timetable-solver.RAILWAY_PRIVATE_DOMAIN}}:${{timetable-solver.PORT}}
+TIMETABLE_SOLVER_URL=http://timetable-solver.railway.internal:7317
 TIMETABLE_SOLVER_INTERNAL_TOKEN=<same-secret-as-solver>
 AI_ENABLED=false
 SCHOOL_TIMEZONE=Africa/Blantyre
@@ -47,22 +47,31 @@ If you change the API domain, redeploy the web service so Vite rebuilds with the
 Set:
 
 ```bash
+PORT=7317
 TIMETABLE_SOLVER_INTERNAL_TOKEN=<same-secret-as-api>
 TIMETABLE_SOLVER_LOG_LEVEL=INFO
 ```
 
+If you name the solver service something other than `timetable-solver`, replace `timetable-solver.railway.internal` with that service's internal Railway hostname.
+
 ## Database Setup
 
-The API does not currently auto-run migrations. For a fresh Railway MySQL database, apply:
+The API does not currently auto-run database setup. For a fresh Railway MySQL database, apply the consolidated schema with the helper script:
 
 ```bash
-mysql "$DATABASE_URL" < smartlink-schools/server/database/schema.sql
-mysql "$DATABASE_URL" < smartlink-schools/server/database/024_bursar_finance_module.sql
-mysql "$DATABASE_URL" < smartlink-schools/server/database/028_finance_bursar_workflow_fixes.sql
-mysql "$DATABASE_URL" < smartlink-schools/server/database/029_finance_reconciliation_controls.sql
+cd smartlink-schools/server
+DATABASE_URL='mysql://USER:PASSWORD@HOST:PORT/DATABASE' npm run db:apply -- database/schema.sql
 ```
 
-For a realistic demo, load one of the seed files after the schema. Do not run demo seed files against production data.
+For a realistic demo, load seed data after the schema:
+
+```bash
+DATABASE_URL='mysql://USER:PASSWORD@HOST:PORT/DATABASE' npm run db:apply -- database/seed.sql
+```
+
+Use Railway's MySQL connection string from the database service. The helper removes local-only `CREATE DATABASE smartlink_schools` and `USE smartlink_schools` statements so the SQL loads into Railway's actual database.
+
+Do not run demo seed files against production data.
 
 ## Why Not Split Repositories?
 
