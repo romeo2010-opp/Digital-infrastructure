@@ -37,10 +37,19 @@ Add `GEMINI_API_KEY`, `AI_ENABLED=true`, and the Gemini variables later if you w
 Set this before building the frontend:
 
 ```bash
+SCHOOLS_API_BASE_URL=https://<smartlink-schools-api>.up.railway.app
 VITE_SCHOOLS_API_BASE_URL=https://<smartlink-schools-api>.up.railway.app
 ```
 
-If you change the API domain, redeploy the web service so Vite rebuilds with the new value.
+`SCHOOLS_API_BASE_URL` is read by the runtime static server through `/config.js`. `VITE_SCHOOLS_API_BASE_URL` is read during the Vite build. Set both for Railway testing.
+
+After deploy, verify:
+
+```bash
+curl https://<smartlink-schools-web>.up.railway.app/config.js
+```
+
+It should print the API domain. If it is empty, the web service variable is missing or the web service was not redeployed.
 
 ### `timetable-solver`
 

@@ -30,6 +30,17 @@ function filePathForRequest(url = "/") {
 }
 
 const server = createServer((req, res) => {
+  if (String(req.url || "").split("?")[0] === "/config.js") {
+    const apiBaseUrl =
+      process.env.SCHOOLS_API_BASE_URL ||
+      process.env.VITE_SCHOOLS_API_BASE_URL ||
+      process.env.VITE_API_BASE_URL ||
+      ""
+    res.setHeader("Content-Type", "text/javascript; charset=utf-8")
+    res.setHeader("Cache-Control", "no-store")
+    res.end(`window.__SMARTLINK_CONFIG__ = ${JSON.stringify({ apiBaseUrl })};\n`)
+    return
+  }
   if (String(req.url || "").startsWith("/api/")) {
     res.statusCode = 502
     res.setHeader("Content-Type", "application/json; charset=utf-8")

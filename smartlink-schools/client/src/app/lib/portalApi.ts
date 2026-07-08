@@ -1,10 +1,11 @@
 const storageKey = 'smartlink.schools.session'
-const apiBaseUrl =
-  import.meta.env.VITE_SCHOOLS_API_BASE_URL ||
-  import.meta.env.VITE_API_BASE_URL ||
-  ''
+function configuredApiBaseUrl() {
+  const runtimeConfig = typeof window !== 'undefined' ? (window as any).__SMARTLINK_CONFIG__ : null
+  return runtimeConfig?.apiBaseUrl || import.meta.env.VITE_SCHOOLS_API_BASE_URL || import.meta.env.VITE_API_BASE_URL || ''
+}
 
 function resolveApiOrigin() {
+  const apiBaseUrl = configuredApiBaseUrl()
   if (apiBaseUrl) {
     return new URL(apiBaseUrl, window.location.origin).origin
   }
