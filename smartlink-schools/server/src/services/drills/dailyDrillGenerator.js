@@ -125,7 +125,7 @@ async function topicScopeIds(connection, schoolId, subjectId, topicId) {
   const id = Number(topicId || 0)
   if (!id) return []
   const [rows] = await connection.query(
-    `SELECT DISTINCT scoped.id
+    `SELECT scoped.id
      FROM syllabus_topics seed
      JOIN syllabus_topics scoped ON scoped.school_id = seed.school_id
       AND scoped.subject_id = seed.subject_id

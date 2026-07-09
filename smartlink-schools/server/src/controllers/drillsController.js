@@ -197,20 +197,47 @@ export async function generateDrillForStudent(req, res) {
   const studentId = studentIdForRequest(req)
   if (!studentId) throw new HttpError(400, "Student is required")
   const connection = await pool.getConnection()
+  let transactionOpen = false
   try {
     await connection.beginTransaction()
+    transactionOpen = true
     const generated = await generateDailyDrill(connection, schoolId, studentId, {
       subjectId: req.body.subject_id || req.query.subject_id,
       topicId: req.body.topic_id || req.query.topic_id,
       scheduledDate: req.body.scheduled_date || req.query.scheduled_date,
       limit: req.body.limit || 5,
     })
+    if (!generated.ok) {
+      await connection.rollback()
+      transactionOpen = false
+      return res.status(409).json({
+        success: false,
+        error: "Daily Drill generation failed",
+        reason: generated.reason || "Unable to generate drill.",
+      })
+    }
     await connection.commit()
-    if (!generated.ok) throw new HttpError(409, generated.reason)
+    transactionOpen = false
     res.status(201).json(generated)
   } catch (error) {
-    await connection.rollback()
-    throw error
+    if (transactionOpen) await connection.rollback().catch(() => {})
+    const status = error.status && Number(error.status) < 500 ? Number(error.status) : 500
+    const reason = error.sqlMessage || error.message || "Unable to generate drill."
+    if (status >= 500) {
+      console.error("[daily-drill] generation failed", {
+        school_id: schoolId,
+        student_id: studentId,
+        code: error.code,
+        message: error.message,
+        sqlMessage: error.sqlMessage,
+        stack: error.stack,
+      })
+    }
+    res.status(status).json({
+      success: false,
+      error: "Daily Drill generation failed",
+      reason,
+    })
   } finally {
     connection.release()
   }

@@ -35,7 +35,8 @@ export function resolvePortalWebSocketUrl(pathname: string, params: Record<strin
 
 function parseResponse(response: Response, payload: any) {
   if (!response.ok || payload?.ok === false) {
-    throw new Error(payload?.error || payload?.message || `Request failed (${response.status})`)
+    const baseMessage = payload?.error || payload?.message || `Request failed (${response.status})`
+    throw new Error(payload?.reason ? `${baseMessage}: ${payload.reason}` : baseMessage)
   }
   return payload?.data ?? payload
 }
