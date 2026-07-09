@@ -278,7 +278,7 @@ function buildMarksheetHtml({
     <section class="heading">
       <img src="${escapeHtml(logoSrc || GREENHILL_LOGO_URL)}" alt="Greenhill logo" />
       <div>
-        <h1>GREENHILL SECONDARY SCHOOL</h1>
+        <h1>REIGN INTERNATIONAL ACADEMY</h1>
         <h2>${escapeHtml(title.toUpperCase())}</h2>
         ${subtitle ? `<div class="meta">${escapeHtml(subtitle)}</div>` : ''}
       </div>
