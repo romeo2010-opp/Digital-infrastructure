@@ -15,12 +15,40 @@ import {
   jsonString,
   normalizeTimetable,
   normalizeVersion,
+  parseJson,
   sourceHash,
 } from "./timetabling.helpers.js"
 
 const TIMETABLE_TYPES = ["SCHOOL_TIMETABLE", "EXAM_TIMETABLE"]
 const CYCLE_TYPES = ["NORMAL_WEEK", "WEEK_A_WEEK_B", "ROTATING_CYCLE", "DATED_EXAM_SESSIONS", "CUSTOM"]
 const CREATION_METHODS = ["MANUAL", "ASSISTED", "AUTOMATIC", "CLONED", "IMPORTED"]
+
+function positiveInt(value, fallback = 1) {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed) || parsed < 1) return fallback
+  return Math.floor(parsed)
+}
+
+async function loadTimetablePolicy(connection, schoolId) {
+  const [[row]] = await connection.query(
+    "SELECT setting_value FROM school_settings WHERE school_id = ? AND setting_key = 'timetable_policy' LIMIT 1",
+    [schoolId],
+  )
+  return {
+    timetable_cycle_weeks: 1,
+    max_timetable_cycle_weeks: 4,
+    allow_duplicate_weeks: false,
+    default_half_day_closing_time: "12:00:00",
+    ...(parseJson(row?.setting_value, {}) || {}),
+  }
+}
+
+function normalizeCycleWeeks(value, fallback = 1, policy = {}) {
+  const maxWeeks = Math.max(1, Math.min(52, positiveInt(policy.max_timetable_cycle_weeks ?? policy.maxTimetableCycleWeeks, 4)))
+  const weeks = positiveInt(value, positiveInt(fallback, 1))
+  if (weeks > maxWeeks) throw new HttpError(400, `timetable_cycle_weeks cannot exceed ${maxWeeks} for this school policy`)
+  return Math.max(1, weeks)
+}
 
 async function assertTimetableTypeFeature(connection, schoolId, timetableType) {
   return assertSchoolFeatureEnabled(connection, schoolId, timetableFeatureKey(timetableType))
@@ -189,7 +217,7 @@ export async function getTimetableSetupOptions(req) {
   const features = await getSchoolFeatures(pool, schoolId)
   const availableTypes = await enabledTimetableTypes(pool, schoolId)
   if (!availableTypes.length) throw new HttpError(403, "Timetable features are disabled in school settings")
-  const [[years], [terms], [classes], [subjects], [teachers], [rooms], [facilities], [equipment], [weeklyActivities], [bellTemplates], [bellSlots], [examSessions], [assessments]] = await Promise.all([
+  const [[years], [terms], [classes], [subjects], [teachers], [rooms], [facilities], [equipment], [weeklyActivities], [bellTemplates], [bellSlots], [examSessions], [assessments], timetablePolicy] = await Promise.all([
     pool.query("SELECT id, name, start_date, end_date, status, is_active FROM academic_years WHERE school_id = ? ORDER BY start_date DESC", [schoolId]),
     pool.query("SELECT id, academic_year_id, name, term_number, start_date, end_date, status FROM terms WHERE school_id = ? ORDER BY start_date DESC", [schoolId]),
     pool.query("SELECT id, name, grade_level, teacher_user_id FROM classes WHERE school_id = ? ORDER BY name", [schoolId]),
@@ -220,15 +248,21 @@ export async function getTimetableSetupOptions(req) {
     ),
     pool.query("SELECT id, name, academic_year_id, term_id, exam_type, start_date, end_date, status FROM exam_sessions WHERE school_id = ? ORDER BY start_date DESC", [schoolId]),
     pool.query("SELECT id, name, exam_session_id, academic_year_id, term_id, class_id, subject_id, total_marks, duration_minutes, status FROM assessments WHERE school_id = ? AND status <> 'archived' ORDER BY updated_at DESC LIMIT 200", [schoolId]),
+    loadTimetablePolicy(pool, schoolId),
   ])
-  return { years, terms, classes, subjects, teachers, rooms, facilities, equipment, weekly_activities: weeklyActivities, bell_templates: bellTemplates, bell_slots: bellSlots, exam_sessions: examSessions, assessments, features, available_types: availableTypes }
+  return { years, terms, classes, subjects, teachers, rooms, facilities, equipment, weekly_activities: weeklyActivities, bell_templates: bellTemplates, bell_slots: bellSlots, exam_sessions: examSessions, assessments, timetable_policy: timetablePolicy, features, available_types: availableTypes }
 }
 
 export async function createTimetable(req) {
   const schoolId = getScopedSchoolId(req)
   const timetableType = enumValue(req.body.timetable_type || req.body.timetableType, TIMETABLE_TYPES, "SCHOOL_TIMETABLE", "timetable_type")
   await assertTimetableTypeFeature(pool, schoolId, timetableType)
-  const cycleType = enumValue(req.body.cycle_type || req.body.cycleType, CYCLE_TYPES, timetableType === "EXAM_TIMETABLE" ? "DATED_EXAM_SESSIONS" : "NORMAL_WEEK", "cycle_type")
+  const timetablePolicy = await loadTimetablePolicy(pool, schoolId)
+  const timetableCycleWeeks = timetableType === "SCHOOL_TIMETABLE"
+    ? normalizeCycleWeeks(req.body.timetable_cycle_weeks || req.body.timetableCycleWeeks, timetablePolicy.timetable_cycle_weeks || 1, timetablePolicy)
+    : 1
+  const defaultCycleType = timetableType === "EXAM_TIMETABLE" ? "DATED_EXAM_SESSIONS" : timetableCycleWeeks > 1 ? "ROTATING_CYCLE" : "NORMAL_WEEK"
+  const cycleType = enumValue(req.body.cycle_type || req.body.cycleType, CYCLE_TYPES, defaultCycleType, "cycle_type")
   const name = cleanText(req.body.name)
   if (!name) throw new HttpError(400, "Timetable name is required")
   const academicYearId = idValue(req.body.academic_year_id || req.body.academicYearId, "academic_year_id", true)
@@ -243,17 +277,17 @@ export async function createTimetable(req) {
     await connection.beginTransaction()
     const [result] = await connection.query(
       `INSERT INTO timetables (
-        school_id, timetable_type, name, academic_year_id, term_id, cycle_type, effective_from, effective_to,
+        school_id, timetable_type, name, academic_year_id, term_id, cycle_type, timetable_cycle_weeks, effective_from, effective_to,
         status, setup_progress, created_by
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'SETUP', ?, ?)`,
-      [schoolId, timetableType, name, academicYearId, termId, cycleType, effectiveFrom, effectiveTo, jsonString(req.body.setup_progress || req.body.setupProgress || {}, {}), req.user.id],
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'SETUP', ?, ?)`,
+      [schoolId, timetableType, name, academicYearId, termId, cycleType, timetableCycleWeeks, effectiveFrom, effectiveTo, jsonString(req.body.setup_progress || req.body.setupProgress || {}, {}), req.user.id],
     )
     const timetableId = Number(result.insertId)
     const [versionResult] = await connection.query(
       `INSERT INTO timetable_versions (
         timetable_id, version_number, status, creation_method, configuration_snapshot, source_snapshot_hash, created_by
       ) VALUES (?, 1, 'SETUP', 'MANUAL', ?, ?, ?)`,
-      [timetableId, jsonString({ created_from: "initial_setup" }, {}), sourceHash({ schoolId, timetableType, academicYearId, termId, effectiveFrom, effectiveTo }), req.user.id],
+      [timetableId, jsonString({ created_from: "initial_setup", timetable_cycle_weeks: timetableCycleWeeks }, {}), sourceHash({ schoolId, timetableType, academicYearId, termId, effectiveFrom, effectiveTo, timetableCycleWeeks }), req.user.id],
     )
     if (req.body.create_default_schedule !== false) {
       if (timetableType === "SCHOOL_TIMETABLE") await seedDefaultSchoolCycle(connection, schoolId, timetableId, req.user.id)
@@ -268,7 +302,7 @@ export async function createTimetable(req) {
       action: "TIMETABLE_CREATED",
       entityType: "timetable",
       entityId: timetableId,
-      newValues: { timetable_type: timetableType, name, academic_year_id: academicYearId, term_id: termId },
+      newValues: { timetable_type: timetableType, name, academic_year_id: academicYearId, term_id: termId, timetable_cycle_weeks: timetableCycleWeeks },
     })
     await connection.commit()
     return getTimetableById({ ...req, params: { id: timetableId } })
@@ -333,7 +367,7 @@ export async function getTimetableById(req) {
        LEFT JOIN bell_schedule_slots ss ON ss.id = e.slot_start_id
        LEFT JOIN bell_schedule_slots es ON es.id = e.slot_end_id
        WHERE tv.timetable_id = ?
-       ORDER BY tv.version_number DESC, cd.sort_order, ss.sort_order
+       ORDER BY tv.version_number DESC, COALESCE(e.cycle_week, 1), cd.sort_order, ss.sort_order
        LIMIT 300`,
       [timetableId],
     ),
@@ -358,9 +392,13 @@ export async function updateTimetableSetup(req) {
   await assertTimetableFeature(pool, schoolId, timetable)
   if (["PUBLISHED", "SUPERSEDED", "ARCHIVED"].includes(timetable.status)) throw new HttpError(409, "Published or archived timetables cannot be edited directly")
 
+  const timetablePolicy = await loadTimetablePolicy(pool, schoolId)
   const patch = {
     name: cleanText(req.body.name || timetable.name),
     cycle_type: req.body.cycle_type || req.body.cycleType ? enumValue(req.body.cycle_type || req.body.cycleType, CYCLE_TYPES, timetable.cycle_type, "cycle_type") : timetable.cycle_type,
+    timetable_cycle_weeks: timetable.timetable_type === "SCHOOL_TIMETABLE"
+      ? normalizeCycleWeeks(req.body.timetable_cycle_weeks ?? req.body.timetableCycleWeeks, timetable.timetable_cycle_weeks || 1, timetablePolicy)
+      : 1,
     effective_from: dateOnly(req.body.effective_from || req.body.effectiveFrom || timetable.effective_from, "effective_from", true),
     effective_to: dateOnly(req.body.effective_to || req.body.effectiveTo || timetable.effective_to, "effective_to", true),
     setup_progress: req.body.setup_progress || req.body.setupProgress || timetable.setup_progress || {},
@@ -369,9 +407,9 @@ export async function updateTimetableSetup(req) {
 
   await pool.query(
     `UPDATE timetables
-     SET name = ?, cycle_type = ?, effective_from = ?, effective_to = ?, setup_progress = ?, status = 'VALIDATION_REQUIRED'
+     SET name = ?, cycle_type = ?, timetable_cycle_weeks = ?, effective_from = ?, effective_to = ?, setup_progress = ?, status = 'VALIDATION_REQUIRED'
      WHERE school_id = ? AND id = ?`,
-    [patch.name, patch.cycle_type, patch.effective_from, patch.effective_to, jsonString(patch.setup_progress, {}), schoolId, timetableId],
+    [patch.name, patch.cycle_type, patch.timetable_cycle_weeks, patch.effective_from, patch.effective_to, jsonString(patch.setup_progress, {}), schoolId, timetableId],
   )
   await recordTimetableAudit({
     schoolId,
@@ -446,11 +484,11 @@ export async function createVersion(req) {
     if (parentVersionId) {
       await connection.query(
         `INSERT INTO timetable_entries (
-          timetable_version_id, cycle_day_id, calendar_date, slot_start_id, slot_end_id, entry_type, subject_id,
+          timetable_version_id, cycle_week, cycle_day_id, calendar_date, slot_start_id, slot_end_id, entry_type, subject_id,
           class_id, stream_section, student_group_id, teacher_id, room_id, facility_id, source_requirement_id, source_weekly_activity_id,
           assessment_id, exam_session_id, title, locked, lock_reason, manually_modified, modification_reason, created_by
         )
-        SELECT ?, cycle_day_id, calendar_date, slot_start_id, slot_end_id, entry_type, subject_id,
+        SELECT ?, COALESCE(cycle_week, 1), cycle_day_id, calendar_date, slot_start_id, slot_end_id, entry_type, subject_id,
           class_id, stream_section, student_group_id, teacher_id, room_id, facility_id, source_requirement_id, source_weekly_activity_id,
           assessment_id, exam_session_id, title, locked, lock_reason, manually_modified, modification_reason, ?
         FROM timetable_entries
@@ -503,7 +541,7 @@ export async function getVersionById(req) {
      LEFT JOIN bell_schedule_slots ss ON ss.id = e.slot_start_id
      LEFT JOIN bell_schedule_slots es ON es.id = e.slot_end_id
      WHERE e.timetable_version_id = ?
-     ORDER BY COALESCE(e.calendar_date, '9999-12-31'), cd.sort_order, ss.sort_order, e.id`,
+     ORDER BY COALESCE(e.calendar_date, '9999-12-31'), COALESCE(e.cycle_week, 1), cd.sort_order, ss.sort_order, e.id`,
     [versionId],
   )
   const [slots] = await pool.query(
@@ -634,7 +672,7 @@ export async function getStreamRuleReport(req) {
       [schoolId, timetable.academic_year_id, timetable.term_id],
     ),
     pool.query(
-      `SELECT e.id, e.subject_id, e.class_id, e.stream_section, subj.name AS subject_name, c.name AS class_name,
+      `SELECT e.id, e.cycle_week, e.subject_id, e.class_id, e.stream_section, subj.name AS subject_name, c.name AS class_name,
         c.grade_level, cd.display_name AS cycle_day_name, st.id AS slot_start_id, st.display_name AS start_slot_name
        FROM timetable_entries e
        JOIN bell_schedule_slots st ON st.id = e.slot_start_id
@@ -648,7 +686,7 @@ export async function getStreamRuleReport(req) {
   ])
   const groups = new Map()
   entries.forEach((entry) => {
-    const key = [entry.class_id || entry.grade_level || "school", entry.subject_id, entry.cycle_day_name, entry.slot_start_id].join(":")
+    const key = [entry.class_id || entry.grade_level || "school", entry.subject_id, entry.cycle_week || 1, entry.cycle_day_name, entry.slot_start_id].join(":")
     groups.set(key, [...(groups.get(key) || []), entry])
   })
   const parallelGroups = [...groups.values()].filter((items) => new Set(items.map((item) => item.stream_section)).size > 1)
@@ -667,6 +705,7 @@ export async function getStreamRuleReport(req) {
       subject_name: items[0].subject_name,
       class_id: items[0].class_id,
       class_name: items[0].class_name,
+      cycle_week: Number(items[0].cycle_week || 1),
       cycle_day_name: items[0].cycle_day_name,
       slot_start_id: items[0].slot_start_id,
       start_slot_name: items[0].start_slot_name,
@@ -718,13 +757,14 @@ export async function createEntry(req) {
     assertNoBlockingConflicts(conflicts)
     const [result] = await connection.query(
       `INSERT INTO timetable_entries (
-        timetable_version_id, cycle_day_id, calendar_date, slot_start_id, slot_end_id, entry_type,
+        timetable_version_id, cycle_week, cycle_day_id, calendar_date, slot_start_id, slot_end_id, entry_type,
         subject_id, class_id, stream_section, teacher_id, assistant_teacher_id, room_id, facility_id, source_requirement_id,
         source_weekly_activity_id, required_equipment_json, assessment_id, exam_session_id, title, locked, manually_modified,
         modification_reason, created_by, updated_by, notify_on_publication
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`,
       [
         versionId,
+        normalizeCycleWeeks(req.body.cycle_week || req.body.cycleWeek, 1, { max_timetable_cycle_weeks: timetable.timetable_cycle_weeks || 1 }),
         idValue(req.body.cycle_day_id || req.body.cycleDayId),
         req.body.calendar_date || req.body.calendarDate || null,
         idValue(req.body.slot_start_id || req.body.slotStartId, "slot_start_id", true),
@@ -787,6 +827,7 @@ function entryPayload(row) {
   return {
     id: row.id,
     entry_id: row.id,
+    cycle_week: row.cycle_week || 1,
     entry_type: row.entry_type,
     title: row.title,
     calendar_date: row.calendar_date,

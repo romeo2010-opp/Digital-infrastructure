@@ -14,6 +14,7 @@ function timeText(value) {
 }
 
 function dateText(value) {
+  if (value instanceof Date) return value.toISOString().slice(0, 10)
   return value ? String(value).slice(0, 10) : null
 }
 
@@ -173,6 +174,9 @@ function withLockedAssignments(requirements, fixedEntries) {
     lockedAssignments: lockedEntries
       .filter((entry) => fixedEntryMatchesRequirement(entry, requirement))
       .sort((a, b) => {
+        const weekA = Number(a.cycleWeek || 1)
+        const weekB = Number(b.cycleWeek || 1)
+        if (weekA !== weekB) return weekA - weekB
         const dayA = Number(a.cycleDayId || 0)
         const dayB = Number(b.cycleDayId || 0)
         if (dayA !== dayB) return dayA - dayB
@@ -216,6 +220,32 @@ function dateRange(start, end) {
     current.setUTCDate(current.getUTCDate() + 1)
   }
   return dates
+}
+
+function timetableCycleWeeks(timetable) {
+  const parsed = Number(timetable?.timetable_cycle_weeks || timetable?.timetableCycleWeeks || 1)
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 1
+}
+
+function cycleWeekForDate(timetable, value) {
+  const cycleWeeks = timetableCycleWeeks(timetable)
+  const start = new Date(`${dateText(timetable?.effective_from)}T00:00:00Z`)
+  const current = new Date(`${dateText(value)}T00:00:00Z`)
+  if (Number.isNaN(start.getTime()) || Number.isNaN(current.getTime()) || current < start) return 1
+  const weekIndex = Math.floor((current.getTime() - start.getTime()) / (7 * 86400000))
+  return (weekIndex % cycleWeeks) + 1
+}
+
+function cycleWeekRows(count) {
+  return Array.from({ length: Math.max(1, Number(count || 1)) }, (_, index) => ({
+    weekNumber: index + 1,
+    name: `Week ${index + 1}`,
+  }))
+}
+
+function slotEndAfter(slot, cutoff) {
+  if (!slot?.endTime || !cutoff) return false
+  return String(slot.endTime).slice(0, 8) > String(cutoff).slice(0, 8)
 }
 
 async function loadFacilities(connection, schoolId) {
@@ -392,6 +422,56 @@ async function loadBellSlotTags(connection, schoolId, templateIds) {
     tagCodes: tags.map((tag) => tag.tagCode),
     tags,
   }))
+}
+
+async function loadLessonSuspensionOccupancy(connection, schoolId, timetable, bellContext) {
+  const [rows] = await connection.query(
+    `SELECT *
+     FROM school_closure_dates
+     WHERE school_id = ? AND active = 1 AND blocks_lessons = 1
+      AND closure_date BETWEEN ? AND ?
+      AND (academic_year_id IS NULL OR academic_year_id = ?)
+      AND (term_id IS NULL OR term_id = ?)`,
+    [schoolId, dateText(timetable.effective_from), dateText(timetable.effective_to), timetable.academic_year_id, timetable.term_id],
+  )
+  const dayByWeekday = new Map((bellContext.cycleDays || []).filter((day) => day.weekday).map((day) => [Number(day.weekday), day]))
+  const slotsForDay = (dayId) => (bellContext.bellScheduleSlots || [])
+    .filter((slot) => slot.teachingAllowed && (!slot.cycleDayIds?.length || slot.cycleDayIds.includes(String(dayId))))
+    .sort((left, right) => Number(left.sortOrder || left.slotNumber || 0) - Number(right.sortOrder || right.slotNumber || 0))
+  const occupancy = []
+  rows.forEach((row) => {
+    const impact = String(row.class_impact || (row.blocks_lessons ? "ALL_CLASSES_SUSPENDED" : "NO_CLASSES_SUSPENDED")).toUpperCase()
+    if (impact === "NO_CLASSES_SUSPENDED") return
+    const day = dayByWeekday.get(Number(weekdayFromDate(row.closure_date)))
+    if (!day?.id) return
+    const daySlots = slotsForDay(day.id)
+    if (!daySlots.length) return
+    const blockedSlots = impact === "HALF_DAY"
+      ? daySlots.filter((slot) => slotEndAfter(slot, row.half_day_closing_time || "12:00:00"))
+      : daySlots
+    if (!blockedSlots.length) return
+    occupancy.push({
+      resourceType: "SCHOOL",
+      resourceId: sid(schoolId),
+      date: dateText(row.closure_date),
+      cycleWeek: cycleWeekForDate(timetable, row.closure_date),
+      cycleDayId: day.id,
+      startSlotId: blockedSlots[0].id,
+      endSlotId: blockedSlots[blockedSlots.length - 1].id,
+      occupancyType: impact,
+      sourceEntityType: "school_closure_date",
+      sourceEntityId: sid(row.id),
+      title: row.title || (impact === "HALF_DAY" ? "Half-day holiday" : "Holiday"),
+      blocking: true,
+      canOverride: false,
+      priority: 100,
+      metadata: {
+        classImpact: impact,
+        halfDayClosingTime: row.half_day_closing_time || null,
+      },
+    })
+  })
+  return occupancy
 }
 
 async function loadSubjectFocusSettings(connection, schoolId, academicYearId, termId) {
@@ -601,6 +681,7 @@ async function loadFixedEntries(connection, versionId) {
     assistantTeacherId: sid(row.assistant_teacher_id),
     facilityId: sid(row.facility_id),
     equipmentIds: jsonArray(row.required_equipment_json),
+    cycleWeek: Number(row.cycle_week || 1),
     cycleDayId: sid(row.cycle_day_id),
     slotStartId: sid(row.slot_start_id),
     slotEndId: sid(row.slot_end_id || row.slot_start_id),
@@ -704,7 +785,8 @@ async function loadSubjects(connection, schoolId) {
 export async function buildSchoolTimetableSolverPayload(connection, schoolId, timetable, version, options = {}) {
   const bellContext = await loadBellContext(connection, schoolId, timetable.id)
   const includeExistingEntries = options.includeExistingEntries !== false
-  const [teachers, classes, subjects, facilities, equipment, weeklyActivities, rawFixedEntries, teacherAvailability, facilityAvailability, rawCurriculumRequirements, bellScheduleSlotTags, focusSettings, streamSchedulingRules] = await Promise.all([
+  const cycleWeekCount = timetableCycleWeeks(timetable)
+  const [teachers, classes, subjects, facilities, equipment, weeklyActivities, rawFixedEntries, teacherAvailability, facilityAvailability, rawCurriculumRequirements, bellScheduleSlotTags, focusSettings, streamSchedulingRules, lessonSuspensions] = await Promise.all([
     loadTeachers(connection, schoolId),
     loadClasses(connection, schoolId, timetable.academic_year_id, timetable.term_id),
     loadSubjects(connection, schoolId),
@@ -718,6 +800,7 @@ export async function buildSchoolTimetableSolverPayload(connection, schoolId, ti
     loadBellSlotTags(connection, schoolId, bellContext.selectedTemplateIds),
     loadSubjectFocusSettings(connection, schoolId, timetable.academic_year_id, timetable.term_id),
     loadStreamSchedulingRules(connection, schoolId, timetable.academic_year_id, timetable.term_id),
+    loadLessonSuspensionOccupancy(connection, schoolId, timetable, bellContext),
   ])
   const fixedEntries = includeExistingEntries ? filterFixedEntriesForBellContext(rawFixedEntries, bellContext) : []
   const classHomeFacilityIds = inferClassHomeFacilities(classes, facilities)
@@ -727,6 +810,8 @@ export async function buildSchoolTimetableSolverPayload(connection, schoolId, ti
     academicYearId: sid(timetable.academic_year_id),
     termId: sid(timetable.term_id),
     timetableVersionId: sid(version.id),
+    timetableCycleWeeks: cycleWeekCount,
+    cycleWeeks: cycleWeekRows(cycleWeekCount),
     cycleDays: bellContext.cycleDays,
     bellScheduleSlots: bellContext.bellScheduleSlots,
     bellScheduleSlotTags,
@@ -748,7 +833,7 @@ export async function buildSchoolTimetableSolverPayload(connection, schoolId, ti
     streamSchedulingRules,
     teacherAvailability,
     facilityAvailability,
-    existingOccupancy: [],
+    existingOccupancy: lessonSuspensions,
     hardConstraints: [],
     softConstraints: [],
     strategy: String(options.strategy || "BALANCED").toUpperCase(),

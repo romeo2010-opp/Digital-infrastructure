@@ -120,6 +120,11 @@ function entryCoversSlot(entry: any, slot: any, slotIndex: Map<string, number>) 
   return current >= start && current <= end
 }
 
+function cycleWeekCount(timetable: any) {
+  const value = Number(timetable?.timetable_cycle_weeks || timetable?.timetableCycleWeeks || 1)
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : 1
+}
+
 function entryBelongsToClass(entry: any, classId: any) {
   if (!classId) return false
   if (sameId(entry.class_id, classId)) return true
@@ -136,6 +141,7 @@ function ClassTimetableGrid({
   bellSlots,
   dayTemplates,
   entries,
+  timetableCycleWeeks = 1,
 }: {
   classes: any[]
   selectedClassId: string
@@ -144,7 +150,10 @@ function ClassTimetableGrid({
   bellSlots: any[]
   dayTemplates: any[]
   entries: any[]
+  timetableCycleWeeks?: number
 }) {
+  const weeks = Array.from({ length: Math.max(1, Number(timetableCycleWeeks || 1)) }, (_, index) => index + 1)
+  const [selectedWeek, setSelectedWeek] = useState(1)
   const selectedClass = classes.find((row) => sameId(row.id, selectedClassId))
   const slots = [...(bellSlots || [])].sort((a, b) => slotSortValue(a, 0) - slotSortValue(b, 0))
   const days = [...(cycleDays || [])].filter((day) => Number(day.active ?? 1) === 1)
@@ -166,17 +175,30 @@ function ClassTimetableGrid({
   }))
   const rowSlots = Array.from(rowSlotMap.values()).sort((a, b) => slotSortValue(a, 0) - slotSortValue(b, 0) || String(a.start_time || '').localeCompare(String(b.start_time || '')))
   const slotIndex = new Map(slots.map((slot, index) => [String(slot.id), index]))
-  const selectedEntries = entries.filter((entry) => entryBelongsToClass(entry, selectedClassId))
+  useEffect(() => {
+    if (!weeks.includes(selectedWeek)) setSelectedWeek(1)
+  }, [selectedWeek, weeks.length])
+
+  const selectedEntries = entries.filter((entry) => entryBelongsToClass(entry, selectedClassId) && Number(entry.cycle_week || entry.cycleWeek || 1) === selectedWeek)
 
   return (
     <SectionCard
       title="Class Timetable"
       subtitle={selectedClass ? `${selectedClass.name} weekly view in timetable-grid format.` : 'Choose a class to view the timetable grid.'}
       actions={
-        <select value={selectedClassId} onChange={(event) => onSelectClass(event.target.value)} className={`${selectClassName()} max-w-[220px]`}>
-          <option value="">Select class</option>
-          {classes.map((row) => <option key={row.id} value={row.id}>{row.name}</option>)}
-        </select>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {weeks.length > 1 ? (
+            <div className="flex rounded-[5px] border border-[#d9dce3] bg-white p-0.5">
+              {weeks.map((week) => (
+                <button key={week} type="button" onClick={() => setSelectedWeek(week)} className={`h-7 rounded-[4px] px-2 text-[11px] font-bold ${selectedWeek === week ? 'bg-[#111827] text-white' : 'text-[#64748b] hover:bg-[#f3f4f6]'}`}>Week {week}</button>
+              ))}
+            </div>
+          ) : null}
+          <select value={selectedClassId} onChange={(event) => onSelectClass(event.target.value)} className={`${selectClassName()} max-w-[220px]`}>
+            <option value="">Select class</option>
+            {classes.map((row) => <option key={row.id} value={row.id}>{row.name}</option>)}
+          </select>
+        </div>
       }
     >
       {!selectedClassId ? (
@@ -249,7 +271,7 @@ function ClassTimetableGrid({
             </table>
           </div>
           <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-[11px] font-semibold text-[#64748b]">
-            <span>{selectedEntries.length} scheduled entr{selectedEntries.length === 1 ? 'y' : 'ies'} for {selectedClass?.name || 'this class'}.</span>
+            <span>{selectedEntries.length} scheduled entr{selectedEntries.length === 1 ? 'y' : 'ies'} for {selectedClass?.name || 'this class'} in Week {selectedWeek}.</span>
             <span>Cells repeat lessons that span more than one period.</span>
           </div>
         </div>
@@ -382,6 +404,8 @@ function CreateTimetableForm({ mode, options, onCreate, loading }: { mode: 'scho
   const [termId, setTermId] = useState<any>(activeTerm?.id || '')
   const [effectiveFrom, setEffectiveFrom] = useState(dateInputValue(activeTerm?.start_date || activeYear?.start_date))
   const [effectiveTo, setEffectiveTo] = useState(dateInputValue(activeTerm?.end_date || activeYear?.end_date))
+  const maxCycleWeeks = Math.max(1, Number(options?.timetable_policy?.max_timetable_cycle_weeks || 4))
+  const [cycleWeeks, setCycleWeeks] = useState(String(Math.max(1, Number(options?.timetable_policy?.timetable_cycle_weeks || 1))))
 
   useEffect(() => {
     if (!academicYearId && activeYear?.id) setAcademicYearId(activeYear.id)
@@ -413,7 +437,7 @@ function CreateTimetableForm({ mode, options, onCreate, loading }: { mode: 'scho
             </select>
           </label>
         </div>
-        <div className="grid gap-3 sm:grid-cols-[180px_180px_auto] sm:items-end">
+        <div className="grid gap-3 sm:grid-cols-[180px_180px_180px_auto] sm:items-end">
           <label className="grid gap-1.5 text-[11px] font-bold uppercase tracking-[0.08em] text-[#6b7280]">
             From
             <Input type="date" value={effectiveFrom} onChange={(event) => setEffectiveFrom(event.target.value)} className="h-9 text-[13px]" />
@@ -422,6 +446,14 @@ function CreateTimetableForm({ mode, options, onCreate, loading }: { mode: 'scho
             To
             <Input type="date" value={effectiveTo} onChange={(event) => setEffectiveTo(event.target.value)} className="h-9 text-[13px]" />
           </label>
+          {mode === 'school' ? (
+            <label className="grid gap-1.5 text-[11px] font-bold uppercase tracking-[0.08em] text-[#6b7280]">
+              Cycle Weeks
+              <select value={cycleWeeks} onChange={(event) => setCycleWeeks(event.target.value)} className={selectClassName()}>
+                {Array.from({ length: maxCycleWeeks }, (_, index) => index + 1).map((week) => <option key={week} value={week}>{week} week{week === 1 ? '' : 's'}</option>)}
+              </select>
+            </label>
+          ) : null}
           <Button
             type="button"
             disabled={loading || !name.trim() || !academicYearId || !effectiveFrom || !effectiveTo}
@@ -430,7 +462,8 @@ function CreateTimetableForm({ mode, options, onCreate, loading }: { mode: 'scho
               timetable_type: mode === 'exam' ? 'EXAM_TIMETABLE' : 'SCHOOL_TIMETABLE',
               academic_year_id: academicYearId,
               term_id: termId || null,
-              cycle_type: mode === 'exam' ? 'DATED_EXAM_SESSIONS' : 'NORMAL_WEEK',
+              cycle_type: mode === 'exam' ? 'DATED_EXAM_SESSIONS' : Number(cycleWeeks || 1) > 1 ? 'ROTATING_CYCLE' : 'NORMAL_WEEK',
+              timetable_cycle_weeks: mode === 'school' ? Number(cycleWeeks || 1) : 1,
               effective_from: effectiveFrom,
               effective_to: effectiveTo,
             })}
@@ -448,6 +481,7 @@ function CreateTimetableForm({ mode, options, onCreate, loading }: { mode: 'scho
 function ManualEntryForm({ detail, version, options, mode, loading, canManage, onCreate }: { detail: any; version: any; options: any; mode: 'school' | 'exam'; loading: boolean; canManage: boolean; onCreate: (payload: any) => void }) {
   const teachingSlots = useMemo(() => (detail?.bell_slots || []).filter((slot: any) => Number(slot.teaching_allowed) === 1), [detail?.bell_slots])
   const cycleDays = useMemo(() => detail?.cycle_days || [], [detail?.cycle_days])
+  const timetableWeeks = cycleWeekCount(detail?.timetable)
   const dayTemplates = useMemo(() => detail?.day_templates || [], [detail?.day_templates])
   const classes = options?.classes || []
   const subjects = options?.subjects || []
@@ -461,6 +495,7 @@ function ManualEntryForm({ detail, version, options, mode, loading, canManage, o
     ? ['EXAM_PAPER', 'PRACTICAL_EXAM', 'COMPUTER_BASED_EXAM', 'LISTENING_EXAM']
     : ['LESSON', 'SUBJECT_LESSON', 'LABORATORY_LESSON', 'COMPUTER_LESSON', 'WEEKLY_ACTIVITY', 'ASSEMBLY', 'CHAPEL', 'RELIGIOUS_PROGRAMME', 'CLUB', 'SPORTS', 'STUDY', 'STAFF_MEETING', 'CUSTOM']
   const [cycleDayId, setCycleDayId] = useState<any>('')
+  const [cycleWeek, setCycleWeek] = useState<any>('1')
   const [slotStartId, setSlotStartId] = useState<any>('')
   const [slotEndId, setSlotEndId] = useState<any>('')
   const [classId, setClassId] = useState<any>('')
@@ -541,6 +576,14 @@ function ManualEntryForm({ detail, version, options, mode, loading, canManage, o
           </div>
         ) : null}
         <div className="grid gap-3 lg:grid-cols-5">
+          {mode === 'school' && timetableWeeks > 1 ? (
+            <label className="grid gap-1.5 text-[11px] font-bold uppercase tracking-[0.08em] text-[#6b7280]">
+              Week
+              <select value={cycleWeek} onChange={(event) => setCycleWeek(event.target.value)} className={selectClassName()}>
+                {Array.from({ length: timetableWeeks }, (_, index) => index + 1).map((week) => <option key={week} value={week}>Week {week}</option>)}
+              </select>
+            </label>
+          ) : null}
           {mode === 'school' ? (
             <label className="grid gap-1.5 text-[11px] font-bold uppercase tracking-[0.08em] text-[#6b7280]">
               Day
@@ -658,6 +701,7 @@ function ManualEntryForm({ detail, version, options, mode, loading, canManage, o
           type="button"
           disabled={loading || !canSave}
           onClick={() => onCreate({
+            cycle_week: mode === 'school' ? Number(cycleWeek || 1) : 1,
             cycle_day_id: mode === 'school' ? cycleDayId || null : null,
             slot_start_id: slotStartId,
             slot_end_id: slotEndId,
@@ -945,6 +989,7 @@ export function TimetablingPage({ personal = false }: { personal?: boolean }) {
     return [
       { label: 'Versions', value: detail?.versions?.length || 0, helper: 'selected timetable', delta: activeVersion ? `v${activeVersion.version_number}` : 'none' },
       { label: 'Entries', value: entries.length, helper: 'selected version', delta: mode === 'school' ? `${classOptions.length} classes` : 'scheduled' },
+      { label: 'Cycle', value: `${cycleWeekCount(detail?.timetable)}w`, helper: 'generated weeks', delta: cycleWeekCount(detail?.timetable) > 1 ? 'rotating' : 'weekly' },
       { label: 'Conflicts', value: conflicts.length, helper: 'selected version', delta: conflicts.length ? 'resolve' : 'clear', tone: conflicts.length ? 'warn' as const : 'good' as const },
       { label: 'Published', value: published, helper: 'live schedules', delta: 'current', tone: published ? 'good' as const : 'neutral' as const },
     ]
@@ -970,6 +1015,7 @@ export function TimetablingPage({ personal = false }: { personal?: boolean }) {
     ...item,
     context: [item.academic_year_name, item.term_name].filter(Boolean).join(' / ') || '-',
     dates: `${dateText(item.effective_from)} - ${dateText(item.effective_to)}`,
+    cycleText: `${cycleWeekCount(item)} week${cycleWeekCount(item) === 1 ? '' : 's'}`,
   }))
   const versionRows = (detail?.versions || []).map((version: any) => ({
     ...version,
@@ -978,7 +1024,7 @@ export function TimetablingPage({ personal = false }: { personal?: boolean }) {
   }))
   const entryRows = entries.map((entry: any) => ({
     ...entry,
-    time: `${entry.cycle_day_name || dateText(entry.calendar_date)} / ${entry.start_slot_name || '-'}${entry.end_slot_name && entry.end_slot_name !== entry.start_slot_name ? ` - ${entry.end_slot_name}` : ''}`,
+    time: `${mode === 'school' ? `Week ${entry.cycle_week || 1} / ` : ''}${entry.cycle_day_name || dateText(entry.calendar_date)} / ${entry.start_slot_name || '-'}${entry.end_slot_name && entry.end_slot_name !== entry.start_slot_name ? ` - ${entry.end_slot_name}` : ''}`,
     titleText: entry.title || pretty(entry.entry_type),
     entryTypeText: pretty(entry.entry_type),
     resourceText: entry.facility_name || entry.room_name || '-',
@@ -1044,6 +1090,7 @@ export function TimetablingPage({ personal = false }: { personal?: boolean }) {
                   { key: 'status', label: 'Status', render: (row) => <StatusPill value={row.status} /> },
                   { key: 'context', label: 'Context' },
                   { key: 'dates', label: 'Dates' },
+                  { key: 'cycleText', label: 'Cycle' },
                   { key: 'latest_version_number', label: 'Latest', render: (row) => row.latest_version_number ? `v${row.latest_version_number}` : '-' },
                   {
                     key: 'open',
@@ -1071,7 +1118,7 @@ export function TimetablingPage({ personal = false }: { personal?: boolean }) {
             <div className="grid gap-3">
               <SectionCard
                 title={detail.timetable.name}
-                subtitle={`${detail.timetable.academic_year_name || '-'}${detail.timetable.term_name ? ` / ${detail.timetable.term_name}` : ''} / ${dateText(detail.timetable.effective_from)} to ${dateText(detail.timetable.effective_to)}`}
+                subtitle={`${detail.timetable.academic_year_name || '-'}${detail.timetable.term_name ? ` / ${detail.timetable.term_name}` : ''} / ${dateText(detail.timetable.effective_from)} to ${dateText(detail.timetable.effective_to)} / ${cycleWeekCount(detail.timetable)} week${cycleWeekCount(detail.timetable) === 1 ? '' : 's'} generated cycle`}
                 actions={<StatusPill value={detail.timetable.status} />}
               >
                 <div className="flex flex-wrap items-center gap-2 p-4">
@@ -1145,6 +1192,7 @@ export function TimetablingPage({ personal = false }: { personal?: boolean }) {
                   bellSlots={detailBellSlots}
                   dayTemplates={detailDayTemplates}
                   entries={entries}
+                  timetableCycleWeeks={cycleWeekCount(detail.timetable)}
                 />
               ) : null}
 
@@ -1190,6 +1238,7 @@ export function TimetablingPage({ personal = false }: { personal?: boolean }) {
                 <SectionCard title="Schedule Setup" subtitle="Data available for manual and assisted scheduling.">
                   <div className="grid gap-2 p-4">
                     {[
+                      [CalendarDays, 'Cycle weeks', cycleWeekCount(detail?.timetable)],
                       [CalendarDays, 'Cycle days', detailCycleDays?.length || 0],
                       [Clock, 'Teaching periods', (detailBellSlots || []).filter((slot: any) => Number(slot.teaching_allowed) === 1).length],
                       [Users, 'Classes', options?.classes?.length || 0],

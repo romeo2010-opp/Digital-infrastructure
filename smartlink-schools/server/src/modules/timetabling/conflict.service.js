@@ -41,6 +41,37 @@ function codeSet(values) {
   return new Set((Array.isArray(values) ? values : []).map((value) => String(value || "").toUpperCase()).filter(Boolean))
 }
 
+function dateText(value) {
+  if (value instanceof Date) return value.toISOString().slice(0, 10)
+  return value ? String(value).slice(0, 10) : null
+}
+
+function weekdayFromDate(value) {
+  const date = new Date(`${dateText(value)}T00:00:00Z`)
+  if (Number.isNaN(date.getTime())) return null
+  const day = date.getUTCDay()
+  return day === 0 ? 7 : day
+}
+
+function cycleWeekForDate(timetable, value) {
+  const cycleWeeks = Math.max(1, Number(timetable?.timetable_cycle_weeks || 1))
+  const start = new Date(`${dateText(timetable?.effective_from)}T00:00:00Z`)
+  const current = new Date(`${dateText(value)}T00:00:00Z`)
+  if (Number.isNaN(start.getTime()) || Number.isNaN(current.getTime()) || current < start) return 1
+  const weekIndex = Math.floor((current.getTime() - start.getTime()) / (7 * 86400000))
+  return (weekIndex % cycleWeeks) + 1
+}
+
+function cycleWeekValue(value, fallback = 1) {
+  const parsed = Number(value || fallback || 1)
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 1
+}
+
+function timeAfter(left, right) {
+  if (!left || !right) return false
+  return String(left).slice(0, 8) > String(right).slice(0, 8)
+}
+
 async function loadSlot(connection, slotId) {
   const [[slot]] = await connection.query(
     `SELECT s.*, t.school_id
@@ -176,6 +207,7 @@ async function validateStreamSchedulingRules(connection, schoolId, timetable, ve
   const roomId = idValue(payload.room_id || payload.roomId)
   const facilityId = idValue(payload.facility_id || payload.facilityId)
   const cycleDayId = idValue(payload.cycle_day_id || payload.cycleDayId)
+  const cycleWeek = cycleWeekValue(payload.cycle_week || payload.cycleWeek, 1)
   const calendarDate = payload.calendar_date || payload.calendarDate || null
   const classContext = await loadClassContext(connection, schoolId, classId)
   const gradeLevel = classContext?.grade_level || null
@@ -189,8 +221,9 @@ async function validateStreamSchedulingRules(connection, schoolId, timetable, ve
   )
   const matchingRules = rules.filter((rule) => streamRuleMatches(rule, subjectId, classId, streamSection, gradeLevel) && rule.policy !== "ALLOW_PARALLEL_SAME_SUBJECT")
   if (!matchingRules.length) return []
-  const dayClause = cycleDayId ? "e.cycle_day_id = ?" : "e.calendar_date = ?"
-  const params = [version.id, subjectId, cycleDayId || calendarDate, slotContext.endSlot.slot_number, slotContext.startSlot.slot_number]
+  const dayClause = cycleDayId ? "e.cycle_day_id = ? AND COALESCE(e.cycle_week, 1) = ?" : "e.calendar_date = ?"
+  const dayParams = cycleDayId ? [cycleDayId, cycleWeek] : [calendarDate]
+  const params = [version.id, subjectId, ...dayParams, streamSection, slotContext.endSlot.slot_number, slotContext.startSlot.slot_number]
   const excludeClause = entryId ? "AND e.id <> ?" : ""
   if (entryId) params.push(entryId)
   const [parallelRows] = await connection.query(
@@ -204,7 +237,7 @@ async function validateStreamSchedulingRules(connection, schoolId, timetable, ve
       AND e.stream_section IS NOT NULL AND e.stream_section <> ?
       AND st.slot_number <= ? AND en.slot_number >= ?
       ${excludeClause}`,
-    [params[0], params[1], params[2], streamSection, params[3], params[4], ...params.slice(5)],
+    params,
   )
   const conflicts = []
   matchingRules.forEach((rule) => {
@@ -267,12 +300,68 @@ async function loadDayTemplate(connection, timetableId, cycleDayId) {
   return template || null
 }
 
+async function validateClassSuspension(connection, schoolId, timetable, payload, slotContext) {
+  const calendarDate = dateText(payload.calendar_date || payload.calendarDate)
+  const cycleDayId = idValue(payload.cycle_day_id || payload.cycleDayId)
+  const cycleWeek = cycleWeekValue(payload.cycle_week || payload.cycleWeek, 1)
+  const entryType = String(payload.entry_type || payload.entryType || "LESSON").toUpperCase()
+  const blockColumn = entryType.includes("EXAM") ? "blocks_exams" : "blocks_lessons"
+  if (!slotContext.startSlot || !slotContext.endSlot) return []
+  let closures = []
+  if (calendarDate) {
+    const [rows] = await connection.query(
+      `SELECT *
+       FROM school_closure_dates
+       WHERE school_id = ? AND closure_date = ? AND active = 1 AND ${blockColumn} = 1`,
+      [schoolId, calendarDate],
+    )
+    closures = rows
+  } else if (cycleDayId) {
+    const [[cycleDay]] = await connection.query(
+      "SELECT weekday, display_name FROM timetable_cycle_days WHERE id = ? AND timetable_id = ? AND active = 1 LIMIT 1",
+      [cycleDayId, timetable.id],
+    )
+    if (cycleDay?.weekday) {
+      const [rows] = await connection.query(
+        `SELECT *
+         FROM school_closure_dates
+         WHERE school_id = ? AND active = 1 AND ${blockColumn} = 1
+          AND closure_date BETWEEN ? AND ?
+          AND (academic_year_id IS NULL OR academic_year_id = ?)
+          AND (term_id IS NULL OR term_id = ?)`,
+        [schoolId, dateText(timetable.effective_from), dateText(timetable.effective_to), timetable.academic_year_id, timetable.term_id],
+      )
+      closures = rows.filter((row) => (
+        Number(weekdayFromDate(row.closure_date)) === Number(cycleDay.weekday)
+        && Number(cycleWeekForDate(timetable, row.closure_date)) === Number(cycleWeek)
+      ))
+    }
+  }
+  const conflicts = []
+  closures.forEach((row) => {
+    const impact = String(row.class_impact || (row.blocks_lessons ? "ALL_CLASSES_SUSPENDED" : "NO_CLASSES_SUSPENDED")).toUpperCase()
+    if (impact === "NO_CLASSES_SUSPENDED") return
+    if (impact === "HALF_DAY" && !timeAfter(slotContext.endSlot.end_time, row.half_day_closing_time || "12:00:00")) return
+    conflicts.push(conflict(
+      impact === "HALF_DAY" ? "HOLIDAY_HALF_DAY_CUTOFF" : "HOLIDAY_ALL_CLASSES_SUSPENDED",
+      "HARD",
+      impact === "HALF_DAY" ? "Half-day holiday cutoff" : "Holiday suspends classes",
+      impact === "HALF_DAY"
+        ? `${row.title || "This holiday"} only allows lessons before ${String(row.half_day_closing_time || "12:00:00").slice(0, 5)}.`
+        : `${row.title || "This holiday"} suspends all normal lessons for this day.`,
+      { affectedEntities: [{ type: "school_closure_date", id: Number(row.id) }], classImpact: impact, closureDate: dateText(row.closure_date) },
+    ))
+  })
+  return conflicts
+}
+
 export async function validateTimetableEntry(connection, schoolId, timetable, version, payload, options = {}) {
   const entryId = idValue(payload.id || payload.entry_id)
   const ignoredWeeklyActivityId = idValue(options.ignoreWeeklyActivityId || options.ignore_weekly_activity_id)
   const slotStartId = idValue(payload.slot_start_id || payload.slotStartId, "slot_start_id", true)
   const slotEndId = idValue(payload.slot_end_id || payload.slotEndId || slotStartId, "slot_end_id", true)
   const cycleDayId = idValue(payload.cycle_day_id || payload.cycleDayId)
+  const cycleWeek = cycleWeekValue(payload.cycle_week || payload.cycleWeek, 1)
   const classId = idValue(payload.class_id || payload.classId)
   const teacherId = idValue(payload.teacher_id || payload.teacherId)
   const roomId = idValue(payload.room_id || payload.roomId)
@@ -316,6 +405,9 @@ export async function validateTimetableEntry(connection, schoolId, timetable, ve
       [cycleDayId, timetable.id],
     )
     if (!cycleDay) conflicts.push(conflict("INVALID_CYCLE_DAY", "HARD", "Invalid cycle day", "The selected cycle day does not belong to this timetable."))
+  }
+  if (cycleWeek < 1 || cycleWeek > Math.max(1, Number(timetable.timetable_cycle_weeks || 1))) {
+    conflicts.push(conflict("INVALID_CYCLE_WEEK", "HARD", "Invalid cycle week", `Select a cycle week between 1 and ${Math.max(1, Number(timetable.timetable_cycle_weeks || 1))}.`))
   }
 
   if (!cycleDayId && !calendarDate) {
@@ -382,14 +474,16 @@ export async function validateTimetableEntry(connection, schoolId, timetable, ve
   }
 
   if (conflicts.some((item) => item.blocking)) return conflicts
+  conflicts.push(...await validateClassSuspension(connection, schoolId, timetable, payload, { startSlot, endSlot }))
+  if (conflicts.some((item) => item.blocking)) return conflicts
 
   const dayClause = cycleDayId
-    ? "e.cycle_day_id = ?"
+    ? "e.cycle_day_id = ? AND COALESCE(e.cycle_week, 1) = ?"
     : "e.calendar_date = ?"
   const dayParam = cycleDayId || calendarDate
   const entryExclusion = entryId ? " AND e.id <> ?" : ""
   const sourceActivityExclusion = ignoredWeeklyActivityId ? " AND (e.source_weekly_activity_id IS NULL OR e.source_weekly_activity_id <> ?)" : ""
-  const params = [timetable.id, version.id, dayParam, endSlot.slot_number, startSlot.slot_number, ...(entryId ? [entryId] : []), ...(ignoredWeeklyActivityId ? [ignoredWeeklyActivityId] : [])]
+  const params = [timetable.id, version.id, dayParam, ...(cycleDayId ? [cycleWeek] : []), endSlot.slot_number, startSlot.slot_number, ...(entryId ? [entryId] : []), ...(ignoredWeeklyActivityId ? [ignoredWeeklyActivityId] : [])]
   const skipVersionEntryOverlaps = Boolean(options.skipVersionEntryOverlaps || options.skip_version_entry_overlaps)
 
   const [overlaps] = skipVersionEntryOverlaps

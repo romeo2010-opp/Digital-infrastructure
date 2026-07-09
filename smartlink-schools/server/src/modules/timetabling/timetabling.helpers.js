@@ -71,6 +71,7 @@ export function normalizeTimetable(row) {
     school_id: Number(row.school_id),
     academic_year_id: Number(row.academic_year_id),
     term_id: row.term_id ? Number(row.term_id) : null,
+    timetable_cycle_weeks: Number(row.timetable_cycle_weeks || 1),
     current_published_version_id: row.current_published_version_id ? Number(row.current_published_version_id) : null,
     created_by: row.created_by ? Number(row.created_by) : null,
     setup_progress: parseJson(row.setup_progress, {}),

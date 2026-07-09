@@ -1,5 +1,6 @@
 export function classifyDifficulty(averageScore) {
   const score = Number(averageScore)
+  if (!Number.isFinite(score)) return "Pending"
   if (score >= 70) return "Easy"
   if (score >= 40) return "Medium"
   return "Hard"
@@ -7,6 +8,9 @@ export function classifyDifficulty(averageScore) {
 
 export function buildTopicRecommendation(topic) {
   const difficulty = classifyDifficulty(topic.average_score)
+  if (difficulty === "Pending") {
+    return `Enter marks for ${topic.topic_name} to generate support recommendations.`
+  }
   if (difficulty === "Hard") {
     return `Schedule teacher-led remediation and daily drills for ${topic.topic_name}.`
   }

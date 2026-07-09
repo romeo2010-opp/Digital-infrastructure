@@ -11,6 +11,7 @@ import { SectionCard } from "../components/SectionCard";
 import { SectionKpiStrip } from "../components/SectionKpiStrip";
 import { TeacherAssignmentsPanel } from "../components/TeacherAssignmentsPanel";
 import { Toolbar } from "../components/Toolbar";
+import { resolvePortalAssetUrl } from "../lib/portalApi";
 import { usePortal } from "../lib/portalContext";
 import { schoolPages, type SchoolPageKey } from "../data/schoolPageConfig";
 
@@ -35,6 +36,36 @@ function statusLabel(value: any) {
   return String(value || "-")
     .replace(/_/g, " ")
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function countValues(value: any) {
+  const counts: Record<string, number> = {};
+  if (!value || typeof value !== "object") return counts;
+  const entries = Array.isArray(value) ? value : Object.values(value);
+  entries.forEach((entry) => {
+    const key = String(entry || "").trim();
+    if (!key) return;
+    counts[key] = Number(counts[key] || 0) + 1;
+  });
+  return counts;
+}
+
+function pollRows(scope: any) {
+  const poll = scope?.poll || null;
+  if (!poll) return [];
+  const counts = countValues(scope?.engagement?.poll_votes);
+  return (poll.options || []).map((option: any) => ({
+    id: option.id,
+    text: option.text,
+    count: Number(counts[option.id] || 0),
+  }));
+}
+
+function reactionRows(scope: any) {
+  const configured = Array.isArray(scope?.reactions) ? scope.reactions : [];
+  const counts = countValues(scope?.engagement?.reactions);
+  const labels = [...new Set([...configured, ...Object.keys(counts)])];
+  return labels.map((label) => ({ label, count: Number(counts[label] || 0) }));
 }
 
 function name(row: any) {
@@ -176,14 +207,14 @@ function buildKpis(pageKey: SchoolPageKey, rows: any[]) {
       },
       {
         label: "Below 50%",
-        value: rows.filter((row) => Number(row.rawAverage || 0) < 50).length,
+        value: rows.filter((row) => row.rawAverage !== null && Number(row.rawAverage) < 50).length,
         helper: "topics",
         delta: "support",
         tone: "warn" as const,
       },
       {
         label: "Strong Topics",
-        value: rows.filter((row) => Number(row.rawAverage || 0) >= 70).length,
+        value: rows.filter((row) => row.rawAverage !== null && Number(row.rawAverage) >= 70).length,
         helper: "topics",
         delta: "maintain",
         tone: "good" as const,
@@ -316,6 +347,7 @@ function mapRows(pageKey: SchoolPageKey, payload: any) {
     return (payload?.messages || []).map((row: any) => ({
       id: row.id,
       subject: row.subject,
+      body: row.body || "",
       type: row.message_type,
       audience:
         row.audience_label ||
@@ -323,6 +355,12 @@ function mapRows(pageKey: SchoolPageKey, payload: any) {
           ? "Whole school"
           : "Selected classes"),
       responsible: row.recipient_scope?.responsible_teacher_name || "-",
+      imageUrl: row.recipient_scope?.image_url || "",
+      poll: row.recipient_scope?.poll || null,
+      pollRows: pollRows(row.recipient_scope),
+      reactionRows: reactionRows(row.recipient_scope),
+      rawScope: row.recipient_scope || {},
+      createdBy: row.created_by_name || "-",
       channel: row.channel,
       status: row.delivery_status,
       time: normalizeDate(row.created_at),
@@ -358,10 +396,11 @@ function mapRows(pageKey: SchoolPageKey, payload: any) {
       id: `${row.subject_name}-${row.topic_name}`,
       subject: row.subject_name,
       topic: row.topic_name,
-      average: percent(row.average_score),
-      rawAverage: Number(row.average_score || 0),
-      support: row.students_needing_support,
+      average: row.average_score === null || row.average_score === undefined ? "Pending" : percent(row.average_score),
+      rawAverage: row.average_score === null || row.average_score === undefined ? null : Number(row.average_score),
+      support: Number(row.marked_students || 0) ? row.students_needing_support : "Pending",
       rawSupport: Number(row.students_needing_support || 0),
+      markedStudents: Number(row.marked_students || 0),
       recommendation: row.recommendation,
     }));
   }
@@ -431,6 +470,87 @@ async function loadPage(api: any, token: string, pageKey: SchoolPageKey) {
   return {};
 }
 
+function MessageDetailPanel({ message }: { message: any }) {
+  if (!message) {
+    return (
+      <SectionCard title="Message View" subtitle="Select a message to inspect the post and engagement.">
+        <div className="p-4 text-[12px] leading-5 text-[#6b7280]">
+          Headteachers can open any message row to review the announcement body, poll responses, and reactions recorded by students.
+        </div>
+      </SectionCard>
+    )
+  }
+
+  const totalReactions = (message.reactionRows || []).reduce((sum: number, row: any) => sum + Number(row.count || 0), 0)
+  const totalPollVotes = (message.pollRows || []).reduce((sum: number, row: any) => sum + Number(row.count || 0), 0)
+  const imageUrl = message.imageUrl ? resolvePortalAssetUrl(message.imageUrl) : ""
+
+  return (
+    <SectionCard title="Message View" subtitle={message.subject || "Posted message"}>
+      <div className="grid gap-3 p-4">
+        <div className="grid gap-1 text-[12px] text-[#374151]">
+          <div className="flex items-center justify-between gap-3">
+            <span className="font-semibold text-[#6b7280]">Posted by</span>
+            <strong className="text-right text-[#111827]">{message.createdBy}</strong>
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <span className="font-semibold text-[#6b7280]">Audience</span>
+            <strong className="text-right text-[#111827]">{message.audience}</strong>
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <span className="font-semibold text-[#6b7280]">Channel</span>
+            <strong className="text-right text-[#111827]">{statusLabel(message.channel)}</strong>
+          </div>
+        </div>
+        <div className="rounded-[5px] border border-[#e2e8f0] bg-white p-3">
+          <div className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6b7280]">Message</div>
+          <p className="mt-2 whitespace-pre-wrap text-[13px] leading-6 text-[#111827]">{message.body || "-"}</p>
+          {imageUrl ? <img src={imageUrl} alt="" className="mt-3 max-h-48 w-full rounded-[5px] object-cover" /> : null}
+        </div>
+        <div className="rounded-[5px] border border-[#e2e8f0] bg-white p-3">
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6b7280]">Reactions</div>
+            <span className="text-[12px] font-bold text-[#111827]">{totalReactions}</span>
+          </div>
+          <div className="mt-2 grid gap-1.5">
+            {(message.reactionRows || []).length ? message.reactionRows.map((row: any) => (
+              <div key={row.label} className="flex items-center justify-between rounded-[4px] bg-[#f8fafc] px-2 py-1.5 text-[12px]">
+                <span className="font-semibold text-[#374151]">{row.label}</span>
+                <strong className="text-[#111827]">{row.count}</strong>
+              </div>
+            )) : <div className="text-[12px] text-[#6b7280]">No reactions recorded yet.</div>}
+          </div>
+        </div>
+        {message.poll ? (
+          <div className="rounded-[5px] border border-[#e2e8f0] bg-white p-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6b7280]">Poll</div>
+              <span className="text-[12px] font-bold text-[#111827]">{totalPollVotes} votes</span>
+            </div>
+            <div className="mt-2 text-[13px] font-semibold text-[#111827]">{message.poll.question}</div>
+            <div className="mt-2 grid gap-1.5">
+              {(message.pollRows || []).map((row: any) => {
+                const pct = totalPollVotes ? Math.round((Number(row.count || 0) / totalPollVotes) * 100) : 0
+                return (
+                  <div key={row.id} className="rounded-[4px] bg-[#f8fafc] px-2 py-1.5 text-[12px]">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-semibold text-[#374151]">{row.text}</span>
+                      <strong className="text-[#111827]">{row.count} · {pct}%</strong>
+                    </div>
+                    <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-[#e5e7eb]">
+                      <div className="h-full bg-[#2563eb]" style={{ width: `${pct}%` }} />
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        ) : null}
+      </div>
+    </SectionCard>
+  )
+}
+
 export function SchoolWorkspace({
   pageKey,
 }: {
@@ -450,6 +570,7 @@ export function SchoolWorkspace({
   const [query, setQuery] = useState("");
   const [action, setAction] = useState<SchoolActionKind>("filters");
   const [modalOpen, setModalOpen] = useState(false);
+  const [selectedRow, setSelectedRow] = useState<any>(null);
 
   const refresh = async () => {
     if (!token || !page) return;
@@ -474,6 +595,7 @@ export function SchoolWorkspace({
   };
 
   useEffect(() => {
+    setSelectedRow(null);
     refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, pageKey]);
@@ -527,7 +649,8 @@ export function SchoolWorkspace({
   };
 
   const openRow = (row: any) => {
-    if (pageKey === "students" && row.id) navigate(`/students/${row.id}`);
+    if (pageKey === "messages") setSelectedRow(row);
+    else if (pageKey === "students" && row.id) navigate(`/students/${row.id}`);
     else if (pageKey === "classes" && row.id) navigate(`/classes/${row.id}`);
     else if (pageKey === "search" && row.route)
       navigate(row.route, {
@@ -664,7 +787,7 @@ export function SchoolWorkspace({
             columns={page.columns}
             rows={visibleRows}
             onRowClick={
-              pageKey === "students" || pageKey === "classes"
+              pageKey === "students" || pageKey === "classes" || pageKey === "messages"
                 ? openRow
                 : undefined
             }
@@ -674,31 +797,35 @@ export function SchoolWorkspace({
           />
         </SectionCard>
 
-        <SectionCard
-          title={page.sideTitle}
-          subtitle="School-only operational prompts"
-        >
-          <div className="grid gap-2 p-4">
-            {page.sideItems.map((item) => (
-              <article
-                key={item.label}
-                className="rounded-[5px] border border-[#e2e8f0] bg-white p-3"
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-[12px] font-semibold text-[#111827]">
-                    {item.label}
-                  </span>
-                  <strong className="text-[12px] text-[#111827]">
-                    {item.value}
-                  </strong>
-                </div>
-                <p className="mt-1 text-[11px] leading-5 text-[#6b7280]">
-                  {item.detail}
-                </p>
-              </article>
-            ))}
-          </div>
-        </SectionCard>
+        {pageKey === "messages" ? (
+          <MessageDetailPanel message={selectedRow} />
+        ) : (
+          <SectionCard
+            title={page.sideTitle}
+            subtitle="School-only operational prompts"
+          >
+            <div className="grid gap-2 p-4">
+              {page.sideItems.map((item) => (
+                <article
+                  key={item.label}
+                  className="rounded-[5px] border border-[#e2e8f0] bg-white p-3"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[12px] font-semibold text-[#111827]">
+                      {item.label}
+                    </span>
+                    <strong className="text-[12px] text-[#111827]">
+                      {item.value}
+                    </strong>
+                  </div>
+                  <p className="mt-1 text-[11px] leading-5 text-[#6b7280]">
+                    {item.detail}
+                  </p>
+                </article>
+              ))}
+            </div>
+          </SectionCard>
+        )}
       </div>
 
       {pageKey === "classes" ? (

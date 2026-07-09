@@ -29,6 +29,7 @@ const EVENT_TYPES = new Set([
 ])
 const EVENT_STATUSES = new Set(["draft", "scheduled", "active", "completed", "cancelled", "archived"])
 const VISIBILITIES = new Set(["whole_school", "teachers_only", "students", "parents", "class_only", "staff_only"])
+const CLASS_IMPACTS = new Set(["ALL_CLASSES_SUSPENDED", "HALF_DAY", "NO_CLASSES_SUSPENDED"])
 const TEMPLATE_TYPES = new Set(["weekly_spelling_test", "weekly_test", "quiz", "reading_check", "mental_maths", "vocabulary_test", "custom"])
 const TEMPLATE_STATUSES = new Set(["draft", "active", "paused", "completed", "archived"])
 const FREQUENCIES = new Set(["weekly", "biweekly", "monthly", "custom"])
@@ -136,6 +137,76 @@ function normalizeTime(value, label = "Time", allowEmpty = true) {
   if (!text && allowEmpty) return null
   if (!/^\d{2}:\d{2}(:\d{2})?$/.test(text)) throw new HttpError(400, `${label} must be HH:MM`)
   return text.length === 5 ? `${text}:00` : text
+}
+
+function normalizeClassImpact(value, eventType, fallback = null) {
+  const raw = cleanText(value).toUpperCase()
+  if (raw) {
+    if (!CLASS_IMPACTS.has(raw)) throw new HttpError(400, `class_impact must be one of ${[...CLASS_IMPACTS].join(", ")}`)
+    return raw
+  }
+  if (fallback && CLASS_IMPACTS.has(String(fallback).toUpperCase())) return String(fallback).toUpperCase()
+  return ["holiday", "closure"].includes(String(eventType || "")) ? "ALL_CLASSES_SUSPENDED" : "NO_CLASSES_SUSPENDED"
+}
+
+function eventDateRange(startDatetime, endDatetime = null) {
+  const start = parseDate(dateOnly(startDatetime), "Event start date")
+  const end = parseDate(dateOnly(endDatetime || startDatetime), "Event end date")
+  const lower = minDate(start, end)
+  const upper = maxDate(start, end)
+  const dates = []
+  for (let current = lower; current.getTime() <= upper.getTime(); current = addDays(current, 1)) {
+    dates.push(formatDate(current))
+  }
+  return dates
+}
+
+function closureTypeForEvent(eventType) {
+  if (eventType === "holiday") return "HOLIDAY"
+  if (eventType === "closure") return "EMERGENCY_CLOSURE"
+  return "PUBLIC_EVENT"
+}
+
+async function syncEventClassImpact(connection, schoolId, eventId, event, userId) {
+  await connection.query("DELETE FROM school_closure_dates WHERE school_id = ? AND source_event_id = ?", [schoolId, eventId])
+  const classImpact = normalizeClassImpact(event.class_impact, event.event_type)
+  if (classImpact === "NO_CLASSES_SUSPENDED" || !["scheduled", "active"].includes(String(event.status || ""))) return
+  const halfDayClosingTime = classImpact === "HALF_DAY"
+    ? normalizeTime(event.half_day_closing_time || "12:00:00", "Half-day closing time", false)
+    : null
+  const dates = eventDateRange(event.start_datetime, event.end_datetime)
+  for (const closureDate of dates) {
+    await connection.query(
+      `INSERT INTO school_closure_dates (
+        school_id, academic_year_id, term_id, source_event_id, closure_date, closure_type,
+        class_impact, half_day_closing_time, title, reason, blocks_lessons, blocks_exams, active, created_by
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+      ON DUPLICATE KEY UPDATE
+        source_event_id = VALUES(source_event_id),
+        closure_type = VALUES(closure_type),
+        class_impact = VALUES(class_impact),
+        half_day_closing_time = VALUES(half_day_closing_time),
+        reason = VALUES(reason),
+        blocks_lessons = VALUES(blocks_lessons),
+        blocks_exams = VALUES(blocks_exams),
+        active = 1`,
+      [
+        schoolId,
+        event.academic_year_id || null,
+        event.term_id || null,
+        eventId,
+        closureDate,
+        closureTypeForEvent(event.event_type),
+        classImpact,
+        halfDayClosingTime,
+        event.title,
+        event.description || null,
+        classImpact === "NO_CLASSES_SUSPENDED" ? 0 : 1,
+        event.event_type === "closure" && classImpact === "ALL_CLASSES_SUSPENDED" ? 1 : 0,
+        userId,
+      ],
+    )
+  }
 }
 
 function normalizeDateTime(value, fallbackDate, fallbackTime = "08:00:00", allDay = false, label = "Date/time") {
@@ -333,6 +404,8 @@ function buildCalendarEvent(source, row, patch = {}) {
     title: row.title || row.name,
     type: row.event_type || patch.type || "school_event",
     subtype: patch.subtype || row.assessment_type || row.exam_type || null,
+    class_impact: row.class_impact || patch.class_impact || "NO_CLASSES_SUSPENDED",
+    half_day_closing_time: row.half_day_closing_time || patch.half_day_closing_time || null,
     start_datetime: row.start_datetime || (row.instance_date ? `${dateOnly(row.instance_date)} ${row.start_time || "00:00:00"}` : `${dateOnly(row.start_date)} 00:00:00`),
     end_datetime: row.end_datetime || (row.end_date ? `${dateOnly(row.end_date)} 23:59:59` : null),
     all_day: Boolean(row.all_day ?? patch.all_day ?? true),
@@ -777,12 +850,17 @@ export async function createSchoolEvent(req, res) {
 
   const connection = await pool.getConnection()
   try {
+    await connection.beginTransaction()
     const title = cleanText(req.body.title)
     if (!title) throw new HttpError(400, "Event title is required")
     const eventType = EVENT_TYPES.has(cleanText(req.body.event_type)) ? cleanText(req.body.event_type) : "school_event"
     const status = EVENT_STATUSES.has(cleanText(req.body.status)) ? cleanText(req.body.status) : "scheduled"
     const visibility = VISIBILITIES.has(cleanText(req.body.visibility)) ? cleanText(req.body.visibility) : "whole_school"
     const allDay = boolValue(req.body.all_day)
+    const classImpact = normalizeClassImpact(req.body.class_impact || req.body.classImpact, eventType)
+    const halfDayClosingTime = classImpact === "HALF_DAY"
+      ? normalizeTime(req.body.half_day_closing_time || req.body.halfDayClosingTime || "12:00", "Half-day closing time", false)
+      : null
     const academicYearId = idValue(req.body.academic_year_id) || activeSession.academicYearId
     const termId = idValue(req.body.term_id) || activeSession.termId
     const classId = idValue(req.body.class_id)
@@ -802,10 +880,10 @@ export async function createSchoolEvent(req, res) {
 
     const [result] = await connection.query(
       `INSERT INTO school_events (
-        school_id, academic_year_id, term_id, title, description, event_type, start_datetime, end_datetime,
+        school_id, academic_year_id, term_id, title, description, event_type, class_impact, half_day_closing_time, start_datetime, end_datetime,
         all_day, class_id, stream_section, subject_id, teacher_id, created_by, visibility,
         recurrence_rule, recurrence_end_date, source_type, source_id, status
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'manual', NULL, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'manual', NULL, ?)`,
       [
         schoolId,
         academicYearId,
@@ -813,6 +891,8 @@ export async function createSchoolEvent(req, res) {
         title,
         cleanText(req.body.description) || null,
         eventType,
+        classImpact,
+        halfDayClosingTime,
         startDatetime,
         endDatetime,
         allDay ? 1 : 0,
@@ -827,7 +907,24 @@ export async function createSchoolEvent(req, res) {
         status,
       ],
     )
-    res.status(201).json({ id: Number(result.insertId), message: "Calendar event created." })
+    const eventId = Number(result.insertId)
+    await syncEventClassImpact(connection, schoolId, eventId, {
+      academic_year_id: academicYearId,
+      term_id: termId,
+      title,
+      description: cleanText(req.body.description) || null,
+      event_type: eventType,
+      class_impact: classImpact,
+      half_day_closing_time: halfDayClosingTime,
+      start_datetime: startDatetime,
+      end_datetime: endDatetime,
+      status,
+    }, req.user.id)
+    await connection.commit()
+    res.status(201).json({ id: eventId, message: "Calendar event created." })
+  } catch (error) {
+    await connection.rollback()
+    throw error
   } finally {
     connection.release()
   }
@@ -839,6 +936,7 @@ export async function updateSchoolEvent(req, res) {
   if (!eventId) throw new HttpError(400, "Event id is required")
   const connection = await pool.getConnection()
   try {
+    await connection.beginTransaction()
     const [[event]] = await connection.query("SELECT * FROM school_events WHERE id = ? AND school_id = ? LIMIT 1", [eventId, schoolId])
     if (!event) throw new HttpError(404, "Calendar event was not found")
     if (isTeacher(req) && Number(event.created_by) !== Number(req.user.id) && Number(event.teacher_id) !== Number(req.user.id)) {
@@ -851,6 +949,9 @@ export async function updateSchoolEvent(req, res) {
       visibility: req.body.visibility !== undefined && VISIBILITIES.has(cleanText(req.body.visibility)) ? cleanText(req.body.visibility) : event.visibility,
       status: req.body.status !== undefined && EVENT_STATUSES.has(cleanText(req.body.status)) ? cleanText(req.body.status) : event.status,
       all_day: req.body.all_day !== undefined ? (boolValue(req.body.all_day) ? 1 : 0) : event.all_day,
+      class_impact: req.body.class_impact !== undefined || req.body.classImpact !== undefined
+        ? normalizeClassImpact(req.body.class_impact || req.body.classImpact, req.body.event_type || event.event_type)
+        : normalizeClassImpact(event.class_impact, req.body.event_type || event.event_type),
       start_datetime: req.body.start_datetime || req.body.date || req.body.start_date
         ? normalizeDateTime(req.body.start_datetime, req.body.date || req.body.start_date || dateOnly(event.start_datetime), req.body.start_time, boolValue(req.body.all_day ?? event.all_day), "Start date")
         : event.start_datetime,
@@ -858,13 +959,21 @@ export async function updateSchoolEvent(req, res) {
         ? normalizeDateTime(req.body.end_datetime, req.body.end_date || req.body.date || req.body.start_date || dateOnly(event.end_datetime || event.start_datetime), req.body.end_time || req.body.start_time, boolValue(req.body.all_day ?? event.all_day), "End date")
         : event.end_datetime,
     }
+    patch.half_day_closing_time = patch.class_impact === "HALF_DAY"
+      ? normalizeTime(req.body.half_day_closing_time || req.body.halfDayClosingTime || event.half_day_closing_time || "12:00", "Half-day closing time", false)
+      : null
     await connection.query(
       `UPDATE school_events
-       SET title = ?, description = ?, event_type = ?, visibility = ?, status = ?, all_day = ?, start_datetime = ?, end_datetime = ?
+       SET title = ?, description = ?, event_type = ?, class_impact = ?, half_day_closing_time = ?, visibility = ?, status = ?, all_day = ?, start_datetime = ?, end_datetime = ?
        WHERE id = ? AND school_id = ?`,
-      [patch.title, patch.description, patch.event_type, patch.visibility, patch.status, patch.all_day, patch.start_datetime, patch.end_datetime, eventId, schoolId],
+      [patch.title, patch.description, patch.event_type, patch.class_impact, patch.half_day_closing_time, patch.visibility, patch.status, patch.all_day, patch.start_datetime, patch.end_datetime, eventId, schoolId],
     )
+    await syncEventClassImpact(connection, schoolId, eventId, patch, req.user.id)
+    await connection.commit()
     res.json({ id: eventId, message: "Calendar event updated." })
+  } catch (error) {
+    await connection.rollback()
+    throw error
   } finally {
     connection.release()
   }

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router'
-import { CalendarDays, CalendarRange, CheckCircle2, Clock, FileText, LayoutGrid, List, Plus, RotateCcw, Save, Search, SlidersHorizontal, XCircle } from 'lucide-react'
+import { CalendarDays, CalendarRange, CheckCircle2, Clock, FileText, LayoutGrid, List, Pencil, Plus, RotateCcw, Save, Search, SlidersHorizontal, XCircle } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
@@ -27,6 +27,12 @@ const eventTypes = [
   ['marking_week', 'Marking Week'],
   ['term_closing_week', 'Term Closing Week'],
   ['custom', 'Custom'],
+]
+
+const classImpactOptions = [
+  ['ALL_CLASSES_SUSPENDED', 'All classes suspended'],
+  ['HALF_DAY', 'Half day'],
+  ['NO_CLASSES_SUSPENDED', 'No classes suspended'],
 ]
 
 const assessmentTypes = [
@@ -60,6 +66,8 @@ const emptyEventForm = {
   subject_id: '',
   teacher_id: '',
   visibility: 'whole_school',
+  class_impact: 'NO_CLASSES_SUSPENDED',
+  half_day_closing_time: '12:00',
   description: '',
 }
 
@@ -102,6 +110,53 @@ function displayTime(value: any) {
   const text = String(value || '')
   const time = text.includes(' ') ? text.split(' ')[1] : text
   return time ? time.slice(0, 5) : ''
+}
+
+function minutesFromTime(value: any) {
+  const time = displayTime(value)
+  if (!time) return null
+  const [hours, minutes] = time.split(':').map(Number)
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null
+  return hours * 60 + minutes
+}
+
+function currentDateKey(date = new Date()) {
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${date.getFullYear()}-${month}-${day}`
+}
+
+function currentClockLabel(date = new Date()) {
+  return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+}
+
+function eventIsHappeningNow(event: any, now = new Date()) {
+  if (dateKey(event.start_datetime) !== currentDateKey(now)) return false
+  if (event.all_day) return true
+  const start = minutesFromTime(event.start_datetime)
+  const end = minutesFromTime(event.end_datetime) ?? (start !== null ? start + 60 : null)
+  if (start === null || end === null) return false
+  const current = now.getHours() * 60 + now.getMinutes()
+  return start <= current && current < end
+}
+
+function eventToForm(event: any) {
+  return {
+    ...emptyEventForm,
+    title: event?.title || '',
+    event_type: event?.event_type || event?.type || 'school_event',
+    date: dateKey(event?.start_datetime),
+    start_time: displayTime(event?.start_datetime) || '08:00',
+    end_time: displayTime(event?.end_datetime),
+    all_day: Boolean(event?.all_day),
+    class_id: event?.class_id ? String(event.class_id) : '',
+    subject_id: event?.subject_id ? String(event.subject_id) : '',
+    teacher_id: event?.teacher_id ? String(event.teacher_id) : '',
+    visibility: event?.visibility || 'whole_school',
+    class_impact: event?.class_impact || 'NO_CLASSES_SUSPENDED',
+    half_day_closing_time: displayTime(event?.half_day_closing_time) || '12:00',
+    description: event?.description || '',
+  }
 }
 
 function orderedDateRange(startValue: any, endValue: any) {
@@ -175,6 +230,7 @@ export function SchoolCalendarPage() {
   const [selectedEvent, setSelectedEvent] = useState<any>(null)
   const [showEventForm, setShowEventForm] = useState(false)
   const [showRecurringForm, setShowRecurringForm] = useState(false)
+  const [editingEventId, setEditingEventId] = useState<any>(null)
   const [eventForm, setEventForm] = useState<any>(emptyEventForm)
   const [recurringForm, setRecurringForm] = useState<any>(emptyRecurringForm)
   const [marksSheet, setMarksSheet] = useState<any>(null)
@@ -183,6 +239,7 @@ export function SchoolCalendarPage() {
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [now, setNow] = useState(() => new Date())
 
   const load = async (nextFilters = filters) => {
     if (!token) return
@@ -212,6 +269,11 @@ export function SchoolCalendarPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token])
 
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(new Date()), 60000)
+    return () => window.clearInterval(timer)
+  }, [])
+
   const events = payload.events || []
   const setup = payload.setup || {}
   const summary = payload.summary || {}
@@ -227,6 +289,8 @@ export function SchoolCalendarPage() {
   }, [events])
   const monthDays = useMemo(() => buildMonthDays(selectedDate || dateKey(term.start_date)), [selectedDate, term.start_date])
   const currentWeekDays = useMemo(() => weekDays(selectedDate || dateKey(term.start_date)), [selectedDate, term.start_date])
+  const todayKey = currentDateKey(now)
+  const currentEvents = useMemo(() => events.filter((event: any) => eventIsHappeningNow(event, now)), [events, now])
 
   const updateFilter = (key: string, value: any) => {
     setFilters((current: any) => ({ ...current, [key]: value }))
@@ -238,17 +302,44 @@ export function SchoolCalendarPage() {
     load(next)
   }
 
-  const createEvent = async () => {
+  const openCreateEvent = () => {
+    setEditingEventId(null)
+    setEventForm({ ...emptyEventForm, date: selectedDate || dateKey(term.start_date) })
+    setShowRecurringForm(false)
+    setShowEventForm(true)
+  }
+
+  const openEditEvent = (event: any) => {
+    setSelectedEvent(event)
+    setEditingEventId(event?.source_id || String(event?.id || '').split('-').pop())
+    setEventForm(eventToForm(event))
+    setShowRecurringForm(false)
+    setShowEventForm(true)
+  }
+
+  const closeEventForm = () => {
+    setEditingEventId(null)
+    setShowEventForm(false)
+  }
+
+  const saveEvent = async () => {
     if (!token) return
     setSaving(true)
     try {
-      await api.createSchoolCalendarEvent(token, eventForm)
-      toast.success('Calendar event created.')
+      if (editingEventId) {
+        await api.updateSchoolCalendarEvent(token, editingEventId, eventForm)
+        toast.success('Calendar event updated.')
+      } else {
+        await api.createSchoolCalendarEvent(token, eventForm)
+        toast.success('Calendar event created.')
+      }
       setEventForm({ ...emptyEventForm, date: dateKey(term.start_date) })
+      setEditingEventId(null)
+      setSelectedEvent(null)
       setShowEventForm(false)
       await load()
     } catch (err: any) {
-      toast.error(err?.message || 'Unable to create event.')
+      toast.error(err?.message || `Unable to ${editingEventId ? 'update' : 'create'} event.`)
     } finally {
       setSaving(false)
     }
@@ -304,20 +395,23 @@ export function SchoolCalendarPage() {
     }
   }
 
-  const renderCompactEvent = (event: any) => (
-    <button
-      key={event.id}
-      type="button"
-      className="grid w-full gap-1 rounded-[4px] border border-[#e2e8f0] bg-white px-2 py-1.5 text-left transition hover:border-[#111827]/30"
-      onClick={() => setSelectedEvent(event)}
-    >
-      <div className="truncate text-[11px] font-bold text-[#111827]">{event.title}</div>
-      <div className="flex items-center justify-between gap-2">
-        <TypePill type={event.type} />
-        <span className="text-[10px] font-semibold text-[#6b7280]">{displayTime(event.start_datetime)}</span>
-      </div>
-    </button>
-  )
+  const renderCompactEvent = (event: any) => {
+    const activeNow = eventIsHappeningNow(event, now)
+    return (
+      <button
+        key={event.id}
+        type="button"
+        className={`grid w-full gap-1 rounded-[4px] border px-2 py-1.5 text-left transition hover:border-[#111827]/30 ${activeNow ? 'border-[#0f766e] bg-[#ecfdf5]' : 'border-[#e2e8f0] bg-white'}`}
+        onClick={() => setSelectedEvent(event)}
+      >
+        <div className="truncate text-[11px] font-bold text-[#111827]">{event.title}</div>
+        <div className="flex items-center justify-between gap-2">
+          <TypePill type={event.type} />
+          <span className={`text-[10px] font-semibold ${activeNow ? 'text-[#0f766e]' : 'text-[#6b7280]'}`}>{activeNow ? 'Now' : displayTime(event.start_datetime)}</span>
+        </div>
+      </button>
+    )
+  }
 
   return (
     <div className="grid gap-3 p-4">
@@ -329,12 +423,16 @@ export function SchoolCalendarPage() {
               {term?.academic_year_name || payload.session?.academic_year?.name || 'Academic year'} - {term?.name || payload.session?.term?.name || 'Current term'}
             </p>
           </div>
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="rounded-[5px] border border-[#dbe4ef] bg-[#f8fafc] px-3 py-2 text-right">
+              <div className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#64748b]">Now</div>
+              <div className="font-mono text-[14px] font-semibold text-[#111827]">{currentClockLabel(now)}</div>
+            </div>
             <Button type="button" variant="outline" className="h-8 rounded-[5px] text-[12px]" onClick={() => setShowRecurringForm((open) => !open)}>
               <CalendarRange className="size-3.5" />
               Recurring Assessment
             </Button>
-            <Button type="button" className="h-8 rounded-[5px] text-[12px]" onClick={() => setShowEventForm((open) => !open)}>
+            <Button type="button" className="h-8 rounded-[5px] text-[12px]" onClick={openCreateEvent}>
               <Plus className="size-3.5" />
               Event
             </Button>
@@ -363,6 +461,10 @@ export function SchoolCalendarPage() {
         <Button type="button" variant="outline" className="h-8 rounded-[5px] text-[12px]" onClick={() => setFiltersOpen((open) => !open)}>
           <SlidersHorizontal className="size-3.5" />
           Filters
+        </Button>
+        <Button type="button" variant="outline" className="h-8 rounded-[5px] text-[12px]" onClick={() => setSelectedDate(todayKey)}>
+          <Clock className="size-3.5" />
+          Today
         </Button>
         <div className="flex rounded-[5px] border border-[#d9dce3] bg-white p-0.5">
           {[
@@ -424,14 +526,20 @@ export function SchoolCalendarPage() {
       ) : null}
 
       {showEventForm ? (
-        <SectionCard title="Create School Event" subtitle="School-wide, staff, class or teacher-specific calendar item">
+        <SectionCard title={editingEventId ? 'Edit School Event' : 'Create School Event'} subtitle="School-wide, staff, class or teacher-specific calendar item">
           <div className="grid gap-3 p-4 md:grid-cols-3 xl:grid-cols-6">
             <Field label="Title"><Input className="h-8 text-[12px]" value={eventForm.title} onChange={(event) => setEventForm({ ...eventForm, title: event.target.value })} /></Field>
-            <Field label="Type"><select className={selectClassName()} value={eventForm.event_type} onChange={(event) => setEventForm({ ...eventForm, event_type: event.target.value })}>{eventTypes.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></Field>
+            <Field label="Type"><select className={selectClassName()} value={eventForm.event_type} onChange={(event) => {
+              const nextType = event.target.value
+              const nextImpact = ['holiday', 'closure'].includes(nextType) && eventForm.class_impact === 'NO_CLASSES_SUSPENDED' ? 'ALL_CLASSES_SUSPENDED' : eventForm.class_impact
+              setEventForm({ ...eventForm, event_type: nextType, class_impact: nextImpact })
+            }}>{eventTypes.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></Field>
             <Field label="Date"><Input type="date" className="h-8 text-[12px]" value={eventForm.date} onChange={(event) => setEventForm({ ...eventForm, date: event.target.value })} /></Field>
             <Field label="Start"><Input type="time" className="h-8 text-[12px]" value={eventForm.start_time} onChange={(event) => setEventForm({ ...eventForm, start_time: event.target.value })} /></Field>
             <Field label="End"><Input type="time" className="h-8 text-[12px]" value={eventForm.end_time} onChange={(event) => setEventForm({ ...eventForm, end_time: event.target.value })} /></Field>
             <Field label="Visibility"><select className={selectClassName()} value={eventForm.visibility} onChange={(event) => setEventForm({ ...eventForm, visibility: event.target.value })}><option value="whole_school">Whole School</option><option value="teachers_only">Teachers Only</option><option value="staff_only">Staff Only</option><option value="class_only">Class Only</option><option value="students">Students</option><option value="parents">Parents</option></select></Field>
+            <Field label="Class Impact"><select className={selectClassName()} value={eventForm.class_impact} onChange={(event) => setEventForm({ ...eventForm, class_impact: event.target.value })}>{classImpactOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></Field>
+            {eventForm.class_impact === 'HALF_DAY' ? <Field label="Closing Time"><Input type="time" className="h-8 text-[12px]" value={eventForm.half_day_closing_time} onChange={(event) => setEventForm({ ...eventForm, half_day_closing_time: event.target.value })} /></Field> : null}
             <Field label="Class"><select className={selectClassName()} value={eventForm.class_id} onChange={(event) => setEventForm({ ...eventForm, class_id: event.target.value })}><option value="">School-wide</option>{(setup.classes || []).map((row: any) => <option key={row.id} value={row.id}>{row.name}</option>)}</select></Field>
             <Field label="Subject"><select className={selectClassName()} value={eventForm.subject_id} onChange={(event) => setEventForm({ ...eventForm, subject_id: event.target.value })}><option value="">None</option>{(setup.subjects || []).map((row: any) => <option key={row.id} value={row.id}>{row.name}</option>)}</select></Field>
             {canManageSchool ? <Field label="Teacher"><select className={selectClassName()} value={eventForm.teacher_id} onChange={(event) => setEventForm({ ...eventForm, teacher_id: event.target.value })}><option value="">None</option>{(setup.teachers || []).map((row: any) => <option key={row.id} value={row.id}>{row.full_name || row.email}</option>)}</select></Field> : null}
@@ -441,8 +549,8 @@ export function SchoolCalendarPage() {
               <Textarea className="min-h-20 text-[12px]" value={eventForm.description} onChange={(event) => setEventForm({ ...eventForm, description: event.target.value })} />
             </label>
             <div className="flex gap-2 md:col-span-3 xl:col-span-6">
-              <Button type="button" className="h-8 rounded-[5px] text-[12px]" disabled={saving || !eventForm.title || !eventForm.date} onClick={createEvent}><Save className="size-3.5" /> Save Event</Button>
-              <Button type="button" variant="outline" className="h-8 rounded-[5px] text-[12px]" onClick={() => setShowEventForm(false)}>Cancel</Button>
+              <Button type="button" className="h-8 rounded-[5px] text-[12px]" disabled={saving || !eventForm.title || !eventForm.date} onClick={saveEvent}><Save className="size-3.5" /> {editingEventId ? 'Save Changes' : 'Save Event'}</Button>
+              <Button type="button" variant="outline" className="h-8 rounded-[5px] text-[12px]" onClick={closeEventForm}>Cancel</Button>
             </div>
           </div>
         </SectionCard>
@@ -481,24 +589,31 @@ export function SchoolCalendarPage() {
             {view === 'month' ? (
               <div className="grid grid-cols-7 overflow-hidden rounded-[6px] border border-[#e2e8f0] bg-white">
                 {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((day) => <div key={day} className="border-b border-[#e2e8f0] bg-[#f8fafc] px-2 py-2 text-[11px] font-bold uppercase tracking-[0.08em] text-[#6b7280]">{day}</div>)}
-                {monthDays.map((day) => (
-                  <button key={day.key} type="button" className={`min-h-[118px] border-b border-r border-[#e2e8f0] p-2 text-left ${day.muted ? 'bg-[#f8fafc] text-[#9ca3af]' : 'bg-white text-[#111827]'} ${selectedDate === day.key ? 'ring-2 ring-inset ring-[#111827]' : ''}`} onClick={() => setSelectedDate(day.key)}>
-                    <div className="text-[12px] font-bold">{day.day}</div>
-                    <div className="mt-2 grid gap-1">{(eventsByDate[day.key] || []).slice(0, 3).map(renderCompactEvent)}</div>
-                    {(eventsByDate[day.key] || []).length > 3 ? <div className="mt-1 text-[10px] font-semibold text-[#6b7280]">+{eventsByDate[day.key].length - 3} more</div> : null}
-                  </button>
-                ))}
+                {monthDays.map((day) => {
+                  const isToday = day.key === todayKey
+                  return (
+                    <button key={day.key} type="button" className={`min-h-[118px] border-b border-r border-[#e2e8f0] p-2 text-left transition ${day.muted ? 'bg-[#f8fafc] text-[#9ca3af]' : 'bg-white text-[#111827]'} ${selectedDate === day.key ? 'ring-2 ring-inset ring-[#111827]' : ''} ${isToday ? 'bg-[#f0fdfa]' : ''}`} onClick={() => setSelectedDate(day.key)}>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className={`grid size-6 place-items-center rounded-full text-[12px] font-bold ${isToday ? 'bg-[#0f766e] text-white' : ''}`}>{day.day}</span>
+                        {isToday ? <span className="text-[9px] font-bold uppercase tracking-[0.1em] text-[#0f766e]">Today</span> : null}
+                      </div>
+                      <div className="mt-2 grid gap-1">{(eventsByDate[day.key] || []).slice(0, 3).map(renderCompactEvent)}</div>
+                      {(eventsByDate[day.key] || []).length > 3 ? <div className="mt-1 text-[10px] font-semibold text-[#6b7280]">+{eventsByDate[day.key].length - 3} more</div> : null}
+                    </button>
+                  )
+                })}
               </div>
             ) : null}
 
             {view === 'week' ? (
               <div className="grid gap-2 md:grid-cols-7">
                 {currentWeekDays.map((day) => (
-                  <article key={day.key} className="min-h-[260px] rounded-[6px] border border-[#e2e8f0] bg-white p-3">
+                  <article key={day.key} className={`min-h-[260px] rounded-[6px] border p-3 ${day.key === todayKey ? 'border-[#99f6e4] bg-[#f0fdfa]' : 'border-[#e2e8f0] bg-white'}`}>
                     <div className="flex items-center justify-between border-b border-[#e2e8f0] pb-2">
                       <span className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6b7280]">{day.label}</span>
-                      <span className="text-[16px] font-bold text-[#111827]">{day.day}</span>
+                      <span className={`grid size-7 place-items-center rounded-full text-[16px] font-bold ${day.key === todayKey ? 'bg-[#0f766e] text-white' : 'text-[#111827]'}`}>{day.day}</span>
                     </div>
+                    {day.key === todayKey ? <div className="mt-2 rounded-[4px] border border-[#99f6e4] bg-white px-2 py-1 font-mono text-[11px] font-semibold text-[#0f766e]">Current time {currentClockLabel(now)}</div> : null}
                     <div className="mt-3 grid gap-2">{(eventsByDate[day.key] || []).map(renderCompactEvent)}</div>
                   </article>
                 ))}
@@ -515,6 +630,7 @@ export function SchoolCalendarPage() {
                   { key: 'type', label: 'Type', render: (row) => <TypePill type={row.type} /> },
                   { key: 'start_datetime', label: 'Date', render: (row) => displayDate(row.start_datetime) },
                   { key: 'time', label: 'Time', render: (row) => row.all_day ? 'All day' : `${displayTime(row.start_datetime)}${row.end_datetime ? ` - ${displayTime(row.end_datetime)}` : ''}` },
+                  { key: 'class_impact', label: 'Class Impact', render: (row) => labelize(row.class_impact || 'NO_CLASSES_SUSPENDED') },
                   { key: 'class_name', label: 'Class', render: (row) => row.class_name || '-' },
                   { key: 'subject_name', label: 'Subject', render: (row) => row.subject_name || '-' },
                   { key: 'teacher_name', label: 'Teacher', render: (row) => row.teacher_name || '-' },
@@ -545,6 +661,24 @@ export function SchoolCalendarPage() {
         </SectionCard>
 
         <div className="grid content-start gap-3">
+          <SectionCard title="Happening Now" subtitle={currentClockLabel(now)}>
+            <div className="grid gap-2 p-4">
+              {currentEvents.length ? currentEvents.map((event: any) => (
+                <button key={event.id} type="button" className="rounded-[5px] border border-[#99f6e4] bg-[#f0fdfa] p-3 text-left hover:border-[#0f766e]/45" onClick={() => setSelectedEvent(event)}>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="min-w-0 truncate text-[12px] font-bold text-[#111827]">{event.title}</span>
+                    <span className="rounded-full bg-[#0f766e] px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.08em] text-white">Now</span>
+                  </div>
+                  <div className="mt-1 text-[11px] font-semibold text-[#0f766e]">{event.all_day ? 'All day' : `${displayTime(event.start_datetime)}${event.end_datetime ? ` - ${displayTime(event.end_datetime)}` : ''}`}</div>
+                </button>
+              )) : (
+                <div className="rounded-[5px] border border-[#e2e8f0] bg-white p-3 text-[12px] font-semibold text-[#64748b]">
+                  No active calendar item at {currentClockLabel(now)} on {displayDate(todayKey)}.
+                </div>
+              )}
+            </div>
+          </SectionCard>
+
           <SectionCard title="Upcoming" subtitle="Next visible school items">
             <div className="grid gap-2 p-4">
               {(summary.upcoming_events || []).length ? summary.upcoming_events.map((event: any) => (
@@ -571,11 +705,13 @@ export function SchoolCalendarPage() {
                   <div>Class: {selectedEvent.class_name || '-'}</div>
                   <div>Subject: {selectedEvent.subject_name || '-'}</div>
                   <div>Teacher: {selectedEvent.teacher_name || '-'}</div>
+                  <div>Class impact: {labelize(selectedEvent.class_impact || 'NO_CLASSES_SUSPENDED')}{selectedEvent.class_impact === 'HALF_DAY' && selectedEvent.half_day_closing_time ? ` until ${String(selectedEvent.half_day_closing_time).slice(0, 5)}` : ''}</div>
                   <div>Status: {labelize(selectedEvent.status)}</div>
                   {selectedEvent.recurrence ? <div>Recurs: {selectedEvent.recurrence}</div> : null}
                 </div>
                 {selectedEvent.description ? <div className="rounded-[5px] bg-[#f8fafc] p-3 text-[12px] leading-5 text-[#4b5563]">{selectedEvent.description}</div> : null}
                 <div className="grid gap-2">
+                  {selectedEvent.source === 'manual' && canManageSchool ? <Button type="button" variant="outline" className="h-8 rounded-[5px] text-[12px]" onClick={() => openEditEvent(selectedEvent)}><Pencil className="size-3.5" /> Edit Event</Button> : null}
                   {selectedEvent.can_open_marks ? <Button type="button" className="h-8 rounded-[5px] text-[12px]" onClick={() => openMarksSheet(selectedEvent)}><FileText className="size-3.5" /> Open Marks Sheet</Button> : null}
                   {selectedEvent.can_open_exam_paper && selectedEvent.assessment_id ? <Button type="button" variant="outline" className="h-8 rounded-[5px] text-[12px]" onClick={() => navigate(`/exam-builder/${selectedEvent.assessment_id}`)}>View Exam Paper</Button> : null}
                   {selectedEvent.can_open_exam_session ? <Button type="button" variant="outline" className="h-8 rounded-[5px] text-[12px]" onClick={() => navigate('/exam-sessions')}>View Exam Session</Button> : null}

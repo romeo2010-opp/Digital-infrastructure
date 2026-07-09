@@ -194,7 +194,8 @@ export function AcademicSessionPage() {
 
       <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_380px]">
         <SectionCard title="Academic Years" subtitle="Expand a year to see pass rate, terms and term actions.">
-          <div className="grid gap-2 p-3">
+          <div className="overflow-x-auto p-3">
+            <div className="grid min-w-[900px] gap-2">
             <div className="hidden grid-cols-[36px_minmax(180px,1fr)_120px_120px_110px_100px_110px] gap-2 rounded-[5px] bg-[#f8fafc] px-3 py-2 text-[11px] font-bold uppercase tracking-[0.08em] text-[#64748b] md:grid">
               <span />
               <span>Academic Year</span>
@@ -264,6 +265,7 @@ export function AcademicSessionPage() {
                 </div>
               )
             })}
+            </div>
           </div>
         </SectionCard>
 

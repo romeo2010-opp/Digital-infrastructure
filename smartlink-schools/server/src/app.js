@@ -10,14 +10,25 @@ const app = express()
 
 function corsOrigin() {
   const raw = String(process.env.CORS_ORIGIN || "").trim()
-  const origins = raw.split(",").map((origin) => origin.trim()).filter(Boolean)
+  const origins = raw.split(",").map(normalizeCorsOrigin).filter(Boolean)
   if (!origins.length) return true
   return (origin, callback) => {
-    if (!origin || origins.includes("*") || origins.includes(origin) || isTrustedDevOrigin(origin)) {
+    const normalizedOrigin = normalizeCorsOrigin(origin)
+    if (!origin || origins.includes("*") || origins.includes(normalizedOrigin) || isTrustedDevOrigin(origin)) {
       callback(null, true)
       return
     }
     callback(new Error(`CORS origin not allowed: ${origin}`))
+  }
+}
+
+function normalizeCorsOrigin(origin) {
+  const value = String(origin || "").trim().replace(/^['"]|['"]$/g, "")
+  if (!value || value === "*") return value
+  try {
+    return new URL(value).origin
+  } catch {
+    return value.replace(/\/+$/, "")
   }
 }
 

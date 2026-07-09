@@ -4,6 +4,7 @@ import { getScopedSchoolId } from "../../utils/tenantScope.js"
 import { TimetableSolverClient } from "./solverClient.service.js"
 
 function dateText(value) {
+  if (value instanceof Date) return value.toISOString().slice(0, 10)
   return value ? String(value).slice(0, 10) : null
 }
 
@@ -93,6 +94,66 @@ function groupBy(entries, key) {
   }, {})
 }
 
+function classImpactFromClosure(row) {
+  return String(row?.class_impact || (Number(row?.blocks_lessons) ? "ALL_CLASSES_SUSPENDED" : "NO_CLASSES_SUSPENDED")).toUpperCase()
+}
+
+function operationImpact(payload) {
+  const closures = payload.schoolClosures || []
+  const allSuspended = closures.find((row) => classImpactFromClosure(row) === "ALL_CLASSES_SUSPENDED")
+  if (allSuspended) {
+    return {
+      classImpact: "ALL_CLASSES_SUSPENDED",
+      schoolStatus: "CLOSED",
+      operatingMode: "HOLIDAY_ALL_CLASSES_SUSPENDED",
+      message: `Holiday: All classes suspended today.${allSuspended.title ? ` ${allSuspended.title}.` : ""}`,
+      alertCode: "HOLIDAY_ALL_CLASSES_SUSPENDED",
+      severity: "WARNING",
+    }
+  }
+  const halfDay = closures.find((row) => classImpactFromClosure(row) === "HALF_DAY")
+  if (halfDay) {
+    return {
+      classImpact: "HALF_DAY",
+      schoolStatus: "HALF_DAY",
+      operatingMode: "HOLIDAY_HALF_DAY",
+      halfDayClosingTime: timeText(halfDay.half_day_closing_time || "12:00:00"),
+      message: `Holiday: Half-day operations today.${halfDay.title ? ` ${halfDay.title}.` : ""}`,
+      alertCode: "HOLIDAY_HALF_DAY",
+      severity: "INFO",
+    }
+  }
+  const infoEvent = (payload.events || []).find((event) => String(event.class_impact || "").toUpperCase() === "NO_CLASSES_SUSPENDED")
+  if (infoEvent) {
+    return {
+      classImpact: "NO_CLASSES_SUSPENDED",
+      schoolStatus: null,
+      operatingMode: null,
+      message: `Event today: Classes continue as normal.${infoEvent.title ? ` ${infoEvent.title}.` : ""}`,
+      alertCode: "EVENT_CLASSES_CONTINUE",
+      severity: "INFO",
+    }
+  }
+  return null
+}
+
+function lessonsForImpact(lessons, impact) {
+  if (!impact) return { activeLessons: lessons, suspendedLessons: [] }
+  if (impact.classImpact === "ALL_CLASSES_SUSPENDED") {
+    return { activeLessons: [], suspendedLessons: lessons }
+  }
+  if (impact.classImpact === "HALF_DAY") {
+    const cutoff = clockMinutes(impact.halfDayClosingTime || "12:00:00")
+    return (lessons || []).reduce((acc, lesson) => {
+      const end = clockMinutes(lesson.endTime || lesson.end_time)
+      if (cutoff !== null && end !== null && end > cutoff) acc.suspendedLessons.push(lesson)
+      else acc.activeLessons.push(lesson)
+      return acc
+    }, { activeLessons: [], suspendedLessons: [] })
+  }
+  return { activeLessons: lessons, suspendedLessons: [] }
+}
+
 function lessonSummary(lesson) {
   if (!lesson) return null
   return {
@@ -115,7 +176,7 @@ function lessonSummary(lesson) {
 
 async function loadPublishedSchoolEntries(connection, schoolId, date, weekday) {
   const [rows] = await connection.query(
-    `SELECT e.id, e.entry_type, e.title, e.calendar_date, e.subject_id, e.class_id, e.stream_section, e.teacher_id,
+    `SELECT e.id, e.cycle_week, e.entry_type, e.title, e.calendar_date, e.subject_id, e.class_id, e.stream_section, e.teacher_id,
       e.facility_id, e.room_id, c.name AS className, subj.name AS subjectName, teacher.full_name AS teacherName,
       sf.name AS facilityName, sf.facility_type AS facilityType, ss.start_time, es.end_time,
       ss.display_name AS startSlotName, es.display_name AS endSlotName
@@ -137,12 +198,18 @@ async function loadPublishedSchoolEntries(connection, schoolId, date, weekday) {
      LEFT JOIN subjects subj ON subj.id = e.subject_id
      LEFT JOIN users teacher ON teacher.id = e.teacher_id
      LEFT JOIN school_facilities sf ON sf.id = e.facility_id
-     WHERE e.calendar_date = ? OR (e.calendar_date IS NULL AND cd.weekday = ?)
+     WHERE e.calendar_date = ?
+      OR (
+        e.calendar_date IS NULL
+        AND cd.weekday = ?
+        AND COALESCE(e.cycle_week, 1) = MOD(TIMESTAMPDIFF(WEEK, tt.effective_from, ?), GREATEST(COALESCE(tt.timetable_cycle_weeks, 1), 1)) + 1
+      )
      ORDER BY ss.sort_order, e.id`,
-    [schoolId, date, weekday],
+    [schoolId, date, weekday, date],
   )
   return rows.map((row) => ({
     id: Number(row.id),
+    cycleWeek: Number(row.cycle_week || 1),
     entryType: row.entry_type,
     title: row.title || row.subjectName || row.entry_type,
     calendarDate: dateText(row.calendar_date) || date,
@@ -265,15 +332,17 @@ async function buildTodayPayload(schoolId, date) {
 function fallbackToday(payload) {
   const exams = payload.publishedExamTimetableEntries || []
   const lessons = payload.publishedSchoolTimetableEntries || []
-  const learningEntries = lessons.filter(isLearningEntry)
+  const impact = operationImpact(payload)
+  const { activeLessons: learningEntries, suspendedLessons } = lessonsForImpact(lessons.filter(isLearningEntry), impact)
   const closures = payload.schoolClosures || []
   const classesWritingExams = [...new Set(exams.map((item) => item.classId).filter(Boolean))]
   const lessonClassIds = [...new Set(learningEntries.map((item) => item.classId).filter(Boolean))]
   const classesContinuingNormalLessons = lessonClassIds.filter((id) => !classesWritingExams.includes(id))
-  const closed = closures.length > 0
-  const schoolStatus = closed ? "CLOSED" : exams.length ? (classesContinuingNormalLessons.length ? "PARTIAL_EXAM_DAY" : "EXAM_DAY") : "NORMAL_SCHOOL_DAY"
-  const operatingMode = closed ? "CLOSED" : exams.length ? (classesContinuingNormalLessons.length ? "NORMAL_WITH_EXAMS" : "EXAM_MODE_FULL_SUSPENSION") : "NORMAL_TIMETABLE"
+  const closed = impact?.classImpact === "ALL_CLASSES_SUSPENDED" || closures.some((row) => Number(row.blocks_lessons) && classImpactFromClosure(row) === "ALL_CLASSES_SUSPENDED")
+  const schoolStatus = impact?.schoolStatus || (closed ? "CLOSED" : exams.length ? (classesContinuingNormalLessons.length ? "PARTIAL_EXAM_DAY" : "EXAM_DAY") : "NORMAL_SCHOOL_DAY")
+  const operatingMode = impact?.operatingMode || (closed ? "CLOSED" : exams.length ? (classesContinuingNormalLessons.length ? "NORMAL_WITH_EXAMS" : "EXAM_MODE_FULL_SUSPENSION") : "NORMAL_TIMETABLE")
   const alerts = []
+  if (impact?.message) alerts.push({ code: impact.alertCode, message: impact.message, severity: impact.severity })
   if (exams.length) alerts.push({ code: "EXAMS_TODAY", message: `${exams.length} exam session(s) are scheduled today.`, severity: "INFO" })
   if (payload.facilityMaintenance?.length) alerts.push({ code: "FACILITY_MAINTENANCE", message: `${payload.facilityMaintenance.length} facility maintenance block(s) are active today.`, severity: "WARNING" })
   const activeLessonsNow = activeNow(learningEntries, payload.timezone).map(lessonSummary).filter(Boolean)
@@ -290,6 +359,9 @@ function fallbackToday(payload) {
     operatingMode,
     activeAcademicYear: payload.activeAcademicYear,
     activeTerm: payload.activeTerm,
+    operationsMessage: impact?.message || null,
+    classImpact: impact?.classImpact || null,
+    halfDayClosingTime: impact?.halfDayClosingTime || null,
     todayBellSchedule: [],
     currentTimeBlock: activeNow([...lessons, ...exams], payload.timezone)[0] || null,
     nextTimeBlock: null,
@@ -304,7 +376,7 @@ function fallbackToday(payload) {
     examSessionsToday: exams,
     classesWritingExams,
     classesContinuingNormalLessons,
-    suspendedLessons: [],
+    suspendedLessons,
     substitutions: [],
     teacherAbsences: [],
     roomChanges: [],
@@ -322,16 +394,23 @@ function fallbackToday(payload) {
     laboratoriesInUseNow: activeNow([...lessons, ...exams].filter((item) => String(item.facilityType || "").includes("LABORATORY")), payload.timezone),
     upcomingCriticalEvents: payload.events || [],
     alerts,
-    recommendations: alerts.some((item) => item.severity === "WARNING") ? ["Review today's operational alerts before the next period."] : [],
+    recommendations: impact?.classImpact === "ALL_CLASSES_SUSPENDED"
+      ? ["Keep normal lesson registers closed for today's suspended timetable."]
+      : impact?.classImpact === "HALF_DAY"
+        ? [`Use the morning timetable only; lessons after ${String(impact.halfDayClosingTime || "12:00").slice(0, 5)} are suspended.`]
+        : alerts.some((item) => item.severity === "WARNING") ? ["Review today's operational alerts before the next period."] : [],
     solverUnavailable: true,
   }
 }
 
 function enrichTodaySnapshot(snapshot, payload) {
-  const lessons = (payload.publishedSchoolTimetableEntries || []).filter(isLearningEntry)
+  const impact = operationImpact(payload)
+  const { activeLessons: lessons, suspendedLessons } = lessonsForImpact((payload.publishedSchoolTimetableEntries || []).filter(isLearningEntry), impact)
   const activeLessonsNow = activeNow(lessons, payload.timezone).map(lessonSummary).filter(Boolean)
   const upcomingLessons = upcomingAfterNow(lessons, payload.timezone).map(lessonSummary).filter(Boolean)
   const classesLearningNow = activeLessonsNow
+  const classesWritingExams = [...new Set((payload.publishedExamTimetableEntries || []).map((item) => item.classId).filter(Boolean))]
+  const classesContinuingNormalLessons = [...new Set(lessons.map((item) => item.classId).filter(Boolean))].filter((id) => !classesWritingExams.includes(id))
   const teacherSchedules = Object.keys(snapshot.teacherSchedules || {}).length ? snapshot.teacherSchedules : groupBy(lessons, "teacherId")
   const currentLessonsByTeacher = groupBy(activeLessonsNow, "teacherId")
   const nextLessonsByTeacher = upcomingLessons.reduce((acc, lesson) => {
@@ -340,7 +419,19 @@ function enrichTodaySnapshot(snapshot, payload) {
   }, {})
   return {
     ...snapshot,
+    schoolStatus: impact?.schoolStatus || snapshot.schoolStatus,
+    operatingMode: impact?.operatingMode || snapshot.operatingMode,
+    operationsMessage: impact?.message || snapshot.operationsMessage || null,
+    classImpact: impact?.classImpact || snapshot.classImpact || null,
+    halfDayClosingTime: impact?.halfDayClosingTime || snapshot.halfDayClosingTime || null,
     teacherSchedules,
+    classSchedules: groupBy(lessons, "classId"),
+    classesContinuingNormalLessons,
+    lessonsExpectedToBeTaught: lessons,
+    suspendedLessons,
+    alerts: impact?.message
+      ? [{ code: impact.alertCode, message: impact.message, severity: impact.severity }, ...(snapshot.alerts || []).filter((item) => item.code !== impact.alertCode)]
+      : snapshot.alerts,
     activeLessonsNow,
     upcomingLessons,
     classesLearningNow,

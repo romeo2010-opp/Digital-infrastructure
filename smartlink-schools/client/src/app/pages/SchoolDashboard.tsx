@@ -604,7 +604,8 @@ function lessonTitle(lesson: any) {
 
 function statusTone(status: any) {
   const value = String(status || '').toUpperCase()
-  if (value.includes('CLOSED') || value.includes('EMERGENCY')) return 'border-[#fecaca] bg-[#fef2f2] text-[#991b1b]'
+  if (value.includes('CLOSED') || value.includes('EMERGENCY') || value.includes('SUSPENDED')) return 'border-[#fecaca] bg-[#fef2f2] text-[#991b1b]'
+  if (value.includes('HALF')) return 'border-[#bfdbfe] bg-[#eff6ff] text-[#1d4ed8]'
   if (value.includes('EXAM') || value.includes('EVENT')) return 'border-[#fed7aa] bg-[#fff7ed] text-[#9a3412]'
   return 'border-[#bbf7d0] bg-[#f0fdf4] text-[#166534]'
 }
@@ -625,6 +626,7 @@ function TodayIntelligenceCard({ todayPayload, user }: { todayPayload: any; user
   const teacherUpcomingLesson = teacherId ? (today.nextLessonsByTeacher?.[teacherId] || today.upcomingLesson || null) : null
   const status = pretty(today.schoolStatus || 'NORMAL_SCHOOL_DAY')
   const operatingMode = pretty(today.operatingMode || 'NORMAL_TIMETABLE')
+  const operationsMessage = String(today.operationsMessage || '')
   const nextLesson = upcomingLessons[0]
   const dayFlowLessons = upcomingLessons.length ? upcomingLessons.slice(0, 3) : classesLearningNow.slice(0, 3)
   const publishedLessonCount = Math.max(classesContinuing.length, classesLearningNow.length, 1)
@@ -688,7 +690,7 @@ function TodayIntelligenceCard({ todayPayload, user }: { todayPayload: any; user
                 </div>
                 <div className="mt-2 text-[24px] font-black leading-tight tracking-[0] text-[#0f172a]">{operatingMode}</div>
                 <div className="school-ops-muted mt-2 max-w-2xl text-[12px] font-medium leading-5 text-[#475569]">
-                  {classesLearningNow.length ? `${countLabel(classesLearningNow.length, 'class', 'classes')} active now across the published timetable.${overlapCount ? ` ${countLabel(overlapCount, 'overlapping entry', 'overlapping entries')} collapsed.` : ''}` : 'No class lesson is active at this exact time.'}
+                  {operationsMessage || (classesLearningNow.length ? `${countLabel(classesLearningNow.length, 'class', 'classes')} active now across the published timetable.${overlapCount ? ` ${countLabel(overlapCount, 'overlapping entry', 'overlapping entries')} collapsed.` : ''}` : 'No class lesson is active at this exact time.')}
                 </div>
                 <div className="mt-5">
                   <div className="school-ops-muted flex items-center justify-between gap-3 text-[11px] font-bold text-[#475569]">
