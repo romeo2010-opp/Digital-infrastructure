@@ -21,6 +21,129 @@ async def test_locked_manual_entry_respected(client, auth_headers):
     assert any(item["requirementId"] == "req-math" and item["cycleDayId"] == "mon" and item["slotStartId"] == "p1" and item["locked"] for item in assignments)
 
 
+async def test_multi_week_cycle_assigns_lessons_across_weeks(client, auth_headers):
+    payload = school_payload()
+    payload["timetableCycleWeeks"] = 2
+    payload["cycleWeeks"] = [{"weekNumber": 1, "name": "Week 1"}, {"weekNumber": 2, "name": "Week 2"}]
+    payload["cycleDays"] = [{"id": "mon", "code": "MON", "weekday": 1, "sortOrder": 1}]
+    payload["bellScheduleSlots"] = [
+        {"id": "p1", "code": "P1", "startTime": "08:00", "endTime": "08:40", "slotNumber": 1, "sortOrder": 1},
+    ]
+    payload["curriculumRequirements"] = [
+        {"id": "req-math", "subjectId": "math", "classId": "c1", "teacherId": "t1", "periodsPerCycle": 2, "blockLength": 1}
+    ]
+    payload["maxAlternatives"] = 1
+
+    response = await client.post("/solve/school-timetable", json=payload, headers=auth_headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] in {"OPTIMAL", "FEASIBLE"}
+    assignments = body["alternatives"][0]["assignments"]
+    assert len(assignments) == 2
+    assert {item["cycleWeek"] for item in assignments} == {1, 2}
+
+
+async def test_existing_full_day_school_occupancy_blocks_lessons(client, auth_headers):
+    payload = school_payload()
+    payload["cycleDays"] = [{"id": "mon", "code": "MON", "weekday": 1, "sortOrder": 1}]
+    payload["bellScheduleSlots"] = [
+        {"id": "p1", "code": "P1", "startTime": "08:00", "endTime": "08:40", "slotNumber": 1, "sortOrder": 1},
+    ]
+    payload["curriculumRequirements"] = [
+        {"id": "req-math", "subjectId": "math", "classId": "c1", "teacherId": "t1", "periodsPerCycle": 1, "blockLength": 1}
+    ]
+    payload["existingOccupancy"] = [
+        {
+            "resourceType": "SCHOOL",
+            "resourceId": "1",
+            "cycleWeek": 1,
+            "cycleDayId": "mon",
+            "startSlotId": "p1",
+            "endSlotId": "p1",
+            "occupancyType": "HOLIDAY",
+            "title": "Public holiday",
+            "blocking": True,
+        }
+    ]
+
+    response = await client.post("/solve/school-timetable", json=payload, headers=auth_headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "INFEASIBLE"
+    assert any(item["code"] == "NO_VALID_PLACEMENT" for item in body["diagnostics"])
+
+
+async def test_half_day_school_occupancy_blocks_only_afternoon_slots(client, auth_headers):
+    payload = school_payload()
+    payload["cycleDays"] = [{"id": "mon", "code": "MON", "weekday": 1, "sortOrder": 1}]
+    payload["bellScheduleSlots"] = [
+        {"id": "p1", "code": "P1", "startTime": "08:00", "endTime": "08:40", "slotNumber": 1, "sortOrder": 1},
+        {"id": "p2", "code": "P2", "startTime": "13:00", "endTime": "13:40", "slotNumber": 2, "sortOrder": 2},
+    ]
+    payload["curriculumRequirements"] = [
+        {"id": "req-math", "subjectId": "math", "classId": "c1", "teacherId": "t1", "periodsPerCycle": 1, "blockLength": 1}
+    ]
+    payload["existingOccupancy"] = [
+        {
+            "resourceType": "SCHOOL",
+            "resourceId": "1",
+            "cycleWeek": 1,
+            "cycleDayId": "mon",
+            "startSlotId": "p2",
+            "endSlotId": "p2",
+            "occupancyType": "HALF_DAY",
+            "title": "Half-day event",
+            "blocking": True,
+        }
+    ]
+    payload["maxAlternatives"] = 1
+
+    response = await client.post("/solve/school-timetable", json=payload, headers=auth_headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] in {"OPTIMAL", "FEASIBLE"}
+    assignments = body["alternatives"][0]["assignments"]
+    assert len(assignments) == 1
+    assert assignments[0]["slotStartId"] == "p1"
+
+
+async def test_non_blocking_school_event_does_not_suspend_lessons(client, auth_headers):
+    payload = school_payload()
+    payload["cycleDays"] = [{"id": "mon", "code": "MON", "weekday": 1, "sortOrder": 1}]
+    payload["bellScheduleSlots"] = [
+        {"id": "p1", "code": "P1", "startTime": "08:00", "endTime": "08:40", "slotNumber": 1, "sortOrder": 1},
+    ]
+    payload["curriculumRequirements"] = [
+        {"id": "req-math", "subjectId": "math", "classId": "c1", "teacherId": "t1", "periodsPerCycle": 1, "blockLength": 1}
+    ]
+    payload["existingOccupancy"] = [
+        {
+            "resourceType": "SCHOOL",
+            "resourceId": "1",
+            "cycleWeek": 1,
+            "cycleDayId": "mon",
+            "startSlotId": "p1",
+            "endSlotId": "p1",
+            "occupancyType": "NO_CLASSES_SUSPENDED",
+            "title": "Information event",
+            "blocking": False,
+        }
+    ]
+    payload["maxAlternatives"] = 1
+
+    response = await client.post("/solve/school-timetable", json=payload, headers=auth_headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] in {"OPTIMAL", "FEASIBLE"}
+    assignments = body["alternatives"][0]["assignments"]
+    assert len(assignments) == 1
+    assert assignments[0]["slotStartId"] == "p1"
+
+
 async def test_stale_locked_slot_returns_diagnostic(client, auth_headers):
     payload = school_payload()
     payload["curriculumRequirements"][0]["lockedAssignments"] = [

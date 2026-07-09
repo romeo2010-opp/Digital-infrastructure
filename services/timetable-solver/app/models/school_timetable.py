@@ -33,6 +33,7 @@ class LockedAssignment(BaseModel):
     assistantTeacherId: str | None = None
     facilityId: str | None = None
     equipmentIds: list[str] = Field(default_factory=list)
+    cycleWeek: int = 1
     cycleDayId: str | None = None
     slotStartId: str
     slotEndId: str | None = None
@@ -147,6 +148,8 @@ class SchoolTimetableSolveRequest(BaseModel):
     academicYearId: str | None = None
     termId: str | None = None
     timetableVersionId: str | None = None
+    timetableCycleWeeks: int = 1
+    cycleWeeks: list[dict[str, Any]] = Field(default_factory=list)
     cycleDays: list[CycleDay] = Field(default_factory=list)
     bellScheduleSlots: list[BellSlot] = Field(default_factory=list)
     bellScheduleSlotTags: list[BellScheduleSlotTag] = Field(default_factory=list)
@@ -188,6 +191,7 @@ class SchoolAssignment(BaseModel):
     assistantTeacherId: str | None = None
     facilityId: str | None = None
     equipmentIds: list[str] = Field(default_factory=list)
+    cycleWeek: int = 1
     cycleDayId: str
     slotStartId: str
     slotEndId: str
@@ -224,6 +228,7 @@ class AlternativeSlotRequest(BaseModel):
     classId: str | None = None
     teacherId: str | None = None
     facilityId: str | None = None
+    cycleWeek: int = 1
     cycleDays: list[CycleDay] = Field(default_factory=list)
     bellScheduleSlots: list[BellSlot] = Field(default_factory=list)
     facilities: list[Facility] = Field(default_factory=list)
@@ -237,6 +242,7 @@ class AlternativeSlotRequest(BaseModel):
 
 
 class AlternativeSlotSuggestion(BaseModel):
+    cycleWeek: int = 1
     cycleDayId: str
     slotStartId: str
     slotEndId: str

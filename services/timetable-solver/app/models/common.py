@@ -149,6 +149,7 @@ class WeeklyActivity(BaseModel):
 class AvailabilityRule(BaseModel):
     resourceType: Literal["TEACHER", "FACILITY", "LABORATORY", "EQUIPMENT"]
     resourceId: str
+    cycleWeek: int | None = None
     cycleDayId: str | None = None
     weekday: int | None = None
     startSlotId: str | None = None
@@ -161,6 +162,7 @@ class OccupancyRecord(BaseModel):
     resourceType: str
     resourceId: str
     date: str | None = None
+    cycleWeek: int | None = None
     cycleDayId: str | None = None
     startTime: str | None = None
     endTime: str | None = None

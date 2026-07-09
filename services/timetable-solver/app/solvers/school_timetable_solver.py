@@ -44,6 +44,7 @@ from app.services.validation import validate_school_problem
 class Candidate:
     requirement: CurriculumRequirement
     occurrence: int
+    cycle_week: int
     cycle_day_id: str
     start_slot_id: str
     end_slot_id: str
@@ -300,7 +301,7 @@ def _stream_rule_group_keys(
     bucket = _stream_bucket(req, classes)
     keys = []
     for slot_id in candidate.occupied_slot_ids:
-        base = f"{rule.id}:{bucket}:subject:{req.subjectId}:day:{candidate.cycle_day_id}:slot:{slot_id}"
+        base = f"{rule.id}:{bucket}:subject:{req.subjectId}:week:{candidate.cycle_week}:day:{candidate.cycle_day_id}:slot:{slot_id}"
         if policy == "ALLOW_ONLY_WITH_DIFFERENT_TEACHERS":
             keys.append((f"{base}:teacher:{candidate.teacher_id or 'UNASSIGNED'}", 1))
         elif policy == "ALLOW_ONLY_WITH_DIFFERENT_ROOMS":
@@ -523,6 +524,7 @@ def _occupancy_blocks_candidate(
     req: CurriculumRequirement,
     teacher_id: str | None,
     facility_id: str | None,
+    cycle_week: int,
     cycle_day_id: str,
     start_slot_id: str,
     end_slot_id: str,
@@ -531,6 +533,8 @@ def _occupancy_blocks_candidate(
 ) -> str | None:
     for item in occupancy:
         if not item.blocking or item.canOverride:
+            continue
+        if item.cycleWeek and int(item.cycleWeek) != int(cycle_week):
             continue
         if item.cycleDayId and item.cycleDayId != cycle_day_id:
             continue
@@ -545,6 +549,7 @@ def _rule_blocks_candidate(
     rules: list[AvailabilityRule],
     resource_type: str,
     resource_id: str | None,
+    cycle_week: int,
     cycle_day_id: str,
     start_slot_id: str,
     end_slot_id: str,
@@ -556,6 +561,8 @@ def _rule_blocks_candidate(
         if rule.resourceType.upper() != resource_type or rule.resourceId != resource_id:
             continue
         if rule.status not in {"UNAVAILABLE", "MAINTENANCE", "RESTRICTED"}:
+            continue
+        if rule.cycleWeek and int(rule.cycleWeek) != int(cycle_week):
             continue
         if rule.cycleDayId and rule.cycleDayId != cycle_day_id:
             continue
@@ -658,6 +665,7 @@ def _locked_candidate(
     return Candidate(
         requirement=req,
         occurrence=occurrence,
+        cycle_week=max(1, int(locked.cycleWeek or 1)),
         cycle_day_id=locked.cycleDayId,
         start_slot_id=locked.slotStartId,
         end_slot_id=end_slot_id,
@@ -707,13 +715,14 @@ def _build_candidates(
     fixed_occupancy = list(payload.existingOccupancy)
     for entry in [*payload.fixedEntries, *payload.lockedEntries]:
         if entry.classId:
-            fixed_occupancy.append(OccupancyRecord(resourceType="STREAM" if entry.streamId else "CLASS", resourceId=entry.streamId or entry.classId, cycleDayId=entry.cycleDayId, startSlotId=entry.slotStartId, endSlotId=entry.slotEndId or entry.slotStartId, occupancyType=entry.entryType, title=entry.notes or "Locked timetable entry", blocking=True))
+            fixed_occupancy.append(OccupancyRecord(resourceType="STREAM" if entry.streamId else "CLASS", resourceId=entry.streamId or entry.classId, cycleWeek=entry.cycleWeek, cycleDayId=entry.cycleDayId, startSlotId=entry.slotStartId, endSlotId=entry.slotEndId or entry.slotStartId, occupancyType=entry.entryType, title=entry.notes or "Locked timetable entry", blocking=True))
         if entry.teacherId:
-            fixed_occupancy.append(OccupancyRecord(resourceType="TEACHER", resourceId=entry.teacherId, cycleDayId=entry.cycleDayId, startSlotId=entry.slotStartId, endSlotId=entry.slotEndId or entry.slotStartId, occupancyType=entry.entryType, title=entry.notes or "Locked timetable entry", blocking=True))
+            fixed_occupancy.append(OccupancyRecord(resourceType="TEACHER", resourceId=entry.teacherId, cycleWeek=entry.cycleWeek, cycleDayId=entry.cycleDayId, startSlotId=entry.slotStartId, endSlotId=entry.slotEndId or entry.slotStartId, occupancyType=entry.entryType, title=entry.notes or "Locked timetable entry", blocking=True))
         if entry.facilityId:
-            fixed_occupancy.append(OccupancyRecord(resourceType="FACILITY", resourceId=entry.facilityId, cycleDayId=entry.cycleDayId, startSlotId=entry.slotStartId, endSlotId=entry.slotEndId or entry.slotStartId, occupancyType=entry.entryType, title=entry.notes or "Locked timetable entry", blocking=True))
+            fixed_occupancy.append(OccupancyRecord(resourceType="FACILITY", resourceId=entry.facilityId, cycleWeek=entry.cycleWeek, cycleDayId=entry.cycleDayId, startSlotId=entry.slotStartId, endSlotId=entry.slotEndId or entry.slotStartId, occupancyType=entry.entryType, title=entry.notes or "Locked timetable entry", blocking=True))
 
     candidates_by_occurrence: dict[str, list[Candidate]] = {}
+    cycle_weeks = range(1, max(1, int(payload.timetableCycleWeeks or 1)) + 1)
 
     for req in payload.curriculumRequirements:
         block_length = max(1, int(req.blockLength or 1))
@@ -746,93 +755,100 @@ def _build_candidates(
 
             candidates: list[Candidate] = []
             last_focus_block: str | None = None
-            for day in days:
-                if req.allowedCycleDayIds and day.id not in req.allowedCycleDayIds:
-                    continue
-                day_slots = _slots_for_day(slots, day.id)
-                for start_slot in day_slots:
-                    if req.allowedSlotIds and start_slot.id not in req.allowedSlotIds:
+            for cycle_week in cycle_weeks:
+                for day in days:
+                    if req.allowedCycleDayIds and day.id not in req.allowedCycleDayIds:
                         continue
-                    if not start_slot.teachingAllowed:
-                        continue
-                    occupied = _block_slot_ids(day_slots, start_slot.id, block_length)
-                    if not occupied:
-                        continue
-                    end_slot_id = occupied[-1]
-                    if start_slot.id not in slot_by_id or end_slot_id not in slot_by_id:
-                        continue
-                    focus_block = _focus_block_reason(req, start_slot.id, occupied, slot_tags, focus_rules)
-                    if focus_block:
-                        last_focus_block = focus_block
-                        continue
-                    for teacher_id in teachers:
-                        teacher_block = _rule_blocks_candidate(
-                            payload.teacherAvailability,
-                            "TEACHER",
-                            teacher_id,
-                            day.id,
-                            start_slot.id,
-                            end_slot_id,
-                            slot_numbers,
-                        )
-                        if teacher_block:
+                    day_slots = _slots_for_day(slots, day.id)
+                    for start_slot in day_slots:
+                        if req.allowedSlotIds and start_slot.id not in req.allowedSlotIds:
                             continue
-                        for facility_id in facilities:
-                            facility_block = _rule_blocks_candidate(
-                                payload.facilityAvailability,
-                                "FACILITY",
-                                facility_id,
-                                day.id,
-                                start_slot.id,
-                                end_slot_id,
-                                slot_numbers,
-                            )
-                            if facility_block:
-                                continue
-                            activity_block = _activity_blocks_candidate(
-                                req,
+                        if not start_slot.teachingAllowed:
+                            continue
+                        occupied = _block_slot_ids(day_slots, start_slot.id, block_length)
+                        if not occupied:
+                            continue
+                        end_slot_id = occupied[-1]
+                        if start_slot.id not in slot_by_id or end_slot_id not in slot_by_id:
+                            continue
+                        focus_block = _focus_block_reason(req, start_slot.id, occupied, slot_tags, focus_rules)
+                        if focus_block:
+                            last_focus_block = focus_block
+                            continue
+                        for teacher_id in teachers:
+                            teacher_block = _rule_blocks_candidate(
+                                payload.teacherAvailability,
+                                "TEACHER",
                                 teacher_id,
-                                facility_id,
+                                cycle_week,
                                 day.id,
                                 start_slot.id,
                                 end_slot_id,
-                                payload,
                                 slot_numbers,
                             )
-                            if activity_block:
+                            if teacher_block:
                                 continue
-                            occupancy_block = _occupancy_blocks_candidate(
-                                req,
-                                teacher_id,
-                                facility_id,
-                                day.id,
-                                start_slot.id,
-                                end_slot_id,
-                                fixed_occupancy,
-                                slot_numbers,
-                            )
-                            if occupancy_block:
-                                continue
-                            if req.classId and req.classId in classes:
-                                class_size = classes[req.classId].size
-                                if facility_id:
-                                    facility = next((item for item in all_facilities if item.id == facility_id), None)
-                                    if facility and facility.normalCapacity and class_size > facility.normalCapacity:
-                                        continue
-                            base_penalty = _candidate_penalty(req, day.id, start_slot, facility_id)
-                            focus_penalty, focus_violations = _focus_penalty_and_violations(req, start_slot.id, occupied, slot_tags, focus_rules)
-                            candidates.append(Candidate(
-                                requirement=req,
-                                occurrence=occurrence,
-                                cycle_day_id=day.id,
-                                start_slot_id=start_slot.id,
-                                end_slot_id=end_slot_id,
-                                occupied_slot_ids=occupied,
-                                teacher_id=teacher_id,
-                                facility_id=facility_id,
-                                penalty=base_penalty + focus_penalty,
-                                focus_violations=focus_violations,
-                            ))
+                            for facility_id in facilities:
+                                facility_block = _rule_blocks_candidate(
+                                    payload.facilityAvailability,
+                                    "FACILITY",
+                                    facility_id,
+                                    cycle_week,
+                                    day.id,
+                                    start_slot.id,
+                                    end_slot_id,
+                                    slot_numbers,
+                                )
+                                if facility_block:
+                                    continue
+                                activity_block = _activity_blocks_candidate(
+                                    req,
+                                    teacher_id,
+                                    facility_id,
+                                    day.id,
+                                    start_slot.id,
+                                    end_slot_id,
+                                    payload,
+                                    slot_numbers,
+                                )
+                                if activity_block:
+                                    continue
+                                occupancy_block = _occupancy_blocks_candidate(
+                                    req,
+                                    teacher_id,
+                                    facility_id,
+                                    cycle_week,
+                                    day.id,
+                                    start_slot.id,
+                                    end_slot_id,
+                                    fixed_occupancy,
+                                    slot_numbers,
+                                )
+                                if occupancy_block:
+                                    continue
+                                if req.classId and req.classId in classes:
+                                    class_size = classes[req.classId].size
+                                    if facility_id:
+                                        facility = next((item for item in all_facilities if item.id == facility_id), None)
+                                        if facility and facility.normalCapacity and class_size > facility.normalCapacity:
+                                            continue
+                                base_penalty = _candidate_penalty(req, day.id, start_slot, facility_id)
+                                target_week = (occurrence % max(1, int(payload.timetableCycleWeeks or 1))) + 1
+                                week_penalty = abs(int(cycle_week) - target_week) * 4
+                                focus_penalty, focus_violations = _focus_penalty_and_violations(req, start_slot.id, occupied, slot_tags, focus_rules)
+                                candidates.append(Candidate(
+                                    requirement=req,
+                                    occurrence=occurrence,
+                                    cycle_week=cycle_week,
+                                    cycle_day_id=day.id,
+                                    start_slot_id=start_slot.id,
+                                    end_slot_id=end_slot_id,
+                                    occupied_slot_ids=occupied,
+                                    teacher_id=teacher_id,
+                                    facility_id=facility_id,
+                                    penalty=base_penalty + week_penalty + focus_penalty,
+                                    focus_violations=focus_violations,
+                                ))
             if not candidates:
                 if last_focus_block:
                     diagnostics.append(diagnostic(
@@ -878,6 +894,7 @@ def _assignment_from_candidate(candidate: Candidate) -> SchoolAssignment:
         assistantTeacherId=req.assistantTeacherId,
         facilityId=candidate.facility_id,
         equipmentIds=req.equipmentIds,
+        cycleWeek=candidate.cycle_week,
         cycleDayId=candidate.cycle_day_id,
         slotStartId=candidate.start_slot_id,
         slotEndId=candidate.end_slot_id,
@@ -1011,20 +1028,20 @@ def solve_school_timetable(payload: SchoolTimetableSolveRequest) -> SchoolTimeta
             req = candidate.requirement
             for slot_id in candidate.occupied_slot_ids:
                 if candidate.teacher_id:
-                    occupancy_groups[f"TEACHER:{candidate.teacher_id}:{candidate.cycle_day_id}:{slot_id}"].append(var)
+                    occupancy_groups[f"TEACHER:{candidate.teacher_id}:{candidate.cycle_week}:{candidate.cycle_day_id}:{slot_id}"].append(var)
                 if req.classId:
                     if req.streamId:
-                        occupancy_groups[f"CLASS_STREAM:{req.classId}:{req.streamId}:{candidate.cycle_day_id}:{slot_id}"].append(var)
+                        occupancy_groups[f"CLASS_STREAM:{req.classId}:{req.streamId}:{candidate.cycle_week}:{candidate.cycle_day_id}:{slot_id}"].append(var)
                     else:
-                        occupancy_groups[f"CLASS:{req.classId}:{candidate.cycle_day_id}:{slot_id}"].append(var)
+                        occupancy_groups[f"CLASS:{req.classId}:{candidate.cycle_week}:{candidate.cycle_day_id}:{slot_id}"].append(var)
                 if req.streamId:
-                    occupancy_groups[f"STREAM:{req.streamId}:{candidate.cycle_day_id}:{slot_id}"].append(var)
+                    occupancy_groups[f"STREAM:{req.streamId}:{candidate.cycle_week}:{candidate.cycle_day_id}:{slot_id}"].append(var)
                 for group_id in req.studentGroupIds:
-                    occupancy_groups[f"STUDENT_GROUP:{group_id}:{candidate.cycle_day_id}:{slot_id}"].append(var)
+                    occupancy_groups[f"STUDENT_GROUP:{group_id}:{candidate.cycle_week}:{candidate.cycle_day_id}:{slot_id}"].append(var)
                 if candidate.facility_id:
-                    occupancy_groups[f"FACILITY:{candidate.facility_id}:{candidate.cycle_day_id}:{slot_id}"].append(var)
+                    occupancy_groups[f"FACILITY:{candidate.facility_id}:{candidate.cycle_week}:{candidate.cycle_day_id}:{slot_id}"].append(var)
             if req.classId and req.subjectId:
-                same_subject_day_groups[f"{req.classId}:{req.subjectId}:{candidate.cycle_day_id}"].append((var, candidate))
+                same_subject_day_groups[f"{req.classId}:{req.subjectId}:{candidate.cycle_week}:{candidate.cycle_day_id}"].append((var, candidate))
             for rule in payload.streamSchedulingRules:
                 for group_key, limit in _stream_rule_group_keys(rule, candidate, classes):
                     target = stream_hard_groups if str(rule.severity).upper() == "HARD" else stream_soft_groups
@@ -1174,6 +1191,7 @@ def find_alternative_slots(payload: AlternativeSlotRequest) -> AlternativeSlotRe
         start_slot = next((slot for slot in slots if slot.id == candidate.start_slot_id), None)
         score = 100 - candidate.penalty - (early_slot_penalty(start_slot) if start_slot else 0)
         suggestions.append(AlternativeSlotSuggestion(
+            cycleWeek=candidate.cycle_week,
             cycleDayId=candidate.cycle_day_id,
             slotStartId=candidate.start_slot_id,
             slotEndId=candidate.end_slot_id,

@@ -5,12 +5,13 @@ from app.models.school_timetable import SchoolTimetableSolveRequest
 
 def _usable_teaching_slots(payload: SchoolTimetableSolveRequest) -> int:
     active_days = [day for day in payload.cycleDays if day.active]
-    return sum(
+    slots_per_week = sum(
         1
         for day in active_days
         for slot in payload.bellScheduleSlots
         if slot.teachingAllowed and (not slot.cycleDayIds or day.id in slot.cycleDayIds)
     )
+    return slots_per_week * max(1, int(payload.timetableCycleWeeks or 1))
 
 
 def validate_school_problem(payload: SchoolTimetableSolveRequest) -> list[Diagnostic]:
