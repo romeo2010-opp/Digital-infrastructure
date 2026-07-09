@@ -36,6 +36,7 @@ import { TimetablingPage } from './pages/TimetablingPage'
 import { SchedulingSettingsPage } from './pages/SchedulingSettingsPage'
 import { PublicLandingPage } from './pages/PublicLandingPage'
 import { BursarFinancePage } from './pages/BursarFinancePage'
+import { FeeReceiptPrintPage } from './pages/FeeReceiptPrintPage'
 import { ExamIntelligenceComingSoonPage } from './pages/ExamIntelligenceComingSoonPage'
 import { ExamIntelligenceLabPage } from './pages/ExamIntelligenceLabPage'
 
@@ -309,6 +310,7 @@ function SchoolRoutes({ landingPath }: { landingPath: string }) {
       <Route path="/parents" element={<SchoolWorkspace pageKey="parents" />} />
       <Route path="/calendar" element={<SchoolCalendarPage />} />
       <Route path="/fees" element={<BursarFinancePage />} />
+      <Route path="/fees/payments/:paymentId/receipt" element={<FeeReceiptPrintPage />} />
       <Route path="/fees/:financeSection" element={<BursarFinancePage />} />
       <Route path="/attendance" element={<SchoolWorkspace pageKey="attendance" />} />
       <Route path="/homework" element={<SchoolWorkspace pageKey="homework" />} />

@@ -6,7 +6,6 @@ import { HttpError } from "../utils/http.js"
 import { getScopedSchoolId } from "../utils/tenantScope.js"
 import { getActiveAcademicSession, requireActiveAcademicSession, sessionPayload } from "../services/academicSessionService.js"
 import { ensureFeeAccountsForActiveStudents } from "../services/financeAccountService.js"
-import { getReportPdfTemplateForSchool } from "../services/reportSettingsService.js"
 import { studentCodeSortSql } from "../utils/studentSort.js"
 
 const activeInvoiceStatuses = ["unpaid", "partial", "paid"]
@@ -23,6 +22,9 @@ const FINANCE_RECEIPT_FONT_REGULAR = "/usr/share/fonts/truetype/msttcorefonts/Ar
 const FINANCE_RECEIPT_FONT_BOLD = "/usr/share/fonts/truetype/msttcorefonts/Arial_Bold.ttf"
 const RIA_REFERENCE_HEADER_PATH = path.resolve(process.cwd(), "src/assets/report-templates/ria-reference-header-000.jpg")
 const RIA_REFERENCE_HEADER_RATIO = 472 / 1675
+const MM_TO_PT = 72 / 25.4
+const RECEIPT_PAGE_WIDTH_PT = 130 * MM_TO_PT
+const RECEIPT_PAGE_HEIGHT_PT = 285 * MM_TO_PT
 
 function numberValue(value) {
   return Number(Number(value || 0).toFixed(2))
@@ -146,72 +148,206 @@ function drawReceiptRow(doc, fonts, label, value, x, y, width) {
   doc.font(fonts.regular).fontSize(10).fillColor("#111827").text(receiptText(value), x, y + 13, { width })
 }
 
-function drawReceiptPdf(receipt, res, templateId) {
-  const doc = new PDFDocument({ size: "LETTER", margin: 42 })
+function receiptKwacha(value) {
+  return `MK ${Number(value || 0).toLocaleString("en-MW", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+}
+
+function kwachaWords(value) {
+  const ones = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine"]
+  const teens = ["Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen"]
+  const tens = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"]
+  const chunk = (input) => {
+    let n = input
+    let text = ""
+    if (n >= 100) {
+      text += `${ones[Math.floor(n / 100)]} Hundred `
+      n %= 100
+    }
+    if (n >= 20) {
+      text += `${tens[Math.floor(n / 10)]} `
+      n %= 10
+    }
+    if (n >= 10) text += `${teens[n - 10]} `
+    else if (n > 0) text += `${ones[n]} `
+    return text
+  }
+  let n = Math.floor(Number(value || 0))
+  if (!n) return "Zero Kwacha Only"
+  const millions = Math.floor(n / 1000000)
+  const thousands = Math.floor((n % 1000000) / 1000)
+  const rest = n % 1000
+  let text = ""
+  if (millions) text += `${chunk(millions)}Million `
+  if (thousands) text += `${chunk(thousands)}Thousand `
+  if (rest) text += chunk(rest)
+  return `${text.trim()} Kwacha Only`
+}
+
+function drawDashedReceiptRule(doc, x, y, width, color) {
+  doc.moveTo(x, y).lineTo(x + width, y).dash(3, { space: 3 }).strokeColor(color).lineWidth(0.7).stroke().undash()
+}
+
+function drawReceiptField(doc, fonts, label, value, x, y, width, colors) {
+  doc.font(fonts.regular).fontSize(6.8).fillColor(colors.muted)
+    .text(String(label || "").toUpperCase(), x, y, { width, characterSpacing: 0.7 })
+  doc.font(fonts.bold).fontSize(8.8).fillColor(colors.ink)
+    .text(receiptText(value), x, y + 11, { width, ellipsis: true })
+}
+
+function drawSchoolReceiptHalf(doc, fonts, receipt, copyLabel, x, y, width, height, colors) {
+  const pad = 16.5
+  const innerX = x + pad
+  const innerW = width - (pad * 2)
+  const schoolName = receiptText(receipt.school_name, "SmartLink School")
+  const address = [receipt.school_city, receipt.school_country].filter(Boolean).join(", ") || receiptText(receipt.school_code || receipt.school_prefix, "School finance office")
+  const schoolMeta = receiptText(receipt.school_code || receipt.school_prefix, "SmartLink Schools")
+  const receiptNo = receiptText(receipt.receipt_no)
+  const paymentDate = receiptDate(receipt.paid_on || receipt.paid_at)
+  const studentName = receiptText([receipt.first_name, receipt.last_name].filter(Boolean).join(" "))
+  const studentId = receiptText(receipt.admission_no || receipt.student_code)
+  const gradeName = receiptText(receipt.grade_level || receipt.class_name)
+  const className = receipt.grade_level ? `${gradeName} - ${receiptText(receipt.class_name)}` : gradeName
+  const termName = receiptText(receipt.term_name)
+  const academicYear = receiptText(receipt.academic_year_name || receipt.academic_year || new Date(receipt.paid_on || receipt.paid_at || Date.now()).getFullYear())
+  const method = receiptText(String(receipt.payment_method || "cash").replace(/_/g, " "))
+  const amountPaid = numberValue(receipt.amount)
+  const balanceBrought = numberValue(receipt.balance_before)
+  const balanceCarried = numberValue(receipt.balance_after)
+  const reference = receiptText(receipt.reference || receiptNo)
+  const bursar = receiptText(receipt.recorded_by_name, "Bursar")
+  const stampText = balanceCarried > 0 ? "PARTIAL" : "PAID"
+  const stampColor = balanceCarried > 0 ? colors.amber : colors.teal
+  const itemRows = Array.isArray(receipt.items) && receipt.items.length
+    ? receipt.items.map((item) => [receiptText(item.label || item.item_name, "School fee item"), numberValue(item.amount || item.line_total), false])
+    : [[`${termName} school fees`, numberValue(receipt.amount_due || receipt.amount), false]]
+  const ledgerRows = [
+    ...itemRows.slice(0, 1),
+    ...(itemRows.length > 1 ? [["Other fee items", itemRows.slice(1).reduce((sum, item) => sum + numberValue(item[1]), 0), false]] : []),
+    ...(balanceBrought > 0 ? [["Balance brought forward", balanceBrought, true]] : []),
+  ]
+
+  doc.font(fonts.regular).fontSize(6.7).fillColor(colors.muted)
+    .text(copyLabel.toUpperCase(), x + width - pad - 90, y + 9, { width: 90, align: "right", characterSpacing: 1 })
+
+  doc.font(fonts.bold).fontSize(11).fillColor(colors.navy)
+    .text(schoolName, innerX, y + 18, { width: innerW - 126, lineGap: 1 })
+  doc.font(fonts.regular).fontSize(7.7).fillColor(colors.muted)
+    .text(address, innerX, y + 36, { width: innerW - 126 })
+    .text(schoolMeta, innerX, y + 49, { width: innerW - 126 })
+
+  doc.font(fonts.regular).fontSize(6.8).fillColor(colors.muted)
+    .text("RECEIPT NO.", x + width - pad - 116, y + 28, { width: 116, align: "right", characterSpacing: 0.7 })
+  doc.font(fonts.bold).fontSize(9.2).fillColor(colors.teal)
+    .text(receiptNo, x + width - pad - 116, y + 40, { width: 116, align: "right" })
+  doc.font(fonts.regular).fontSize(6.8).fillColor(colors.muted)
+    .text("DATE", x + width - pad - 116, y + 62, { width: 116, align: "right", characterSpacing: 0.7 })
+  doc.font(fonts.regular).fontSize(8.7).fillColor(colors.ink)
+    .text(paymentDate, x + width - pad - 116, y + 74, { width: 116, align: "right" })
+
+  let cursorY = y + 92
+  drawDashedReceiptRule(doc, innerX, cursorY, innerW, colors.line)
+  cursorY += 15
+
+  const colW = (innerW - 20) / 3
+  const fields = [
+    ["Student", studentName],
+    ["Student ID", studentId],
+    ["Class", className],
+    ["Term", termName],
+    ["Academic Year", academicYear],
+    ["Payment Method", method],
+  ]
+  fields.forEach(([label, value], index) => {
+    const col = index % 3
+    const row = Math.floor(index / 3)
+    drawReceiptField(doc, fonts, label, value, innerX + col * (colW + 10), cursorY + row * 33, colW, colors)
+  })
+
+  cursorY += 68
+  drawDashedReceiptRule(doc, innerX, cursorY, innerW, colors.line)
+  cursorY += 15
+
+  doc.font(fonts.regular).fontSize(6.8).fillColor(colors.muted)
+    .text("DESCRIPTION", innerX, cursorY, { width: innerW * 0.66, characterSpacing: 0.7 })
+    .text("AMOUNT", innerX + innerW * 0.66, cursorY, { width: innerW * 0.34, align: "right", characterSpacing: 0.7 })
+  doc.moveTo(innerX, cursorY + 12).lineTo(innerX + innerW, cursorY + 12).strokeColor(colors.line).lineWidth(0.7).stroke()
+  cursorY += 19
+
+  ledgerRows.forEach(([label, value, muted], index) => {
+    const rowY = cursorY + index * 19
+    doc.font(muted ? fonts.regular : fonts.bold).fontSize(8.6).fillColor(muted ? colors.muted : colors.ink)
+      .text(label, innerX, rowY, { width: innerW * 0.62, ellipsis: true })
+    doc.font(fonts.regular).fontSize(8.6).fillColor(muted ? colors.muted : colors.ink)
+      .text(receiptKwacha(value), innerX + innerW * 0.62, rowY, { width: innerW * 0.38, align: "right" })
+    doc.moveTo(innerX, rowY + 13).lineTo(innerX + innerW, rowY + 13).strokeColor(colors.line).lineWidth(0.5).stroke()
+  })
+  cursorY += ledgerRows.length * 19 + 5
+
+  doc.rect(x, cursorY, width, 30).fill(colors.tealSoft)
+  doc.font(fonts.bold).fontSize(9.7).fillColor(colors.navy)
+    .text("AMOUNT PAID", innerX, cursorY + 10, { width: innerW / 2 })
+  doc.font(fonts.bold).fontSize(10.5).fillColor(colors.teal)
+    .text(receiptKwacha(amountPaid), innerX + innerW / 2, cursorY + 9, { width: innerW / 2, align: "right" })
+  cursorY += 37
+
+  doc.font(fonts.regular).fontSize(8).fillColor(colors.muted)
+    .text("Balance carried forward", innerX, cursorY, { width: innerW / 2 })
+    .text(receiptKwacha(balanceCarried), innerX + innerW / 2, cursorY, { width: innerW / 2, align: "right" })
+  cursorY += 17
+
+  doc.font(fonts.regular).fontSize(7.5).fillColor(colors.muted)
+    .text(`IN WORDS  ${kwachaWords(amountPaid)}`, innerX, cursorY, { width: innerW, oblique: true })
+  cursorY += 20
+
+  const signY = y + height - 49
+  doc.moveTo(innerX, signY).lineTo(innerX + 132, signY).strokeColor(colors.ink).lineWidth(0.6).stroke()
+  doc.font(fonts.regular).fontSize(6.8).fillColor(colors.muted)
+    .text(`BURSAR - ${bursar}`.toUpperCase(), innerX, signY + 5, { width: 170, characterSpacing: 0.5 })
+
+  const stampX = x + width - pad - 78
+  const stampY = signY - 14
+  doc.save()
+  doc.rotate(-6, { origin: [stampX + 39, stampY + 12] })
+  doc.roundedRect(stampX, stampY, 78, 24, 3).strokeColor(stampColor).lineWidth(1.5).stroke()
+  doc.font(fonts.bold).fontSize(9.5).fillColor(stampColor)
+    .text(stampText, stampX, stampY + 7, { width: 78, align: "center", characterSpacing: 2 })
+  doc.restore()
+
+  doc.font(fonts.regular).fontSize(6.8).fillColor(colors.muted)
+    .text(`Ref: ${reference}  -  Issued via SmartLink Schools`, innerX, y + height - 24, { width: innerW, align: "center" })
+}
+
+function drawReceiptPdf(receipt, res) {
+  const doc = new PDFDocument({ size: [RECEIPT_PAGE_WIDTH_PT, RECEIPT_PAGE_HEIGHT_PT], margin: 0 })
   const fonts = registerFinanceReceiptFonts(doc)
   const filename = `${safeReceiptFilename(receipt.receipt_no)}.pdf`
   res.setHeader("Content-Type", "application/pdf")
-  res.setHeader("Content-Disposition", `inline; filename="${filename}"`)
+  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`)
   doc.pipe(res)
 
-  let y = drawReceiptHeader(doc, receipt, fonts, templateId)
-  const margin = 42
-  const width = doc.page.width - (margin * 2)
+  const colors = {
+    navy: "#0B1E33",
+    teal: "#0F6E6A",
+    tealSoft: "#E4F1F0",
+    amber: "#B45309",
+    paper: "#FAF8F3",
+    ink: "#14181F",
+    muted: "#6B7280",
+    line: "#D8D2C4",
+  }
+  const docWidth = doc.page.width
+  const halfHeight = (doc.page.height - 1) / 2
+  const x = 0
+  const y = 0
+  const tearY = y + halfHeight
 
-  doc.roundedRect(margin, y, width, 58, 6).fillAndStroke("#f8fafc", "#dce3ed")
-  doc.font(fonts.bold).fontSize(8.8).fillColor("#64748b").text("RECEIPT NUMBER", margin + 18, y + 14, { width: 150 })
-  doc.font(fonts.bold).fontSize(17).fillColor("#111827").text(receiptText(receipt.receipt_no), margin + 18, y + 28, { width: 220 })
-  doc.font(fonts.bold).fontSize(8.8).fillColor("#64748b").text("AMOUNT RECEIVED", margin + 330, y + 14, { width: 150, align: "right" })
-  doc.font(fonts.bold).fontSize(18).fillColor("#0f766e").text(receiptMoney(receipt.amount), margin + 300, y + 28, { width: width - 318, align: "right" })
-  y += 82
-
-  doc.roundedRect(margin, y, width, 116, 6).strokeColor("#dce3ed").lineWidth(0.8).stroke()
-  drawReceiptRow(doc, fonts, "Student", [receipt.first_name, receipt.last_name].filter(Boolean).join(" "), margin + 18, y + 18, 210)
-  drawReceiptRow(doc, fonts, "Admission No.", receipt.admission_no || receipt.student_code, margin + 260, y + 18, 120)
-  drawReceiptRow(doc, fonts, "Class", receipt.class_name, margin + 410, y + 18, 120)
-  drawReceiptRow(doc, fonts, "Term", receipt.term_name, margin + 18, y + 70, 210)
-  drawReceiptRow(doc, fonts, "Payment Method", String(receipt.payment_method || "cash").replace(/_/g, " "), margin + 260, y + 70, 120)
-  drawReceiptRow(doc, fonts, "Payment Date", receiptDate(receipt.paid_on || receipt.paid_at), margin + 410, y + 70, 120)
-  y += 142
-
-  doc.font(fonts.bold).fontSize(10).fillColor("#111827").text("Payment Summary", margin, y)
-  y += 20
-  const columns = [230, 100, 100, 100]
-  const labels = ["Description", "Before", "Paid", "After"]
-  let cursor = margin
-  doc.rect(margin, y, width, 26).fill("#111827")
-  labels.forEach((label, index) => {
-    doc.font(fonts.bold).fontSize(8.5).fillColor("#ffffff").text(label, cursor + 8, y + 8, { width: columns[index] - 16, align: index ? "right" : "left" })
-    cursor += columns[index]
-  })
-  y += 26
-  cursor = margin
-  doc.rect(margin, y, width, 34).fillAndStroke("#ffffff", "#dce3ed")
-  const values = [
-    `Fee payment${receipt.reference ? ` (${receipt.reference})` : ""}`,
-    receiptMoney(receipt.balance_before),
-    receiptMoney(receipt.amount),
-    receiptMoney(receipt.balance_after),
-  ]
-  values.forEach((value, index) => {
-    doc.font(index === 2 ? fonts.bold : fonts.regular).fontSize(9.2).fillColor(index === 2 ? "#0f766e" : "#111827")
-      .text(value, cursor + 8, y + 11, { width: columns[index] - 16, align: index ? "right" : "left" })
-    cursor += columns[index]
-  })
-  y += 58
-
-  doc.roundedRect(margin, y, width, 52, 6).fillAndStroke("#f8fafc", "#dce3ed")
-  doc.font(fonts.bold).fontSize(8.8).fillColor("#64748b").text("RECORDED BY", margin + 16, y + 13, { width: 160 })
-  doc.font(fonts.regular).fontSize(10).fillColor("#111827").text(receiptText(receipt.recorded_by_name), margin + 16, y + 28, { width: 220 })
-  doc.font(fonts.bold).fontSize(8.8).fillColor("#64748b").text("STATUS", margin + 355, y + 13, { width: 110, align: "right" })
-  doc.font(fonts.bold).fontSize(10).fillColor(receipt.status === "posted" ? "#0f766e" : "#b91c1c").text(receiptText(receipt.status).toUpperCase(), margin + 355, y + 28, { width: width - 371, align: "right" })
-
-  doc.font(fonts.regular).fontSize(8.2).fillColor("#64748b")
-    .text("This receipt was generated by SmartLink Schools finance records. Keep it for school and guardian reference.", margin, doc.page.height - 78, { width, align: "center" })
-  doc.moveTo(margin, doc.page.height - 54).lineTo(margin + width, doc.page.height - 54).strokeColor("#dce3ed").lineWidth(0.6).stroke()
-  doc.font(fonts.bold).fontSize(8).fillColor("#111827")
-    .text("SmartLink Schools", margin, doc.page.height - 42, { width: width / 2 })
-    .text("Official Fee Receipt", margin + width / 2, doc.page.height - 42, { width: width / 2, align: "right" })
+  doc.rect(0, 0, doc.page.width, doc.page.height).fill(colors.paper)
+  drawSchoolReceiptHalf(doc, fonts, receipt, "Parent copy", x, y, docWidth, halfHeight, colors)
+  drawDashedReceiptRule(doc, x, tearY, docWidth, "#B7AF9C")
+  doc.rect(x + (docWidth / 2) - 74, tearY - 7, 148, 14).fill(colors.paper)
+  doc.font(fonts.regular).fontSize(6.8).fillColor("#8A8274")
+    .text("CUT - OFFICE COPY BELOW - CUT", x + (docWidth / 2) - 74, tearY - 3, { width: 148, align: "center", characterSpacing: 0.6 })
+  drawSchoolReceiptHalf(doc, fonts, receipt, "Office copy", x, tearY + 1, docWidth, halfHeight, colors)
   doc.end()
 }
 
@@ -1031,13 +1167,54 @@ export async function getPaymentReceiptPdf(req, res) {
   if (!paymentId) throw new HttpError(400, "Payment id is required")
   const [[receipt]] = await pool.query(
     `SELECT p.*, f.term_name, f.amount_due, f.discount_amount, f.penalty_amount,
+      ay.name AS academic_year_name,
       s.first_name, s.last_name, s.admission_no, COALESCE(s.student_id, s.admission_no) AS student_code,
-      c.name AS class_name, u.full_name AS recorded_by_name,
+      c.name AS class_name, c.grade_level, u.full_name AS recorded_by_name,
       sc.name AS school_name, sc.code AS school_code, sc.school_prefix, sc.city AS school_city, sc.country AS school_country
      FROM fee_payments p
      JOIN fee_accounts f ON f.id = p.fee_account_id AND f.school_id = p.school_id
      JOIN students s ON s.id = f.student_id AND s.school_id = f.school_id
      JOIN schools sc ON sc.id = p.school_id
+     LEFT JOIN academic_years ay ON ay.id = f.academic_year_id AND ay.school_id = f.school_id
+     LEFT JOIN classes c ON c.id = f.class_id AND c.school_id = f.school_id
+     LEFT JOIN users u ON u.id = p.recorded_by
+    WHERE p.school_id = ? AND p.id = ?
+     LIMIT 1`,
+    [schoolId, paymentId],
+  )
+  if (!receipt) throw new HttpError(404, "Receipt was not found")
+  if (receipt.invoice_id) {
+    const [invoiceItems] = await pool.query(
+      `SELECT item_name, line_total
+       FROM finance_invoice_items
+       WHERE school_id = ? AND invoice_id = ?
+       ORDER BY sort_order ASC, id ASC`,
+      [schoolId, receipt.invoice_id],
+    )
+    receipt.items = invoiceItems.map((item) => ({ label: receiptText(item.item_name, "School fee item"), amount: numberValue(item.line_total) }))
+  }
+  if (!receipt.items?.length) {
+    receipt.items = [{ label: `${receiptText(receipt.term_name, "Term")} school fees`, amount: numberValue(receipt.amount_due || receipt.amount) }]
+  }
+  drawReceiptPdf(receipt, res)
+}
+
+export async function getPaymentReceipt(req, res) {
+  const schoolId = getScopedSchoolId(req)
+  const paymentId = Number(req.params.id || 0)
+  if (!paymentId) throw new HttpError(400, "Payment id is required")
+  const [[receipt]] = await pool.query(
+    `SELECT p.*, f.term_name, f.amount_due, f.discount_amount, f.penalty_amount,
+      ay.name AS academic_year_name,
+      s.first_name, s.last_name, s.admission_no, COALESCE(s.student_id, s.admission_no) AS student_code,
+      c.name AS class_name, c.grade_level,
+      u.full_name AS recorded_by_name,
+      sc.name AS school_name, sc.code AS school_code, sc.school_prefix, sc.city AS school_city, sc.country AS school_country
+     FROM fee_payments p
+     JOIN fee_accounts f ON f.id = p.fee_account_id AND f.school_id = p.school_id
+     JOIN students s ON s.id = f.student_id AND s.school_id = f.school_id
+     JOIN schools sc ON sc.id = p.school_id
+     LEFT JOIN academic_years ay ON ay.id = f.academic_year_id AND ay.school_id = f.school_id
      LEFT JOIN classes c ON c.id = f.class_id AND c.school_id = f.school_id
      LEFT JOIN users u ON u.id = p.recorded_by
      WHERE p.school_id = ? AND p.id = ?
@@ -1045,8 +1222,52 @@ export async function getPaymentReceiptPdf(req, res) {
     [schoolId, paymentId],
   )
   if (!receipt) throw new HttpError(404, "Receipt was not found")
-  const template = await getReportPdfTemplateForSchool(pool, schoolId, receipt)
-  drawReceiptPdf(receipt, res, template)
+
+  let items = []
+  if (receipt.invoice_id) {
+    const [invoiceItems] = await pool.query(
+      `SELECT item_name, line_total
+       FROM finance_invoice_items
+       WHERE school_id = ? AND invoice_id = ?
+       ORDER BY sort_order ASC, id ASC`,
+      [schoolId, receipt.invoice_id],
+    )
+    items = invoiceItems.map((item) => ({ label: receiptText(item.item_name, "School fee item"), amount: numberValue(item.line_total) }))
+  }
+  if (!items.length) {
+    items = [{ label: `${receiptText(receipt.term_name, "Term")} school fees`, amount: numberValue(receipt.amount) }]
+  }
+
+  res.json({
+    school: {
+      name: receiptText(receipt.school_name, "SmartLink School"),
+      address: [receipt.school_city, receipt.school_country].filter(Boolean).join(", ") || receiptText(receipt.school_code || receipt.school_prefix, "School finance office"),
+      phone: receiptText(receipt.school_code || receipt.school_prefix, "SmartLink Schools"),
+    },
+    receipt: {
+      number: receiptText(receipt.receipt_no),
+      date: receiptDate(receipt.paid_on || receipt.paid_at),
+      term: receiptText(receipt.term_name),
+      academicYear: receiptText(receipt.academic_year_name || new Date(receipt.paid_on || receipt.paid_at || Date.now()).getFullYear()),
+    },
+    student: {
+      name: receiptText([receipt.first_name, receipt.last_name].filter(Boolean).join(" ")),
+      studentId: receiptText(receipt.admission_no || receipt.student_code),
+      grade: receiptText(receipt.grade_level || receipt.class_name),
+      class: receipt.grade_level ? receiptText(receipt.class_name) : "",
+    },
+    items,
+    payment: {
+      method: receiptText(String(receipt.payment_method || "cash").replace(/_/g, " ")),
+      reference: receiptText(receipt.reference || receipt.receipt_no),
+      amountPaid: numberValue(receipt.amount),
+      balanceBrought: numberValue(receipt.balance_before),
+      balanceCarried: numberValue(receipt.balance_after),
+    },
+    bursar: {
+      name: receiptText(receipt.recorded_by_name, "Bursar"),
+    },
+  })
 }
 
 export async function reversePayment(req, res) {

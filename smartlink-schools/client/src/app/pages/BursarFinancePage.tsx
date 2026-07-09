@@ -9,7 +9,6 @@ import {
   Landmark,
   Link2,
   Plus,
-  Printer,
   ReceiptText,
   RefreshCcw,
   Search,
@@ -784,12 +783,12 @@ export function BursarFinancePage() {
             type="button"
             onClick={(event) => {
               event.stopPropagation()
-              openReceiptPdf(row.paymentId)
+              openReceiptPrint(row.paymentId)
             }}
             className="inline-flex h-7 items-center gap-1.5 rounded-[5px] border border-[#d7dde6] bg-white px-2 text-[11px] font-semibold text-[#0f766e] transition hover:border-[#0f766e]/35 hover:bg-[#f0fdfa]"
           >
-            <Printer className="size-3" />
-            PDF
+            <ReceiptText className="size-3" />
+            Receipt
           </button>
         ),
       },
@@ -1202,13 +1201,11 @@ export function BursarFinancePage() {
     await refresh()
   }
 
-  async function openReceiptPdf(paymentId: any) {
+  function openReceiptPrint(paymentId: any) {
     if (!token || !paymentId || typeof window === 'undefined') return
-    const blob = await runAction(() => api.downloadPaymentReceiptPdf(token, paymentId), 'Preparing receipt PDF...', { refresh: false })
-    if (!blob) return
-    const url = window.URL.createObjectURL(blob)
-    window.open(url, '_blank', 'noopener,noreferrer')
-    window.setTimeout(() => window.URL.revokeObjectURL(url), 30000)
+    const receiptPath = `/fees/payments/${paymentId}/receipt`
+    const receiptWindow = window.open(receiptPath, '_blank')
+    if (!receiptWindow) navigate(receiptPath)
   }
 
   async function downloadBalancesCsv() {

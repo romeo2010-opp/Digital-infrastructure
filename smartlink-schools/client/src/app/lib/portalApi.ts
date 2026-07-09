@@ -16,6 +16,7 @@ function resolveApiOrigin() {
 export function resolvePortalAssetUrl(assetPath: string) {
   const raw = String(assetPath || '').trim()
   if (!raw) return ''
+  if (/^(https?:|data:|blob:)/i.test(raw)) return raw
   try {
     return new URL(raw.startsWith('/') ? raw : `/${raw}`, resolveApiOrigin()).toString()
   } catch {
@@ -615,6 +616,10 @@ export const portalApi = {
 
   downloadPaymentReceiptPdf(token: string, id: any) {
     return requestBlob(`/api/fees/payments/${id}/receipt.pdf`, { token })
+  },
+
+  getPaymentReceipt(token: string, id: any) {
+    return request(`/api/fees/payments/${id}/receipt`, { token })
   },
 
   listFinanceArrears(token: string, filters: Record<string, any> = {}) {

@@ -12,6 +12,7 @@ import {
   getBursarDashboard,
   getFeeAccount,
   getFinanceReports,
+  getPaymentReceipt,
   getPaymentReceiptPdf,
   importBankTransactions,
   listArrears,
@@ -529,6 +530,7 @@ router.get("/fees/invoices", requireRole("school_owner", "headteacher", "bursar"
 router.post("/fees/invoices/generate", requireRole("school_owner", "headteacher", "bursar"), asyncHandler(generateInvoices))
 router.get("/fees/payments", requireRole("school_owner", "headteacher", "bursar"), asyncHandler(listPayments))
 router.post("/fees/payments", requireRole("school_owner", "headteacher", "bursar"), asyncHandler(recordPayment))
+router.get("/fees/payments/:id/receipt", requireRole("school_owner", "headteacher", "bursar"), asyncHandler(getPaymentReceipt))
 router.get("/fees/payments/:id/receipt.pdf", requireRole("school_owner", "headteacher", "bursar"), asyncHandler(getPaymentReceiptPdf))
 router.post("/fees/payments/:id/reverse", requireRole("school_owner", "headteacher"), asyncHandler(reversePayment))
 router.get("/fees/arrears", requireRole("school_owner", "headteacher", "bursar"), asyncHandler(listArrears))
