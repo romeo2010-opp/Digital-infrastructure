@@ -1,4 +1,3 @@
 <resources>
-    <string name="app_name">SmartLink User App</string>
-    <!-- Replace with your actual Mapbox Public Access Token -->
+    <string name="app_name">SmartLink Schools</string>
 </resources>

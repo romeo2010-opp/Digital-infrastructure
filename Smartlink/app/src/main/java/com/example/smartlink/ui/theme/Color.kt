@@ -2,10 +2,10 @@ package com.example.smartlink.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-val SmartlinkNavy = Color(0xFF133049)
-val SmartlinkTeal = Color(0xFF1E6A73)
-val SmartlinkMint = Color(0xFFB9E4CF)
-val SmartlinkSand = Color(0xFFF4F8FB)
-val SmartlinkInk = Color(0xFF12212D)
-val SmartlinkSlate = Color(0xFF597086)
+val SmartlinkNavy = Color(0xFF111827)
+val SmartlinkTeal = Color(0xFF0F766E)
+val SmartlinkMint = Color(0xFF6BDD9E)
+val SmartlinkSand = Color(0xFFEEEEEE)
+val SmartlinkInk = Color(0xFF171717)
+val SmartlinkSlate = Color(0xFF8B8B8B)
 val SmartlinkCard = Color(0xFFFFFFFF)
