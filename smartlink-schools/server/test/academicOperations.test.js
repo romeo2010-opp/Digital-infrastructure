@@ -6,6 +6,7 @@ import {
   buildGeneratedResponseLayout,
   confidenceForEvidenceLevel,
   dedupeTargetedLearners,
+  normalizeGeneratedOptions,
   sourcePermissionAllowsReuse,
   validateGeneratedAssessmentDraft,
   validateMarkSheetPayload,
@@ -113,6 +114,15 @@ test('generated response layouts create printable answer space for every questio
   assert.equal(calculation.answer_space_type, 'blank_box')
   assert.ok(calculation.answer_height >= 120)
   assert.ok(multipleChoice.answer_height > 0)
+})
+
+test('generated multiple-choice options are normalized and retain the correct answer', () => {
+  const options = normalizeGeneratedOptions({
+    correct_answer: 'B',
+    options_json: [{ label: 'A', text: 'Maize' }, { label: 'B', text: 'Groundnuts' }, { label: 'C', text: 'Rice' }],
+  })
+  assert.equal(options.length, 3)
+  assert.equal(options.find((option) => option.is_correct)?.option_text, 'Groundnuts')
 })
 
 test('Anthropic provider remains unavailable without an environment credential', async () => {
