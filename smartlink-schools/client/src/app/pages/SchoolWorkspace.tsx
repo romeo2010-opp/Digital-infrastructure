@@ -286,7 +286,8 @@ function buildKpis(pageKey: SchoolPageKey, rows: any[]) {
 function mapRows(pageKey: SchoolPageKey, payload: any) {
   if (pageKey === "classes") {
     return (payload?.classes || []).map((row: any) => ({
-      id: row.id,
+      id: row.public_ref || row.id,
+      public_ref: row.public_ref,
       className: row.name,
       gradeLevel: row.grade_level || "-",
       teacher: row.teacher_name || "Unassigned",
@@ -297,7 +298,8 @@ function mapRows(pageKey: SchoolPageKey, payload: any) {
   }
   if (pageKey === "students") {
     return (payload?.students || []).map((row: any) => ({
-      id: row.id,
+      id: row.public_ref,
+      public_ref: row.public_ref,
       student: name(row),
       className: row.class_name || "-",
       streamSection: row.stream_section || "-",
@@ -650,8 +652,11 @@ export function SchoolWorkspace({
 
   const openRow = (row: any) => {
     if (pageKey === "messages") setSelectedRow(row);
-    else if (pageKey === "students" && row.id) navigate(`/students/${row.id}`);
-    else if (pageKey === "classes" && row.id) navigate(`/classes/${row.id}`);
+    else if (pageKey === "students" && row.public_ref)
+      navigate(`/students/${encodeURIComponent(row.public_ref)}`, {
+        state: { fromStudents: true },
+      });
+    else if (pageKey === "classes" && row.public_ref) navigate(`/classes/${row.public_ref}`);
     else if (pageKey === "search" && row.route)
       navigate(row.route, {
         state: { fromSearch: true, search: location.search },

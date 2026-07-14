@@ -156,6 +156,17 @@ function Field({ label, children }: { label: string; children: any }) {
   return <label className={labelClass}>{label}{children}</label>
 }
 
+function EditSurface({ editing, title, subtitle, onClose, children }: { editing: boolean; title: string; subtitle: string; onClose: () => void; children: any }) {
+  if (editing) {
+    return (
+      <ModalShell open onOpenChange={(open) => { if (!open) onClose() }} title={title} description={subtitle} className="max-w-4xl">
+        {children}
+      </ModalShell>
+    )
+  }
+  return <SectionCard title={title} subtitle={subtitle}>{children}</SectionCard>
+}
+
 function pretty(value: any) {
   return String(value || '-')
     .replace(/_/g, ' ')
@@ -1779,7 +1790,12 @@ export function SchedulingSettingsPage({ section }: { section: SchedulingSetting
     <div className="grid gap-3">
       <SectionKpiStrip items={kpis} />
       <div className="grid gap-3 2xl:grid-cols-[430px_minmax(0,1fr)]">
-        <SectionCard title={editingRequirementId ? 'Edit Curriculum Requirement' : 'Add Curriculum Requirement'} subtitle="Define the class-subject periods the solver must place before automatic generation can run.">
+        <EditSurface
+          editing={Boolean(editingRequirementId)}
+          title={editingRequirementId ? 'Edit Curriculum Requirement' : 'Add Curriculum Requirement'}
+          subtitle="Define the class-subject periods the solver must place before automatic generation can run."
+          onClose={() => { setEditingRequirementId(null); setCurriculumForm({ ...initialCurriculumForm(), academic_year_id: String(activeYear?.id || ''), term_id: String(activeTerm?.id || '') }) }}
+        >
           <div className="grid gap-3 p-4">
             <div className="grid gap-3 sm:grid-cols-2">
               <Field label="Academic year">
@@ -1872,7 +1888,7 @@ export function SchedulingSettingsPage({ section }: { section: SchedulingSetting
               ) : null}
             </div>
           </div>
-        </SectionCard>
+        </EditSurface>
         <SectionCard title="Curriculum Period Requirements" subtitle="These records are the required weekly or cycle load used by solver generation.">
           <PortalTable
             columns={[
@@ -1899,7 +1915,12 @@ export function SchedulingSettingsPage({ section }: { section: SchedulingSetting
         </SectionCard>
       </div>
       <div className="grid gap-3 2xl:grid-cols-[430px_minmax(0,1fr)]">
-        <SectionCard title={editingFocusCategoryId ? 'Edit Focus Category' : 'Subject Focus Categories'} subtitle="Categories let each school decide which subjects need stronger attention windows.">
+        <EditSurface
+          editing={Boolean(editingFocusCategoryId)}
+          title={editingFocusCategoryId ? 'Edit Focus Category' : 'Subject Focus Categories'}
+          subtitle="Categories let each school decide which subjects need stronger attention windows."
+          onClose={() => { setEditingFocusCategoryId(null); setFocusCategoryForm(initialFocusCategoryForm()) }}
+        >
           <div className="grid gap-3 p-4">
             <div className="grid gap-3 sm:grid-cols-2">
               <Field label="Name"><Input value={focusCategoryForm.name} onChange={(event) => setFocusCategoryForm({ ...focusCategoryForm, name: event.target.value })} className="h-8 text-[12px]" placeholder="High Focus" /></Field>
@@ -1917,7 +1938,7 @@ export function SchedulingSettingsPage({ section }: { section: SchedulingSetting
               <Button type="button" variant="outline" onClick={() => { setEditingFocusCategoryId(null); setFocusCategoryForm(initialFocusCategoryForm()) }} className="h-8 justify-self-start rounded-[5px] text-[12px]">Cancel edit</Button>
             ) : null}
           </div>
-        </SectionCard>
+        </EditSurface>
         <SectionCard title="Focus Categories" subtitle="Default categories are seeded, but schools can keep, rename or archive them.">
           <PortalTable
             columns={[
@@ -1942,7 +1963,12 @@ export function SchedulingSettingsPage({ section }: { section: SchedulingSetting
         </SectionCard>
       </div>
       <div className="grid gap-3 2xl:grid-cols-[430px_minmax(0,1fr)]">
-        <SectionCard title={editingFocusAssignmentId ? 'Edit Subject Focus Assignment' : 'Assign Subjects To Focus'} subtitle="This is where a school chooses which subjects belong to high-focus, practical, flexible or custom groups.">
+        <EditSurface
+          editing={Boolean(editingFocusAssignmentId)}
+          title={editingFocusAssignmentId ? 'Edit Subject Focus Assignment' : 'Assign Subjects To Focus'}
+          subtitle="This is where a school chooses which subjects belong to high-focus, practical, flexible or custom groups."
+          onClose={() => { setEditingFocusAssignmentId(null); setFocusAssignmentForm({ ...initialFocusAssignmentForm(), academic_year_id: String(activeYear?.id || ''), term_id: String(activeTerm?.id || '') }) }}
+        >
           <div className="grid gap-3 p-4">
             <div className="grid gap-3 sm:grid-cols-2">
               <Field label="Subject">
@@ -1984,7 +2010,7 @@ export function SchedulingSettingsPage({ section }: { section: SchedulingSetting
               ) : null}
             </div>
           </div>
-        </SectionCard>
+        </EditSurface>
         <SectionCard title="Subject Focus Assignments" subtitle="Assignments can apply to the whole school, a grade, a class or a stream.">
           <PortalTable
             columns={[
@@ -2009,7 +2035,12 @@ export function SchedulingSettingsPage({ section }: { section: SchedulingSetting
         </SectionCard>
       </div>
       <div className="grid gap-3 2xl:grid-cols-[430px_minmax(0,1fr)]">
-        <SectionCard title={editingFocusRuleId ? 'Edit Subject Focus Rule' : 'Subject Focus Timing Rule'} subtitle="Soft by default: the solver prefers these periods, but can move lessons when the timetable needs it.">
+        <EditSurface
+          editing={Boolean(editingFocusRuleId)}
+          title={editingFocusRuleId ? 'Edit Subject Focus Rule' : 'Subject Focus Timing Rule'}
+          subtitle="Soft by default: the solver prefers these periods, but can move lessons when the timetable needs it."
+          onClose={() => { setEditingFocusRuleId(null); setFocusRuleForm({ ...initialFocusRuleForm(), academic_year_id: String(activeYear?.id || ''), term_id: String(activeTerm?.id || '') }) }}
+        >
           <div className="grid gap-3 p-4">
             <Field label="Rule name"><Input value={focusRuleForm.name} onChange={(event) => setFocusRuleForm({ ...focusRuleForm, name: event.target.value })} className="h-8 text-[12px]" placeholder="High focus before lunch" /></Field>
             <div className="grid gap-3 sm:grid-cols-2">
@@ -2080,7 +2111,7 @@ export function SchedulingSettingsPage({ section }: { section: SchedulingSetting
               {editingFocusRuleId ? <Button type="button" variant="outline" onClick={() => { setEditingFocusRuleId(null); setFocusRuleForm({ ...initialFocusRuleForm(), academic_year_id: String(activeYear?.id || ''), term_id: String(activeTerm?.id || '') }) }} className="h-8 rounded-[5px] text-[12px]">Cancel</Button> : null}
             </div>
           </div>
-        </SectionCard>
+        </EditSurface>
         <SectionCard title="Subject Focus Rules" subtitle="Soft rules guide the solver; hard rules also block manual placement.">
           <PortalTable
             columns={[
@@ -2106,7 +2137,12 @@ export function SchedulingSettingsPage({ section }: { section: SchedulingSetting
         </SectionCard>
       </div>
       <div className="grid gap-3 2xl:grid-cols-[430px_minmax(0,1fr)]">
-        <SectionCard title={editingStreamRuleId ? 'Edit Stream Scheduling Rule' : 'Stream Scheduling Rule'} subtitle="Control whether streams may take the same subject at the same time.">
+        <EditSurface
+          editing={Boolean(editingStreamRuleId)}
+          title={editingStreamRuleId ? 'Edit Stream Scheduling Rule' : 'Stream Scheduling Rule'}
+          subtitle="Control whether streams may take the same subject at the same time."
+          onClose={() => { setEditingStreamRuleId(null); setStreamRuleForm({ ...initialStreamRuleForm(), academic_year_id: String(activeYear?.id || ''), term_id: String(activeTerm?.id || '') }) }}
+        >
           <div className="grid gap-3 p-4">
             <Field label="Rule name"><Input value={streamRuleForm.name} onChange={(event) => setStreamRuleForm({ ...streamRuleForm, name: event.target.value })} className="h-8 text-[12px]" placeholder="No parallel same subject" /></Field>
             <div className="grid gap-3 sm:grid-cols-2">
@@ -2154,7 +2190,7 @@ export function SchedulingSettingsPage({ section }: { section: SchedulingSetting
               {editingStreamRuleId ? <Button type="button" variant="outline" onClick={() => { setEditingStreamRuleId(null); setStreamRuleForm({ ...initialStreamRuleForm(), academic_year_id: String(activeYear?.id || ''), term_id: String(activeTerm?.id || '') }) }} className="h-8 rounded-[5px] text-[12px]">Cancel</Button> : null}
             </div>
           </div>
-        </SectionCard>
+        </EditSurface>
         <SectionCard title="Stream Scheduling Rules" subtitle="Hard rules block generation and manual placement; soft rules add penalties and warnings.">
           <PortalTable
             columns={[

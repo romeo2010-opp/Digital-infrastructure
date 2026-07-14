@@ -4,6 +4,7 @@ import path from "path"
 import { execFile } from "child_process"
 import { promisify } from "util"
 import PDFDocument from "pdfkit"
+import { HttpError } from "../utils/http.js"
 
 const PT_PER_MM = 72 / 25.4
 const CSS_PX_TO_PT = 0.75
@@ -76,8 +77,9 @@ export function assessmentExportFilename(assessment, variant) {
 }
 
 function normalizeLayout(blocks = []) {
-  const layoutBlock = blocks.find((block) => block?.metadata_json?.system_block === "paper_layout")
-  const content = layoutBlock?.content_json?.paper_layout || layoutBlock?.content_json || {}
+  const layoutBlock = blocks.find((block) => parseJson(block?.metadata_json, {})?.system_block === "paper_layout")
+  const blockContent = parseJson(layoutBlock?.content_json, {})
+  const content = parseJson(blockContent?.paper_layout || blockContent, {})
   return {
     ...DEFAULT_LAYOUT,
     ...(content || {}),
@@ -153,7 +155,58 @@ function blockKey(block) {
   return String(block?.local_id || block?.id || "")
 }
 
-function buildExportBlocks(assessment, questions = [], blocks = []) {
+function questionReferenceKey(value) {
+  return cleanText(value).toLowerCase().replace(/^question\s*/, "").replace(/[\s.()[\]{}_-]+/g, "")
+}
+
+function displayQuestionReference(value) {
+  const reference = cleanText(value).trim()
+  if (!reference) return ""
+  // Plain builder numbers retain the conventional trailing full stop. Imported
+  // references are already formatted by the source paper and must remain exact.
+  return /^\d+$/.test(reference) ? `${reference}.` : reference
+}
+
+function questionHasPrintableContent(question = {}) {
+  if (cleanText(question.question_text).trim()) return true
+  return normalizeParts(question.content_parts || question.contentParts || []).some((part) => part.type === "image" || cleanText(part.text).trim())
+}
+
+export function validateAssessmentExportContent({ assessment = {}, questions = [] } = {}) {
+  if (!Array.isArray(questions) || !questions.length) {
+    throw new HttpError(422, "This assessment cannot be exported because it has no questions. Add at least one complete question first.", { code: "ASSESSMENT_HAS_NO_QUESTIONS" })
+  }
+  const emptyQuestions = questions
+    .map((question, index) => ({ question, index }))
+    .filter(({ question }) => !questionHasPrintableContent(question))
+    .map(({ question, index }) => cleanText(question.display_number || question.question_number || index + 1).trim())
+  if (emptyQuestions.length) {
+    throw new HttpError(422, `Question ${emptyQuestions.join(", ")} has no printable content. Add the question text or an image before exporting.`, { code: "ASSESSMENT_QUESTION_CONTENT_REQUIRED" })
+  }
+  const unmarkedQuestions = questions
+    .map((question, index) => ({ question, index }))
+    .filter(({ question }) => !Number.isFinite(Number(question.marks)) || Number(question.marks) <= 0)
+    .map(({ question, index }) => cleanText(question.display_number || question.question_number || index + 1).trim())
+  if (unmarkedQuestions.length) {
+    throw new HttpError(422, `Question ${unmarkedQuestions.join(", ")} must have marks greater than zero before exporting.`, { code: "ASSESSMENT_QUESTION_MARKS_REQUIRED" })
+  }
+  const references = questions.map((question, index) => questionReferenceKey(question.display_number || question.question_number || index + 1))
+  const duplicateReferences = [...new Set(references.filter((reference, index) => reference && references.indexOf(reference) !== index))]
+  if (duplicateReferences.length) {
+    throw new HttpError(422, "Question numbers must be unique before exporting the paper.", { code: "ASSESSMENT_QUESTION_NUMBERS_DUPLICATED" })
+  }
+  const declaredMarks = Number(assessment.total_marks)
+  const questionMarks = questions.reduce((sum, question) => sum + Number(question.marks || 0), 0)
+  if (!Number.isFinite(declaredMarks) || declaredMarks <= 0) {
+    throw new HttpError(422, "Set the assessment total marks before exporting the paper.", { code: "ASSESSMENT_TOTAL_MARKS_REQUIRED" })
+  }
+  if (Math.abs(declaredMarks - questionMarks) > 0.01) {
+    throw new HttpError(422, `The question marks add up to ${questionMarks}, but the assessment total is ${declaredMarks}. Make them equal before exporting.`, { code: "ASSESSMENT_MARKS_MISMATCH" })
+  }
+  return { question_count: questions.length, total_marks: questionMarks }
+}
+
+export function buildExportBlocks(assessment, questions = [], blocks = []) {
   const normalizedBlocks = blocks.map((block) => ({
     ...block,
     content_json: parseJson(block.content_json, {}),
@@ -165,8 +218,14 @@ function buildExportBlocks(assessment, questions = [], blocks = []) {
     .filter((block) => block.metadata_json?.system_block !== "paper_layout")
     .filter((block) => !["cover_field", "instructions", "question", "sub_question", "mcq_options"].includes(block.block_type))
 
+  const usedQuestionBlockIndexes = new Set()
   const exportedQuestions = questions.map((question, index) => {
-    const questionBlock = questionBlocks.find((block) => Number(block.content_json?.question_number || 0) === index + 1) || questionBlocks[index] || {}
+    const displayNumber=cleanText(question.display_number||question.question_number||index+1)
+    let questionBlockIndex = questionBlocks.findIndex((block,blockIndex) => !usedQuestionBlockIndexes.has(blockIndex) && questionReferenceKey(block.content_json?.question_number) === questionReferenceKey(displayNumber))
+    if(questionBlockIndex<0&&!usedQuestionBlockIndexes.has(index)&&questionBlocks[index])questionBlockIndex=index
+    if(questionBlockIndex<0)questionBlockIndex=questionBlocks.findIndex((_,blockIndex)=>!usedQuestionBlockIndexes.has(blockIndex))
+    if(questionBlockIndex>=0)usedQuestionBlockIndexes.add(questionBlockIndex)
+    const questionBlock = questionBlocks[questionBlockIndex] || {}
     const content = questionBlock.content_json || {}
     const metadata = questionBlock.metadata_json || {}
     const parts = normalizeParts(content.content_parts || question.content_parts || question.contentParts || [])
@@ -177,7 +236,7 @@ function buildExportBlocks(assessment, questions = [], blocks = []) {
       is_printable: true,
       style_json: { ...(questionBlock.style_json || {}) },
       content_json: {
-        question_number: index + 1,
+        question_number: cleanText(content.question_number || displayNumber),
         question_text: cleanText(content.question_text || question.question_text || partsToText(parts)),
         content_parts: parts,
         question_type: content.question_type || question.question_type || "short_answer",
@@ -193,13 +252,21 @@ function buildExportBlocks(assessment, questions = [], blocks = []) {
         correct_answer: metadata.correct_answer || question.correct_answer || "",
         marking_scheme: metadata.marking_scheme || question.marking_scheme || "",
         explanation: metadata.explanation || question.explanation || "",
+        is_last_question: index === questions.length - 1,
       },
     }
   })
 
-  return [...designBlocks, ...exportedQuestions]
+  const ordered = [...designBlocks, ...exportedQuestions]
     .filter((block) => block.block_type !== "teacher_note" && block.is_printable !== false)
     .sort((a, b) => numeric(a.sort_order, 0) - numeric(b.sort_order, 0))
+  const compact = []
+  for (const block of ordered) {
+    if (block.block_type === "page_break" && (!compact.length || compact[compact.length - 1]?.block_type === "page_break")) continue
+    compact.push(block)
+  }
+  while (compact[compact.length - 1]?.block_type === "page_break") compact.pop()
+  return compact
 }
 
 function fontName(style = {}) {
@@ -313,6 +380,10 @@ function drawAnswerSpaceFrame(state, content = {}, x, width) {
     for (let gridX = x; gridX <= x + width; gridX += 16.5) state.doc.moveTo(gridX, y).lineTo(gridX, y + height).stroke()
     for (let gridY = y; gridY <= y + height; gridY += 16.5) state.doc.moveTo(x, gridY).lineTo(x + width, gridY).stroke()
     state.doc.restore()
+  }
+  if (type === "blank_space") {
+    // Intentionally leave the measured area open: the imported paper used
+    // whitespace rather than rules or a border for the learner response.
   }
   if (type === "ruled_lines") {
     const lineCount = Math.max(1, numeric(content.number_of_lines, Math.round(height / 24)))
@@ -500,13 +571,14 @@ async function drawQuestion(state, block) {
   if (questionHeight < availableHeight(state) * 0.9) ensureSpace(state, questionHeight)
   advanceWithOffset(state, style)
   const startY = state.y
-  const numberWidth = 24
+  const questionReference = displayQuestionReference(content.question_number)
+  const numberWidth = Math.min(92, Math.max(24, questionReference.length * 6.2))
   const gap = 10
   const bodyX = state.margins.left + numberWidth + gap
   const bodyWidth = stateInnerWidth(state) - numberWidth - gap
   const marks = numeric(content.marks, 0)
   const markLabel = marks === 1 ? "1 mark" : `${marks || 0} marks`
-  state.doc.font("Helvetica-Bold").fontSize(11.5).fillColor("#111827").text(`${content.question_number || ""}.`, state.margins.left, startY + 1, { width: numberWidth, align: "right" })
+  state.doc.font("Helvetica-Bold").fontSize(11.5).fillColor("#111827").text(questionReference, state.margins.left, startY + 1, { width: numberWidth, align: "right", lineBreak: false })
   state.doc.font("Helvetica-Bold").fontSize(9).text(`(${markLabel})`, bodyX, startY + 1, { width: bodyWidth, align: "right" })
 
   const parts = normalizeParts(content.content_parts || [])
@@ -563,6 +635,13 @@ async function drawQuestion(state, block) {
       state.doc.fillColor("#111827").text(text, bodyX + 8, state.y + 7, { width: bodyWidth - 16 })
       state.y += height + 8
     }
+  }
+
+  if (metadata.is_last_question) {
+    const markerY = Math.min(state.y + 8, state.size[1] - state.margins.bottom + 2)
+    state.doc.font("Helvetica-Bold").fontSize(9).fillColor("#111827")
+      .text("End of question paper", state.margins.left, markerY, { width: stateInnerWidth(state), align: "center", lineBreak: false })
+    state.y = Math.max(state.y, markerY + 14)
   }
 
   state.y += 6
@@ -754,8 +833,22 @@ function drawCambridgeCover(state) {
   doc.font("Helvetica-Bold").fontSize(9).text(`[${cleanText(layout.footer_note || "Turn over")}]`, left + width / 2, state.size[1] - state.margins.bottom - 12, { width: width / 2, align: "right" })
 }
 
-function drawCover(state) {
-  if (state.layout.cover_style === "msce") drawMsceCover(state)
+async function drawOriginalImportedCover(state) {
+  const mediaId=Number(state.layout.original_cover_media_id||0)
+  if(!mediaId){drawStandardCover(state);return}
+  const image=await resolveImage({media_id:mediaId},state)
+  if(!image){drawStandardCover(state);return}
+  try{
+    state.doc.image(image.input,0,0,{fit:[state.size[0],state.size[1]],align:"center",valign:"center"})
+    state.y=state.size[1]
+  }catch{
+    drawStandardCover(state)
+  }
+}
+
+async function drawCover(state) {
+  if (state.layout.cover_style === "original_imported") await drawOriginalImportedCover(state)
+  else if (state.layout.cover_style === "msce") drawMsceCover(state)
   else if (state.layout.cover_style === "cambridge") drawCambridgeCover(state)
   else drawStandardCover(state)
 }
@@ -766,6 +859,7 @@ function drawPageFurniture(state) {
   for (let index = range.start; index < range.start + range.count; index += 1) {
     doc.switchToPage(index)
     const pageNumber = index + 1
+    if(pageNumber===1&&state.layout.cover_style==="original_imported")continue
     const width = stateInnerWidth(state)
     const footerY = state.size[1] - state.margins.bottom + 8
     doc.font("Helvetica").fontSize(8).fillColor("#6b7280")
@@ -843,6 +937,7 @@ function answerSpaceHtml(content = {}) {
   const lines = Math.max(0, numeric(content.number_of_lines, 0))
   const border = content.show_border === false ? "" : "border:1px solid #111827;"
   if (type === "graph_grid") return `<div class="answer-space graph-space" style="min-height:${height}px;${border}"></div>`
+  if (type === "blank_space") return `<div class="answer-space blank-open-space" style="min-height:${height}px"></div>`
   if (type === "blank_box") return `<div class="answer-space" style="min-height:${height}px;${border}"></div>`
   const lineCount = lines || Math.max(1, Math.round(height / 32))
   return `<div class="answer-space" style="min-height:${height}px;${border}">${Array.from({ length: lineCount }).map(() => '<div class="answer-line"></div>').join("")}</div>`
@@ -940,13 +1035,14 @@ async function questionHtml(block, state) {
     ].filter(Boolean).join("")
     : ""
   return `<section class="question-block" style="${escapeAttribute(cssBlockStyle(style))}">
-    <div class="question-number">${escapeHtml(content.question_number || "")}.</div>
+    <div class="question-number">${escapeHtml(displayQuestionReference(content.question_number))}</div>
     <div class="question-body">
       <div class="question-text"><span class="marks">(${markLabel})</span>${await questionContentHtml(content, state)}</div>
       ${content.question_instructions ? `<div class="question-instructions">${textToHtml(content.question_instructions)}</div>` : ""}
       ${optionsHtml}
       ${answerHtml ? `<div class="question-answer-space">${answerHtml}</div>` : ""}
       ${schemeRows ? `<div class="marking-panel">${schemeRows}</div>` : ""}
+      ${metadata.is_last_question ? '<div class="end-of-question-paper">End of question paper</div>' : ""}
     </div>
   </section>`
 }
@@ -956,6 +1052,12 @@ async function coverBlocksHtml(state) {
   const rows = []
   for (const block of blocks) rows.push(await exportBlockHtml(block, state))
   return rows.length ? `<div class="cover-freeform">${rows.join("\n")}</div>` : ""
+}
+
+async function originalImportedCoverHtml(state) {
+  const src=await resolveHtmlImageSource({media_id:Number(state.layout.original_cover_media_id||0)},state)
+  if(!src)return standardCoverHtml(state)
+  return `<section class="cover-page original-imported-cover"><img src="${escapeAttribute(src)}" alt="Original imported assessment cover page" /></section>`
 }
 
 async function standardCoverHtml(state) {
@@ -1065,7 +1167,8 @@ async function buildAssessmentHtml({ assessment, questions = [], blocks, media, 
     mediaMap: mediaMapFrom(media),
   }
   const content = []
-  if (layout.cover_style === "msce") content.push(await msceCoverHtml(state))
+  if (layout.cover_style === "original_imported") content.push(await originalImportedCoverHtml(state))
+  else if (layout.cover_style === "msce") content.push(await msceCoverHtml(state))
   else if (layout.cover_style === "cambridge") content.push(await cambridgeCoverHtml(state))
   else content.push(await standardCoverHtml(state))
   if (layout.cover_style === "msce") {
@@ -1089,6 +1192,8 @@ async function buildAssessmentHtml({ assessment, questions = [], blocks, media, 
     body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .paper { width: 100%; }
     .cover-page { min-height: calc(297mm - (${margin} * 2)); break-after: page; page-break-after: always; position: relative; }
+    .original-imported-cover { width: 210mm; height: 297mm; min-height: 297mm; margin: calc(-1 * ${margin}); overflow: hidden; }
+    .original-imported-cover img { display: block; width: 210mm; height: 297mm; object-fit: fill; }
     .cover-freeform { margin: 8px 0; }
     .continuation-header { margin-bottom: 14px; font-weight: 700; break-after: avoid; page-break-after: avoid; }
     .continuation-header .candidate-line { font-size: 12.5pt; }
@@ -1140,8 +1245,8 @@ async function buildAssessmentHtml({ assessment, questions = [], blocks, media, 
     .paper-block { margin: 12px 0; break-inside: avoid; page-break-inside: avoid; }
     .section-title { margin: 18px 0 8px; text-align: center; font-size: 14pt; break-after: avoid; page-break-after: avoid; }
     .text-box { border: 1px solid #111827; padding: 8px; }
-    .question-block { display: grid; grid-template-columns: 28px minmax(0,1fr); gap: 8px; margin: 12px 0; font-size: 13pt; break-inside: avoid; page-break-inside: avoid; }
-    .question-number { text-align: right; font-weight: 700; }
+    .question-block { display: grid; grid-template-columns: minmax(28px,max-content) minmax(0,1fr); gap: 8px; margin: 12px 0; font-size: 13pt; break-inside: avoid; page-break-inside: avoid; }
+    .question-number { text-align: right; font-weight: 700; white-space: nowrap; }
     .question-text { white-space: pre-wrap; }
     .question-part { margin: 0 0 8px; }
     .marks { float: right; margin-left: 12px; white-space: nowrap; font-size: 11pt; font-weight: 700; }
@@ -1165,6 +1270,7 @@ async function buildAssessmentHtml({ assessment, questions = [], blocks, media, 
     .shape.triangle { clip-path: polygon(50% 0,100% 100%,0 100%); }
     .marking-panel { margin-top: 8px; border: 1px solid #cbd5e1; background: #f8fafc; padding: 8px; font-size: 10pt; break-inside: avoid; page-break-inside: avoid; }
     .marking-panel p { margin: 0 0 5px; }
+    .end-of-question-paper { clear: both; margin-top: 16px; text-align: center; font-size: 10pt; font-weight: 700; break-inside: avoid; page-break-inside: avoid; }
     .page-break { break-after: page; page-break-after: always; height: 0; }
   </style>
     <script>
@@ -1254,7 +1360,7 @@ async function buildAssessmentPdfKit({ assessment, questions = [], blocks = [], 
   }
 
   addPage(state)
-  drawCover(state)
+  await drawCover(state)
   addPage(state)
   for (const block of exportBlocks) {
     await drawBlock(state, block)
@@ -1265,6 +1371,7 @@ async function buildAssessmentPdfKit({ assessment, questions = [], blocks = [], 
 }
 
 export async function buildAssessmentPdf(args) {
+  validateAssessmentExportContent(args)
   try {
     const html = await buildAssessmentHtml(args)
     const chromiumPdf = await renderHtmlPdfWithChromium(html)

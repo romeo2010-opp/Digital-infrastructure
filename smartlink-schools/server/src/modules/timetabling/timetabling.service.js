@@ -3,6 +3,7 @@ import { HttpError } from "../../utils/http.js"
 import { getScopedSchoolId } from "../../utils/tenantScope.js"
 import { assertSchoolFeatureEnabled, enabledTimetableTypes, getSchoolFeatures, timetableFeatureKey } from "../../services/schoolFeaturesService.js"
 import { recordTimetableAudit, listTimetableAudit } from "./audit.service.js"
+import { broadcastSchoolNotification } from "../../services/operationalCommunicationService.js"
 import { validateTimetableEntry, listVersionConflicts, assertNoBlockingConflicts } from "./conflict.service.js"
 import { runTimetableReadinessAudit } from "./readiness.service.js"
 import {
@@ -277,16 +278,16 @@ export async function createTimetable(req) {
     await connection.beginTransaction()
     const [result] = await connection.query(
       `INSERT INTO timetables (
-        school_id, timetable_type, name, academic_year_id, term_id, cycle_type, timetable_cycle_weeks, effective_from, effective_to,
+        public_ref, school_id, timetable_type, name, academic_year_id, term_id, cycle_type, timetable_cycle_weeks, effective_from, effective_to,
         status, setup_progress, created_by
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'SETUP', ?, ?)`,
+      ) VALUES (UUID(), ?, ?, ?, ?, ?, ?, ?, ?, ?, 'SETUP', ?, ?)`,
       [schoolId, timetableType, name, academicYearId, termId, cycleType, timetableCycleWeeks, effectiveFrom, effectiveTo, jsonString(req.body.setup_progress || req.body.setupProgress || {}, {}), req.user.id],
     )
     const timetableId = Number(result.insertId)
     const [versionResult] = await connection.query(
       `INSERT INTO timetable_versions (
-        timetable_id, version_number, status, creation_method, configuration_snapshot, source_snapshot_hash, created_by
-      ) VALUES (?, 1, 'SETUP', 'MANUAL', ?, ?, ?)`,
+        public_ref, timetable_id, version_number, status, creation_method, configuration_snapshot, source_snapshot_hash, created_by
+      ) VALUES (UUID(), ?, 1, 'SETUP', 'MANUAL', ?, ?, ?)`,
       [timetableId, jsonString({ created_from: "initial_setup", timetable_cycle_weeks: timetableCycleWeeks }, {}), sourceHash({ schoolId, timetableType, academicYearId, termId, effectiveFrom, effectiveTo, timetableCycleWeeks }), req.user.id],
     )
     if (req.body.create_default_schedule !== false) {
@@ -1047,6 +1048,7 @@ export async function publishVersion(req) {
     )
     await recordTimetableAudit({ connection, schoolId, timetableId, timetableVersionId: versionId, actorUserId: req.user.id, action: "PUBLICATION_COMPLETED", entityType: "timetable_version", entityId: versionId, newValues: { status: "PUBLISHED" } })
     await connection.commit()
+    await broadcastSchoolNotification({schoolId,roles:["teacher","headteacher","school_owner","director","owner"],excludeUserId:req.user.id,title:`${timetable.name} published`,message:`A new ${timetable.timetable_type === "EXAM_TIMETABLE" ? "exam" : "school"} timetable has been published. Open your timetable to review the latest schedule.`,category:"academics",priority:"high",linkedEntityType:"timetable",linkedEntityId:timetableId,createdBy:req.user.id})
     return getVersionById(req)
   } catch (error) {
     await connection.rollback()

@@ -48,7 +48,7 @@ export function createGeminiProvider(config = {}) {
         message: apiKey ? "Gemini configuration is present." : GEMINI_NOT_CONFIGURED_MESSAGE,
       }
     },
-    async generateJson({ prompt, schemaHint, responseSchema }) {
+    async generateJson({ prompt, schemaHint, responseSchema, attachments = [] }) {
       if (!apiKey) throw new Error(GEMINI_NOT_CONFIGURED_MESSAGE)
 
       const controller = new AbortController()
@@ -60,6 +60,15 @@ export function createGeminiProvider(config = {}) {
         }
         if (responseSchema) generationConfig.response_schema = responseSchema
 
+        const mediaParts = attachments
+          .filter((attachment) => attachment?.data && attachment?.mimeType)
+          .map((attachment) => ({
+            inline_data: {
+              mime_type: attachment.mimeType,
+              data: attachment.data,
+            },
+          }))
+
         const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
           method: "POST",
           headers: {
@@ -70,9 +79,12 @@ export function createGeminiProvider(config = {}) {
           body: JSON.stringify({
             contents: [{
               role: "user",
-              parts: [{
-                text: `${prompt}\n\nReturn JSON only. ${schemaHint || ""}`.trim(),
-              }],
+              parts: [
+                ...mediaParts,
+                {
+                  text: `${prompt}\n\nReturn JSON only. ${schemaHint || ""}`.trim(),
+                },
+              ],
             }],
             generationConfig,
           }),

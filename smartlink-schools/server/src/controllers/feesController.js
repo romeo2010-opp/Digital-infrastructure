@@ -7,6 +7,7 @@ import { getScopedSchoolId } from "../utils/tenantScope.js"
 import { getActiveAcademicSession, requireActiveAcademicSession, sessionPayload } from "../services/academicSessionService.js"
 import { ensureFeeAccountsForActiveStudents } from "../services/financeAccountService.js"
 import { studentCodeSortSql } from "../utils/studentSort.js"
+import { broadcastSchoolNotification } from "../services/operationalCommunicationService.js"
 
 const activeInvoiceStatuses = ["unpaid", "partial", "paid"]
 const paymentMethods = new Set(["cash", "bank_transfer", "mobile_money", "cheque", "pos_card", "other"])
@@ -1466,6 +1467,21 @@ export async function createDiscount(req, res) {
     }
     await auditFinance(connection, req, "discount.requested", "discount", discountId, null, { status, amountType, amountValue })
     await connection.commit()
+    if (status === "pending") {
+      const [[student]] = await pool.query("SELECT CONCAT(first_name,' ',last_name) full_name FROM students WHERE school_id=? AND id=?", [schoolId, studentId])
+      await broadcastSchoolNotification({
+        schoolId,
+        roles: ["school_owner", "director", "owner", "headteacher"],
+        excludeUserId: req.user.id,
+        title: "Discount request awaiting approval",
+        message: `${student?.full_name || "A learner"} has a ${discountType.replaceAll("_", " ")} discount request awaiting review.`,
+        category: "finance",
+        priority: "high",
+        linkedEntityType: "finance_discount",
+        linkedEntityId: discountId,
+        createdBy: req.user.id,
+      })
+    }
     res.status(201).json({ discountId, status })
   } catch (error) {
     await connection.rollback()

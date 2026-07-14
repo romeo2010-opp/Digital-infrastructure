@@ -5,8 +5,8 @@ import { getPortalPacket, normalizePortalPacketKeys } from "./portalPackets.js"
 
 const WS_MAGIC = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 const PUSH_INTERVAL_MS = 30000
-const schoolDashboardRoles = new Set(["school_owner", "headteacher", "teacher", "bursar", "super_admin"])
-const schoolResourceRoles = new Set(["school_owner", "headteacher", "teacher", "bursar", "parent", "student", "super_admin"])
+const schoolDashboardRoles = new Set(["school_owner", "headteacher", "teacher", "bursar", "librarian", "super_admin"])
+const schoolResourceRoles = new Set(["school_owner", "headteacher", "teacher", "bursar", "librarian", "parent", "student", "super_admin"])
 const portalResources = new Set(["preferences", "schoolData", "studentPortal", "timetables", "examLab"])
 const portalClients = new Map()
 
@@ -117,6 +117,15 @@ export function broadcastPortalInvalidation({
     }
   })
 
+  return { sent }
+}
+
+export function broadcastUserEvent({ schoolId, userId, type, data }) {
+  let sent = 0
+  portalClients.forEach((client, socket) => {
+    if (!socket.writable || socket.destroyed || !matchesScope(client.user, { schoolId, userId })) return
+    try { sendFrame(socket, { type, data, at: new Date().toISOString() }); sent += 1 } catch { portalClients.delete(socket) }
+  })
   return { sent }
 }
 

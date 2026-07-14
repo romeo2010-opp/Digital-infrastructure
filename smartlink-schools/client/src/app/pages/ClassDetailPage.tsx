@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router'
-import { ArrowLeft, Users } from 'lucide-react'
+import { Users } from 'lucide-react'
 import { PortalTable } from '../components/PortalTable'
 import { SectionCard } from '../components/SectionCard'
 import { SectionKpiStrip } from '../components/SectionKpiStrip'
+import { PageBackButton } from '../components/PageBackButton'
 import { usePortal } from '../lib/portalContext'
 
 function valueLabel(value: any) {
@@ -16,6 +17,7 @@ export function ClassDetailPage() {
   const location = useLocation()
   const { token, api } = usePortal()
   const [classRecord, setClassRecord] = useState<any>(null)
+  const [academic, setAcademic] = useState<any>(null)
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -23,6 +25,13 @@ export function ClassDetailPage() {
     api.getClass(token, classId)
       .then((payload: any) => setClassRecord(payload?.class || null))
       .catch((err: any) => setError(err?.message || 'Unable to load class detail.'))
+  }, [api, classId, token])
+
+  useEffect(() => {
+    if (!token || !classId) return
+    api.getAcademicClass(token, classId)
+      .then((payload: any) => setAcademic(payload))
+      .catch(() => setAcademic(null))
   }, [api, classId, token])
 
   const assignments = classRecord?.assignments || []
@@ -37,9 +46,7 @@ export function ClassDetailPage() {
       <section className="rounded-[6px] border border-[var(--mera-panel-border)] bg-[var(--mera-panel)] p-4 shadow-[var(--mera-shadow-card)]">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <button type="button" onClick={() => navigate(backPath)} className="mb-2 inline-flex items-center gap-1 text-[11px] font-semibold text-[#6b7280] hover:text-[#111827]">
-              <ArrowLeft className="size-3.5" /> Back
-            </button>
+            <PageBackButton fallback={backPath} className="mb-3" />
             <h1 className="text-[22px] font-semibold tracking-[-0.035em] text-[var(--mera-panel-text)]">{classRecord?.name || 'Class Detail'}</h1>
             <p className="mt-1 text-[13px] text-[var(--mera-panel-text-muted)]">{classRecord?.grade_level || 'School class'} · Class Teacher: {classTeacher}</p>
           </div>
@@ -56,6 +63,26 @@ export function ClassDetailPage() {
         { label: 'Grade', value: classRecord?.grade_level || '-', helper: 'class setup', delta: 'database' },
       ]} />
 
+      {academic ? <>
+        <SectionKpiStrip items={[
+          { label: 'Academic state', value: valueLabel(academic.overall_state), helper: 'validated open evidence', delta: 'operational' },
+          { label: 'Readiness', value: academic.readiness?.[0]?.readiness_score === null || academic.readiness?.[0]?.readiness_score === undefined ? '—' : `${Number(academic.readiness[0].readiness_score).toFixed(0)}%`, helper: 'not a predicted mark', delta: `${Number(academic.readiness?.[0]?.confidence_score || 0).toFixed(0)}% confidence` },
+          { label: 'Topics measured', value: academic.topic_matrix?.length || 0, helper: 'published mapped evidence', delta: 'current scope' },
+          { label: 'Active interventions', value: academic.interventions?.length || 0, helper: 'owned support plans', delta: 'measured follow-up' },
+        ]} />
+        <SectionCard title="Class Academic Intelligence" subtitle="Delivery, mapped evidence and learner distribution remain separate; drill into the learner or assessment for source evidence.">
+          <PortalTable columns={[
+            { key: 'subject_name', label: 'Subject' },
+            { key: 'topic_name', label: 'Topic' },
+            { key: 'class_result', label: 'Class result', render: (row: any) => row.class_result === null ? 'Insufficient evidence' : `${Number(row.class_result).toFixed(1)}%` },
+            { key: 'learners_below_secure', label: 'Below secure' },
+            { key: 'trend', label: 'Trend', render: (row: any) => valueLabel(row.trend) },
+            { key: 'confidence', label: 'Confidence', render: (row: any) => row.confidence === null ? '—' : `${Number(row.confidence).toFixed(0)}%` },
+          ]} rows={academic.topic_matrix || []} emptyMessage="No published mapped topic evidence is available for this class yet." />
+        </SectionCard>
+        <div className="grid gap-3 xl:grid-cols-2"><SectionCard title="Learner mastery distribution" subtitle="No rank exposure; only the evidence state needed for support planning."><PortalTable columns={[{ key: 'mastery_status', label: 'Mastery state', render: (row: any) => valueLabel(row.mastery_status) }, { key: 'learner_count', label: 'Learners' }]} rows={academic.learner_distribution || []} /></SectionCard><SectionCard title="Upcoming assessments" subtitle="Use mapped assessments to close evidence gaps."><PortalTable columns={[{ key: 'name', label: 'Assessment' }, { key: 'subject_name', label: 'Subject' }, { key: 'assessment_type', label: 'Type', render: (row: any) => valueLabel(row.assessment_type) }, { key: 'exam_date', label: 'Date', render: (row: any) => row.exam_date ? new Date(row.exam_date).toLocaleDateString() : 'Not scheduled' }]} rows={academic.upcoming_assessments || []} /></SectionCard></div>
+      </> : null}
+
       <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_420px]">
         <SectionCard title="Students Inside This Class" subtitle="Click a learner to open the full student profile">
           <PortalTable
@@ -67,7 +94,7 @@ export function ClassDetailPage() {
               { key: 'status', label: 'Status' },
             ]}
             rows={students}
-            onRowClick={(row) => navigate(`/students/${row.id}`, { state: { fromClass: classRecord?.id } })}
+            onRowClick={(row) => navigate(`/students/${row.public_ref}`, { state: { fromClass: classRecord?.public_ref } })}
             emptyMessage="No students are currently assigned to this class."
           />
         </SectionCard>

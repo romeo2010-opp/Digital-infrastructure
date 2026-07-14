@@ -2,6 +2,9 @@ package com.example.smartlink.domain.model
 
 data class SchoolSession(val token: String, val name: String, val role: String, val schoolName: String) {
     val isStudent get() = role.equals("student", ignoreCase = true)
+    val isBursar get() = role.equals("bursar", ignoreCase = true)
+    val isTeacher get() = role.equals("teacher", ignoreCase = true)
+    val isLeadership get() = listOf("school_owner", "headteacher", "super_admin", "staff").any { role.equals(it, ignoreCase = true) }
 }
 data class StudentProfile(val fullName: String, val admissionNumber: String, val className: String)
 data class StudentMetric(val label: String, val value: String)
@@ -15,8 +18,29 @@ data class StudentPortal(
     val metrics: List<StudentMetric>,
     val results: List<SchoolListItem>,
     val latestReport: ReportCard?,
+    val fees: List<SchoolListItem>,
+    val attendance: List<SchoolListItem>,
     val homework: List<SchoolListItem>,
     val timetable: List<SchoolListItem>,
     val announcements: List<Announcement>,
 )
 data class SchoolDashboard(val students: String, val attendance: String, val balances: String, val notices: String)
+
+data class StaffMetric(val label: String, val value: String, val helper: String = "", val tone: String = "neutral")
+data class StaffModule(
+    val key: String,
+    val title: String,
+    val subtitle: String,
+    val action: String,
+    val metrics: List<StaffMetric> = emptyList(),
+    val rows: List<SchoolListItem> = emptyList(),
+)
+data class StaffWorkspace(
+    val dashboard: SchoolDashboard,
+    val heroMetrics: List<StaffMetric>,
+    val operations: List<StaffModule>,
+    val finance: List<StaffModule>,
+    val learning: List<StaffModule>,
+    val communication: List<StaffModule>,
+    val today: List<SchoolListItem> = emptyList(),
+)

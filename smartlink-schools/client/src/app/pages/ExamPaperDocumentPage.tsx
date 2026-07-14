@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
-import { AlignCenter, AlignLeft, AlignRight, Archive, ArrowDown, ArrowLeft, ArrowUp, Bold, CheckCircle2, ClipboardCheck, Copy, Crop, Download, FileJson, FileText, FilePlus2, GripVertical, Grid3X3, Image as ImageIcon, Italic, Layers, List, ListOrdered, Minus, Move, PanelRight, Plus, Printer, Rows3, Save, Send, Shapes, Square, Trash2, Type, Underline, Undo2, Upload, XCircle } from 'lucide-react'
+import { AlignCenter, AlignLeft, AlignRight, Archive, ArrowDown, ArrowUp, Bold, CheckCircle2, ClipboardCheck, Copy, Crop, Download, FileJson, FileText, FilePlus2, GripVertical, Grid3X3, Image as ImageIcon, Italic, Layers, List, ListOrdered, Minus, Move, PanelRight, Plus, Printer, Rows3, Save, Send, Shapes, Square, Trash2, Type, Underline, Undo2, Upload, XCircle } from 'lucide-react'
 import { toast } from 'sonner'
 import { SmartLinkLoadingState } from '../components/SmartLinkLoadingState'
+import { PageBackButton } from '../components/PageBackButton'
+import { QuestionCurriculumMapping } from '../components/QuestionCurriculumMapping'
 import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
 import { Textarea } from '../components/ui/textarea'
@@ -107,6 +109,8 @@ function newQuestion(index: number) {
   return {
     local_id: uid('question'),
     question_number: index,
+    display_number: String(index),
+    number_locked: false,
     sort_order: 100 + index,
     question_text: '',
     question_type: 'short_answer',
@@ -135,6 +139,10 @@ function blockKey(block: any) {
 
 function questionKey(question: any, index: number) {
   return String(question?.local_id || (question?.id ? `question-${question.id}` : `question-${index + 1}`))
+}
+
+function questionReferenceKey(value: any) {
+  return String(value || '').toLowerCase().replace(/^question\s*/, '').replace(/[\s.()[\]{}_-]+/g, '')
 }
 
 function normalizeCurriculumKey(value: any) {
@@ -311,7 +319,7 @@ function questionToBlock(question: any, index: number) {
     local_id: questionKey(question, index),
     block_type: 'question',
     content_json: {
-      question_number: index + 1,
+      question_number: question.display_number || question.question_number || index + 1,
       question_text: questionDisplayText(question),
       content_parts: contentParts,
       question_type: question.question_type || 'short_answer',
@@ -441,6 +449,17 @@ function paginateDocumentBlocks(blocks: any[], margins: string, mode: string) {
 
   if (page.length || pages.length === 0) pages.push(page)
   return pages
+}
+
+function compactAssessmentPaperBlocks(blocks: any[], hasQuestions: boolean) {
+  if (!hasQuestions) return []
+  const compact: any[] = []
+  blocks.forEach((block) => {
+    if (block?.block_type === 'page_break' && (!compact.length || compact[compact.length - 1]?.block_type === 'page_break')) return
+    compact.push(block)
+  })
+  while (compact[compact.length - 1]?.block_type === 'page_break') compact.pop()
+  return compact
 }
 
 function Field({ label, children }: { label: string; children: any }) {
@@ -617,6 +636,7 @@ export function ExamPaperDocumentPage() {
   ].sort((a: any, b: any) => Number(a.sort_order || 0) - Number(b.sort_order || 0)), [designBlocks, questions])
 
   const coverBlocks = useMemo(() => normalizeCoverBlocks(paperLayout.cover_blocks || []), [paperLayout.cover_blocks])
+  const originalCoverMedia = useMemo(() => media.find((row: any) => String(row.id) === String(paperLayout.original_cover_media_id)) || null, [media, paperLayout.original_cover_media_id])
   const selectedBlock = useMemo(() => coverBlocks.find((block: any) => String(block.local_id || block.id) === String(selectedBlockId)) || allBlocks.find((block: any) => String(block.local_id || block.id) === String(selectedBlockId)) || null, [allBlocks, coverBlocks, selectedBlockId])
   const layeredBlocks = useMemo(() => [...allBlocks].sort((a: any, b: any) => {
     const layerDiff = numericStyle(b.style_json?.z_index, 0) - numericStyle(a.style_json?.z_index, 0)
@@ -650,12 +670,20 @@ export function ExamPaperDocumentPage() {
       return_reason: assessment?.return_reason || '',
       status: assessment?.status || 'draft',
     })
+    const usedQuestionBlockIndexes = new Set<number>()
     setQuestions((payload?.questions || []).map((question: any, index: number) => {
-      const questionBlock = questionBlocks.find((block: any) => Number(block.content_json?.question_number || 0) === index + 1) || questionBlocks[index]
+      const displayNumber = String(question.display_number || question.question_number || index + 1)
+      let questionBlockIndex = questionBlocks.findIndex((block: any, blockIndex: number) => !usedQuestionBlockIndexes.has(blockIndex) && questionReferenceKey(block.content_json?.question_number) === questionReferenceKey(displayNumber))
+      if (questionBlockIndex < 0 && !usedQuestionBlockIndexes.has(index) && questionBlocks[index]) questionBlockIndex = index
+      if (questionBlockIndex < 0) questionBlockIndex = questionBlocks.findIndex((_: any, blockIndex: number) => !usedQuestionBlockIndexes.has(blockIndex))
+      if (questionBlockIndex >= 0) usedQuestionBlockIndexes.add(questionBlockIndex)
+      const questionBlock = questionBlocks[questionBlockIndex]
       const contentParts = normalizeQuestionParts(questionBlock?.content_json?.content_parts || question.content_parts || question.contentParts || [])
       return {
         ...newQuestion(index + 1),
         ...question,
+        display_number: String(questionBlock?.content_json?.question_number || displayNumber),
+        number_locked: Boolean(questionBlock?.metadata_json?.original_question_number || question.display_number),
         local_id: question.local_id || (question.id ? `question-${question.id}` : uid('question')),
         question_text: question.question_text || questionPartsToText(contentParts),
         content_parts: contentParts,
@@ -838,7 +866,7 @@ export function ExamPaperDocumentPage() {
       const next = [...current]
       const [item] = next.splice(index, 1)
       next.splice(nextIndex, 0, item)
-      return next.map((question, questionIndex) => ({ ...question, question_number: questionIndex + 1, sort_order: numericStyle(question.sort_order, 100 + questionIndex) }))
+      return next.map((question, questionIndex) => ({ ...question, question_number: questionIndex + 1, display_number: question.number_locked ? question.display_number : String(questionIndex + 1), sort_order: numericStyle(question.sort_order, 100 + questionIndex) }))
     })
   }
 
@@ -873,7 +901,7 @@ export function ExamPaperDocumentPage() {
   }
 
   const deleteQuestion = (index: number) => {
-    setQuestions((current) => current.filter((_, questionIndex) => questionIndex !== index).map((row, questionIndex) => ({ ...row, question_number: questionIndex + 1 })))
+    setQuestions((current) => current.filter((_, questionIndex) => questionIndex !== index).map((row, questionIndex) => ({ ...row, question_number: questionIndex + 1, display_number: row.number_locked ? row.display_number : String(questionIndex + 1) })))
   }
 
   const insertBlock = (blockType: string, patch: any = {}) => {
@@ -1023,6 +1051,7 @@ export function ExamPaperDocumentPage() {
       return [...orderedQuestions, ...remaining].map((question, index) => ({
         ...question,
         question_number: index + 1,
+        display_number: question.number_locked ? question.display_number : String(index + 1),
         sort_order: positions.get(questionKey(question, index)) ?? numericStyle(question.sort_order, 100 + index),
       }))
     })
@@ -1144,6 +1173,7 @@ export function ExamPaperDocumentPage() {
     questions: questions.map((question, index) => ({
       ...question,
       question_number: index + 1,
+      display_number: question.display_number || String(index + 1),
       question_text: questionDisplayText(question),
       content_parts: normalizeQuestionParts(question.content_parts || []),
       sort_order: numericStyle(question.sort_order, 100 + index),
@@ -1572,12 +1602,12 @@ export function ExamPaperDocumentPage() {
     toast.success('Image added to question.')
   }
 
-  const saveCoverTemplate = () => {
-    if (!['school_owner', 'headteacher', 'super_admin'].includes(role)) {
-      toast.error('Only school leadership can save cover templates.')
-      return
-    }
+  const saveCoverTemplate = async () => {
+    const templateName = window.prompt('Template name', `${form.name || currentCurriculumLabel} Cover`)
+    if (!templateName) return
     const template = {
+      version: 1,
+      paper_size: paperLayout.paper_size,
       curriculum_key: currentCurriculumKey,
       cover_style: paperLayout.cover_style,
       margins: paperLayout.margins,
@@ -1596,9 +1626,25 @@ export function ExamPaperDocumentPage() {
       header: paperLayout.header,
       footer: paperLayout.footer,
       cover_blocks: coverBlocks,
+      original_cover_media_id: paperLayout.original_cover_media_id || null,
     }
-    window.localStorage.setItem(coverTemplateStorageKey(user, currentCurriculumKey), JSON.stringify(template))
-    toast.success(`${currentCurriculumLabel} cover template saved for this school on this device.`)
+    try {
+      await api.createAssessmentTemplate(token, {
+        template_name: templateName,
+        template_description: `Saved from ${form.name || 'Assessment Builder'}`,
+        source_type: 'school_created',
+        source_assessment_id: form.id || null,
+        subject_id: form.subject_id || null,
+        class_id: form.class_id || null,
+        assessment_type: form.assessment_type,
+        template_category: isFormal ? 'exam' : form.assessment_type === 'quiz' ? 'quiz' : 'general',
+        layout_json: template,
+        style_json: { curriculum_key: currentCurriculumKey },
+      })
+      toast.success('Cover saved to the school template library.')
+    } catch (err: any) {
+      toast.error(err?.message || 'Cover template could not be saved.')
+    }
   }
 
   const applySavedCoverTemplate = () => {
@@ -1628,7 +1674,7 @@ export function ExamPaperDocumentPage() {
       form.instructions || '',
       '',
       ...questions.flatMap((question, index) => [
-        `${index + 1}. ${questionDisplayText(question)} (${question.marks || 0} marks)`,
+        `${question.display_number || question.question_number || index + 1} ${questionDisplayText(question)} (${question.marks || 0} marks)`,
         ...(question.question_type === 'multiple_choice' ? (question.options || []).map((option: any) => `   ${option.option_label}. ${option.option_text}`) : []),
         ...(mode === 'marking' ? [
           question.correct_answer ? `Correct answer: ${question.correct_answer}` : '',
@@ -1637,6 +1683,7 @@ export function ExamPaperDocumentPage() {
         ] : []),
         '',
       ]),
+      'End of question paper',
     ]
     return rows.join('\n')
   }
@@ -1750,7 +1797,7 @@ export function ExamPaperDocumentPage() {
     const schemeHtml = mode === 'marking'
       ? `<div class="marking-panel">${question.correct_answer ? `<p><strong>Answer:</strong> ${textToHtml(question.correct_answer)}</p>` : ''}${question.marking_scheme ? `<p><strong>Marking scheme:</strong> ${textToHtml(question.marking_scheme)}</p>` : ''}${question.explanation ? `<p><strong>Explanation:</strong> ${textToHtml(question.explanation)}</p>` : ''}</div>`
       : ''
-    return `<section class="question-block"><div class="question-number">${index + 1}.</div><div class="question-body"><div class="question-text"><span class="marks">(${markLabel})</span>${questionContentHtml(question)}</div>${question.question_instructions ? `<div class="question-instructions">${textToHtml(question.question_instructions)}</div>` : ''}${optionsHtml}${questionAnswerSpaceHtml(question.style_json || {})}${schemeHtml}</div></section>`
+    return `<section class="question-block"><div class="question-number">${escapeHtml(question.display_number || question.question_number || index + 1)}</div><div class="question-body"><div class="question-text"><span class="marks">(${markLabel})</span>${questionContentHtml(question)}</div>${question.question_instructions ? `<div class="question-instructions">${textToHtml(question.question_instructions)}</div>` : ''}${optionsHtml}${questionAnswerSpaceHtml(question.style_json || {})}${schemeHtml}${index === questions.length - 1 ? '<div class="end-of-question-paper">End of question paper</div>' : ''}</div></section>`
   }
 
   const coverBlocksHtml = () => coverBlocks.length
@@ -1856,7 +1903,7 @@ export function ExamPaperDocumentPage() {
         : standardCoverHtml()
     const content = [
       coverHtml,
-      ...allBlocks.map((block: any) => block.block_type === 'question'
+      ...strictDocumentBlocks.map((block: any) => block.block_type === 'question'
         ? questionHtml(questions.find((question, index) => questionKey(question, index) === blockKey(block)) || {}, questions.findIndex((question, index) => questionKey(question, index) === blockKey(block)), mode)
         : designBlockHtml(block)),
     ].join('\n')
@@ -1905,8 +1952,8 @@ export function ExamPaperDocumentPage() {
     .paper-block { margin: 12px 0; }
     .section-title { margin: 18px 0 8px; text-align: center; font-size: 14pt; }
     .text-box { border: 1px solid #111827; padding: 8px; }
-    .question-block { display: grid; grid-template-columns: 28px minmax(0,1fr); gap: 8px; margin: 12px 0; break-inside: avoid; }
-    .question-number { text-align: right; font-weight: 700; }
+    .question-block { display: grid; grid-template-columns: minmax(28px,max-content) minmax(0,1fr); gap: 8px; margin: 12px 0; break-inside: avoid; }
+    .question-number { text-align: right; font-weight: 700; white-space: nowrap; }
     .question-text { white-space: pre-wrap; }
     .question-part { margin: 0 0 8px; }
     .marks { float: right; white-space: nowrap; }
@@ -1924,6 +1971,7 @@ export function ExamPaperDocumentPage() {
     .image-block figcaption { margin-top: 4px; font-size: 10pt; color: #4b5563; }
     .image-placeholder, .shape-placeholder { display: inline-flex; align-items: center; justify-content: center; border: 1px dashed #6b7280; background: #f8fafc; min-height: 90px; padding: 8px; }
     .marking-panel { margin-top: 8px; border: 1px solid #cbd5e1; background: #f8fafc; padding: 8px; font-size: 10pt; }
+    .end-of-question-paper { margin-top: 16px; text-align: center; font-size: 10pt; font-weight: 700; break-inside: avoid; page-break-inside: avoid; }
     .page-break, .page-break-after { break-after: page; page-break-after: always; }
   </style>
 </head>
@@ -1951,6 +1999,18 @@ export function ExamPaperDocumentPage() {
 
   const exportPaper = async (format: 'print' | 'word' | 'html' | 'text' | 'json', mode: 'student' | 'marking' = 'student') => {
     const baseName = documentTitle.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase() || 'exam-paper'
+    if (format !== 'json' && !quality.ready) {
+      const reasons = [
+        !questions.length ? 'add at least one question' : '',
+        quality.missingText ? `${quality.missingText} question${quality.missingText === 1 ? '' : 's'} need content` : '',
+        quality.missingMarks ? `${quality.missingMarks} question${quality.missingMarks === 1 ? '' : 's'} need marks` : '',
+        quality.mcqIssues ? `${quality.mcqIssues} multiple-choice question${quality.mcqIssues === 1 ? '' : 's'} need valid options` : '',
+        quality.missingSchemes ? `${quality.missingSchemes} formal question${quality.missingSchemes === 1 ? '' : 's'} need marking schemes` : '',
+        Math.abs(quality.questionTotal - quality.totalMarks) >= 0.01 ? `question marks total ${quality.questionTotal}, but the paper total is ${quality.totalMarks}` : '',
+      ].filter(Boolean)
+      toast.error(`Paper is not ready to export: ${reasons.join('; ') || 'complete the required assessment details'}.`)
+      return
+    }
     if (format === 'print') {
       if (!token) return
       const variant = mode === 'marking' ? 'scheme' : 'student'
@@ -2314,7 +2374,7 @@ export function ExamPaperDocumentPage() {
       >
         {renderCanvasDragHandle({ ...block, style_json: style })}
         <div className="flex items-start gap-3 p-1">
-          <div className="w-8 shrink-0 pt-2 text-right text-[15px] font-bold text-[#111827]">{questionIndex + 1}.</div>
+          <div className="min-w-14 shrink-0 whitespace-nowrap pt-2 text-right text-[15px] font-bold text-[#111827]">{question.display_number || question.question_number || questionIndex + 1}</div>
           <div className="min-w-0 flex-1">
             {editableQuestion ? (
               <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_90px]">
@@ -2339,7 +2399,7 @@ export function ExamPaperDocumentPage() {
               <select disabled={readOnly} className={selectClassName()} value={question.question_type} onChange={(event) => updateQuestionType(questionIndex, event.target.value)}>
                 {questionTypes.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
               </select>
-              <Input disabled={readOnly} className="h-8 text-[12px]" value={question.topic_text} onChange={(event) => updateQuestion(questionIndex, 'topic_text', event.target.value)} placeholder="Topic" />
+              <div className="flex h-8 min-w-0 items-center rounded-[5px] border border-[#d9dce3] bg-white px-2 text-[11px] text-[#475569]" title={[question.topic_text, question.subtopic_text].filter(Boolean).join(' → ')}>{question.topic_text ? [question.topic_text, question.subtopic_text].filter(Boolean).join(' → ') : 'Map syllabus in Inspector'}</div>
               <select disabled={readOnly} className={selectClassName()} value={question.difficulty} onChange={(event) => updateQuestion(questionIndex, 'difficulty', event.target.value)}>
                 <option value="easy">Easy</option>
                 <option value="medium">Medium</option>
@@ -2437,12 +2497,6 @@ export function ExamPaperDocumentPage() {
                   <Field label="Marks">
                     <Input disabled={readOnly} type="number" className="h-8 text-[12px]" value={question.marks || ''} onChange={(event) => updateQuestion(questionIndex, 'marks', event.target.value)} />
                   </Field>
-                  <Field label="Topic">
-                    <Input disabled={readOnly} className="h-8 text-[12px]" value={question.topic_text || ''} onChange={(event) => updateQuestion(questionIndex, 'topic_text', event.target.value)} />
-                  </Field>
-                  <Field label="Subtopic">
-                    <Input disabled={readOnly} className="h-8 text-[12px]" value={question.subtopic_text || ''} onChange={(event) => updateQuestion(questionIndex, 'subtopic_text', event.target.value)} />
-                  </Field>
                   <Field label="Difficulty">
                     <select disabled={readOnly} className={selectClassName()} value={question.difficulty || 'medium'} onChange={(event) => updateQuestion(questionIndex, 'difficulty', event.target.value)}>
                       <option value="easy">Easy</option>
@@ -2459,6 +2513,15 @@ export function ExamPaperDocumentPage() {
                       <option value="analysis">Analysis</option>
                     </select>
                   </Field>
+                  <QuestionCurriculumMapping
+                    assessmentId={form.id || assessmentId}
+                    question={question}
+                    classId={form.class_id}
+                    subjectId={form.subject_id}
+                    termId={form.term_id}
+                    readOnly={readOnly}
+                    onMapped={(result) => setQuestions((current) => current.map((item, index) => index === questionIndex ? { ...item, topic_id: result.topic_id, topic_text: result.topic_text, subtopic_id: result.subtopic_id, subtopic_text: result.subtopic_text, topic_mappings: result.topic_mappings, objective_mappings: result.objective_mappings, mapping_status: result.mapping_status } : item))}
+                  />
                   <div className="rounded-[5px] border border-[#e2e8f0] bg-white p-2">
                     <div className="mb-2 text-[12px] font-bold text-[#111827]">Student Answer Space</div>
                     <Field label="Type">
@@ -2703,6 +2766,12 @@ export function ExamPaperDocumentPage() {
     </div>
   ) : null
 
+  const renderOriginalImportedCover = () => originalCoverMedia ? (
+    <div className="-m-10 overflow-hidden bg-white print:-m-[14mm]">
+      <img src={resolvePortalAssetUrl(originalCoverMedia.storage_path)} alt="Original imported assessment cover" className="block aspect-[210/297] h-auto w-full object-fill" />
+    </div>
+  ) : renderStandardCover()
+
   const renderStandardCover = () => (
     <>
       <div className="border-b-2 border-[#111827] pb-5 text-center">
@@ -2903,7 +2972,8 @@ export function ExamPaperDocumentPage() {
       ? 'px-8 py-10 sm:px-14 lg:px-20 lg:py-16'
       : 'px-6 py-8 sm:px-10 lg:px-16 lg:py-14'
   const paperPageClass = `mx-auto min-h-[1120px] w-full max-w-[850px] bg-white text-[15px] leading-7 shadow-[0_14px_45px_rgba(15,23,42,0.18)] print:min-h-0 print:max-w-none print:p-0 print:shadow-none ${pagePaddingClass}`
-  const visibleDocumentBlocks = allBlocks.filter((block) => editorMode !== 'print' || block.block_type === 'question' || block.is_printable !== false)
+  const strictDocumentBlocks = useMemo(() => compactAssessmentPaperBlocks(allBlocks, questions.length > 0), [allBlocks, questions.length])
+  const visibleDocumentBlocks = strictDocumentBlocks.filter((block) => editorMode !== 'print' || block.block_type === 'question' || block.is_printable !== false)
   const documentPages = paginateDocumentBlocks(visibleDocumentBlocks, paperLayout.margins, editorMode)
   const renderDocumentBlock = (block: any) => block.block_type === 'question' ? renderQuestionBlock(block) : renderDesignBlock(block)
   const totalPreviewPages = documentPages.length + 1
@@ -2929,14 +2999,7 @@ export function ExamPaperDocumentPage() {
       <header className="shrink-0 border-b border-[#d7dce4] bg-white shadow-[0_1px_8px_rgba(15,23,42,0.08)] print:hidden">
         <div className="flex min-h-12 flex-wrap items-center justify-between gap-2 px-3 py-2">
           <div className="flex min-w-0 items-center gap-2">
-            <button
-              type="button"
-              className="grid size-8 place-items-center rounded-[4px] border border-[#d9dce3] text-[#4b5563] transition hover:bg-[#f3f4f6] hover:text-[#111827]"
-              onClick={() => navigate('/exam-builder')}
-              aria-label="Back to exam papers"
-            >
-              <ArrowLeft className="size-4" />
-            </button>
+            <PageBackButton fallback="/exam-builder" label="Back to exam papers" iconOnly />
             <span className="grid size-8 place-items-center rounded-[4px] bg-[#2563eb] text-white">
               <FileText className="size-4" />
             </span>
@@ -3201,6 +3264,7 @@ export function ExamPaperDocumentPage() {
               </Field>
               <Field label="Cover">
                 <select className={`${selectClassName()} w-36`} value={paperLayout.cover_style || 'standard'} onChange={(event) => setPaperLayout(normalizePaperLayout({ ...paperLayout, cover_style: event.target.value }))}>
+                  {paperLayout.original_cover_media_id ? <option value="original_imported">Original Imported</option> : null}
                   <option value="standard">Standard</option>
                   <option value="msce">MSCE</option>
                   <option value="cambridge">Cambridge</option>
@@ -3269,11 +3333,11 @@ export function ExamPaperDocumentPage() {
                 <input type="checkbox" checked={paperLayout.show_guides} onChange={(event) => setPaperLayout({ ...paperLayout, show_guides: event.target.checked })} />
                 Metadata guides
               </label>
-              <Button type="button" variant="outline" className="h-8 rounded-[5px] text-[12px]" onClick={applySavedCoverTemplate}>
-                Apply {currentCurriculumLabel} Cover
+              <Button type="button" variant="outline" className="h-8 rounded-[5px] text-[12px]" onClick={() => navigate(`/assessments/templates${form.id ? `?assessment_id=${form.id}` : ''}`)}>
+                Change Cover Template
               </Button>
-              <Button type="button" className="h-8 rounded-[5px] text-[12px]" disabled={!['school_owner', 'headteacher', 'super_admin'].includes(role)} onClick={saveCoverTemplate}>
-                Save {currentCurriculumLabel} Cover
+              <Button type="button" className="h-8 rounded-[5px] text-[12px]" disabled={readOnly} onClick={saveCoverTemplate}>
+                Save Current Cover as Template
               </Button>
             </div>
           ) : null}
@@ -3509,7 +3573,7 @@ export function ExamPaperDocumentPage() {
               <div className="mb-6 rounded-[5px] border border-[#fed7aa] bg-[#fff7ed] px-3 py-2 text-[12px] font-semibold text-[#9a3412] print:hidden">{form.return_reason}</div>
             ) : null}
             {renderPageBadge(1)}
-            {paperLayout.cover_style === 'msce' ? renderMsceCover() : paperLayout.cover_style === 'cambridge' ? renderCambridgeCover() : renderStandardCover()}
+            {paperLayout.cover_style === 'original_imported' ? renderOriginalImportedCover() : paperLayout.cover_style === 'msce' ? renderMsceCover() : paperLayout.cover_style === 'cambridge' ? renderCambridgeCover() : renderStandardCover()}
           </article>
 
           {documentPages.map((pageBlocks, pageIndex) => (
@@ -3528,6 +3592,7 @@ export function ExamPaperDocumentPage() {
                       </Button>
                     </div>
                   )}
+                {pageIndex === documentPages.length - 1 && questions.length ? <div className="pt-2 text-center text-[12px] font-bold text-[#111827]">End of question paper</div> : null}
               </div>
             </article>
           ))}

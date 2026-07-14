@@ -183,11 +183,13 @@ async function loadResults(schoolId, studentId) {
   subjects.forEach((subject) => {
     const report = reportsById.get(Number(subject.report_card_id))
     if (!report) return
-    const score = nullableNumber(subject.score)
-    const rawScore = subject.raw_score === null ? score : nullableNumber(subject.raw_score)
+    const absent = String(subject.entry_status || "").toLowerCase() === "absent"
+    const score = absent ? null : nullableNumber(subject.score)
+    const rawScore = absent || subject.raw_score === null ? score : nullableNumber(subject.raw_score)
     report.subjects.push({
       ...subject,
       id: Number(subject.id),
+      absent,
       score,
       raw_score: rawScore,
       total_marks: nullableNumber(subject.total_marks),
@@ -197,7 +199,7 @@ async function loadResults(schoolId, studentId) {
   })
 
   const normalizedReports = [...reportsById.values()].map((report) => {
-    const failedSubjects = report.subjects.filter((subject) => numberValue(subject.total_percent) < 50).length
+    const failedSubjects = report.subjects.filter((subject) => !subject.absent && numberValue(subject.total_percent) < 50).length
     const subjectCount = report.subjects.length
     const averageScore = nullableNumber(report.average_score)
     return {
@@ -226,7 +228,7 @@ async function loadResults(schoolId, studentId) {
         exam_session_name: report.exam_session_name,
         term_name: report.term_name,
         generated_at: report.generated_at,
-        score: nullableNumber(subject.total_percent),
+        score: subject.absent ? null : nullableNumber(subject.total_percent),
       })
     })
   })

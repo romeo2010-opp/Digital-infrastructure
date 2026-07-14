@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router'
-import { ArrowLeft, BookOpenCheck, UserRound } from 'lucide-react'
+import { BookOpenCheck, UserRound } from 'lucide-react'
 import { Button } from '../components/ui/button'
 import { PortalTable } from '../components/PortalTable'
 import { SectionCard } from '../components/SectionCard'
+import { PageBackButton } from '../components/PageBackButton'
 import { usePortal } from '../lib/portalContext'
 
 function Row({ label, value }: { label: string; value: any }) {
@@ -48,9 +49,7 @@ export function TeacherProfilePage() {
           <div className="flex items-center gap-3">
             <div className="grid size-12 place-items-center rounded-[6px] bg-[#111827] text-[14px] font-bold text-white">{initials(teacher?.full_name)}</div>
             <div>
-              <button type="button" onClick={() => navigate(backPath)} className="mb-1 inline-flex items-center gap-1 text-[11px] font-semibold text-[#6b7280] hover:text-[#111827]">
-                <ArrowLeft className="size-3.5" /> Back
-              </button>
+              <PageBackButton fallback={backPath} className="mb-2" />
               <h1 className="text-[22px] font-semibold tracking-[-0.035em] text-[var(--mera-panel-text)]">{teacher?.full_name || 'Teacher Profile'}</h1>
               <p className="mt-1 text-[13px] text-[var(--mera-panel-text-muted)]">{valueLabel(teacher?.role_type)} · {valueLabel(teacher?.employment_status)}</p>
             </div>

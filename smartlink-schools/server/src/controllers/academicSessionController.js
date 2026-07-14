@@ -3,6 +3,7 @@ import { getScopedSchoolId, getTeacherClassSubjectPairs, isTeacher } from "../ut
 import { HttpError } from "../utils/http.js"
 import { getActiveAcademicSession, sessionPayload } from "../services/academicSessionService.js"
 import { studentCodeSortSql } from "../utils/studentSort.js"
+import { createArchiveSnapshot } from "../services/libraryClassroomService.js"
 
 function normalizeDate(value, label) {
   const text = String(value || "").trim()
@@ -125,7 +126,7 @@ async function buildTermWarnings(connection, schoolId, termId) {
   const [missingMarkRows] = await connection.query(
     `SELECT a.id, a.name, c.name AS class_name, subj.name AS subject_name,
       COUNT(DISTINCT se.student_id) AS expected_students,
-      COUNT(DISTINCT CASE WHEN re.score IS NOT NULL THEN re.student_id END) AS marked_students
+      COUNT(DISTINCT CASE WHEN re.score IS NOT NULL OR re.status = 'absent' THEN re.student_id END) AS marked_students
      FROM assessments a
      JOIN classes c ON c.id = a.class_id AND c.school_id = a.school_id
      JOIN subjects subj ON subj.id = a.subject_id AND subj.school_id = a.school_id
@@ -384,8 +385,8 @@ async function buildProgressionPreviewRows(connection, schoolId, fromAcademicYea
       COUNT(DISTINCT CASE WHEN a.id IS NOT NULL AND rb.id IS NULL THEN a.id END) AS missing_result_batches,
       COUNT(DISTINCT CASE WHEN rb.id IS NOT NULL AND rb.status NOT IN ('approved', 'locked') THEN rb.id END) AS pending_batches,
       COUNT(DISTINCT CASE WHEN rb.status IN ('approved', 'locked') THEN rb.id END) AS completed_batches,
-      COUNT(DISTINCT CASE WHEN rb.status IN ('approved', 'locked') AND re.score IS NOT NULL THEN rb.id END) AS marked_completed_batches,
-      COUNT(DISTINCT CASE WHEN re.score IS NOT NULL THEN re.id END) AS result_entries
+      COUNT(DISTINCT CASE WHEN rb.status IN ('approved', 'locked') AND (re.score IS NOT NULL OR re.status = 'absent') THEN rb.id END) AS marked_completed_batches,
+      COUNT(DISTINCT CASE WHEN re.score IS NOT NULL OR re.status = 'absent' THEN re.id END) AS result_entries
      FROM student_enrollments se
      JOIN students s ON s.id = se.student_id AND s.school_id = se.school_id
      JOIN classes c ON c.id = se.class_id AND c.school_id = se.school_id
@@ -769,7 +770,7 @@ export async function getAcademicTermDetail(req, res) {
      LEFT JOIN users u ON u.id = a.teacher_id AND u.school_id = a.school_id
      LEFT JOIN users admin ON admin.id = a.administering_teacher_id AND admin.school_id = a.school_id
      LEFT JOIN result_batches rb ON rb.assessment_id = a.id AND rb.school_id = a.school_id
-     LEFT JOIN result_entries re ON re.result_batch_id = rb.id AND re.school_id = rb.school_id AND re.score IS NOT NULL
+     LEFT JOIN result_entries re ON re.result_batch_id = rb.id AND re.school_id = rb.school_id AND (re.score IS NOT NULL OR re.status = 'absent')
      WHERE a.school_id = ? AND a.term_id = ? AND a.status <> 'archived'${assessmentScope.clause}
      GROUP BY a.id, a.name, a.assessment_type, a.status, a.total_marks, a.duration_minutes,
        a.exam_session_id, a.class_id, a.subject_id, a.teacher_id, a.administering_teacher_id,
@@ -1292,6 +1293,7 @@ export async function archiveTerm(req, res) {
   const schoolId = getScopedSchoolId(req)
   const termId = Number(req.params.id || 0)
   if (!termId) throw new HttpError(400, "Term id is required")
+  const archive = await createArchiveSnapshot(schoolId, termId, req.user)
   const [result] = await pool.query(
     "UPDATE terms SET status = 'archived' WHERE id = ? AND school_id = ? AND status = 'closed'",
     [termId, schoolId],
@@ -1299,7 +1301,7 @@ export async function archiveTerm(req, res) {
   if (!result.affectedRows) throw new HttpError(400, "Only a closed term can be archived")
   await pool.query("UPDATE exam_sessions SET status = 'archived' WHERE school_id = ? AND term_id = ? AND status = 'locked'", [schoolId, termId])
   await pool.query("UPDATE report_cards SET status = 'archived' WHERE school_id = ? AND term_id = ? AND status = 'locked'", [schoolId, termId])
-  res.json({ ok: true })
+  res.json({ ok: true, archive })
 }
 
 export async function listClassProgressionRules(req, res) {
@@ -1333,8 +1335,19 @@ export async function saveProgressionPolicy(req, res) {
 
 export async function saveClassProgressionRule(req, res) {
   const schoolId = getScopedSchoolId(req)
-  const fromClassId = Number(req.body.from_class_id || 0)
-  const toClassId = req.body.to_class_id ? Number(req.body.to_class_id) : null
+  const resolveClassId = async (value) => {
+    const raw = String(value ?? '').trim()
+    if (!raw) return 0
+    const [[row]] = await pool.query(
+      /^\d+$/.test(raw)
+        ? "SELECT id FROM classes WHERE id = ? AND school_id = ? LIMIT 1"
+        : "SELECT id FROM classes WHERE public_ref = ? AND school_id = ? LIMIT 1",
+      [raw, schoolId],
+    )
+    return Number(row?.id || 0)
+  }
+  const fromClassId = await resolveClassId(req.body.from_class_id)
+  const toClassId = req.body.to_class_id ? await resolveClassId(req.body.to_class_id) : null
   const isTerminalClass = Boolean(req.body.is_terminal_class)
   const defaultDecision = isTerminalClass ? "graduate" : String(req.body.default_decision || "promote")
   const isActive = req.body.is_active === undefined ? true : Boolean(req.body.is_active)
@@ -1342,8 +1355,7 @@ export async function saveClassProgressionRule(req, res) {
   if (!["promote", "graduate"].includes(defaultDecision)) throw new HttpError(400, "Default decision is invalid")
   if (!isTerminalClass && !toClassId && defaultDecision === "promote") throw new HttpError(400, "Select a next class or mark this as a terminal class")
 
-  const [[fromClass]] = await pool.query("SELECT id FROM classes WHERE id = ? AND school_id = ? LIMIT 1", [fromClassId, schoolId])
-  if (!fromClass) throw new HttpError(400, "From class does not belong to this school")
+  if (!fromClassId) throw new HttpError(400, "From class does not belong to this school")
   if (toClassId) {
     const [[toClass]] = await pool.query("SELECT id FROM classes WHERE id = ? AND school_id = ? LIMIT 1", [toClassId, schoolId])
     if (!toClass) throw new HttpError(400, "Next class does not belong to this school")
@@ -1359,7 +1371,7 @@ export async function saveClassProgressionRule(req, res) {
       is_active = VALUES(is_active)`,
     [schoolId, fromClassId, toClassId, isTerminalClass ? 1 : 0, defaultDecision, isActive ? 1 : 0],
   )
-  res.status(result.insertId ? 201 : 200).json({ ok: true, id: Number(result.insertId || 0) })
+  res.status(result.insertId ? 201 : 200).json({ ok: true })
 }
 
 export async function getProgressionPreview(req, res) {

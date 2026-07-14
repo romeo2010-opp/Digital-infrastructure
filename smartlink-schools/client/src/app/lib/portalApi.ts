@@ -119,7 +119,6 @@ export const portalApi = {
     return request('/api/auth/login', { method: 'POST', body: credentials }).then((payload: any) => ({
       accessToken: payload?.token || payload?.accessToken,
       user: payload?.user,
-      ai: payload?.ai || null,
     }))
   },
 
@@ -565,6 +564,71 @@ export const portalApi = {
 
   uploadStudentPhoto(token: string, payload: any) {
     return request('/api/students/photo', { method: 'POST', token, body: payload })
+  },
+
+  createStudentWithdrawal(token: string, studentId: any, payload: any) {
+    return request(`/api/students/${studentId}/withdrawals`, { method: 'POST', token, body: payload })
+  },
+
+  listStudentWithdrawals(token: string, studentId: any) {
+    return request(`/api/students/${studentId}/withdrawals`, { token })
+  },
+
+  cancelStudentWithdrawal(token: string, studentId: any, withdrawalId: any, payload: any = {}) {
+    return request(`/api/students/${studentId}/withdrawals/${withdrawalId}/cancel`, { method: 'PATCH', token, body: payload })
+  },
+
+  getStudentWithdrawalStatus(token: string, studentId: any, filters: Record<string, any> = {}) {
+    return request(`/api/students/${studentId}/withdrawal-status${queryString(filters)}`, { token })
+  },
+
+  getDirectorOverview(token: string) {
+    return request('/api/director/overview', { token })
+  },
+
+  getDirectorPage(token: string, section: string, filters: Record<string, any> = {}) {
+    return request(`/api/director/pages/${section}${queryString(filters)}`, { token })
+  },
+
+  updateDirectorSettings(token: string, payload: any) {
+    return request('/api/director/settings', { method: 'PATCH', token, body: payload })
+  },
+
+  listDirectorTasks(token: string, filters: Record<string, any> = {}) {
+    return request(`/api/director/tasks${queryString(filters)}`, { token })
+  },
+
+  getDirectorTask(token: string, taskId: any) {
+    return request(`/api/director/tasks/${taskId}`, { token })
+  },
+
+  createDirectorTask(token: string, payload: any) {
+    return request('/api/director/tasks', { method: 'POST', token, body: payload })
+  },
+
+  updateDirectorTask(token: string, taskId: any, payload: any) {
+    return request(`/api/director/tasks/${taskId}`, { method: 'PATCH', token, body: payload })
+  },
+
+  completeDirectorTask(token: string, taskId: any, payload: any = {}) {
+    return request(`/api/director/tasks/${taskId}/complete`, { method: 'PATCH', token, body: payload })
+  },
+
+  cancelDirectorTask(token: string, taskId: any) {
+    return request(`/api/director/tasks/${taskId}/cancel`, { method: 'PATCH', token })
+  },
+  deleteDirectorTask(token: string, taskId: any) { return request(`/api/director/tasks/${taskId}`, { method: 'DELETE', token }) },
+
+  getDirectorDailyClosure(token: string, date?: string) {
+    return request(`/api/director/daily-closure${queryString(date ? { date } : {})}`, { token })
+  },
+
+  reviewDirectorDailyClosure(token: string, payload: any) {
+    return request('/api/director/daily-closure', { method: 'PATCH', token, body: payload })
+  },
+
+  listDirectorWithdrawals(token: string, filters: Record<string, any> = {}) {
+    return request(`/api/director/withdrawals${queryString(filters)}`, { token })
   },
 
   getBursarDashboard(token: string, filters: Record<string, any> = {}) {
@@ -1269,12 +1333,200 @@ export const portalApi = {
     return request('/api/users', { token })
   },
 
+  createSchoolUser(token: string, payload: any) {
+    return request('/api/users', { method: 'POST', token, body: payload })
+  },
+
+  linkParentGuardian(token: string, userRef: string, payload: any) {
+    return request(`/api/users/${encodeURIComponent(userRef)}/guardian-links`, { method: 'POST', token, body: payload })
+  },
+
+  getUserPermissions(token: string, userRef: string) {
+    return request(`/api/users/${encodeURIComponent(userRef)}/permissions`, { token })
+  },
+
+  updateUserPermissions(token: string, userRef: string, permissions: any[]) {
+    return request(`/api/users/${encodeURIComponent(userRef)}/permissions`, { method: 'PUT', token, body: { permissions } })
+  },
+
+  getPayrollDashboard(token: string) {
+    return request('/api/director/finance/payroll', { token })
+  },
+
+  getPayrollRun(token: string, runRef: string) {
+    return request(`/api/director/finance/payroll/runs/${encodeURIComponent(runRef)}`, { token })
+  },
+
+  createPayrollRun(token: string, payload: any) {
+    return request('/api/director/finance/payroll/runs', { method: 'POST', token, body: payload })
+  },
+
+  generatePayrollItems(token: string, runRef: string) {
+    return request(`/api/director/finance/payroll/runs/${encodeURIComponent(runRef)}/generate-items`, { method: 'POST', token })
+  },
+
+  transitionPayrollRun(token: string, runRef: string, action: 'submit' | 'approve' | 'pay' | 'cancel') {
+    return request(`/api/director/finance/payroll/runs/${encodeURIComponent(runRef)}/${action}`, { method: 'POST', token })
+  },
+
+  saveSalaryProfile(token: string, payload: any, profileRef?: string) {
+    return request(`/api/director/finance/payroll/salary-profiles${profileRef ? `/${encodeURIComponent(profileRef)}` : ''}`, { method: profileRef ? 'PATCH' : 'POST', token, body: payload })
+  },
+
+  updatePayrollItem(token: string, itemRef: string, payload: any) {
+    return request(`/api/director/finance/payroll/items/${encodeURIComponent(itemRef)}`, { method: 'PATCH', token, body: payload })
+  },
+
+  getLeaveDashboard(token: string, filters: Record<string, any> = {}) {
+    return request(`/api/director/staff/leave${queryString(filters)}`, { token })
+  },
+
+  getLeaveRequest(token: string, leaveRef: string) {
+    return request(`/api/director/staff/leave/${encodeURIComponent(leaveRef)}`, { token })
+  },
+
+  createLeaveRequest(token: string, payload: any) {
+    return request('/api/director/staff/leave', { method: 'POST', token, body: payload })
+  },
+
+  updateLeaveRequest(token: string, leaveRef: string, payload: any) {
+    return request(`/api/director/staff/leave/${encodeURIComponent(leaveRef)}`, { method: 'PATCH', token, body: payload })
+  },
+
+  transitionLeave(token: string, leaveRef: string, action: 'approve' | 'reject' | 'cancel' | 'complete', payload: any = {}) {
+    return request(`/api/director/staff/leave/${encodeURIComponent(leaveRef)}/${action}`, { method: 'POST', token, body: payload })
+  },
+
+  getHrSettings(token: string) {
+    return request('/api/director/hr-settings', { token })
+  },
+
+  updateHrSettings(token: string, payload: any) {
+    return request('/api/director/hr-settings', { method: 'PATCH', token, body: payload })
+  },
+
   quickSearch(token: string, query: string, limit = 10, signal?: AbortSignal) {
     return request(`/api/search${queryString({ q: query, limit })}`, { token, signal })
   },
 
   fullSearch(token: string, filters: Record<string, any> = {}, signal?: AbortSignal) {
     return request(`/api/search${queryString(filters)}`, { token, signal })
+  },
+
+  createAssessmentImport(token: string, payload: any) {
+    return request('/api/assessment-imports', { method: 'POST', token, body: payload })
+  },
+
+  listAssessmentImports(token: string) {
+    return request('/api/assessment-imports', { token })
+  },
+
+  startAssessmentImport(token: string, importRef: string) {
+    return request(`/api/assessment-imports/${encodeURIComponent(importRef)}/start`, { method: 'POST', token })
+  },
+
+  getAssessmentImportReview(token: string, importRef: string) {
+    return request(`/api/assessment-imports/${encodeURIComponent(importRef)}/review`, { token })
+  },
+
+  updateAssessmentImportQuestion(token: string, importRef: string, questionRef: string, payload: any) {
+    return request(`/api/assessment-imports/${encodeURIComponent(importRef)}/questions/${encodeURIComponent(questionRef)}`, { method: 'PATCH', token, body: payload })
+  },
+
+  updateAssessmentImportMarking(token: string, importRef: string, markingRef: string, payload: any) {
+    return request(`/api/assessment-imports/${encodeURIComponent(importRef)}/marking-items/${encodeURIComponent(markingRef)}`, { method: 'PATCH', token, body: payload })
+  },
+
+  linkAssessmentImportAnswer(token: string, importRef: string, payload: any) {
+    return request(`/api/assessment-imports/${encodeURIComponent(importRef)}/link-answer`, { method: 'POST', token, body: payload })
+  },
+
+  approveAssessmentImport(token: string, importRef: string) {
+    return request(`/api/assessment-imports/${encodeURIComponent(importRef)}/approve`, { method: 'POST', token })
+  },
+
+  cancelAssessmentImport(token: string, importRef: string) {
+    return request(`/api/assessment-imports/${encodeURIComponent(importRef)}/cancel`, { method: 'POST', token })
+  },
+
+  getAssessmentImportPreview(token: string, importRef: string, documentType: string, pageNumber: number) {
+    return requestBlob(`/api/assessment-imports/${encodeURIComponent(importRef)}/pages/${encodeURIComponent(documentType)}/${pageNumber}/preview`, { token })
+  },
+
+  getAssessmentImportAssetPreview(token: string, importRef: string, assetRef: string) {
+    return requestBlob(`/api/assessment-imports/${encodeURIComponent(importRef)}/assets/${encodeURIComponent(assetRef)}/preview`, { token })
+  },
+
+  listAssessmentImportImages(token: string, importRef: string) {
+    return request(`/api/assessment-imports/${encodeURIComponent(importRef)}/images`, { token })
+  },
+
+  extractAssessmentImportImages(token: string, importRef: string) {
+    return request(`/api/assessment-imports/${encodeURIComponent(importRef)}/extract-images`, { method: 'POST', token })
+  },
+
+  updateAssessmentImportImage(token: string, importRef: string, assetRef: string, body: Record<string, any>) {
+    return request(`/api/assessment-imports/${encodeURIComponent(importRef)}/images/${encodeURIComponent(assetRef)}`, { method: 'PATCH', token, body })
+  },
+
+  deleteAssessmentImportImage(token: string, importRef: string, assetRef: string) {
+    return request(`/api/assessment-imports/${encodeURIComponent(importRef)}/images/${encodeURIComponent(assetRef)}`, { method: 'DELETE', token })
+  },
+
+  listAssessmentTemplates(token: string, filters: Record<string, any> = {}) {
+    return request(`/api/assessment-templates${queryString(filters)}`, { token })
+  },
+
+  getAssessmentTemplate(token: string, templateRef: string) {
+    return request(`/api/assessment-templates/${encodeURIComponent(templateRef)}`, { token })
+  },
+
+  getAssessmentTemplatePreview(token: string, templateRef: string) {
+    return requestBlob(`/api/assessment-templates/${encodeURIComponent(templateRef)}/preview`, { token })
+  },
+
+  createAssessmentTemplate(token: string, payload: any) {
+    return request('/api/assessment-templates', { method: 'POST', token, body: payload })
+  },
+
+  updateAssessmentTemplate(token: string, templateRef: string, payload: any) {
+    return request(`/api/assessment-templates/${encodeURIComponent(templateRef)}`, { method: 'PATCH', token, body: payload })
+  },
+
+  approveAssessmentTemplate(token: string, templateRef: string) {
+    return request(`/api/assessment-templates/${encodeURIComponent(templateRef)}/approve`, { method: 'POST', token })
+  },
+
+  archiveAssessmentTemplate(token: string, templateRef: string) {
+    return request(`/api/assessment-templates/${encodeURIComponent(templateRef)}/archive`, { method: 'POST', token })
+  },
+
+  duplicateAssessmentTemplate(token: string, templateRef: string, payload: any = {}) {
+    return request(`/api/assessment-templates/${encodeURIComponent(templateRef)}/duplicate`, { method: 'POST', token, body: payload })
+  },
+
+  applyAssessmentTemplate(token: string, templateRef: string, assessmentId: any) {
+    return request(`/api/assessment-templates/${encodeURIComponent(templateRef)}/apply-to-assessment`, { method: 'POST', token, body: { assessment_id: assessmentId } })
+  },
+
+  setDefaultAssessmentTemplate(token: string, templateRef: string, category: string) {
+    return request(`/api/assessment-templates/${encodeURIComponent(templateRef)}/set-default`, { method: 'POST', token, body: { category } })
+  },
+
+  extractAssessmentImportCoverTemplate(token: string, importRef: string) {
+    return request(`/api/assessment-imports/${encodeURIComponent(importRef)}/extract-cover-template`, { method: 'POST', token })
+  },
+
+  matchAssessmentImportCoverTemplate(token: string, importRef: string) {
+    return request(`/api/assessment-imports/${encodeURIComponent(importRef)}/match-cover-template`, { method: 'POST', token })
+  },
+
+  getAssessmentTemplateSettings(token: string) {
+    return request('/api/assessment-template-settings', { token })
+  },
+
+  updateAssessmentTemplateSettings(token: string, payload: any) {
+    return request('/api/assessment-template-settings', { method: 'PATCH', token, body: payload })
   },
 
   getExamLabDashboard(token: string, filters: Record<string, any> = {}) {
@@ -1369,13 +1621,116 @@ export const portalApi = {
     return request('/api/internal/exam-lab/ai/suggest-tags', { method: 'POST', token, body: payload })
   },
 
+  getAcademicCommandCentre(token: string, filters: Record<string, any> = {}) { return request(`/api/academic-intelligence/command-centre${queryString(filters)}`, { token }) },
+  getAcademicOverview(token: string, filters: Record<string, any> = {}) { return request(`/api/academic-intelligence/overview${queryString(filters)}`, { token }) },
+  getAcademicClasses(token: string, filters: Record<string, any> = {}) { return request(`/api/academic-intelligence/classes${queryString(filters)}`, { token }) },
+  getAcademicClass(token: string, classRef: string, filters: Record<string, any> = {}) { return request(`/api/academic-intelligence/classes/${encodeURIComponent(classRef)}${queryString(filters)}`, { token }) },
+  getAcademicSubjects(token: string, filters: Record<string, any> = {}) { return request(`/api/academic-intelligence/subjects${queryString(filters)}`, { token }) },
+  getAcademicSubject(token: string, subjectRef: string, filters: Record<string, any> = {}) { return request(`/api/academic-intelligence/subjects/${encodeURIComponent(subjectRef)}${queryString(filters)}`, { token }) },
+  getAcademicTopic(token: string, topicRef: string, filters: Record<string, any> = {}) { return request(`/api/academic-intelligence/topics/${encodeURIComponent(topicRef)}${queryString(filters)}`, { token }) },
+  getAcademicEvidence(token: string, filters: Record<string, any> = {}) { return request(`/api/academic-intelligence/evidence${queryString(filters)}`, { token }) },
+  getAcademicRisks(token: string, filters: Record<string, any> = {}) { return request(`/api/academic-intelligence/risks${queryString(filters)}`, { token }) },
+  getAcademicInsights(token: string, filters: Record<string, any> = {}) { return request(`/api/academic-intelligence/insights${queryString(filters)}`, { token }) },
+  getAcademicPositiveSignals(token: string, filters: Record<string, any> = {}) { return request(`/api/academic-intelligence/positive-signals${queryString(filters)}`, { token }) },
+  getAcademicMeaningfulChanges(token: string, filters: Record<string, any> = {}) { return request(`/api/academic-intelligence/meaningful-changes${queryString(filters)}`, { token }) },
+  getAcademicEvidenceGaps(token: string, filters: Record<string, any> = {}) { return request(`/api/academic-intelligence/evidence-gaps${queryString(filters)}`, { token }) },
+  getAcademicReadiness(token: string, filters: Record<string, any> = {}) { return request(`/api/academic-intelligence/readiness${queryString(filters)}`, { token }) },
+  getAcademicHistory(token: string, filters: Record<string, any> = {}) { return request(`/api/academic-intelligence/history${queryString(filters)}`, { token }) },
+  getAcademicExplanation(token: string, findingId: string) { return request(`/api/academic-intelligence/explanations/${encodeURIComponent(findingId)}`, { token }) },
+  queueAcademicRecalculation(token: string, payload: any = {}) { return request('/api/academic-intelligence/recalculate', { method: 'POST', token, body: payload }) },
+  explainAcademicFindings(token: string, payload: any) { return request('/api/academic-intelligence/ai/explain', { method: 'POST', token, body: payload }) },
+  getAcademicAuthoringSetup(token: string) { return request('/api/academic-intelligence/authoring-setup', { token }) },
+  getStudentAcademicIntelligence(token: string, studentRef: string) { return request(`/api/academic-intelligence/students/${encodeURIComponent(studentRef)}`, { token }) },
+  getAcademicDependencies(token: string) { return request('/api/academic-intelligence/dependencies', { token }) },
+  getAcademicEngineConfig(token: string) { return request('/api/academic-intelligence/config', { token }) },
+  updateAcademicEngineConfig(token: string, payload: any) { return request('/api/academic-intelligence/config', { method: 'PATCH', token, body: payload }) },
+  updateCurriculumLifecycle(token: string, recordRef: string, payload: any) { return request(`/api/academic-intelligence/curriculum/${encodeURIComponent(recordRef)}`, { method: 'PATCH', token, body: payload }) },
+  createAcademicIntervention(token: string, payload: any) { return request('/api/academic-intelligence/interventions', { method: 'POST', token, body: payload }) },
+  createParentAcademicInsight(token: string, payload: any) { return request('/api/academic-intelligence/parent-insights', { method: 'POST', token, body: payload }) },
+  updateParentAcademicInsight(token: string, insightRef: string, payload: any) { return request(`/api/academic-intelligence/parent-insights/${encodeURIComponent(insightRef)}`, { method: 'PATCH', token, body: payload }) },
+  getParentAcademicInsights(token: string) { return request('/api/parent-portal/academic-insights', { token }) },
+  updateAcademicIntervention(token: string, interventionRef: string, payload: any) { return request(`/api/academic-intelligence/interventions/${encodeURIComponent(interventionRef)}`, { method: 'PATCH', token, body: payload }) },
+  listAssessmentBlueprints(token: string, filters: Record<string, any> = {}) { return request(`/api/academic-intelligence/assessment-blueprints${queryString(filters)}`, { token }) },
+  createAssessmentBlueprint(token: string, payload: any) { return request('/api/academic-intelligence/assessment-blueprints', { method: 'POST', token, body: payload }) },
+  listRemediationPacks(token: string, filters: Record<string, any> = {}) { return request(`/api/academic-intelligence/remediation-packs${queryString(filters)}`, { token }) },
+  createRemediationPack(token: string, payload: any) { return request('/api/academic-intelligence/remediation-packs', { method: 'POST', token, body: payload }) },
+  updateRemediationPack(token: string, packRef: string, payload: any) { return request(`/api/academic-intelligence/remediation-packs/${encodeURIComponent(packRef)}`, { method: 'PATCH', token, body: payload }) },
+  listAcademicAuthoringTopics(token: string, filters: Record<string, any> = {}) { return request(`/api/academic-intelligence/authoring-topics${queryString(filters)}`, { token }) },
+  saveAssessmentQuestionMappings(token: string, assessmentId: number | string, questionId: number | string, payload: any) { return request(`/api/assessments/${assessmentId}/questions/${questionId}/mappings`, { method: 'PUT', token, body: payload }) },
+  getAssessmentOperationalIntelligence(token: string, assessmentId: number | string) { return request(`/api/assessments/${assessmentId}/operational-intelligence`, { token }) },
+  getAcademicMarkSheet(token: string, assessmentId: number | string, mode: 'question' | 'topic' | 'overall' = 'question') { return request(`/api/assessments/${assessmentId}/academic-mark-sheet${queryString({ mode })}`, { token }) },
+  saveAcademicMarkSheetDraft(token: string, assessmentId: number | string, payload: any) { return request(`/api/assessments/${assessmentId}/academic-mark-sheet/draft`, { method: 'POST', token, body: payload }) },
+  publishAcademicMarkSheet(token: string, assessmentId: number | string, payload: any) { return request(`/api/assessments/${assessmentId}/academic-mark-sheet/publish`, { method: 'POST', token, body: payload }) },
+  updateQuestionSourcePermission(token: string, questionRef: string, payload: any) { return request(`/api/question-library/${encodeURIComponent(questionRef)}/source-permission`, { method: 'PATCH', token, body: payload }) },
+  listTargetedAssessments(token: string, filters: Record<string, any> = {}) { return request(`/api/academic-intelligence/targeted-assessments${queryString(filters)}`, { token }) },
+  createTargetedAssessment(token: string, payload: any) { return request('/api/academic-intelligence/targeted-assessments', { method: 'POST', token, body: payload }) },
+  getTargetedAssessment(token: string, generatedRef: string) { return request(`/api/academic-intelligence/targeted-assessments/${encodeURIComponent(generatedRef)}`, { token }) },
+  generateTargetedAssessment(token: string, generatedRef: string, payload: any = {}) { return request(`/api/academic-intelligence/targeted-assessments/${encodeURIComponent(generatedRef)}/generate`, { method: 'POST', token, body: payload }) },
+  saveTargetedAssessmentReview(token: string, generatedRef: string, payload: any) { return request(`/api/academic-intelligence/targeted-assessments/${encodeURIComponent(generatedRef)}/review`, { method: 'PUT', token, body: payload }) },
+  replaceTargetedAssessmentQuestion(token: string, generatedRef: string, payload: any) { return request(`/api/academic-intelligence/targeted-assessments/${encodeURIComponent(generatedRef)}/replace-question`, { method: 'POST', token, body: payload }) },
+  confirmTargetedAssessmentLearners(token: string, generatedRef: string, payload: any) { return request(`/api/academic-intelligence/targeted-assessments/${encodeURIComponent(generatedRef)}/confirm-learners`, { method: 'POST', token, body: payload }) },
+  validateTargetedAssessment(token: string, generatedRef: string) { return request(`/api/academic-intelligence/targeted-assessments/${encodeURIComponent(generatedRef)}/validate`, { method: 'POST', token }) },
+  approveTargetedAssessment(token: string, generatedRef: string) { return request(`/api/academic-intelligence/targeted-assessments/${encodeURIComponent(generatedRef)}/approve`, { method: 'POST', token }) },
+  publishTargetedAssessment(token: string, generatedRef: string) { return request(`/api/academic-intelligence/targeted-assessments/${encodeURIComponent(generatedRef)}/publish`, { method: 'POST', token }) },
+  getLibrarianDashboard(token: string) { return request('/api/library/dashboard', { token }) },
+  listLibraryResources(token: string, filters: Record<string, any> = {}) { return request(`/api/library/catalogue${queryString(filters)}`, { token }) },
+  createLibraryResource(token: string, payload: any) { return request('/api/library/catalogue', { method: 'POST', token, body: payload }) },
+  listLibraryLoans(token: string, filters: Record<string, any> = {}) { return request(`/api/library/loans${queryString(filters)}`, { token }) },
+  issueLibraryLoan(token: string, payload: any) { return request('/api/library/loans', { method: 'POST', token, body: payload }) },
+  returnLibraryLoan(token: string, loanRef: string, payload: any) { return request(`/api/library/loans/${encodeURIComponent(loanRef)}/return`, { method: 'POST', token, body: payload }) },
+  listLibraryComputers(token: string) { return request('/api/library/computers', { token }) },
+  createLibraryComputer(token: string, payload: any) { return request('/api/library/computers', { method: 'POST', token, body: payload }) },
+  updateLibraryComputer(token: string, computerRef: string, payload: any) { return request(`/api/library/computers/${encodeURIComponent(computerRef)}`, { method: 'PATCH', token, body: payload }) },
+  listTeachingResources(token: string, filters: Record<string, any> = {}) { return request(`/api/teaching-resources${queryString(filters)}`, { token }) },
+  getTeachingResource(token: string, resourceRef: string) { return request(`/api/teaching-resources/${encodeURIComponent(resourceRef)}`, { token }) },
+  createTeachingResource(token: string, payload: any) { return request('/api/teaching-resources', { method: 'POST', token, body: payload }) },
+  createTeachingResourceVersion(token: string, resourceRef: string, payload: any) { return request(`/api/teaching-resources/${encodeURIComponent(resourceRef)}/versions`, { method: 'POST', token, body: payload }) },
+  listTeachingResourceRequests(token: string, filters: Record<string, any> = {}) { return request(`/api/teaching-resource-requests${queryString(filters)}`, { token }) },
+  createTeachingResourceRequest(token: string, payload: any) { return request('/api/teaching-resource-requests', { method: 'POST', token, body: payload }) },
+  updateTeachingResourceRequest(token: string, requestRef: string, payload: any) { return request(`/api/teaching-resource-requests/${encodeURIComponent(requestRef)}`, { method: 'PATCH', token, body: payload }) },
+  transitionTeachingResource(token: string, resourceRef: string, payload: any) { return request(`/api/teaching-resources/${encodeURIComponent(resourceRef)}/status`, { method: 'PATCH', token, body: payload }) },
+  reviewTeachingResource(token: string, resourceRef: string, payload: any) { return request(`/api/teaching-resources/${encodeURIComponent(resourceRef)}/reviews`, { method: 'POST', token, body: payload }) },
+  downloadTeachingResource(token: string, resourceRef: string, versionRef?: string) { return requestBlob(`/api/teaching-resources/${encodeURIComponent(resourceRef)}/download${queryString(versionRef ? { version_ref: versionRef } : {})}`, { token }) },
+  listPrintRequests(token: string, filters: Record<string, any> = {}) { return request(`/api/print-requests${queryString(filters)}`, { token }) },
+  createPrintRequest(token: string, payload: any) { return request('/api/print-requests', { method: 'POST', token, body: payload }) },
+  transitionPrintRequest(token: string, requestRef: string, payload: any) { return request(`/api/print-requests/${encodeURIComponent(requestRef)}`, { method: 'PATCH', token, body: payload }) },
+  browseInstitutionalArchive(token: string, filters: Record<string, any> = {}) { return request(`/api/institutional-archive${queryString(filters)}`, { token }) },
+  getClassroomSetup(token: string) { return request('/api/classroom-mode/setup', { token }) },
+  listClassroomHistory(token: string, filters: Record<string, any> = {}) { return request(`/api/classroom-mode/history${queryString(filters)}`, { token }) },
+  startClassroomSession(token: string, payload: any) { return request('/api/classroom-mode/sessions', { method: 'POST', token, body: payload }) },
+  getClassroomSession(token: string, sessionRef: string) { return request(`/api/classroom-mode/sessions/${encodeURIComponent(sessionRef)}`, { token }) },
+  saveClassroomSession(token: string, sessionRef: string, payload: any) { return request(`/api/classroom-mode/sessions/${encodeURIComponent(sessionRef)}`, { method: 'PATCH', token, body: payload }) },
+  saveClassroomAttendance(token: string, sessionRef: string, payload: any) { return request(`/api/classroom-mode/sessions/${encodeURIComponent(sessionRef)}/attendance`, { method: 'POST', token, body: payload }) },
+  attachClassroomResource(token: string, sessionRef: string, payload: any) { return request(`/api/classroom-mode/sessions/${encodeURIComponent(sessionRef)}/resources`, { method: 'POST', token, body: payload }) },
+  completeClassroomSession(token: string, sessionRef: string, payload: any) { return request(`/api/classroom-mode/sessions/${encodeURIComponent(sessionRef)}/complete`, { method: 'POST', token, body: payload }) },
+
   searchSuggestions() {
     return Promise.resolve({ suggestions: [] })
   },
 
-  markNotificationRead() {
-    return Promise.resolve({ ok: true })
+  listNotifications(token: string) {
+    return request('/api/notifications', { token })
   },
+
+  markNotificationRead(token: string, notificationId: any) {
+    return request(`/api/notifications/${notificationId}/read`, { method: 'PATCH', token })
+  },
+
+  dismissNotification(token: string, notificationId: any) {
+    return request(`/api/notifications/${notificationId}/dismiss`, { method: 'PATCH', token })
+  },
+
+  sendOperationalReminder(token: string, payload: any) { return request('/api/director/reminders', { method: 'POST', token, body: payload }) },
+  escalateToHeadteacher(token: string, payload: any) { return request('/api/director/escalations', { method: 'POST', token, body: payload }) },
+  getStaffAttendanceToday(token: string, date?: string) { return request(`/api/staff/attendance/today${queryString(date ? { date } : {})}`, { token }) },
+  recordStaffAttendance(token: string, payload: any) { return request('/api/staff/attendance', { method: 'POST', token, body: payload }) },
+  selfCheckInStaffAttendance(token: string) { return request('/api/staff/attendance/self-check-in', { method: 'POST', token }) },
+  sendFeeReminder(token: string, payload: any) { return request('/api/director/finance/fee-reminders', { method: 'POST', token, body: payload }) },
+  createPaymentPromise(token: string, payload: any) { return request('/api/director/finance/payment-promises', { method: 'POST', token, body: payload }) },
+  updatePaymentPromise(token: string, id: any, payload: any) { return request(`/api/director/finance/payment-promises/${id}`, { method: 'PATCH', token, body: payload }) },
+  getWhatsAppSettings(token: string) { return request('/api/director/settings/whatsapp', { token }) },
+  updateWhatsAppSettings(token: string, payload: any) { return request('/api/director/settings/whatsapp', { method: 'PATCH', token, body: payload }) },
+  runReminderEngine(token: string) { return request('/api/system/run-reminder-engine', { method: 'POST', token }) },
 
   getProfile() {
     return Promise.resolve(null)

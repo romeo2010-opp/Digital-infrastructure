@@ -546,6 +546,13 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
             setLoading(pendingPacketRequestsRef.current.size > 0)
             return
           }
+          if (message?.type === 'smartlink_notification' && message.data) {
+            const item = message.data
+            setData((current: any) => ({ ...current, notifications: { items: [item, ...((current.notifications?.items || []).filter((existing: any) => existing.publicId !== item.publicId))], unreadCount: Number(current.notifications?.unreadCount || 0) + 1 } }))
+            setPortalSyncEvent({ pulse: Date.now(), keys: [], resources: ['notifications', 'tasks'], reason: 'notification-received' })
+            toast.info(item.title || 'New notification', { description: item.message || 'A new follow-up requires your attention.' })
+            return
+          }
           if (message?.type === 'mera_portal_invalidate' || message?.type === 'mera_dashboard_refresh') {
             const resources = normalizePortalResources(message.resources)
             const explicitKeys = normalizePacketKeys(message.keys)
@@ -647,6 +654,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     }
 
     loadPreferences().catch(() => {})
+    portalApi.listNotifications(token).then((payload: any) => setData((current: any) => ({ ...current, notifications: payload?.notifications || { items: [], unreadCount: 0 } }))).catch(() => {})
   }, [loadPreferences, token])
 
   const preloadLoginPackets = useCallback(async (accessToken: string, preloadUser?: any) => {
@@ -720,9 +728,6 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     setLoginPreloadSettled(false)
     try {
       const payload = await portalApi.login(credentials)
-      if (payload?.ai && payload.ai.online === false) {
-        toast.warning(payload.ai.message || 'AI is not online right now. Manual workflows are still available.')
-      }
       if (payload?.challengeRequired) {
         setPendingLoginChallenge(payload)
         return payload

@@ -7,6 +7,21 @@ export const MERA_PERMISSIONS = {
   MESSAGES_MANAGE: 'MESSAGES_MANAGE',
   REPORTS_VIEW: 'REPORTS_VIEW',
   USERS_MANAGE: 'USERS_MANAGE',
+  AWARE_SEARCH: 'AWARE_SEARCH',
+  PAYROLL_VIEW: 'PAYROLL_VIEW',
+  PAYROLL_MANAGE: 'PAYROLL_MANAGE',
+  PAYROLL_APPROVE: 'PAYROLL_APPROVE',
+  LEAVE_VIEW: 'LEAVE_VIEW',
+  LEAVE_MANAGE: 'LEAVE_MANAGE',
+  LEAVE_APPROVE: 'LEAVE_APPROVE',
+  LIBRARY_DASHBOARD_VIEW: 'LIBRARY_DASHBOARD_VIEW',
+  LIBRARY_BOOK_VIEW: 'LIBRARY_BOOK_VIEW',
+  LIBRARY_LOAN_VIEW: 'LIBRARY_LOAN_VIEW',
+  TEACHING_RESOURCE_VIEW: 'TEACHING_RESOURCE_VIEW',
+  PRINT_REQUEST_VIEW: 'PRINT_REQUEST_VIEW',
+  ARCHIVED_TERM_VIEW: 'ARCHIVED_TERM_VIEW',
+  ACADEMIC_INTELLIGENCE_VIEW: 'ACADEMIC_INTELLIGENCE_VIEW',
+  CLASSROOM_MODE_USE: 'CLASSROOM_MODE_USE',
 } as const
 
 export type MeraPermission = (typeof MERA_PERMISSIONS)[keyof typeof MERA_PERMISSIONS] | string
@@ -94,7 +109,22 @@ export function isReadOnlyExecutive() {
   return false
 }
 
-export const routePermissions: Array<{ path: string; permissions: MeraPermission[] }> = []
+export const routePermissions: Array<{ path: string; permissions: MeraPermission[] }> = [
+  { path: '/finance/payroll', permissions: [MERA_PERMISSIONS.PAYROLL_VIEW] },
+  { path: '/staff/leave', permissions: [MERA_PERMISSIONS.LEAVE_VIEW] },
+  { path: '/search', permissions: [MERA_PERMISSIONS.AWARE_SEARCH] },
+  { path: '/settings/users', permissions: [MERA_PERMISSIONS.USERS_MANAGE] },
+  { path: '/library/dashboard', permissions: [MERA_PERMISSIONS.LIBRARY_DASHBOARD_VIEW] },
+  { path: '/library/catalogue', permissions: [MERA_PERMISSIONS.LIBRARY_BOOK_VIEW] },
+  { path: '/library/loans', permissions: [MERA_PERMISSIONS.LIBRARY_LOAN_VIEW] },
+  { path: '/library/computers', permissions: ['LIBRARY_COMPUTER_VIEW'] },
+  { path: '/library/resources', permissions: [MERA_PERMISSIONS.TEACHING_RESOURCE_VIEW] },
+  { path: '/library/resource-requests', permissions: [MERA_PERMISSIONS.TEACHING_RESOURCE_REVIEW] },
+  { path: '/library/print-requests', permissions: [MERA_PERMISSIONS.PRINT_REQUEST_VIEW, 'TEACHING_RESOURCE_PRINT'] },
+  { path: '/library/archive', permissions: [MERA_PERMISSIONS.ARCHIVED_TERM_VIEW] },
+  { path: '/academic-intelligence', permissions: [MERA_PERMISSIONS.ACADEMIC_INTELLIGENCE_VIEW] },
+  { path: '/classroom', permissions: [MERA_PERMISSIONS.CLASSROOM_MODE_USE] },
+]
 
 function normalizeSchoolFeatures(value: any) {
   const source = value?.features && typeof value.features === 'object' ? value.features : value
@@ -131,9 +161,14 @@ function routeFeatureEnabled(user: any, pathname = '/') {
 const roleRoutePrefixes: Record<string, string[]> = {
   super_admin: ['/'],
   school_owner: ['/'],
+  director: ['/'],
+  owner: ['/'],
   headteacher: ['/'],
   bursar: [
+    '/tasks',
+    '/search',
     '/fees',
+    '/finance/payroll',
     '/exam-intelligence',
     '/settings/profile',
     '/settings/preferences',
@@ -141,7 +176,26 @@ const roleRoutePrefixes: Record<string, string[]> = {
     '/settings/notifications',
     '/settings/security',
   ],
+  librarian: [
+    '/dashboard',
+    '/tasks',
+    '/search',
+    '/library/dashboard',
+    '/library/catalogue',
+    '/library/loans',
+    '/library/computers',
+    '/library/resources',
+    '/library/resource-requests',
+    '/library/archive',
+    '/library/print-requests',
+    '/settings/profile',
+    '/settings/preferences',
+    '/settings/personalized',
+    '/settings/notifications',
+    '/settings/security',
+  ],
   teacher: [
+    '/tasks',
     '/dashboard',
     '/search',
     '/academic-sessions',
@@ -158,6 +212,10 @@ const roleRoutePrefixes: Record<string, string[]> = {
     '/homework',
     '/teacher/lesson-log',
     '/teacher/classes',
+    '/classroom',
+    '/academic-intelligence',
+    '/library/resources',
+    '/library/print-requests',
     '/results',
     '/exam-sessions',
     '/assessment-insights',
@@ -165,6 +223,7 @@ const roleRoutePrefixes: Record<string, string[]> = {
     '/questions/bank',
     '/questions/batches',
     '/exam-builder',
+    '/assessments',
     '/daily-drill',
     '/exam-forecast',
     '/exam-intelligence',
@@ -176,31 +235,40 @@ const roleRoutePrefixes: Record<string, string[]> = {
     '/settings/notifications',
     '/settings/security',
   ],
-  parent: ['/dashboard', '/my-timetable', '/my-exams', '/homework', '/exam-intelligence', '/messages', '/settings/profile', '/settings/preferences', '/settings/personalized', '/settings/notifications', '/settings/security'],
+  parent: ['/parent-insights', '/my-timetable', '/my-exams', '/homework', '/exam-intelligence', '/messages', '/settings/profile', '/settings/preferences', '/settings/personalized', '/settings/notifications', '/settings/security'],
   student: ['/student-portal', '/my-timetable', '/my-exams', '/exam-intelligence', '/settings/profile', '/settings/preferences', '/settings/personalized', '/settings/security'],
 }
 
 const roleLandingPath: Record<string, string> = {
+  school_owner: '/overview',
+  director: '/overview',
+  owner: '/overview',
   bursar: '/fees/dashboard',
+  librarian: '/library/dashboard',
   teacher: '/dashboard',
-  parent: '/homework',
+  parent: '/parent-insights',
   student: '/student-portal',
 }
 
 function roleFor(user: any) {
-  return String(user?.role || '').toLowerCase()
+  const role = String(user?.role || '').toLowerCase()
+  if (role === 'director' || role === 'owner') return role
+  return role
 }
 
 const internalRouteRoles = new Set(['super_admin', 'founder', 'developer', 'system_admin'])
 
 export function canAccessPath(user: any, pathname = '/') {
   const role = roleFor(user)
+  if ((pathname === '/classroom' || pathname.startsWith('/classroom/')) && role !== 'teacher') return false
   if (pathname === '/internal' || pathname.startsWith('/internal/')) {
     return internalRouteRoles.has(role)
   }
   const prefixes = roleRoutePrefixes[role] || roleRoutePrefixes.teacher
   const roleAllowed = prefixes.includes('/') || prefixes.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`))
-  return roleAllowed && routeFeatureEnabled(user, pathname)
+  const permissionRule = routePermissions.find((item) => pathname === item.path || pathname.startsWith(`${item.path}/`))
+  const permissionAllowed = !permissionRule || hasAnyPermission(user, permissionRule.permissions)
+  return roleAllowed && permissionAllowed && routeFeatureEnabled(user, pathname)
 }
 
 export function firstAccessiblePath(user?: any) {

@@ -3,6 +3,7 @@ import { HttpError } from "../utils/http.js"
 import { getScopedSchoolId, getTeacherClassIds, scopedInClause } from "../utils/tenantScope.js"
 import { getActiveAcademicSession, sessionPayload } from "../services/academicSessionService.js"
 import { generateDailyDrill, markAnswer, updateMasteryFromAnswer } from "../services/drills/dailyDrillGenerator.js"
+import { recalculateQuestionAnalytics, recalculateStudentMastery } from "../services/academicIntelligenceEngine.js"
 import { markAnswerWithAi } from "../services/drills/aiAnswerMarker.js"
 import { studentCodeSortSql } from "../utils/studentSort.js"
 
@@ -402,6 +403,31 @@ export async function answerDrillQuestion(req, res) {
       [String(answer), mark.is_correct, mark.marks_awarded, mark.mistake_type, mark.ai_feedback || null, row.session_question_id],
     )
     await updateMasteryFromAnswer(connection, schoolId, row.student_id, row, mark)
+    if (mark.is_correct !== null && mark.is_correct !== undefined) {
+      const maxMarks=Math.max(1,Number(row.marks||1))
+      const awarded=Math.max(0,Number(mark.marks_awarded||0))
+      const scorePercentage=Number(((awarded/maxMarks)*100).toFixed(2))
+      const responseStatus=mark.is_correct?'correct':awarded>0?'partially_correct':'incorrect'
+      await connection.query(`INSERT INTO question_attempts (
+        public_ref,school_id,student_id,question_id,drill_session_id,subject_id,topic_id,subtopic_id,learning_objective_id,
+        response_text,response_status,marks_awarded,marks_available,attempt_context,misconception_code,attempted_at
+      ) VALUES (UUID(),?,?,?,?,?,?,?,?,?,?,?,?,'daily_drill',?,CURRENT_TIMESTAMP)
+      ON DUPLICATE KEY UPDATE response_text=VALUES(response_text),response_status=VALUES(response_status),
+        marks_awarded=VALUES(marks_awarded),marks_available=VALUES(marks_available),misconception_code=VALUES(misconception_code),attempted_at=CURRENT_TIMESTAMP`,
+      [schoolId,row.student_id,row.id,sessionId,row.subject_id,row.topic_id,row.subtopic_id||null,row.learning_objective_id||null,String(answer),responseStatus,awarded,maxMarks,mark.mistake_type||null])
+      await connection.query(`INSERT INTO mastery_evidence (
+        public_ref,school_id,student_id,subject_id,topic_id,subtopic_id,learning_objective_id,evidence_type,
+        source_entity_type,source_entity_id,score_percentage,marks_awarded,marks_available,difficulty_weight,
+        assessment_weight,independence_weight,evidence_granularity,evidence_at,metadata_json
+      ) VALUES (UUID(),?,?,?,?,?,?,'daily_drill','drill_session_question',?,?,?,?,?,0.5,1,?,CURRENT_TIMESTAMP,?)
+      ON DUPLICATE KEY UPDATE score_percentage=VALUES(score_percentage),marks_awarded=VALUES(marks_awarded),
+        marks_available=VALUES(marks_available),evidence_at=CURRENT_TIMESTAMP,metadata_json=VALUES(metadata_json)`,
+      [schoolId,row.student_id,row.subject_id,row.topic_id,row.subtopic_id||null,row.learning_objective_id||null,row.session_question_id,scorePercentage,awarded,maxMarks,row.difficulty==='hard'?1.2:row.difficulty==='medium'?1:0.85,row.learning_objective_id?'objective':row.subtopic_id?'subtopic':'topic',JSON.stringify({mistake_type:mark.mistake_type||null,reason:row.reason||null})])
+      await recalculateStudentMastery(schoolId,row.student_id,row.subject_id,{topic_id:row.topic_id},connection)
+      if(row.subtopic_id)await recalculateStudentMastery(schoolId,row.student_id,row.subject_id,{topic_id:row.topic_id,subtopic_id:row.subtopic_id},connection)
+      if(row.learning_objective_id)await recalculateStudentMastery(schoolId,row.student_id,row.subject_id,{topic_id:row.topic_id,subtopic_id:row.subtopic_id||null,learning_objective_id:row.learning_objective_id},connection)
+      await recalculateQuestionAnalytics(schoolId,row.id,connection)
+    }
     await connection.commit()
     res.json({
       ok: true,

@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router";
-import { ArrowLeft } from "lucide-react";
 import FeeReceipt from "../components/FeeReceipt";
 import { Button } from "../components/ui/button";
 import { SmartLinkLoadingState } from "../components/SmartLinkLoadingState";
+import { PageBackButton } from "../components/PageBackButton";
 import { usePortal } from "../lib/portalContext";
 
 function safeReceiptFilename(value: any) {
@@ -70,10 +70,7 @@ export function FeeReceiptPrintPage() {
       <div className="grid min-h-full place-items-center bg-[#f8fafc] p-6">
         <section className="w-full max-w-lg rounded-[8px] border border-[#fecaca] bg-white p-5 shadow-sm">
           <div className="text-[14px] font-semibold text-[#b91c1c]">{error}</div>
-          <Button type="button" variant="outline" className="mt-4 h-8 rounded-[5px] text-[12px]" onClick={() => navigate("/fees/receipts")}>
-            <ArrowLeft className="size-3.5" />
-            Back to receipts
-          </Button>
+          <PageBackButton fallback="/fees/receipts" label="Back to receipts" className="mt-4" />
         </section>
       </div>
     );
@@ -86,10 +83,7 @@ export function FeeReceiptPrintPage() {
   return (
     <div className="min-h-full bg-[#eef2f7] print:bg-white">
       <div className="mx-auto flex max-w-[620px] items-center justify-between px-4 py-3 print:hidden">
-        <Button type="button" variant="outline" className="h-8 rounded-[5px] text-[12px]" onClick={() => navigate("/fees/receipts")}>
-          <ArrowLeft className="size-3.5" />
-          Back to receipts
-        </Button>
+        <PageBackButton fallback="/fees/receipts" label="Back to receipts" />
       </div>
       {downloadError ? (
         <div className="mx-auto mb-3 max-w-[620px] rounded-[6px] border border-[#fecaca] bg-white px-3 py-2 text-[12px] font-semibold text-[#b91c1c] print:hidden">

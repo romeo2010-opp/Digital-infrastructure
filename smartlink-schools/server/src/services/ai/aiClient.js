@@ -1,6 +1,8 @@
 import { pool } from "../../config/db.js"
 import { createGeminiProvider, GEMINI_NOT_CONFIGURED_MESSAGE } from "./providers/geminiProvider.js"
 import { createNullProvider } from "./providers/nullProvider.js"
+import { createOpenAiProvider, OPENAI_NOT_CONFIGURED_MESSAGE } from "./providers/openaiProvider.js"
+import { createAnthropicProvider, ANTHROPIC_NOT_CONFIGURED_MESSAGE } from "./providers/anthropicProvider.js"
 
 export const AI_LIMIT_MESSAGE = "AI limit reached for this school. Existing approved drills still work."
 const DEFAULT_AI_TIMEOUT_MS = 180000
@@ -23,16 +25,22 @@ function intFromEnv(value, fallback) {
 }
 
 function aiConfig(overrides = {}) {
-  const provider = String(process.env.AI_PROVIDER || "gemini").toLowerCase()
+  const assessmentVision = overrides.featureName === "assessment_pdf_import"
+  const academicIntelligence = overrides.featureName === "academic_intelligence"
+  const provider = String(overrides.provider || (assessmentVision ? process.env.ASSESSMENT_VISION_AI_PROVIDER : academicIntelligence ? process.env.ACADEMIC_AI_PROVIDER : null) || process.env.AI_PROVIDER || "gemini").toLowerCase()
+  const defaultModel = provider === "openai" ? "gpt-5.4" : provider === "anthropic" ? "claude-sonnet-4-20250514" : "gemini-2.5-flash"
+  const model = overrides.model || (assessmentVision ? process.env.ASSESSMENT_VISION_AI_MODEL : academicIntelligence ? process.env.ACADEMIC_AI_MODEL : null) || process.env.AI_MODEL || defaultModel
   return {
-    enabled: boolFromEnv(process.env.AI_ENABLED, true),
+    enabled: boolFromEnv(academicIntelligence ? process.env.ACADEMIC_AI_ENABLED : process.env.AI_ENABLED, academicIntelligence ? false : true),
     provider,
-    model: process.env.AI_MODEL || "gemini-2.5-flash",
-    apiKey: process.env.GEMINI_API_KEY || "",
-    timeoutMs: intFromEnv(overrides.timeoutMs ?? process.env.AI_TIMEOUT_MS, DEFAULT_AI_TIMEOUT_MS),
-    maxRetries: intFromEnv(process.env.AI_MAX_RETRIES, 1),
+    model,
+    apiKey: provider === "openai" ? process.env.OPENAI_API_KEY || "" : provider === "anthropic" ? process.env.ANTHROPIC_API_KEY || "" : process.env.GEMINI_API_KEY || "",
+    timeoutMs: intFromEnv(overrides.timeoutMs ?? (academicIntelligence ? process.env.ACADEMIC_AI_TIMEOUT_MS : null) ?? process.env.AI_TIMEOUT_MS, DEFAULT_AI_TIMEOUT_MS),
+    maxRetries: intFromEnv(academicIntelligence ? process.env.ACADEMIC_AI_MAX_RETRIES : process.env.AI_MAX_RETRIES, 1),
     logRawResponses: boolFromEnv(process.env.AI_LOG_RAW_RESPONSES, false),
     requireTeacherApproval: boolFromEnv(process.env.AI_REQUIRE_TEACHER_APPROVAL, true),
+    visionDetail: assessmentVision ? String(process.env.ASSESSMENT_VISION_DETAIL || "high").toLowerCase() : "auto",
+    maxOutputTokens: intFromEnv(process.env.ASSESSMENT_VISION_MAX_OUTPUT_TOKENS, 60000),
   }
 }
 
@@ -48,11 +56,18 @@ export function getAiProvider(overrides = {}) {
       message: "AI assistance is disabled. Upload, review, and manual approval features are still available.",
     })
   }
+  if (config.provider === "openai") {
+    if (!config.apiKey) return createNullProvider({ ...config, message: OPENAI_NOT_CONFIGURED_MESSAGE })
+    return createOpenAiProvider(config)
+  }
+  if (config.provider === "anthropic") {
+    if (!config.apiKey) return createNullProvider({ ...config, message: ANTHROPIC_NOT_CONFIGURED_MESSAGE })
+    return createAnthropicProvider(config)
+  }
   if (config.provider !== "gemini") {
     return createNullProvider({
       ...config,
-      provider: "gemini",
-      message: "Only Gemini is enabled for this pilot. Set AI_PROVIDER=gemini to use AI assistance.",
+      message: `Unsupported AI provider '${config.provider}'. Use openai, gemini, anthropic or disabled deterministic mode.`,
     })
   }
   if (!config.apiKey) return createNullProvider(config)
@@ -111,7 +126,7 @@ async function getSchoolAiSettings(schoolId) {
   }
 }
 
-export async function assertSchoolAiAllowed(schoolId) {
+export async function assertSchoolAiAllowed(schoolId, featureName = null) {
   if (!schoolId) return { allowed: true }
   const settings = await getSchoolAiSettings(schoolId)
   if (!Number(settings.ai_enabled)) return { allowed: false, message: AI_LIMIT_MESSAGE, settings }
@@ -138,6 +153,18 @@ export async function assertSchoolAiAllowed(schoolId) {
     if (settings.ai_monthly_budget_usd !== null && Number(settings.ai_monthly_budget_usd) > 0) {
       if (Number(month?.estimated_cost_usd || 0) >= Number(settings.ai_monthly_budget_usd)) {
         return { allowed: false, message: AI_LIMIT_MESSAGE, settings }
+      }
+    }
+    if (featureName === "academic_intelligence") {
+      const dailyBudget = Number(process.env.ACADEMIC_AI_DAILY_BUDGET || 0)
+      if (Number.isFinite(dailyBudget) && dailyBudget > 0) {
+        const [[academicDaily]] = await pool.query(
+          `SELECT COALESCE(SUM(estimated_cost_usd), 0) AS estimated_cost_usd
+           FROM ai_usage_logs
+           WHERE school_id=? AND feature_name='academic_intelligence' AND created_at >= CURDATE()`,
+          [schoolId],
+        )
+        if (Number(academicDaily?.estimated_cost_usd || 0) >= dailyBudget) return { allowed: false, message: 'Academic AI daily budget reached.', settings }
       }
     }
   } catch (error) {
@@ -176,12 +203,12 @@ export async function logAiUsage({ schoolId = null, userId = null, featureName, 
   }
 }
 
-function logRawResponseIfEnabled(config, featureName, raw) {
+function logRawResponseIfEnabled(config, featureName, raw, provider, model) {
   if (!config.logRawResponses) return
   console.info("[smartlink-ai] raw_response", JSON.stringify({
     feature_name: featureName,
-    provider: "gemini",
-    model: config.model,
+    provider,
+    model,
     raw,
   }))
 }
@@ -196,11 +223,29 @@ async function runStructuredRequest({
   schoolId = null,
   userId = null,
   timeoutMs = null,
+  attachments = [],
 }) {
-  const config = aiConfig({ timeoutMs })
-  const provider = getAiProvider({ timeoutMs })
-  const status = await provider.status()
-  if (!status.available) {
+  const config = aiConfig({ timeoutMs, featureName })
+  const primaryProvider = getAiProvider({ timeoutMs, featureName })
+  const providers = [{ provider: primaryProvider, fallback: false }]
+  if (featureName === "assessment_pdf_import") {
+    const fallbackName = String(process.env.ASSESSMENT_VISION_FALLBACK_PROVIDER || "gemini").toLowerCase()
+    if (fallbackName && fallbackName !== config.provider) {
+      providers.push({
+        provider: getAiProvider({
+          timeoutMs,
+          featureName,
+          provider: fallbackName,
+          model: process.env.ASSESSMENT_VISION_FALLBACK_MODEL || (fallbackName === "openai" ? "gpt-5.4" : "gemini-2.5-flash"),
+        }),
+        fallback: true,
+      })
+    }
+  }
+  const providerStatuses = await Promise.all(providers.map(async (entry) => ({ ...entry, status: await entry.provider.status() })))
+  const availableProviders = providerStatuses.filter((entry) => entry.status.available)
+  if (!availableProviders.length) {
+    const status = providerStatuses[0]?.status || {}
     return {
       ok: false,
       unavailable: true,
@@ -209,12 +254,13 @@ async function runStructuredRequest({
       data: fallback || null,
       raw: "",
       usage: { inputTokens: null, outputTokens: null },
-      message: status.message || GEMINI_NOT_CONFIGURED_MESSAGE,
+      message: providerStatuses.map((entry) => entry.status.message).filter(Boolean).join(" Fallback: ") || GEMINI_NOT_CONFIGURED_MESSAGE,
     }
   }
 
-  const limit = await assertSchoolAiAllowed(schoolId)
+  const limit = await assertSchoolAiAllowed(schoolId, featureName)
   if (!limit.allowed) {
+    const status = availableProviders[0]?.status || {}
     return {
       ok: false,
       blocked: true,
@@ -228,45 +274,58 @@ async function runStructuredRequest({
   }
 
   let lastError = null
+  const providerErrors = []
   let raw = ""
   let usage = {}
   const attempts = Math.max(1, config.maxRetries + 1)
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    try {
-      const result = await provider.generateJson({
-        prompt: attempt === 0 ? prompt : `${prompt}\n\nYour previous response was invalid JSON. Return corrected JSON only.`,
-        schemaHint,
-        responseSchema,
-      })
-      raw = result.raw || ""
-      usage = addUsage(usage, result.usage || {})
-      logRawResponseIfEnabled(config, featureName, raw)
-      const data = parseJson(raw)
-      if (validate) validate(data)
-      await logAiUsage({ schoolId, userId, featureName, model: result.model || provider.model, usage })
-      return { ok: true, provider: result.provider || provider.name, model: result.model || provider.model, data, raw, usage }
-    } catch (error) {
-      lastError = error
+  let lastProvider = availableProviders[0]?.provider
+  for (const providerEntry of availableProviders) {
+    const provider = providerEntry.provider
+    lastProvider = provider
+    let providerLastError = null
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      try {
+        const result = await provider.generateJson({
+          prompt: attempt === 0 ? prompt : `${prompt}\n\nThe previous attempt did not produce valid data. Re-check every PDF page and return corrected JSON only.`,
+          schemaHint,
+          responseSchema,
+          attachments,
+        })
+        raw = result.raw || ""
+        usage = addUsage(usage, result.usage || {})
+        logRawResponseIfEnabled(config, featureName, raw, result.provider || provider.name, result.model || provider.model)
+        const data = parseJson(raw)
+        if (validate) validate(data)
+        await logAiUsage({ schoolId, userId, featureName, model: result.model || provider.model, usage })
+        return { ok: true, provider: result.provider || provider.name, model: result.model || provider.model, data, raw, usage, fallbackUsed: providerEntry.fallback }
+      } catch (error) {
+        lastError = error
+        providerLastError = error
+        if (/quota|billing|invalid api key|authentication|model .*not found|permission/i.test(String(error?.message || ""))) break
+      }
     }
+    if(providerLastError)providerErrors.push(`${provider.name} (${provider.model}): ${providerLastError.message}`)
   }
 
-  await logAiUsage({ schoolId, userId, featureName, model: provider.model, usage })
+  await logAiUsage({ schoolId, userId, featureName, model: lastProvider?.model, usage })
   return {
     ok: false,
-    provider: provider.name,
-    model: provider.model,
+    provider: lastProvider?.name || config.provider,
+    model: lastProvider?.model || config.model,
     data: fallback || null,
     raw,
     usage,
-    message: lastError?.message || "AI returned invalid JSON",
+    message: providerErrors.join(" Fallback: ") || lastError?.message || "AI returned invalid JSON",
+    providerErrors,
   }
 }
 
 export async function getAiStatus() {
-  const status = await getAiProvider().status()
+  const provider = getAiProvider()
+  const status = await provider.status()
   return {
-    provider: "gemini",
-    model: status.model || "gemini-2.5-flash",
+    provider: status.provider || provider.name,
+    model: status.model || provider.model,
     configured: Boolean(status.configured),
     available: Boolean(status.available),
     online: lastConnectionTest.status === null ? null : lastConnectionTest.status === "ok",
@@ -320,7 +379,7 @@ export async function probeAiConnection({ timeoutMs = null } = {}) {
     const payload = parseJson(result.raw)
     lastConnectionTest = {
       status: payload?.ok === false ? "failed" : "ok",
-      error: payload?.ok === false ? payload?.message || "Gemini test failed" : null,
+      error: payload?.ok === false ? payload?.message || "AI provider test failed" : null,
       checked_at: checkedAt,
     }
     return {
@@ -363,6 +422,10 @@ export async function extractExamPaperQuestions(input = {}) {
   return runStructuredRequest({ ...input, featureName: "exam_paper_extraction" })
 }
 
+export async function parseAssessmentImportDocument(input = {}) {
+  return runStructuredRequest({ ...input, featureName: "assessment_pdf_import" })
+}
+
 export async function generateQuestionDrafts(input = {}) {
   return runStructuredRequest({ ...input, featureName: "question_generation" })
 }
@@ -373,6 +436,13 @@ export async function generateAnswerExplanation(input = {}) {
 
 export async function adaptExplanationForStudent(input = {}) {
   return runStructuredRequest({ ...input, featureName: "explanation_adaptation" })
+}
+
+// Academic narration is intentionally a separate feature. It receives only
+// validated findings and has a deterministic caller-owned fallback when the
+// provider is disabled, unavailable, over budget, or returns invalid JSON.
+export async function interpretAcademicFindings(input = {}) {
+  return runStructuredRequest({ ...input, featureName: "academic_intelligence" })
 }
 
 export async function testConnection({ schoolId = null, userId = null, timeoutMs = null } = {}) {

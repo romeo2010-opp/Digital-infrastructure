@@ -16,6 +16,9 @@ const filters = [
   ['teachers', 'Teachers'],
   ['classes', 'Classes'],
   ['fees', 'Fees'],
+  ['discounts', 'Discounts'],
+  ['leave', 'Leave'],
+  ['payroll', 'Payroll'],
   ['homework', 'Homework'],
   ['reports', 'Reports'],
 ]
@@ -35,7 +38,7 @@ export function SearchResultsPage() {
   const isTeacher = String(user?.role || '').toLowerCase() === 'teacher'
   const activeType = isTeacher && type === 'teachers' ? 'all' : type
   const visibleFilters = useMemo(() => filters.filter(([value]) => !(isTeacher && value === 'teachers')), [isTeacher])
-  const searchHelpText = isTeacher ? 'Search students, classes, homework and results.' : 'Search students, teachers, classes, fees and homework.'
+  const searchHelpText = isTeacher ? 'Search students and classes in your assigned scope.' : 'Ask for permitted school data in plain English, such as “students who have not paid”.'
 
   useEffect(() => {
     setInput(query)
@@ -86,13 +89,13 @@ export function SearchResultsPage() {
           <div>
             <h1 className="text-lg font-medium tracking-normal text-[#111827]">Search Results</h1>
             <p className="mt-1 text-xs text-[#6b7280]">
-              {payload ? `${payload.total || 0} result${Number(payload.total || 0) === 1 ? '' : 's'} for "${query}"` : searchHelpText}
+              {payload ? `${payload.total || 0} result${Number(payload.total || 0) === 1 ? '' : 's'} for "${query}"${payload.interpretation ? ` · Understood as ${payload.interpretation}` : ''}` : searchHelpText}
             </p>
           </div>
         </div>
       </div>
 
-      <SectionCard title="Global Search" subtitle="Search school records and open full detail views without losing this result list">
+      <SectionCard title="Aware Search" subtitle="Plain-language search is interpreted deterministically and only queries records your role is allowed to view.">
         <div className="space-y-3 px-4 py-3">
           <div className="flex flex-wrap items-end gap-2">
             <FieldControl label="Search query" className="min-w-[260px] flex-1">
@@ -105,7 +108,7 @@ export function SearchResultsPage() {
                   onKeyDown={(event) => {
                     if (event.key === 'Enter') commitSearch()
                   }}
-                  placeholder={isTeacher ? 'Search students, classes, homework, results...' : 'Search students, teachers, classes, fees, homework...'}
+                  placeholder={isTeacher ? 'Search a student or class...' : 'Try: students who have not paid'}
                 />
               </div>
             </FieldControl>

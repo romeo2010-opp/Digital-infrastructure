@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
-  ArrowLeft,
   BookOpenText,
   Bookmark,
   CheckCircle2,
@@ -28,6 +27,7 @@ import { toast } from 'sonner'
 import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
 import { Textarea } from '../components/ui/textarea'
+import { PageBackButton } from '../components/PageBackButton'
 import { usePortal } from '../lib/portalContext'
 
 type Criterion = {
@@ -645,15 +645,7 @@ export function SyllabusComposerPage() {
     <div className="flex h-screen flex-col overflow-hidden bg-[#f6f8fb] text-[#0f172a]">
       <header className="flex min-h-[92px] shrink-0 items-center justify-between gap-5 border-b border-[#dde5f0] bg-white/95 px-7 shadow-[0_10px_34px_-28px_rgba(15,23,42,0.55)] backdrop-blur">
         <div className="flex min-w-0 items-center gap-4">
-          <button
-            type="button"
-            onClick={() => navigate('/syllabus')}
-            className="grid size-10 place-items-center rounded-[7px] border border-[#d7deea] bg-white text-[#334155] shadow-sm transition hover:border-[#2563eb] hover:text-[#2563eb]"
-            aria-label="Back to syllabus"
-            title="Back"
-          >
-            <ArrowLeft className="size-4" />
-          </button>
+          <PageBackButton fallback="/syllabus" label="Back to syllabus" iconOnly />
           <div className="min-w-0">
             <div className="truncate text-[22px] font-bold leading-7 text-[#0f172a]">SmartLink Syllabus Studio</div>
             <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-2 text-[12px] font-medium text-[#64748b]">

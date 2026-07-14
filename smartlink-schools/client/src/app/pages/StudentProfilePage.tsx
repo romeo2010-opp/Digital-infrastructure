@@ -1,18 +1,31 @@
 import { type ChangeEvent, useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router'
-import { ArrowLeft, FileText, ImagePlus, PencilLine, Printer, Save } from 'lucide-react'
+import { FileText, ImagePlus, PencilLine, Printer, Save, UserX } from 'lucide-react'
+import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { Button } from '../components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/dialog'
 import { Input } from '../components/ui/input'
+import { Textarea } from '../components/ui/textarea'
 import { PortalTable } from '../components/PortalTable'
 import { SectionCard } from '../components/SectionCard'
 import { SectionKpiStrip } from '../components/SectionKpiStrip'
+import { PageBackButton } from '../components/PageBackButton'
 import { usePortal } from '../lib/portalContext'
 import { resolvePortalAssetUrl } from '../lib/portalApi'
 
 const inputClassName = 'h-10 min-w-0 rounded-[7px] border-[#d9dce3] bg-white text-[13px] font-medium text-[#111827]'
 const selectClassName = 'h-10 min-w-0 w-full rounded-[7px] border border-[#d9dce3] bg-white px-3 text-[13px] font-medium text-[#111827] outline-none focus:border-[#111827]/35'
 const fieldLabelClassName = 'grid min-w-0 gap-1.5 text-[11px] font-bold uppercase tracking-[0.08em] text-[#6b7280]'
+
+const withdrawalReasons = [
+  'Transferred to another school',
+  'Medical leave',
+  'Disciplinary suspension',
+  'Financial hold',
+  'Family relocation',
+  'Temporary absence',
+  'Other',
+]
 
 function readFileAsDataUrl(file: File) {
   return new Promise<string>((resolve, reject) => {
@@ -30,6 +43,10 @@ function dateInputValue(value: any) {
 
 function valueLabel(value: any) {
   return String(value || '-').replace(/_/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase())
+}
+
+function money(value: any) {
+  return `MWK ${Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}`
 }
 
 function initialsFor(student: any) {
@@ -100,6 +117,10 @@ function scoreLabel(value: any, suffix = '') {
 
 function percentLabel(value: any) {
   return value === null || value === undefined || value === '' ? 'N/A' : scoreLabel(value, '%')
+}
+
+function isAbsentResult(row: any) {
+  return Boolean(row?.absent) || String(row?.status || row?.entry_status || '').toLowerCase() === 'absent'
 }
 
 function remarkClass(remark: any) {
@@ -251,6 +272,81 @@ function EditStudentDialog({
   )
 }
 
+function WithdrawalDialog({
+  open,
+  onOpenChange,
+  form,
+  setForm,
+  onSubmit,
+  saving,
+  error,
+}: {
+  open: boolean
+  onOpenChange: (value: boolean) => void
+  form: any
+  setForm: (updater: any) => void
+  onSubmit: () => void
+  saving: boolean
+  error: string
+}) {
+  const update = (key: string, value: any) => setForm((current: any) => ({ ...(current || {}), [key]: value }))
+  const temporary = String(form?.withdrawal_type || 'temporary') === 'temporary'
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="flex !w-[min(760px,calc(100vw-32px))] !max-w-[min(760px,calc(100vw-32px))] max-h-[calc(100vh-32px)] flex-col overflow-hidden rounded-[10px] border-[#dbe1ea] bg-white p-0 sm:!max-w-[min(760px,calc(100vw-32px))]">
+        <DialogHeader className="shrink-0 border-b border-[#e2e8f0] px-6 py-4">
+          <DialogTitle className="text-[18px] font-bold tracking-[-0.025em] text-[#111827]">Withdraw Student</DialogTitle>
+          <DialogDescription className="text-[12px] font-medium text-[#64748b]">Create a temporary or permanent withdrawal record for this learner.</DialogDescription>
+        </DialogHeader>
+
+        <div className="grid gap-4 overflow-y-auto px-6 py-5">
+          {error ? <div className="rounded-[6px] border border-[#fecaca] bg-[#fef2f2] px-3 py-2 text-[12px] font-semibold text-[#b91c1c]">{error}</div> : null}
+
+          <EditField label="Withdrawal Reason">
+            <Input list="withdrawal-reasons" value={form?.reason || ''} onChange={(event) => update('reason', event.target.value)} className={inputClassName} placeholder="Reason is required" />
+            <datalist id="withdrawal-reasons">
+              {withdrawalReasons.map((reason) => <option key={reason} value={reason} />)}
+            </datalist>
+          </EditField>
+
+          <div className="grid gap-4 md:grid-cols-3">
+            <EditField label="Duration Type">
+              <select value={form?.withdrawal_type || 'temporary'} onChange={(event) => update('withdrawal_type', event.target.value)} className={selectClassName}>
+                <option value="temporary">Temporary</option>
+                <option value="permanent">Permanent</option>
+              </select>
+            </EditField>
+            <EditField label="Start Date">
+              <Input type="date" value={form?.start_date || ''} onChange={(event) => update('start_date', event.target.value)} className={inputClassName} />
+            </EditField>
+            <EditField label="End Date">
+              <Input type="date" value={form?.end_date || ''} onChange={(event) => update('end_date', event.target.value)} className={inputClassName} disabled={!temporary} required={temporary} />
+            </EditField>
+          </div>
+
+          <EditField label="Notes">
+            <Textarea value={form?.notes || ''} onChange={(event) => update('notes', event.target.value)} className="min-h-[96px] rounded-[7px] border-[#d9dce3] bg-white text-[13px] font-medium text-[#111827]" placeholder="Optional internal note" />
+          </EditField>
+
+          <label className="flex items-start gap-3 rounded-[7px] border border-[#e2e8f0] bg-[#f8fafc] p-3 text-[12px] font-medium leading-5 text-[#475569]">
+            <input type="checkbox" checked={Boolean(form?.confirmed)} onChange={(event) => update('confirmed', event.target.checked)} className="mt-1 size-4 rounded border-[#cbd5e1]" />
+            <span>I confirm this withdrawal record is correct and should affect marks entry for overlapping exam dates.</span>
+          </label>
+        </div>
+
+        <DialogFooter className="shrink-0 border-t border-[#e2e8f0] bg-[#f8fafc] px-6 py-4">
+          <Button type="button" variant="outline" onClick={() => onOpenChange(false)} className="h-9 rounded-[7px] text-[12px]" disabled={saving}>Cancel</Button>
+          <Button type="button" variant="destructive" onClick={onSubmit} className="h-9 rounded-[7px] text-[12px]" disabled={saving || !form?.confirmed}>
+            <UserX className="size-3.5" />
+            {saving ? 'Withdrawing...' : 'Withdraw Student'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 export function StudentProfilePage() {
   const { studentId } = useParams()
   const navigate = useNavigate()
@@ -267,6 +363,14 @@ export function StudentProfilePage() {
   const [pendingPhotoPreview, setPendingPhotoPreview] = useState('')
   const [editError, setEditError] = useState('')
   const [savingProfile, setSavingProfile] = useState(false)
+  const [withdrawOpen, setWithdrawOpen] = useState(false)
+  const [withdrawForm, setWithdrawForm] = useState<any>({})
+  const [withdrawError, setWithdrawError] = useState('')
+  const [savingWithdrawal, setSavingWithdrawal] = useState(false)
+  const [cancellingWithdrawalId, setCancellingWithdrawalId] = useState<any>(null)
+  const [trendSelection, setTrendSelection] = useState('exam_sessions')
+  const [academicIntelligence, setAcademicIntelligence] = useState<any>(null)
+  const [parentInsightBusy, setParentInsightBusy] = useState('')
 
   useEffect(() => {
     if (!token || !studentId) return
@@ -274,6 +378,47 @@ export function StudentProfilePage() {
       .then((payload: any) => setStudent(payload?.student || null))
       .catch((err: any) => setError(err?.message || 'Unable to load student profile.'))
   }, [api, studentId, token])
+
+  useEffect(() => {
+    if (!token || !studentId || !(user?.permissions || []).includes('ACADEMIC_INTELLIGENCE_VIEW')) return
+    api.getStudentAcademicIntelligence(token, studentId)
+      .then((payload: any) => setAcademicIntelligence(payload))
+      .catch(() => setAcademicIntelligence(null))
+  }, [api, studentId, token, user?.permissions])
+
+  const refreshAcademicIntelligence = async () => {
+    if (!token || !studentId) return
+    const payload = await api.getStudentAcademicIntelligence(token, studentId)
+    setAcademicIntelligence(payload)
+  }
+
+  const prepareParentInsight = async () => {
+    if (!token || !studentId) return
+    setParentInsightBusy('create')
+    setError('')
+    try {
+      await api.createParentAcademicInsight(token, { student_ref: studentId })
+      await refreshAcademicIntelligence()
+    } catch (err: any) {
+      setError(err?.message || 'Unable to prepare the parent-safe progress update.')
+    } finally {
+      setParentInsightBusy('')
+    }
+  }
+
+  const changeParentInsightStatus = async (insightRef: string, status: string) => {
+    if (!token) return
+    setParentInsightBusy(`${insightRef}:${status}`)
+    setError('')
+    try {
+      await api.updateParentAcademicInsight(token, insightRef, { status })
+      await refreshAcademicIntelligence()
+    } catch (err: any) {
+      setError(err?.message || `Unable to ${status} the parent-safe progress update.`)
+    } finally {
+      setParentInsightBusy('')
+    }
+  }
 
   useEffect(() => {
     if (!token || !editOpen) return
@@ -357,6 +502,86 @@ export function StudentProfilePage() {
     }
   }
 
+  const openWithdrawStudent = () => {
+    const today = new Date().toISOString().slice(0, 10)
+    setWithdrawError('')
+    setWithdrawForm({
+      reason: '',
+      withdrawal_type: 'temporary',
+      start_date: today,
+      end_date: '',
+      notes: '',
+      confirmed: false,
+    })
+    setWithdrawOpen(true)
+  }
+
+  const submitWithdrawal = async () => {
+    if (!token || !studentId) return
+    setWithdrawError('')
+    const type = String(withdrawForm.withdrawal_type || 'temporary')
+    if (!String(withdrawForm.reason || '').trim()) {
+      setWithdrawError('Withdrawal reason is required.')
+      return
+    }
+    if (!withdrawForm.start_date) {
+      setWithdrawError('Withdrawal start date is required.')
+      return
+    }
+    if (type === 'temporary' && !withdrawForm.end_date) {
+      setWithdrawError('Temporary withdrawals require an end date.')
+      return
+    }
+    if (type === 'temporary' && withdrawForm.end_date < withdrawForm.start_date) {
+      setWithdrawError('End date cannot be before start date.')
+      return
+    }
+    if (!withdrawForm.confirmed) {
+      setWithdrawError('Confirm the withdrawal before saving.')
+      return
+    }
+
+    setSavingWithdrawal(true)
+    try {
+      await runAction(async () => {
+        await api.createStudentWithdrawal(token, studentId, {
+          reason: withdrawForm.reason,
+          withdrawal_type: type,
+          start_date: withdrawForm.start_date,
+          end_date: type === 'temporary' ? withdrawForm.end_date : null,
+          notes: withdrawForm.notes,
+        })
+        const fresh = await api.getStudent(token, studentId)
+        setStudent(fresh?.student || null)
+        setWithdrawOpen(false)
+        return fresh
+      }, 'Withdrawing student...', { refresh: false })
+    } catch (err: any) {
+      setWithdrawError(err?.message || 'Unable to withdraw student.')
+    } finally {
+      setSavingWithdrawal(false)
+    }
+  }
+
+  const cancelWithdrawal = async (withdrawal: any) => {
+    if (!token || !studentId || !withdrawal?.id) return
+    if (!window.confirm('Cancel this withdrawal record? Cancelled withdrawals will no longer affect result entry.')) return
+    setCancellingWithdrawalId(withdrawal.id)
+    setError('')
+    try {
+      await runAction(async () => {
+        await api.cancelStudentWithdrawal(token, studentId, withdrawal.id, { reason: 'Cancelled from student profile' })
+        const fresh = await api.getStudent(token, studentId)
+        setStudent(fresh?.student || null)
+        return fresh
+      }, 'Cancelling withdrawal...', { refresh: false })
+    } catch (err: any) {
+      setError(err?.message || 'Unable to cancel withdrawal.')
+    } finally {
+      setCancellingWithdrawalId(null)
+    }
+  }
+
   const printProfile = () => window.print()
   const searchQuery = (location.state as any)?.search
   const backPath = (location.state as any)?.fromSearch ? `/search${searchQuery ? `?q=${encodeURIComponent(searchQuery)}` : (window.location.search || '')}` : (location.state as any)?.fromClass ? `/classes/${(location.state as any).fromClass}` : '/students'
@@ -371,7 +596,35 @@ export function StudentProfilePage() {
       percentage: row.score === null || row.score === undefined || !row.total_marks ? null : Number(((Number(row.score) / Number(row.total_marks)) * 100).toFixed(1)),
     }))
   }, [student])
-  const canEditProfile = ['school_owner', 'headteacher'].includes(String(user?.role || '').toLowerCase())
+  const trendSubjects = useMemo(() => [...new Set(assessmentRows.map((row: any) => row.subject_name).filter(Boolean))].sort(), [assessmentRows])
+  const performanceTrend = useMemo(() => {
+    if (trendSelection === 'exam_sessions') {
+      return examReports
+        .filter((report: any) => Number.isFinite(Number(report.average_score)))
+        .map((report: any) => ({
+          date: String(report.generated_at || report.updated_at || report.created_at || '').slice(0, 10),
+          label: report.exam_session_name || `${report.term_name || 'Term'} exam`,
+          assessment: report.exam_session_name || 'Exam session',
+          average: Number(Number(report.average_score).toFixed(1)),
+          results: Number(report.subject_count || report.subjects?.length || 0),
+        }))
+        .sort((a: any, b: any) => a.date.localeCompare(b.date))
+    }
+    const subjectName = trendSelection.replace(/^subject:/, '')
+    return assessmentRows
+      .filter((row: any) => row.subject_name === subjectName && !isAbsentResult(row))
+      .map((row: any) => {
+        const percentage = row.percentage === null || row.percentage === undefined
+          ? (row.score === null || row.score === undefined || !Number(row.total_marks) ? null : (Number(row.score) / Number(row.total_marks)) * 100)
+          : Number(row.percentage)
+        const date = String(row.result_date || row.instance_date || row.last_saved_at || '').slice(0, 10)
+        const assessment = row.assessment_name || row.source_label || 'Assessment'
+        return percentage === null || !Number.isFinite(percentage) ? null : { date, label: assessment, assessment, average: Number(percentage.toFixed(1)), results: 1 }
+      })
+      .filter(Boolean)
+      .sort((a: any, b: any) => a.date.localeCompare(b.date))
+  }, [assessmentRows, examReports, trendSelection])
+  const canEditProfile = ['school_owner', 'director', 'owner', 'headteacher'].includes(String(user?.role || '').toLowerCase())
   const subjectGradeCount = examReports.reduce((sum: number, report: any) => sum + Number(report.subject_count || report.subjects?.length || 0), 0)
   const openReport = async (report: any) => {
     const reportId = report?.report_card_id || report?.id
@@ -400,10 +653,7 @@ export function StudentProfilePage() {
       <section className="rounded-[6px] border border-[var(--mera-panel-border)] bg-[var(--mera-panel)] p-4 shadow-[var(--mera-shadow-card)]">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <button type="button" onClick={() => navigate(backPath)} className="mb-2 inline-flex items-center gap-1 text-[11px] font-semibold text-[#6b7280] hover:text-[#111827]">
-              <ArrowLeft className="size-3.5" />
-              Back
-            </button>
+            <PageBackButton fallback={backPath} className="mb-3" />
             <div className="flex items-center gap-3">
               <div className="grid size-12 place-items-center rounded-[6px] bg-[#111827] text-[14px] font-bold text-white">{initialsFor(student)}</div>
               <div>
@@ -419,6 +669,12 @@ export function StudentProfilePage() {
               <Button type="button" variant="outline" onClick={openEditProfile} className="h-8 rounded-[5px] text-[12px]">
                 <PencilLine className="size-3.5" />
                 Edit Profile
+              </Button>
+            ) : null}
+            {canEditProfile ? (
+              <Button type="button" variant="outline" onClick={openWithdrawStudent} className="h-8 rounded-[5px] text-[12px]">
+                <UserX className="size-3.5" />
+                Withdraw Student
               </Button>
             ) : null}
             <Button type="button" variant="outline" onClick={() => navigate('/results')} className="h-8 rounded-[5px] text-[12px]"><FileText className="size-3.5" /> View Results</Button>
@@ -438,6 +694,116 @@ export function StudentProfilePage() {
         { label: 'Results', value: examReports.length + assessmentRows.length, helper: 'reports and assessments', delta: `${subjectGradeCount} report grades` },
         { label: 'Fees', value: student?.fees?.length || 0, helper: 'fee records', delta: valueLabel(student?.fee_category) },
       ]} />
+
+      {academicIntelligence ? (
+        <div className="order-[99] grid gap-3 xl:grid-cols-[1.15fr_0.85fr]">
+          <SectionCard title="Academic Intelligence" subtitle="Mastery is confidence-aware and distinguishes missing evidence from low performance.">
+            <PortalTable
+              columns={[
+                { key: 'subject_name', label: 'Subject' },
+                { key: 'topic_name', label: 'Topic', render: (row) => row.topic_name || 'Subject overview' },
+                { key: 'mastery_score', label: 'Mastery', render: (row) => row.mastery_score === null ? 'Not assessed' : `${Number(row.mastery_score).toFixed(1)}%` },
+                { key: 'confidence_score', label: 'Confidence', render: (row) => `${Number(row.confidence_score || 0).toFixed(0)}%` },
+                { key: 'mastery_status', label: 'Status', render: (row) => valueLabel(row.mastery_status) },
+                { key: 'trend', label: 'Trend', render: (row) => valueLabel(row.trend) },
+                { key: 'evidence_count', label: 'Evidence' },
+              ]}
+              rows={academicIntelligence.mastery || []}
+              emptyMessage="No mastery evidence is available yet. This does not mean low mastery."
+            />
+          </SectionCard>
+          <SectionCard title="Recommended next actions" subtitle="Evidence-based support and active intervention history.">
+            <div className="divide-y divide-[#e2e8f0]">
+              {(academicIntelligence.recommendations || []).map((row: any) => (
+                <article key={row.public_ref} className="p-4">
+                  <div className="text-[12px] font-semibold text-[#111827]">{row.title}</div>
+                  <div className="mt-1 text-[11px] leading-5 text-[#64748b]">{row.reason}</div>
+                  <div className="mt-2 text-[11px] font-medium text-[#334155]">Next: {row.suggested_action}</div>
+                </article>
+              ))}
+              {!(academicIntelligence.recommendations || []).length ? <div className="p-6 text-center text-[12px] text-[#64748b]">No active recommendation for this student.</div> : null}
+            </div>
+          </SectionCard>
+
+          <SectionCard title="Exam-readiness forecast" subtitle="A forecast from available evidence, not a guaranteed examination result.">
+            <div className="divide-y divide-[#e2e8f0]">
+              {(academicIntelligence.exam_readiness || []).map((row: any) => (
+                <article key={row.public_ref} className="p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-[12px] font-semibold text-[#111827]">{row.subject_name || 'Overall readiness'}</div>
+                      <div className="mt-1 text-[11px] text-[#64748b]">Updated {row.calculated_at ? new Date(row.calculated_at).toLocaleDateString() : 'from current evidence'}</div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-[20px] font-semibold tracking-[-0.04em] text-[#6d28d9]">{Number(row.readiness_score || 0).toFixed(0)}%</div>
+                      <div className="text-[9px] font-bold uppercase tracking-[0.08em] text-[#94a3b8]">{Number(row.confidence_score || 0).toFixed(0)}% confidence</div>
+                    </div>
+                  </div>
+                  <div className="mt-3 h-2 overflow-hidden rounded-full bg-[#ede9fe]" role="progressbar" aria-label={`${row.subject_name || 'Overall'} exam readiness`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(Number(row.readiness_score || 0))}>
+                    <div className="h-full rounded-full bg-[linear-gradient(90deg,#6d28d9,#db2777)]" style={{ width: `${Math.max(0, Math.min(100, Number(row.readiness_score || 0)))}%` }} />
+                  </div>
+                  {row.missing_data?.length ? <p className="mt-2 text-[10px] leading-5 text-[#92400e]">Confidence is limited because {row.missing_data.map((item: string) => valueLabel(item).toLowerCase()).join(', ')} data is missing.</p> : null}
+                  {row.recommendations?.length ? <p className="mt-2 text-[11px] leading-5 text-[#475569]">Next: {row.recommendations[0]}</p> : null}
+                </article>
+              ))}
+              {!(academicIntelligence.exam_readiness || []).length ? <div className="p-6 text-center text-[12px] text-[#64748b]">Readiness will appear after sufficient curriculum and assessment evidence is available.</div> : null}
+            </div>
+          </SectionCard>
+
+          <SectionCard title="Academic interventions" subtitle="Assigned support, review dates and completed outcomes.">
+            <div className="divide-y divide-[#e2e8f0]">
+              {(academicIntelligence.interventions || []).map((row: any) => (
+                <article key={row.public_ref} className="p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="text-[12px] font-semibold text-[#111827]">{valueLabel(row.intervention_type)}</div>
+                    <span className="rounded-full border border-[#e2e8f0] bg-[#f8fafc] px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em] text-[#475569]">{valueLabel(row.status)}</span>
+                  </div>
+                  <p className="mt-1 text-[11px] leading-5 text-[#64748b]">{row.issue}</p>
+                  <div className="mt-2 text-[10px] font-semibold text-[#475569]">{row.subject_name}{row.topic_name ? ` · ${row.topic_name}` : ''}{row.review_date ? ` · Review ${String(row.review_date).slice(0, 10)}` : ''}</div>
+                  {row.outcome ? <p className="mt-2 rounded-[6px] bg-[#f0fdf4] px-3 py-2 text-[11px] leading-5 text-[#166534]">Outcome: {row.outcome}</p> : null}
+                </article>
+              ))}
+              {!(academicIntelligence.interventions || []).length ? <div className="p-6 text-center text-[12px] text-[#64748b]">No academic intervention has been recorded for this student.</div> : null}
+            </div>
+          </SectionCard>
+
+          {(user?.permissions || []).includes('ACADEMIC_INTERVENTION_MANAGE') || (user?.permissions || []).includes('ACADEMIC_INTELLIGENCE_MANAGE') ? (
+            <SectionCard
+              className="xl:col-span-2"
+              title="Parent-safe academic updates"
+              subtitle="Prepare a plain-language summary from school evidence. Parents only see it after academic approval and publication."
+              actions={(user?.permissions || []).includes('ACADEMIC_INTERVENTION_MANAGE') ? (
+                <Button type="button" onClick={prepareParentInsight} disabled={Boolean(parentInsightBusy)} className="h-8 rounded-[6px] text-[11px]">
+                  {parentInsightBusy === 'create' ? 'Preparing...' : 'Prepare update'}
+                </Button>
+              ) : null}
+            >
+              <div className="divide-y divide-[#e2e8f0]">
+                {(academicIntelligence.parent_insights || []).map((insight: any) => (
+                  <article key={insight.public_ref} className="grid gap-3 p-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-[13px] font-semibold text-[#111827]">{insight.headline}</span>
+                        <span className={`rounded-full border px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em] ${insight.status === 'published' ? 'border-[#bbf7d0] bg-[#f0fdf4] text-[#166534]' : insight.status === 'approved' ? 'border-[#bfdbfe] bg-[#eff6ff] text-[#1d4ed8]' : 'border-[#e2e8f0] bg-[#f8fafc] text-[#475569]'}`}>{valueLabel(insight.status)}</span>
+                      </div>
+                      <p className="mt-1 text-[12px] leading-5 text-[#64748b]">{insight.summary_text}</p>
+                      <div className="mt-2 text-[10px] font-semibold uppercase tracking-[0.07em] text-[#94a3b8]">{insight.subject_name || 'Overall learning'} · {insight.reporting_period || 'Current period'}</div>
+                    </div>
+                    {(user?.permissions || []).includes('ACADEMIC_INTELLIGENCE_MANAGE') ? (
+                      <div className="flex flex-wrap gap-2">
+                        {insight.status === 'draft' ? <Button type="button" variant="outline" onClick={() => changeParentInsightStatus(insight.public_ref, 'approved')} disabled={Boolean(parentInsightBusy)} className="h-8 rounded-[6px] text-[11px]">{parentInsightBusy === `${insight.public_ref}:approved` ? 'Approving...' : 'Approve'}</Button> : null}
+                        {insight.status === 'approved' ? <Button type="button" onClick={() => changeParentInsightStatus(insight.public_ref, 'published')} disabled={Boolean(parentInsightBusy)} className="h-8 rounded-[6px] text-[11px]">{parentInsightBusy === `${insight.public_ref}:published` ? 'Publishing...' : 'Publish to parent'}</Button> : null}
+                        {insight.status === 'published' ? <Button type="button" variant="outline" onClick={() => changeParentInsightStatus(insight.public_ref, 'withdrawn')} disabled={Boolean(parentInsightBusy)} className="h-8 rounded-[6px] text-[11px]">Withdraw</Button> : null}
+                      </div>
+                    ) : null}
+                  </article>
+                ))}
+                {!(academicIntelligence.parent_insights || []).length ? <div className="p-6 text-center text-[12px] text-[#64748b]">No parent-safe academic update has been prepared for this student.</div> : null}
+              </div>
+            </SectionCard>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="grid gap-3 xl:grid-cols-2">
         <SectionCard title="Student Identity" subtitle="Generated school ID and personal details">
@@ -487,29 +853,95 @@ export function StudentProfilePage() {
           </div>
         </SectionCard>
 
-        <SectionCard title="Fee Profile" subtitle="Category, payment plan and discounts">
-          <div className="p-4">
-            <Row label="Fee Category" value={valueLabel(student?.fee_category)} />
-            <Row label="Payment Plan" value={valueLabel(student?.payment_plan)} />
-            <Row label="Discount" value={`${Number(student?.discount_percent || 0)}%`} />
-            <Row label="Reason" value={student?.discount_reason} />
+        <SectionCard title="Fee Profile" subtitle="Live fee accounts, payments, approved discounts and payment-plan records">
+          <div className="grid gap-4 p-4">
+            <div className="grid gap-2 sm:grid-cols-2">
+              <Row label="Fee Category" value={valueLabel(student?.fee_profile?.category || student?.fee_category)} />
+              <Row label="Payment Plan" value={valueLabel(student?.fee_profile?.active_payment_plan?.status ? 'active installment plan' : student?.fee_profile?.configured_payment_plan)} />
+              <Row label="Total Billed" value={money(student?.fee_profile?.summary?.billed)} />
+              <Row label="Discounts Applied" value={money(student?.fee_profile?.summary?.discounts)} />
+              <Row label="Total Paid" value={money(student?.fee_profile?.summary?.paid)} />
+              <Row label="Outstanding Balance" value={money(student?.fee_profile?.summary?.outstanding)} />
+            </div>
+            <PortalTable
+              columns={[
+                { key: 'term_name', label: 'Account' },
+                { key: 'amount_due', label: 'Due', render: (row) => money(row.amount_due) },
+                { key: 'discount_amount', label: 'Discount', render: (row) => money(row.discount_amount) },
+                { key: 'amount_paid', label: 'Paid', render: (row) => money(row.amount_paid) },
+                { key: 'balance', label: 'Balance', render: (row) => money(row.balance) },
+                { key: 'status', label: 'Status', render: (row) => valueLabel(row.status) },
+              ]}
+              rows={student?.fee_profile?.accounts || []}
+              emptyMessage="No fee-account records have been generated for this student."
+            />
+            {(student?.fee_profile?.discounts || []).length ? (
+              <div className="border-t border-[#e5e7eb] pt-3 text-[12px] text-[#475569]">
+                <span className="font-semibold text-[#111827]">Latest discount:</span>{' '}
+                {valueLabel(student.fee_profile.discounts[0].discount_type)} · {valueLabel(student.fee_profile.discounts[0].status)} · {student.fee_profile.discounts[0].reason || 'No reason recorded'}
+              </div>
+            ) : null}
           </div>
+        </SectionCard>
+
+        <SectionCard title="Withdrawals" subtitle="Temporary and permanent withdrawal history">
+          <PortalTable
+            columns={[
+              { key: 'start_date', label: 'Start', render: (row) => row.start_date?.slice?.(0, 10) || row.start_date || '-' },
+              { key: 'end_date', label: 'End', render: (row) => row.withdrawal_type === 'permanent' ? 'Permanent' : row.end_date?.slice?.(0, 10) || '-' },
+              { key: 'withdrawal_type', label: 'Type', render: (row) => valueLabel(row.withdrawal_type) },
+              { key: 'computed_status', label: 'Status', render: (row) => valueLabel(row.computed_status || row.status) },
+              { key: 'reason', label: 'Reason' },
+              { key: 'created_by_name', label: 'Created By', render: (row) => row.created_by_name || '-' },
+              { key: 'created_at', label: 'Created', render: (row) => row.created_at ? new Date(row.created_at).toLocaleString() : '-' },
+              {
+                key: 'actions',
+                label: 'Actions',
+                render: (row) => canEditProfile && String(row.status) !== 'cancelled' ? (
+                  <button
+                    type="button"
+                    className="text-[11px] font-semibold text-[#b91c1c] disabled:text-[#94a3b8]"
+                    disabled={String(cancellingWithdrawalId || '') === String(row.id)}
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      cancelWithdrawal(row)
+                    }}
+                  >
+                    {String(cancellingWithdrawalId || '') === String(row.id) ? 'Cancelling...' : 'Cancel'}
+                  </button>
+                ) : '-',
+              },
+            ]}
+            rows={student?.withdrawals || []}
+            emptyMessage="No withdrawal records are available."
+          />
         </SectionCard>
       </div>
 
       <div className="grid gap-3 xl:grid-cols-2">
-        <SectionCard title="Academic History" subtitle="Enrollment records preserve previous terms and classes">
-          <PortalTable
-            columns={[
-              { key: 'academic_year_name', label: 'Academic Year' },
-              { key: 'term_name', label: 'Term' },
-              { key: 'class_name', label: 'Class' },
-              { key: 'enrollment_type', label: 'Type', render: (row) => valueLabel(row.enrollment_type) },
-              { key: 'enrollment_status', label: 'Status', render: (row) => valueLabel(row.enrollment_status) },
-            ]}
-            rows={student?.enrollments || []}
-            emptyMessage="No academic history records found."
-          />
+        <SectionCard title="Performance Trend" subtitle={trendSelection === 'exam_sessions' ? 'Average performance across official exam sessions' : `${trendSelection.replace(/^subject:/, '')} performance across recorded assessments`}>
+          <div className="border-b border-[#eef0f3] px-4 py-3">
+            <label className="grid max-w-[320px] gap-1.5 text-[11px] font-bold uppercase tracking-[0.08em] text-[#64748b]">
+              Trend view
+              <select value={trendSelection} onChange={(event) => setTrendSelection(event.target.value)} className="h-9 rounded-[7px] border border-[#d8dee8] bg-white px-3 text-[12px] font-semibold normal-case tracking-normal text-[#334155] outline-none focus:border-[#94a3b8]">
+                <option value="exam_sessions">Exam session averages</option>
+                {trendSubjects.map((subject) => <option key={subject} value={`subject:${subject}`}>{subject}</option>)}
+              </select>
+            </label>
+          </div>
+          {performanceTrend.length ? (
+            <div className="h-[310px] px-3 pb-3 pt-5">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={performanceTrend} margin={{ top: 8, right: 22, left: 0, bottom: 34 }}>
+                  <CartesianGrid vertical={false} stroke="#e2e8f0" strokeDasharray="2 4" />
+                  <XAxis dataKey="label" axisLine={false} tickLine={false} interval="preserveStartEnd" angle={-12} textAnchor="end" height={54} tick={{ fontSize: 10, fill: '#64748b' }} />
+                  <YAxis domain={[0, 100]} axisLine={false} tickLine={false} width={42} tick={{ fontSize: 11, fill: '#64748b' }} tickFormatter={(value) => `${value}%`} />
+                  <Tooltip contentStyle={{ borderRadius: 8, borderColor: '#e2e8f0', boxShadow: '0 10px 30px rgba(15,23,42,.10)', fontSize: 12 }} formatter={(value: any) => [`${Number(value).toFixed(1)}%`, trendSelection === 'exam_sessions' ? 'Session average' : 'Score']} labelFormatter={(_, payload) => payload?.[0]?.payload ? `${payload[0].payload.assessment}${payload[0].payload.date ? ` · ${payload[0].payload.date}` : ''}` : ''} />
+                  <Line type="monotone" dataKey="average" stroke="#2563eb" strokeWidth={2.5} dot={{ r: 3.5, fill: '#fff', strokeWidth: 2 }} activeDot={{ r: 5 }} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          ) : <div className="grid min-h-[260px] place-items-center p-5 text-center text-[12px] text-[#64748b]">No scored results are available for this trend selection.</div>}
         </SectionCard>
 
         <SectionCard title="Official Report Cards" subtitle="Exam sessions with generated report cards">
@@ -555,13 +987,27 @@ export function StudentProfilePage() {
               { key: 'assessment_type', label: 'Type', render: (row) => valueLabel(row.assessment_type) },
               { key: 'subject_name', label: 'Subject' },
               { key: 'source_label', label: 'Source', render: (row) => row.source_label || '-' },
-              { key: 'score', label: 'Score', render: (row) => `${row.score ?? '-'} / ${row.total_marks || '-'}` },
-              { key: 'percentage', label: 'Result', render: (row) => row.percentage === null || row.percentage === undefined ? (row.grade || '-') : `${row.percentage}%${row.grade ? ` · ${row.grade}` : ''}` },
+              { key: 'score', label: 'Score', render: (row) => isAbsentResult(row) ? 'Absent' : `${row.score ?? '-'} / ${row.total_marks || '-'}` },
+              { key: 'percentage', label: 'Result', render: (row) => isAbsentResult(row) ? 'Absent' : row.percentage === null || row.percentage === undefined ? (row.grade || '-') : `${row.percentage}%${row.grade ? ` · ${row.grade}` : ''}` },
               { key: 'status', label: 'Status', render: (row) => valueLabel(row.status) },
               { key: 'teacher_name', label: 'Teacher', render: (row) => row.teacher_name || '-' },
             ]}
             rows={assessmentRows}
             emptyMessage="No mid-term or classroom assessment results are available yet."
+          />
+        </SectionCard>
+
+        <SectionCard title="Academic History" subtitle="Enrollment records preserve previous terms and classes">
+          <PortalTable
+            columns={[
+              { key: 'academic_year_name', label: 'Academic Year' },
+              { key: 'term_name', label: 'Term' },
+              { key: 'class_name', label: 'Class' },
+              { key: 'enrollment_type', label: 'Type', render: (row) => valueLabel(row.enrollment_type) },
+              { key: 'enrollment_status', label: 'Status', render: (row) => valueLabel(row.enrollment_status) },
+            ]}
+            rows={student?.enrollments || []}
+            emptyMessage="No academic history records found."
           />
         </SectionCard>
       </div>
@@ -604,6 +1050,16 @@ export function StudentProfilePage() {
         onSave={saveEditProfile}
         saving={savingProfile}
         error={editError}
+      />
+
+      <WithdrawalDialog
+        open={withdrawOpen}
+        onOpenChange={setWithdrawOpen}
+        form={withdrawForm}
+        setForm={setWithdrawForm}
+        onSubmit={submitWithdrawal}
+        saving={savingWithdrawal}
+        error={withdrawError}
       />
 
       <Dialog open={photoPreviewOpen} onOpenChange={setPhotoPreviewOpen}>

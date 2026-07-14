@@ -68,7 +68,7 @@ function generatedTemporaryPassword(teacher) {
 }
 
 function teacherSelect() {
-  return `id, school_id, role, full_name, first_name, last_name, email, must_change_password, phone, gender, date_of_birth,
+  return `id, public_ref, school_id, role, full_name, first_name, last_name, email, must_change_password, phone, gender, date_of_birth,
     national_id, employee_id, qualification, specialization, address, profile_photo_url,
     employment_status, role_type, is_active, created_at, updated_at`
 }
@@ -92,16 +92,18 @@ export async function createTeacher(req, res) {
   const teacher = normalizeTeacherPayload(req.body)
   const email = teacher.email || generatedTeacherEmail(schoolId)
   const temporaryPassword = generatedTemporaryPassword(teacher)
+  const publicRef = crypto.randomUUID()
   const passwordHash = await bcrypt.hash(temporaryPassword, 10)
 
   try {
     const [result] = await pool.query(
       `INSERT INTO users (
-        school_id, role, full_name, first_name, last_name, email, password_hash, must_change_password, phone,
+        public_ref, school_id, role, full_name, first_name, last_name, email, password_hash, must_change_password, phone,
         gender, date_of_birth, national_id, employee_id, qualification, specialization, address,
         profile_photo_url, employment_status, role_type, is_active
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
+        publicRef,
         schoolId,
         teacher.role,
         teacher.fullName,
@@ -126,7 +128,7 @@ export async function createTeacher(req, res) {
     )
     res.status(201).json({
       teacher: {
-        id: Number(result.insertId),
+        public_ref: publicRef,
         school_id: schoolId,
         role: teacher.role,
         role_type: teacher.roleType,
@@ -150,8 +152,9 @@ export async function createTeacher(req, res) {
 
 export async function getTeacher(req, res) {
   const schoolId = getScopedSchoolId(req)
-  const teacherId = Number(req.params.id || 0)
-  if (!teacherId) throw new HttpError(400, "Teacher id is required")
+  const [[teacherReference]] = await pool.query("SELECT id FROM users WHERE school_id = ? AND public_ref = ? LIMIT 1", [schoolId, String(req.params.id || "")])
+  const teacherId = Number(teacherReference?.id || 0)
+  if (!teacherId) throw new HttpError(404, "Teacher was not found")
 
   const teacherClassIds = await getTeacherClassIds(req, schoolId)
   if (teacherClassIds && Number(req.user.id) !== teacherId) {

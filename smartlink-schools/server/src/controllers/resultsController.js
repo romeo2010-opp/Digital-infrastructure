@@ -6,8 +6,11 @@ import {
   isTeacher,
 } from "../utils/tenantScope.js"
 import { HttpError } from "../utils/http.js"
+import { createInAppNotification } from "../services/operationalCommunicationService.js"
 import { getActiveAcademicSession, sessionPayload } from "../services/academicSessionService.js"
 import { studentCodeSortSql } from "../utils/studentSort.js"
+import { absentCommentForWithdrawal, getWithdrawalsForStudentsOnDate } from "../services/studentWithdrawalService.js"
+import { ingestApprovedResultBatch } from "../services/academicIntelligenceEngine.js"
 
 function gradeFor(score, totalMarks) {
   if (score === null || score === undefined || score === "") return null
@@ -64,13 +67,19 @@ async function getAssessmentOrThrow(schoolId, assessmentId) {
   const [[assessment]] = await pool.query(
     `SELECT a.*, c.name AS class_name, subj.name AS subject_name,
       ay.name AS academic_year_name, t.name AS term_name
-      , es.name AS exam_session_name, es.status AS exam_session_status
+      , es.name AS exam_session_name, es.status AS exam_session_status,
+      ett.exam_date
      FROM assessments a
      JOIN classes c ON c.id = a.class_id AND c.school_id = a.school_id
      JOIN subjects subj ON subj.id = a.subject_id AND subj.school_id = a.school_id
      LEFT JOIN academic_years ay ON ay.id = a.academic_year_id AND ay.school_id = a.school_id
      LEFT JOIN terms t ON t.id = a.term_id AND t.school_id = a.school_id
      LEFT JOIN exam_sessions es ON es.id = a.exam_session_id AND es.school_id = a.school_id
+     LEFT JOIN exam_timetable_entries ett ON ett.school_id = a.school_id
+       AND ett.assessment_id = a.id
+       AND ett.class_id = a.class_id
+       AND ett.subject_id = a.subject_id
+       AND ett.status <> 'cancelled'
      WHERE a.school_id = ? AND a.id = ? LIMIT 1`,
     [schoolId, assessmentId],
   )
@@ -129,6 +138,7 @@ async function ensureBatch(connection, schoolId, assessment, teacherId) {
 }
 
 async function loadSheetRows(schoolId, assessment, batchId) {
+  const assessmentDate = assessment.exam_date || null
   const [students] = await pool.query(
     `SELECT se.id AS enrollment_id, s.id, COALESCE(s.student_id, s.admission_no) AS student_id, s.admission_no,
       s.first_name, s.last_name, COALESCE(se.stream_section, s.stream_section) AS stream_section,
@@ -136,25 +146,36 @@ async function loadSheetRows(schoolId, assessment, batchId) {
      FROM student_enrollments se
      JOIN students s ON s.id = se.student_id AND s.school_id = se.school_id
      JOIN classes c ON c.id = se.class_id AND c.school_id = se.school_id
+     LEFT JOIN student_withdrawals sw ON sw.school_id = se.school_id
+      AND sw.student_id = s.id
+      AND sw.status <> 'cancelled'
+      AND ? IS NOT NULL
+      AND sw.start_date <= ?
+      AND (sw.withdrawal_type = 'permanent' OR sw.end_date >= ?)
      WHERE se.school_id = ? AND se.academic_year_id = ? AND se.term_id = ? AND se.class_id = ?
-      AND se.enrollment_status = 'active' AND s.status = 'active'
+      AND ((se.enrollment_status = 'active' AND s.status = 'active') OR sw.id IS NOT NULL)
      ORDER BY ${studentCodeSortSql("s")}, s.last_name, s.first_name`,
-    [schoolId, assessment.academic_year_id, assessment.term_id, assessment.class_id],
+    [assessmentDate, assessmentDate, assessmentDate, schoolId, assessment.academic_year_id, assessment.term_id, assessment.class_id],
   )
   const [entries] = batchId
     ? await pool.query("SELECT * FROM result_entries WHERE school_id = ? AND result_batch_id = ?", [schoolId, batchId])
     : [[]]
   const entriesByStudent = new Map(entries.map((entry) => [Number(entry.student_id), entry]))
+  const withdrawalsByStudent = await getWithdrawalsForStudentsOnDate(pool, schoolId, students.map((student) => student.id), assessmentDate)
   return students.map((student) => {
     const entry = entriesByStudent.get(Number(student.id))
+    const withdrawal = withdrawalsByStudent.get(Number(student.id)) || null
+    const absent = Boolean(withdrawal)
     return {
       ...student,
       result_entry_id: entry?.id || null,
       enrollment_id: entry?.enrollment_id || student.enrollment_id || null,
-      score: entry?.score ?? "",
-      grade: entry?.grade || "",
+      score: absent ? "" : entry?.score ?? "",
+      grade: absent ? "" : entry?.grade || "",
       comment: entry?.comment || "",
-      status: entry?.status || "draft",
+      status: absent ? "absent" : entry?.status === "absent" ? "draft" : entry?.status || "draft",
+      withdrawal_status: withdrawal ? { withdrawn: true, ...withdrawal } : null,
+      absent,
       last_saved_at: entry?.last_saved_at || null,
     }
   })
@@ -222,7 +243,8 @@ export async function listResultsSetup(req, res) {
   const [batches] = session.setupRequired ? [[]] : await pool.query(
     `SELECT rb.*, a.name AS assessment_name, c.name AS class_name, subj.name AS subject_name, u.full_name AS teacher_name,
       COUNT(re.id) AS completed_marks,
-      SUM(CASE WHEN re.score IS NULL THEN 1 ELSE 0 END) AS missing_marks
+      SUM(CASE WHEN re.score IS NULL AND COALESCE(re.status, '') <> 'absent' THEN 1 ELSE 0 END) AS missing_marks,
+      SUM(CASE WHEN re.status = 'absent' THEN 1 ELSE 0 END) AS absent_marks
      FROM result_batches rb
      JOIN assessments a ON a.id = rb.assessment_id AND a.school_id = rb.school_id
      JOIN classes c ON c.id = rb.class_id AND c.school_id = rb.school_id
@@ -247,7 +269,8 @@ export async function listResultBatches(req, res) {
     `SELECT rb.*, a.name AS assessment_name, a.total_marks, c.name AS class_name, subj.name AS subject_name,
       u.full_name AS teacher_name, ay.name AS academic_year_name, t.name AS term_name, es.name AS exam_session_name,
       COUNT(re.id) AS saved_marks,
-      SUM(CASE WHEN re.score IS NULL THEN 1 ELSE 0 END) AS missing_marks
+      SUM(CASE WHEN re.score IS NULL AND COALESCE(re.status, '') <> 'absent' THEN 1 ELSE 0 END) AS missing_marks,
+      SUM(CASE WHEN re.status = 'absent' THEN 1 ELSE 0 END) AS absent_marks
      FROM result_batches rb
      JOIN assessments a ON a.id = rb.assessment_id AND a.school_id = rb.school_id
      JOIN classes c ON c.id = rb.class_id AND c.school_id = rb.school_id
@@ -326,21 +349,30 @@ export async function getClassResultSheet(req, res) {
   const [papers] = await pool.query(
     `SELECT a.id, a.name AS assessment_name, a.assessment_type, a.status AS assessment_status,
       a.total_marks, a.exam_session_id, es.name AS exam_session_name,
+      ett.exam_date,
       subj.id AS subject_id, subj.name AS subject_name, subj.code AS subject_code,
       rb.id AS result_batch_id, rb.status AS batch_status, u.full_name AS teacher_name
      FROM assessments a
      JOIN subjects subj ON subj.id = a.subject_id AND subj.school_id = a.school_id
      LEFT JOIN exam_sessions es ON es.id = a.exam_session_id AND es.school_id = a.school_id
+     LEFT JOIN exam_timetable_entries ett ON ett.school_id = a.school_id
+       AND ett.assessment_id = a.id
+       AND ett.class_id = a.class_id
+       AND ett.subject_id = a.subject_id
+       AND ett.status <> 'cancelled'
      LEFT JOIN result_batches rb ON rb.assessment_id = a.id AND rb.school_id = a.school_id
      LEFT JOIN users u ON u.id = COALESCE(rb.teacher_id, a.teacher_id) AND u.school_id = a.school_id
      WHERE a.school_id = ? AND a.academic_year_id = ? AND a.term_id = ? AND a.class_id = ?
        AND a.status <> 'archived'${examSessionClause}
      GROUP BY a.id, a.name, a.assessment_type, a.status, a.total_marks, a.exam_session_id,
-       es.name, subj.id, subj.name, subj.code, rb.id, rb.status, u.full_name
+       es.name, ett.exam_date, subj.id, subj.name, subj.code, rb.id, rb.status, u.full_name
      ORDER BY subj.name, a.name`,
     assessmentParams,
   )
 
+  const examDates = papers.map((paper) => paper.exam_date).filter(Boolean).map((value) => String(value).slice(0, 10)).sort()
+  const firstExamDate = examDates[0] || null
+  const lastExamDate = examDates[examDates.length - 1] || null
   const [students] = await pool.query(
     `SELECT se.id AS enrollment_id, s.id AS student_pk, COALESCE(s.student_id, s.admission_no) AS student_id,
       s.admission_no, s.first_name, s.last_name, COALESCE(se.stream_section, s.stream_section) AS stream_section,
@@ -348,10 +380,16 @@ export async function getClassResultSheet(req, res) {
      FROM student_enrollments se
      JOIN students s ON s.id = se.student_id AND s.school_id = se.school_id
      JOIN classes c ON c.id = se.class_id AND c.school_id = se.school_id
+     LEFT JOIN student_withdrawals sw ON sw.school_id = se.school_id
+      AND sw.student_id = se.student_id
+      AND sw.status <> 'cancelled'
+      AND ? IS NOT NULL
+      AND sw.start_date <= ?
+      AND COALESCE(sw.end_date, '9999-12-31') >= ?
      WHERE se.school_id = ? AND se.academic_year_id = ? AND se.term_id = ? AND se.class_id = ?
-       AND se.enrollment_status = 'active' AND s.status = 'active'
+       AND ((se.enrollment_status = 'active' AND s.status = 'active') OR sw.id IS NOT NULL)
      ORDER BY ${studentCodeSortSql("s")}, s.last_name, s.first_name`,
-    [schoolId, academicYearId, termId, classId],
+    [firstExamDate, lastExamDate, firstExamDate, schoolId, academicYearId, termId, classId],
   )
 
   const entriesParams = [schoolId, academicYearId, termId, classId]
@@ -390,14 +428,35 @@ export async function getClassResultSheet(req, res) {
   })
 
   const paperIds = papers.map((paper) => Number(paper.id))
+  const withdrawalMapsByPaper = new Map()
+  for (const paper of papers) {
+    if (!paper.exam_date) continue
+    withdrawalMapsByPaper.set(
+      Number(paper.id),
+      await getWithdrawalsForStudentsOnDate(pool, schoolId, students.map((student) => student.student_pk), paper.exam_date),
+    )
+  }
   const rows = students.map((student) => {
     const resultMap = entriesByStudent.get(Number(student.student_pk)) || new Map()
     const results = {}
     let totalPercentage = 0
     let marked = 0
+    let absent = 0
     paperIds.forEach((paperId) => {
+      const withdrawal = withdrawalMapsByPaper.get(paperId)?.get(Number(student.student_pk)) || null
       const result = resultMap.get(paperId) || null
-      if (result) {
+      if (withdrawal) {
+        absent += 1
+        results[paperId] = {
+          ...(result || {}),
+          score: null,
+          grade: "",
+          percentage: null,
+          comment: result?.comment || absentCommentForWithdrawal(withdrawal),
+          status: "absent",
+          withdrawal_status: { withdrawn: true, ...withdrawal },
+        }
+      } else if (result && String(result.status || "").toLowerCase() !== "absent") {
         results[paperId] = result
         if (result.percentage !== null) {
           totalPercentage += Number(result.percentage)
@@ -413,7 +472,8 @@ export async function getClassResultSheet(req, res) {
       id: student.student_pk,
       results,
       marked_subjects: marked,
-      missing_subjects: Math.max(0, paperIds.length - marked),
+      absent_subjects: absent,
+      missing_subjects: Math.max(0, paperIds.length - marked - absent),
       average_score: averageScore,
       average_grade: averageScore === null ? null : gradeFor(averageScore, 100),
     }
@@ -436,11 +496,20 @@ export async function getClassResultSheet(req, res) {
 }
 
 async function saveEntries(connection, schoolId, batch, assessment, entries, status = "draft") {
+  const assessmentDate = assessment.exam_date || null
+  const withdrawalsByStudent = await getWithdrawalsForStudentsOnDate(
+    connection,
+    schoolId,
+    entries.map((entry) => entry.student_id),
+    assessmentDate,
+  )
   for (const entry of entries) {
     const studentId = Number(entry.student_id || 0)
     if (!studentId) continue
     const enrollmentId = entry.enrollment_id ? Number(entry.enrollment_id) : null
-    const scoreValue = entry.score === "" || entry.score === null || entry.score === undefined ? null : Number(entry.score)
+    const withdrawal = withdrawalsByStudent.get(studentId) || null
+    const absent = Boolean(withdrawal)
+    const scoreValue = absent || entry.score === "" || entry.score === null || entry.score === undefined ? null : Number(entry.score)
     if (scoreValue !== null && (!Number.isFinite(scoreValue) || scoreValue < 0 || scoreValue > Number(assessment.total_marks))) {
       throw new HttpError(400, `Score for student ${studentId} must be between 0 and ${assessment.total_marks}`)
     }
@@ -455,9 +524,9 @@ async function saveEntries(connection, schoolId, batch, assessment, entries, sta
         studentId,
         enrollmentId,
         scoreValue,
-        gradeFor(scoreValue, assessment.total_marks),
-        String(entry.comment || "").trim() || null,
-        status,
+        absent ? null : gradeFor(scoreValue, assessment.total_marks),
+        String(entry.comment || "").trim() || (absent ? absentCommentForWithdrawal(withdrawal) : null),
+        absent ? "absent" : status,
       ],
     )
   }
@@ -622,6 +691,13 @@ export async function saveResultDraft(req, res) {
     }
     await connection.query("UPDATE result_batches SET status = 'draft', return_reason = NULL WHERE id = ? AND school_id = ?", [batch.id, schoolId])
     await connection.commit()
+    try {
+      const [headteachers] = await pool.query("SELECT id FROM users WHERE school_id=? AND role='headteacher' AND is_active=1", [schoolId])
+      const [[context]] = await pool.query(`SELECT c.name class_name,subj.name subject_name,u.full_name teacher_name,a.name assessment_name FROM assessments a JOIN classes c ON c.id=a.class_id JOIN subjects subj ON subj.id=a.subject_id LEFT JOIN users u ON u.id=? WHERE a.school_id=? AND a.id=?`, [teacherId,schoolId,assessmentId])
+      for (const headteacher of headteachers) await createInAppNotification({ schoolId, recipientUserId: headteacher.id, title: "Results submitted for review", message: `${context?.teacher_name || "A teacher"} submitted ${context?.class_name || "class"} ${context?.subject_name || "subject"} results for ${context?.assessment_name || "an assessment"}.`, category: "academics", priority: "high", linkedEntityType: "result_batch", linkedEntityId: batch.id, createdBy: req.user.id })
+    } catch {
+      // Result submission remains successful if optional notification delivery is unavailable.
+    }
     res.json({ ok: true, batch_id: batch.id })
   } catch (error) {
     await connection.rollback()
@@ -649,15 +725,32 @@ export async function submitResults(req, res) {
     }
     if (entries.length) await saveEntries(connection, schoolId, batch, assessment, entries, "draft")
     const [[enrolled]] = await connection.query(
-      `SELECT COUNT(DISTINCT student_id) AS total
-       FROM student_enrollments
-       WHERE school_id = ? AND academic_year_id = ? AND term_id = ? AND class_id = ? AND enrollment_status = 'active'`,
-      [schoolId, assessment.academic_year_id, assessment.term_id, assessment.class_id],
+      `SELECT COUNT(DISTINCT se.student_id) AS total
+       FROM student_enrollments se
+       LEFT JOIN students s ON s.id = se.student_id AND s.school_id = se.school_id
+       LEFT JOIN student_withdrawals sw ON sw.school_id = se.school_id
+        AND sw.student_id = se.student_id
+        AND sw.status <> 'cancelled'
+        AND ? IS NOT NULL
+        AND sw.start_date <= ?
+        AND (sw.withdrawal_type = 'permanent' OR sw.end_date >= ?)
+       WHERE se.school_id = ? AND se.academic_year_id = ? AND se.term_id = ? AND se.class_id = ?
+        AND ((se.enrollment_status = 'active' AND s.status = 'active') OR sw.id IS NOT NULL)`,
+      [assessment.exam_date || null, assessment.exam_date || null, assessment.exam_date || null, schoolId, assessment.academic_year_id, assessment.term_id, assessment.class_id],
     )
     const expectedTotal = Number(enrolled?.total || 0)
     const [[completed]] = await connection.query(
-      "SELECT COUNT(*) AS total FROM result_entries WHERE school_id = ? AND result_batch_id = ? AND score IS NOT NULL",
-      [schoolId, batch.id],
+      `SELECT COUNT(DISTINCT re.student_id) AS total
+       FROM result_entries re
+       LEFT JOIN student_withdrawals sw ON sw.school_id = re.school_id
+        AND sw.student_id = re.student_id
+        AND sw.status <> 'cancelled'
+        AND ? IS NOT NULL
+        AND sw.start_date <= ?
+        AND (sw.withdrawal_type = 'permanent' OR sw.end_date >= ?)
+       WHERE re.school_id = ? AND re.result_batch_id = ?
+        AND (re.score IS NOT NULL OR (re.status = 'absent' AND sw.id IS NOT NULL))`,
+      [assessment.exam_date || null, assessment.exam_date || null, assessment.exam_date || null, schoolId, batch.id],
     )
     const missingCount = Math.max(0, expectedTotal - Number(completed?.total || 0))
     if (missingCount) throw new HttpError(400, `${missingCount} students are missing marks`)
@@ -667,10 +760,11 @@ export async function submitResults(req, res) {
        WHERE id = ? AND school_id = ?`,
       [req.user.id, batch.id, schoolId],
     )
-    await connection.query("UPDATE result_entries SET status = 'submitted' WHERE school_id = ? AND result_batch_id = ?", [schoolId, batch.id])
+    await connection.query("UPDATE result_entries SET status = CASE WHEN status = 'absent' THEN 'absent' ELSE 'submitted' END WHERE school_id = ? AND result_batch_id = ?", [schoolId, batch.id])
     await connection.query("UPDATE assessments SET status = 'results_submitted' WHERE id = ? AND school_id = ? AND exam_session_id IS NOT NULL", [assessmentId, schoolId])
     await connection.commit()
-    res.json({ ok: true, batch_id: batch.id })
+    const intelligence = await ingestApprovedResultBatch(schoolId, batch.id, req.user).catch((error) => ({ queued: true, warning: error.message }))
+    res.json({ ok: true, batch_id: batch.id, academic_intelligence: intelligence })
   } catch (error) {
     await connection.rollback()
     throw error
@@ -694,11 +788,25 @@ export async function approveResultBatch(req, res) {
     )
     if (!batch || batch.status !== "submitted") throw new HttpError(400, "Only submitted results can be approved")
     const [[missing]] = await connection.query(
-      `SELECT COUNT(DISTINCT se.student_id) - COUNT(DISTINCT CASE WHEN re.score IS NOT NULL THEN re.student_id END) AS total
+      `SELECT COUNT(DISTINCT se.student_id) - COUNT(DISTINCT CASE WHEN re.score IS NOT NULL OR (re.status = 'absent' AND sw.id IS NOT NULL) THEN re.student_id END) AS total
        FROM student_enrollments se
-       LEFT JOIN result_entries re ON re.school_id = se.school_id AND re.result_batch_id = ? AND re.student_id = se.student_id
+       LEFT JOIN students s ON s.id = se.student_id AND s.school_id = se.school_id
+       LEFT JOIN result_batches rb ON rb.id = ? AND rb.school_id = se.school_id
+       LEFT JOIN assessments a ON a.id = rb.assessment_id AND a.school_id = rb.school_id
+       LEFT JOIN exam_timetable_entries ett ON ett.school_id = a.school_id
+        AND ett.assessment_id = a.id
+        AND ett.class_id = a.class_id
+        AND ett.subject_id = a.subject_id
+        AND ett.status <> 'cancelled'
+       LEFT JOIN student_withdrawals sw ON sw.school_id = se.school_id
+        AND sw.student_id = se.student_id
+        AND sw.status <> 'cancelled'
+        AND ett.exam_date IS NOT NULL
+        AND sw.start_date <= ett.exam_date
+        AND (sw.withdrawal_type = 'permanent' OR sw.end_date >= ett.exam_date)
+       LEFT JOIN result_entries re ON re.school_id = se.school_id AND re.result_batch_id = rb.id AND re.student_id = se.student_id
        WHERE se.school_id = ? AND se.academic_year_id = ? AND se.term_id = ? AND se.class_id = ?
-         AND se.enrollment_status = 'active'`,
+         AND ((se.enrollment_status = 'active' AND s.status = 'active') OR sw.id IS NOT NULL)`,
       [batchId, schoolId, batch.academic_year_id, batch.term_id, batch.class_id],
     )
     if (Number(missing?.total || 0) > 0) throw new HttpError(400, `${Number(missing.total)} students are missing marks`)
@@ -708,11 +816,12 @@ export async function approveResultBatch(req, res) {
        WHERE id = ? AND school_id = ?`,
       [req.user.id, batchId, schoolId],
     )
-    await connection.query("UPDATE result_entries SET status = 'approved' WHERE school_id = ? AND result_batch_id = ?", [schoolId, batchId])
+    await connection.query("UPDATE result_entries SET status = CASE WHEN status = 'absent' THEN 'absent' ELSE 'approved' END WHERE school_id = ? AND result_batch_id = ?", [schoolId, batchId])
     await connection.query("UPDATE assessments SET status = 'results_approved' WHERE id = ? AND school_id = ? AND exam_session_id IS NOT NULL", [batch.assessment_id, schoolId])
     const generated = await generateOfficialResultsForBatch(connection, schoolId, batchId, req.user.id)
     await connection.commit()
-    res.json({ ok: true, generated })
+    const intelligence = await ingestApprovedResultBatch(schoolId, batchId, req.user).catch((error) => ({ queued: true, warning: error.message }))
+    res.json({ ok: true, generated, academic_intelligence: intelligence })
   } catch (error) {
     await connection.rollback()
     throw error
@@ -733,7 +842,7 @@ export async function returnResultBatch(req, res) {
     [req.user.id, reason, batchId, schoolId],
   )
   if (!result.affectedRows) throw new HttpError(400, "Only submitted or approved results can be returned")
-  await pool.query("UPDATE result_entries SET status = 'returned' WHERE school_id = ? AND result_batch_id = ?", [schoolId, batchId])
+  await pool.query("UPDATE result_entries SET status = CASE WHEN status = 'absent' THEN 'absent' ELSE 'returned' END WHERE school_id = ? AND result_batch_id = ?", [schoolId, batchId])
   await pool.query(
     `UPDATE assessments a
      JOIN result_batches rb ON rb.assessment_id = a.id AND rb.school_id = a.school_id

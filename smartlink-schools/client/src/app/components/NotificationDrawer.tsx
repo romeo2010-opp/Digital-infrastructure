@@ -14,7 +14,13 @@ import { normalizeDate, normalizeRows } from '../lib/portalUtils'
 function routeForNotification(item: any) {
   const type = String(item?.linkedEntityType || '').toUpperCase()
   const id = String(item?.linkedEntityId || '').trim()
+  if (type === 'FINANCE_DISCOUNT') return '/finance/discounts-bursaries'
+  if (type === 'TIMETABLE') return '/timetables'
+  if (type === 'EXAM_SESSION') return '/exam-sessions'
+  if (type === 'PAYROLL_RUN') return id && !/^\d+$/.test(id) ? `/finance/payroll/${encodeURIComponent(id)}` : '/finance/payroll'
+  if (type === 'STAFF_LEAVE') return id && !/^\d+$/.test(id) ? `/staff/leave/${encodeURIComponent(id)}` : '/staff/leave'
   if (!id) return ''
+  if (type === 'DIRECTOR_TASK') return `/tasks/${encodeURIComponent(id)}`
   if (type === 'STUDENT') return '/students'
   if (type === 'PARENT' || type === 'GUARDIAN') return '/parents'
   if (type === 'FEE' || type === 'PAYMENT' || type === 'RECEIPT') return '/fees'
@@ -41,8 +47,10 @@ export function NotificationDrawer({
   const selectedRoute = routeForNotification(selected)
 
   useEffect(() => {
-    if (open) setSelected(null)
-  }, [open])
+    if (!open || !token) return
+    setSelected(null)
+    api.listNotifications(token).then((payload: any) => updatePortalData((current: any) => ({ ...current, notifications: payload?.notifications || { items: [], unreadCount: 0 } }))).catch(() => {})
+  }, [open, token])
 
   useEffect(() => {
     if (!selected?.publicId || !items.length) return
@@ -141,10 +149,10 @@ export function NotificationDrawer({
               <div className="rounded-[6px] border border-[#e2e8f0] bg-[#f9fafb] px-4 py-3 text-[13px] leading-6 text-[#374151]">
                 {selected.message || 'No message body.'}
               </div>
-              {selected.linkedEntityId ? (
+              {selected.linkedEntityType && selected.linkedEntityType !== 'director_task' ? (
                 <div className="rounded-[6px] border border-[#e2e8f0] bg-white px-4 py-3 text-[12px] text-[#6b7280]">
                   <div className="font-bold uppercase tracking-[0.08em] text-[#9ca3af]">Linked record</div>
-                  <div className="mt-1 font-semibold text-[#111827]">{selected.linkedEntityType || 'Record'} {selected.linkedEntityId}</div>
+                  <div className="mt-1 font-semibold text-[#111827]">{selected.linkedEntityType || 'Record'}</div>
                 </div>
               ) : null}
               {selectedRoute ? (

@@ -36,12 +36,27 @@ import { TimetablingPage } from './pages/TimetablingPage'
 import { SchedulingSettingsPage } from './pages/SchedulingSettingsPage'
 import { PublicLandingPage } from './pages/PublicLandingPage'
 import { BursarFinancePage } from './pages/BursarFinancePage'
+import { LeavePage, PayrollPage, PayslipPage } from './pages/HrOperationsPage'
+import { AssessmentImportPage } from './pages/AssessmentImportPage'
+import { AssessmentTemplatesPage } from './pages/AssessmentTemplatesPage'
 import { FeeReceiptPrintPage } from './pages/FeeReceiptPrintPage'
 import { ExamIntelligenceComingSoonPage } from './pages/ExamIntelligenceComingSoonPage'
 import { ExamIntelligenceLabPage } from './pages/ExamIntelligenceLabPage'
+import { DirectorPortalPage } from './pages/DirectorPortalPage'
+import { MyTasksPage } from './pages/MyTasksPage'
+import { TaskDetailPage } from './pages/TaskDetailPage'
+import { LibrarianPortalPage, TeachingResourceDetailPage } from './pages/LibrarianPortalPage'
+import { ClassroomModePage } from './pages/ClassroomModePage'
+import { AcademicIntelligencePage } from './pages/AcademicIntelligencePage'
+import { ParentAcademicInsightsPage } from './pages/ParentAcademicInsightsPage'
 
 const routeMeta = [
   { path: '/dashboard', title: 'School Dashboard', subtitle: 'Students, fees, attendance and academic progress' },
+  { path: '/overview', title: 'Director Portal', subtitle: 'Owner command center for finance, admissions, academics and operations' },
+  { path: '/library', title: 'Library & Institutional Resources', subtitle: 'Physical resources, teaching materials, archives and print operations' },
+  { path: '/classroom', title: 'Classroom Mode', subtitle: 'Fast teacher-operated lesson workflow without student devices' },
+  { path: '/academic-intelligence', title: 'Academic Intelligence', subtitle: 'Explainable mastery, pacing, readiness and next actions' },
+  { path: '/parent-insights', title: 'Child Progress', subtitle: 'School-approved learning updates and support at home' },
   { path: '/student-portal', title: 'Student Portal', subtitle: 'Results, fees, timetable, homework, attendance and notices' },
   { path: '/search', title: 'School Search', subtitle: 'Search students, parents, classes, homework and results' },
   { path: '/academic-sessions', title: 'Academic Sessions', subtitle: 'Academic years, terms, closures and progression' },
@@ -83,6 +98,7 @@ const routeMeta = [
   { path: '/questions/bank', title: 'Question Bank', subtitle: 'Questions, answers and explanations' },
   { path: '/questions/batches/', title: 'AI Draft Batch', subtitle: 'Review generated questions and explanations' },
   { path: '/exam-builder', title: 'Assessment Builder', subtitle: 'Exam topics, marks and difficulty review' },
+  { path: '/assessments/templates', title: 'Assessment Cover Templates', subtitle: 'Built-in, school-created and imported PDF cover designs' },
   { path: '/daily-drill', title: 'Daily Drill', subtitle: 'Personalized practice from weak topics' },
   { path: '/exam-forecast', title: 'Exam Forecast', subtitle: 'Topic priority for exam preparation' },
   { path: '/exam-intelligence', title: 'Exam Intelligence', subtitle: 'Coming soon exam analytics and revision intelligence' },
@@ -295,6 +311,37 @@ function SchoolRoutes({ landingPath }: { landingPath: string }) {
       <Route path="/" element={<Navigate to={landingPath} replace />} />
       <Route path="/student-portal" element={<StudentPortalPage />} />
       <Route path="/dashboard" element={<SchoolDashboard />} />
+      <Route path="/tasks" element={<MyTasksPage />} />
+      <Route path="/tasks/:taskId" element={<TaskDetailPage />} />
+      <Route path="/overview" element={<DirectorPortalPage />} />
+      <Route path="/library" element={<Navigate to="/library/dashboard" replace />} />
+      <Route path="/library/dashboard" element={<LibrarianPortalPage />} />
+      <Route path="/library/catalogue" element={<LibrarianPortalPage />} />
+      <Route path="/library/loans" element={<LibrarianPortalPage />} />
+      <Route path="/library/computers" element={<LibrarianPortalPage />} />
+      <Route path="/library/resources" element={<LibrarianPortalPage />} />
+      <Route path="/library/resources/review" element={<LibrarianPortalPage />} />
+      <Route path="/library/resource-requests" element={<LibrarianPortalPage />} />
+      <Route path="/library/resources/:resourceRef" element={<TeachingResourceDetailPage />} />
+      <Route path="/library/archive" element={<LibrarianPortalPage />} />
+      <Route path="/library/print-requests" element={<LibrarianPortalPage />} />
+      <Route path="/classroom" element={<ClassroomModePage />} />
+      <Route path="/classroom/:sessionRef" element={<ClassroomModePage />} />
+      <Route path="/academic-intelligence" element={<AcademicIntelligencePage />} />
+      <Route path="/parent-insights" element={<ParentAcademicInsightsPage />} />
+      <Route path="/finance/payroll" element={<PayrollPage />} />
+      <Route path="/finance/payroll/:runRef" element={<PayrollPage />} />
+      <Route path="/finance/payroll/:runRef/items/:itemRef/payslip" element={<PayslipPage />} />
+      <Route path="/staff/leave" element={<LeavePage />} />
+      <Route path="/staff/leave/:leaveRef" element={<LeavePage />} />
+      <Route path="/finance/*" element={<DirectorPortalPage />} />
+      <Route path="/admissions/*" element={<DirectorPortalPage />} />
+      <Route path="/academics/*" element={<DirectorPortalPage />} />
+      <Route path="/staff/*" element={<DirectorPortalPage />} />
+      <Route path="/operations/*" element={<DirectorPortalPage />} />
+      <Route path="/reports/*" element={<DirectorPortalPage />} />
+      <Route path="/audit-security" element={<DirectorPortalPage />} />
+      <Route path="/leadership-settings/*" element={<DirectorPortalPage />} />
       <Route path="/search" element={<SearchResultsPage />} />
       <Route path="/academic-sessions" element={<AcademicSessionPage />} />
       <Route path="/academic-sessions/terms/:termId" element={<AcademicTermDetailPage />} />
@@ -351,6 +398,9 @@ function SchoolRoutes({ landingPath }: { landingPath: string }) {
       <Route path="/questions/bank" element={<QuestionBankPage />} />
       <Route path="/questions/batches/:batchId" element={<QuestionBatchEditorPage />} />
       <Route path="/exam-builder" element={<ExamPaperStudioPage />} />
+      <Route path="/assessments/imports/new" element={<AssessmentImportPage />} />
+      <Route path="/assessments/imports/:importRef/review" element={<AssessmentImportPage />} />
+      <Route path="/assessments/templates" element={<AssessmentTemplatesPage />} />
       <Route path="/exam-builder/new" element={<ExamPaperDocumentPage />} />
       <Route path="/exam-builder/:assessmentId" element={<ExamPaperDocumentPage />} />
       <Route path="/daily-drill" element={<SyllabusIntelligencePage />} />
@@ -437,6 +487,7 @@ function PortalShell() {
   } = usePortal()
   const activeMeta = resolveMeta(location.pathname)
   const landingPreferencePaths: Record<string, string> = {
+    director: '/overview',
     dashboard: '/dashboard',
     schoolOverview: '/dashboard',
     students: '/students',
@@ -455,7 +506,8 @@ function PortalShell() {
     users: '/settings/users',
     profile: '/settings/profile',
   }
-  const preferredLandingPath = landingPreferencePaths[String(preferences?.landingPage || 'dashboard')] || '/dashboard'
+  const ownerPortal = ['school_owner', 'director', 'owner'].includes(String(user?.role || '').toLowerCase())
+  const preferredLandingPath = landingPreferencePaths[String(preferences?.landingPage || (ownerPortal ? 'director' : 'dashboard'))] || (ownerPortal ? '/overview' : '/dashboard')
   const landingPath = canAccessPath(user, preferredLandingPath) ? preferredLandingPath : (firstAccessiblePath(user) || '/dashboard')
   const routeLoading = routePacketLoading(location.pathname, data, packetStatus)
 
@@ -523,6 +575,7 @@ function PortalShell() {
   }
 
   const isDashboardRoute = location.pathname === '/dashboard'
+  const isClassroomRoute = location.pathname === '/classroom' || location.pathname.startsWith('/classroom/')
   const isExamPaperDocumentRoute = /^\/exam-builder\/(new|[^/]+)$/.test(location.pathname)
   const isSyllabusComposerRoute = /^\/syllabus\/create(\/[^/]+)?$/.test(location.pathname)
   const isQuestionBatchEditorRoute = /^\/questions\/batches\/[^/]+$/.test(location.pathname)
@@ -551,6 +604,15 @@ function PortalShell() {
     '--sl-personal-panel-blur': `${Number(preferences?.sectionBlur ?? 10)}px`,
     ...(contentBackgroundStyle || {}),
   } as CSSProperties
+
+  if (isClassroomRoute) {
+    return (
+      <div className="h-screen overflow-y-auto overflow-x-hidden bg-[#eef2ff] text-[#111827]">
+        <ActionLoadingOverlay visible={actionLoading} label={actionLabel} />
+        <SchoolRoutes landingPath={landingPath} />
+      </div>
+    )
+  }
 
   if (isExamPaperDocumentRoute || isSyllabusComposerRoute || isQuestionBatchEditorRoute || isQuestionBankRoute || isResultsSheetRoute) {
     return (

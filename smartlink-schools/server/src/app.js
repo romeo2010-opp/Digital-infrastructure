@@ -1,8 +1,11 @@
 import cors from "cors"
 import dotenv from "dotenv"
 import express from "express"
+import { randomUUID } from "crypto"
 import path from "path"
 import routes from "./routes/index.js"
+import { normalizeDatabaseError } from "./utils/databaseErrors.js"
+import { recordSystemError } from "./services/systemErrorService.js"
 
 dotenv.config()
 
@@ -54,8 +57,15 @@ function isTrustedDevOrigin(origin) {
 }
 
 app.use(cors({ origin: corsOrigin(), credentials: true }))
-app.use(express.json({ limit: "8mb" }))
-app.use("/uploads", express.static(path.resolve(process.cwd(), "uploads")))
+app.use(express.json({ limit: "60mb" }))
+const publicUploads = express.static(path.resolve(process.cwd(), "uploads"))
+app.use("/uploads", (req, res, next) => {
+  if (String(req.path || "").startsWith("/teaching-resources/")) {
+    res.status(404).json({ message: "Resource files require an authorised download request." })
+    return
+  }
+  publicUploads(req, res, next)
+})
 
 app.get("/health", (_req, res) => {
   res.json({ ok: true, service: "smartlink-schools" })
@@ -69,18 +79,36 @@ app.use((req, _res, next) => {
   next(error)
 })
 
-app.use((error, _req, res, _next) => {
+app.use((incomingError, req, res, _next) => {
+  const error = normalizeDatabaseError(incomingError)
   const status = error.status || 500
+  const errorId = randomUUID()
+  const originalCode = error?.cause?.code || error.code
+  if (status >= 500 || String(originalCode || "").startsWith("ER_")) {
+    void recordSystemError({ errorId, error, req, status })
+  }
   if (status >= 500) {
     console.error("[smartlink-schools] request failed", {
+      errorId,
+      method: req.method,
+      path: req.originalUrl,
+      schoolId: req.user?.school_id || req.user?.schoolId || null,
+      userId: req.user?.id || null,
       message: error.message,
-      code: error.code,
-      sqlMessage: error.sqlMessage,
+      code: originalCode,
+      sqlMessage: error.cause?.sqlMessage || error.sqlMessage,
+      causeMessage: error.cause?.message,
+      causeCode: error.cause?.code,
       stack: error.stack,
     })
   }
   res.status(status).json({
-    message: status >= 500 ? "Internal server error" : error.message,
+    message: status >= 500 && !error.expose
+      ? `SmartLink could not complete this request. Reference: ${errorId}`
+      : error.message,
+    ...(error.code ? { code: error.code } : {}),
+    ...(error.details ? { details: error.details } : {}),
+    ...(status >= 500 ? { error_id: errorId } : {}),
   })
 })
 

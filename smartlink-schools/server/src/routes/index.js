@@ -1,4 +1,5 @@
 import { Router } from "express"
+import { pool } from "../config/db.js"
 import authRoutes from "./auth.routes.js"
 import { getDashboard } from "../controllers/dashboardController.js"
 import { listStudents, getStudent, createStudent, updateStudent, uploadStudentPhoto } from "../controllers/studentsController.js"
@@ -49,6 +50,25 @@ import {
   transitionAssessmentStatus,
   uploadAssessmentMedia,
 } from "../controllers/assessmentController.js"
+import {
+  applyImportTemplateMatch,
+  applyTemplate,
+  approveTemplate,
+  archiveTemplate,
+  createTemplate,
+  deleteTemplate,
+  duplicateTemplate,
+  extractImportCoverTemplate,
+  getTemplate,
+  getTemplateSettings,
+  importTemplateCandidates,
+  listTemplates,
+  matchImportCoverTemplate,
+  patchTemplateSettings,
+  setDefaultTemplate,
+  templatePreview,
+  updateTemplate,
+} from "../controllers/assessmentTemplateController.js"
 import {
   createExamPaper,
   createBulkExamPapers,
@@ -115,6 +135,14 @@ import { listForecasts } from "../controllers/forecastController.js"
 import { getAiStatusController, getAiUsageSummaryController, testAiController, updateAiSettingsController } from "../controllers/aiController.js"
 import { getReportPdfSettingsController, updateReportPdfSettingsController } from "../controllers/reportSettingsController.js"
 import { getMyPreferences, updateMyPreferences } from "../controllers/preferencesController.js"
+import { cancelTask, completeTask, createTask, dailyClosure, deleteTask, dismissNotification, escalate, executeReminderEngine, feeReminder, getDirectorMappedPage, getDirectorOverview, getDirectorPage, getTask, listTasks, markDailyClosureReviewed, notifications, patchDirectorSettings, patchPaymentPromise, patchTask, patchWhatsappSettings, paymentPromise, readNotification, recordAttendance, remind, staffAttendanceToday, teacherSelfCheckIn, unreadNotifications, whatsappSettings } from "../controllers/directorController.js"
+import {
+  cancelStudentWithdrawal,
+  createStudentWithdrawal,
+  getStudentWithdrawalStatus,
+  listDirectorWithdrawals,
+  listStudentWithdrawalHistory,
+} from "../controllers/studentWithdrawalsController.js"
 import {
   approveExtractedItem,
   approveExtractedItems,
@@ -301,23 +329,165 @@ import {
 } from "../controllers/resultsController.js"
 import {
   createClass,
+  createSchoolUser,
   createSubject,
   deleteSubject,
   getClass,
+  getUserPermissions,
   listClasses,
   listParents,
   listReports,
   listResults,
   listSubjects,
   listUsers,
+  linkParentGuardian,
   quickSearch,
+  updateUserPermissions,
   updateSubject,
 } from "../controllers/schoolDataController.js"
-import { requireAuth, requirePasswordReady, requireRole } from "../middleware/auth.js"
+import { requireAuth, requireExactRole, requirePasswordReady, requireRole } from "../middleware/auth.js"
+import { requireSchoolPermission, SCHOOL_PERMISSIONS } from "../services/authorizationService.js"
+import {
+  createLeave,
+  createRun,
+  generateItems,
+  hrSettings,
+  leaveDashboard,
+  leaveRequest,
+  leaveTransition,
+  patchHrSettings,
+  patchLeave,
+  patchLeaveBalance,
+  patchPayrollItem,
+  payrollDashboard,
+  payrollRun,
+  payrollTransition,
+  saveProfile,
+} from "../controllers/hrOperationsController.js"
+import { approveImport, assetPreview, cancelImport, createImport, deleteImage, extractImages, getImport, linkAnswer, listImages, listImports, pagePreview, reviewImport, startImport, updateImage, updateImportMarking, updateImportQuestion } from "../controllers/assessmentImportController.js"
 import { portalMutationInvalidationMiddleware } from "../realtime/portalInvalidationMiddleware.js"
 import { asyncHandler } from "../utils/http.js"
+import {
+  academicCommandCentre,
+  academicAiExplain,
+  academicOverview,
+  academicClasses,
+  academicClassDetail,
+  academicSubjects,
+  academicSubjectDetail,
+  academicTopicDetail,
+  academicEvidence,
+  academicRisks,
+  academicInsights,
+  academicPositiveSignals,
+  academicMeaningfulChanges,
+  academicEvidenceGaps,
+  academicReadiness,
+  academicHistory,
+  academicExplanation,
+  academicRecalculate,
+  academicAuthoringSetup,
+  assessmentBlueprints,
+  academicEngineConfiguration,
+  curriculumDependencyGraph,
+  patchCurriculumLifecycle,
+  patchParentAcademicInsight,
+  postIntervention,
+  postParentAcademicInsight,
+  postAssessmentBlueprint,
+  postRemediationPack,
+  remediationPacks,
+  parentPortalAcademicInsights,
+  studentAcademicIntelligence,
+  updateAcademicEngineConfiguration,
+  updateIntervention,
+  updateRemediationPack,
+} from "../controllers/academicIntelligenceController.js"
+import {
+  academicAuthoringTopics,
+  academicMarkSheet,
+  assessmentOperationalIntelligence,
+  patchQuestionPermission,
+  postAcademicMarkSheetDraft,
+  postAcademicMarkSheetPublish,
+  postTargetedAssessment,
+  postTargetedAssessmentApproval,
+  postTargetedAssessmentGenerate,
+  postTargetedAssessmentPublish,
+  postTargetedAssessmentReplacement,
+  postTargetedLearnerConfirmation,
+  putQuestionMappings,
+  putTargetedAssessmentReview,
+  targetedAssessment,
+  targetedAssessments,
+  validateTargetedAssessment,
+} from "../controllers/academicOperationsController.js"
+import {
+  archiveBrowser,
+  classroomAttendance,
+  classroomHistory,
+  classroomResource,
+  classroomSession,
+  classroomSetup,
+  completeClassroomSession,
+  downloadTeachingResource,
+  librarianDashboard,
+  libraryComputers,
+  libraryLoans,
+  patchClassroomSession,
+  patchLibraryComputer,
+  patchPrintRequest,
+  patchTeachingResourceRequest,
+  patchTeachingResourceStatus,
+  physicalLibraryResources,
+  postClassroomSession,
+  postLibraryComputer,
+  postLibraryLoan,
+  postLibraryReturn,
+  postPhysicalLibraryResource,
+  postPrintRequest,
+  postTeachingResource,
+  postTeachingResourceRequest,
+  postTeachingResourceVersion,
+  postTeachingResourceReview,
+  printRequests,
+  teachingResource,
+  teachingResourceRequests,
+  teachingResources,
+} from "../controllers/libraryClassroomController.js"
 
 const router = Router()
+
+router.param("id", async (req, _res, next, value) => {
+  try {
+    if (!String(req.path || "").includes("timetables") || /^\d+$/.test(String(value))) return next()
+    const schoolId = Number(req.user?.schoolId || req.user?.school_id || 0)
+    const [[row]] = await pool.query("SELECT id FROM timetables WHERE school_id=? AND public_ref=? LIMIT 1", [schoolId, value])
+    if (!row) return next(new Error("Timetable reference was not found."))
+    req.params.id = String(row.id)
+    next()
+  } catch (error) { next(error) }
+})
+
+router.param("versionId", async (req, _res, next, value) => {
+  try {
+    if (!String(req.path || "").includes("timetables") || /^\d+$/.test(String(value))) return next()
+    const schoolId = Number(req.user?.schoolId || req.user?.school_id || 0)
+    const [[row]] = await pool.query("SELECT tv.id FROM timetable_versions tv JOIN timetables tt ON tt.id=tv.timetable_id WHERE tt.school_id=? AND tv.public_ref=? LIMIT 1", [schoolId, value])
+    if (!row) return next(new Error("Timetable version reference was not found."))
+    req.params.versionId = String(row.id)
+    next()
+  } catch (error) { next(error) }
+})
+
+const requireDirectorAccess = requireRole("school_owner", "headteacher")
+
+function directorPage(section) {
+  return asyncHandler((req, res, next) => {
+    req.directorSection = section
+    return getDirectorMappedPage(req, res, next)
+  })
+}
 
 router.use("/auth", authRoutes)
 router.post("/public/school-setup-drafts", asyncHandler(savePublicSchoolSetupDraft))
@@ -326,6 +496,168 @@ router.use(requirePasswordReady)
 router.use(portalMutationInvalidationMiddleware)
 
 router.get("/dashboard", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(getDashboard))
+router.get("/director/overview", requireDirectorAccess, asyncHandler(getDirectorOverview))
+router.get("/director/pages/:section", requireDirectorAccess, asyncHandler(getDirectorPage))
+router.get("/director/finance/fee-collection", requireDirectorAccess, directorPage("finance-fee-collection"))
+router.get("/director/finance/outstanding-balances", requireDirectorAccess, directorPage("finance-outstanding-balances"))
+router.get("/director/finance/discounts-bursaries", requireDirectorAccess, directorPage("finance-discounts-bursaries"))
+router.get("/director/finance/expenses", requireDirectorAccess, directorPage("finance-expenses"))
+router.get("/director/finance/financial-reports", requireDirectorAccess, directorPage("finance-financial-reports"))
+
+router.get("/director/finance/payroll", requireSchoolPermission(SCHOOL_PERMISSIONS.PAYROLL_VIEW), asyncHandler(payrollDashboard))
+router.post("/director/finance/payroll/runs", requireSchoolPermission(SCHOOL_PERMISSIONS.PAYROLL_MANAGE), asyncHandler(createRun))
+router.get("/director/finance/payroll/runs/:runRef", requireSchoolPermission(SCHOOL_PERMISSIONS.PAYROLL_VIEW), asyncHandler(payrollRun))
+router.post("/director/finance/payroll/runs/:runRef/generate-items", requireSchoolPermission(SCHOOL_PERMISSIONS.PAYROLL_MANAGE), asyncHandler(generateItems))
+router.post("/director/finance/payroll/runs/:runRef/submit", requireSchoolPermission(SCHOOL_PERMISSIONS.PAYROLL_MANAGE), (req,_res,next)=>{req.params.action="submit";next()}, asyncHandler(payrollTransition))
+router.post("/director/finance/payroll/runs/:runRef/:action(approve|pay|cancel)", requireSchoolPermission(SCHOOL_PERMISSIONS.PAYROLL_APPROVE), asyncHandler(payrollTransition))
+router.patch("/director/finance/payroll/items/:itemRef", requireSchoolPermission(SCHOOL_PERMISSIONS.PAYROLL_MANAGE), asyncHandler(patchPayrollItem))
+router.post("/director/finance/payroll/salary-profiles", requireSchoolPermission(SCHOOL_PERMISSIONS.PAYROLL_MANAGE), asyncHandler(saveProfile))
+router.patch("/director/finance/payroll/salary-profiles/:profileRef", requireSchoolPermission(SCHOOL_PERMISSIONS.PAYROLL_MANAGE), asyncHandler(saveProfile))
+router.get("/director/staff/leave", requireSchoolPermission(SCHOOL_PERMISSIONS.LEAVE_VIEW), asyncHandler(leaveDashboard))
+router.post("/director/staff/leave", requireSchoolPermission(SCHOOL_PERMISSIONS.LEAVE_MANAGE), asyncHandler(createLeave))
+router.get("/director/staff/leave/:leaveRef", requireSchoolPermission(SCHOOL_PERMISSIONS.LEAVE_VIEW), asyncHandler(leaveRequest))
+router.patch("/director/staff/leave/:leaveRef", requireSchoolPermission(SCHOOL_PERMISSIONS.LEAVE_MANAGE), asyncHandler(patchLeave))
+router.post("/director/staff/leave/:leaveRef/:action(approve|reject|cancel|complete)", requireSchoolPermission(SCHOOL_PERMISSIONS.LEAVE_APPROVE), asyncHandler(leaveTransition))
+router.patch("/director/staff/leave-balances/:balanceRef", requireSchoolPermission(SCHOOL_PERMISSIONS.LEAVE_APPROVE), asyncHandler(patchLeaveBalance))
+router.get("/director/hr-settings", requireRole("school_owner"), asyncHandler(hrSettings))
+router.patch("/director/hr-settings", requireRole("school_owner"), asyncHandler(patchHrSettings))
+router.get("/director/admissions/enrollment-pipeline", requireDirectorAccess, directorPage("admissions-enrollment-pipeline"))
+router.get("/director/admissions/class-capacity", requireDirectorAccess, directorPage("admissions-class-capacity"))
+router.get("/director/admissions/class-capacity/:classId", requireDirectorAccess, directorPage("admissions-class-capacity"))
+router.get("/director/admissions/withdrawals", requireDirectorAccess, directorPage("admissions-withdrawals"))
+router.get("/director/admissions/withdrawals/:withdrawalId", requireDirectorAccess, directorPage("admissions-withdrawals"))
+router.get("/director/academics/performance-overview", requireDirectorAccess, directorPage("academics-performance-overview"))
+router.get("/director/academics/at-risk-students", requireDirectorAccess, directorPage("academics-at-risk-students"))
+router.get("/director/academics/at-risk-students/:studentId", requireDirectorAccess, directorPage("academics-at-risk-students"))
+router.get("/director/academics/subject-trends", requireDirectorAccess, directorPage("academics-subject-trends"))
+router.get("/director/academics/subject-trends/:subjectId", requireDirectorAccess, directorPage("academics-subject-trends"))
+router.get("/director/academics/marks-submission", requireDirectorAccess, directorPage("academics-marks-submission"))
+router.get("/director/academics/marks-submission/:batchId", requireDirectorAccess, directorPage("academics-marks-submission"))
+router.get("/director/staff/teacher-compliance", requireDirectorAccess, directorPage("staff-teacher-compliance"))
+router.get("/director/staff/teacher-compliance/:teacherId", requireDirectorAccess, directorPage("staff-teacher-compliance"))
+router.get("/director/staff/attendance", requireDirectorAccess, directorPage("staff-attendance"))
+router.get("/director/staff/workload", requireDirectorAccess, directorPage("staff-workload"))
+router.get("/director/operations/incidents", requireDirectorAccess, directorPage("operations-incidents"))
+router.get("/director/operations/complaints", requireDirectorAccess, directorPage("operations-complaints"))
+router.get("/director/operations/approvals", requireDirectorAccess, directorPage("operations-approvals"))
+router.get("/director/reports/director-report", requireDirectorAccess, directorPage("reports-director-report"))
+router.get("/director/reports/term-report", requireDirectorAccess, directorPage("reports-term-report"))
+router.get("/director/reports/export-center", requireDirectorAccess, directorPage("reports-export-center"))
+router.get("/director/audit-security", requireDirectorAccess, directorPage("audit-security"))
+router.get("/director/settings", requireDirectorAccess, directorPage("settings"))
+router.patch("/director/settings", requireDirectorAccess, asyncHandler(patchDirectorSettings))
+router.get("/director/tasks", asyncHandler(listTasks))
+router.post("/director/tasks", requireDirectorAccess, asyncHandler(createTask))
+router.get("/director/tasks/:taskId", asyncHandler(getTask))
+router.patch("/director/tasks/:taskId", asyncHandler(patchTask))
+router.patch("/director/tasks/:taskId/complete", asyncHandler(completeTask))
+router.patch("/director/tasks/:taskId/cancel", asyncHandler(cancelTask))
+router.delete("/director/tasks/:taskId", asyncHandler(deleteTask))
+router.get("/director/daily-closure", requireDirectorAccess, asyncHandler(dailyClosure))
+router.patch("/director/daily-closure", requireDirectorAccess, asyncHandler(markDailyClosureReviewed))
+router.get("/notifications", asyncHandler(notifications))
+router.get("/notifications/unread-count", asyncHandler(unreadNotifications))
+router.patch("/notifications/:notificationId/read", asyncHandler(readNotification))
+router.patch("/notifications/:notificationId/dismiss", asyncHandler(dismissNotification))
+
+router.get("/academic-intelligence/command-centre", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_VIEW), asyncHandler(academicCommandCentre))
+router.get("/academic-intelligence/overview", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_VIEW), asyncHandler(academicOverview))
+router.get("/academic-intelligence/classes", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_VIEW), asyncHandler(academicClasses))
+router.get("/academic-intelligence/classes/:classRef", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_VIEW), asyncHandler(academicClassDetail))
+router.get("/academic-intelligence/subjects", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_VIEW), asyncHandler(academicSubjects))
+router.get("/academic-intelligence/subjects/:subjectRef", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_VIEW), asyncHandler(academicSubjectDetail))
+router.get("/academic-intelligence/topics/:topicRef", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_VIEW), asyncHandler(academicTopicDetail))
+router.get("/academic-intelligence/evidence", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_VIEW), asyncHandler(academicEvidence))
+router.get("/academic-intelligence/risks", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_VIEW), asyncHandler(academicRisks))
+router.get("/academic-intelligence/insights", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_VIEW), asyncHandler(academicInsights))
+router.get("/academic-intelligence/positive-signals", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_VIEW), asyncHandler(academicPositiveSignals))
+router.get("/academic-intelligence/meaningful-changes", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_VIEW), asyncHandler(academicMeaningfulChanges))
+router.get("/academic-intelligence/evidence-gaps", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_VIEW), asyncHandler(academicEvidenceGaps))
+router.get("/academic-intelligence/readiness", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_VIEW), asyncHandler(academicReadiness))
+router.get("/academic-intelligence/history", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_VIEW), asyncHandler(academicHistory))
+router.get("/academic-intelligence/explanations/:findingId", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_VIEW), asyncHandler(academicExplanation))
+router.post("/academic-intelligence/recalculate", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_MANAGE), asyncHandler(academicRecalculate))
+router.post("/academic-intelligence/ai/explain", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_VIEW), asyncHandler(academicAiExplain))
+router.get("/academic-intelligence/authoring-setup", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_VIEW), asyncHandler(academicAuthoringSetup))
+router.get("/academic-intelligence/students/:studentRef", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_VIEW), asyncHandler(studentAcademicIntelligence))
+router.get("/academic-intelligence/dependencies", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_VIEW), asyncHandler(curriculumDependencyGraph))
+router.get("/academic-intelligence/config", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_VIEW), asyncHandler(academicEngineConfiguration))
+router.patch("/academic-intelligence/config", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_MANAGE), asyncHandler(updateAcademicEngineConfiguration))
+router.patch("/academic-intelligence/curriculum/:recordRef", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_MANAGE), asyncHandler(patchCurriculumLifecycle))
+router.post("/academic-intelligence/interventions", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTERVENTION_MANAGE), asyncHandler(postIntervention))
+router.patch("/academic-intelligence/interventions/:interventionRef", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTERVENTION_MANAGE), asyncHandler(updateIntervention))
+router.post("/academic-intelligence/parent-insights", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTERVENTION_MANAGE), asyncHandler(postParentAcademicInsight))
+router.patch("/academic-intelligence/parent-insights/:insightRef", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_MANAGE), asyncHandler(patchParentAcademicInsight))
+router.get("/parent-portal/academic-insights", requireExactRole("parent"), asyncHandler(parentPortalAcademicInsights))
+router.get("/academic-intelligence/assessment-blueprints", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_VIEW), asyncHandler(assessmentBlueprints))
+router.post("/academic-intelligence/assessment-blueprints", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMICS_MANAGE), asyncHandler(postAssessmentBlueprint))
+router.get("/academic-intelligence/remediation-packs", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_VIEW), asyncHandler(remediationPacks))
+router.post("/academic-intelligence/remediation-packs", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTERVENTION_MANAGE), asyncHandler(postRemediationPack))
+router.patch("/academic-intelligence/remediation-packs/:packRef", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTERVENTION_MANAGE), asyncHandler(updateRemediationPack))
+
+// Canonical academic operations loop. These routes extend the existing
+// assessment and evidence domains; they are not a second intelligence API.
+router.get("/academic-intelligence/authoring-topics", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_VIEW), asyncHandler(academicAuthoringTopics))
+router.put("/assessments/:assessmentId/questions/:questionId/mappings", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMICS_MANAGE), asyncHandler(putQuestionMappings))
+router.get("/assessments/:assessmentId/operational-intelligence", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_VIEW), asyncHandler(assessmentOperationalIntelligence))
+router.get("/assessments/:assessmentId/academic-mark-sheet", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_VIEW), asyncHandler(academicMarkSheet))
+router.post("/assessments/:assessmentId/academic-mark-sheet/draft", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMICS_MANAGE), asyncHandler(postAcademicMarkSheetDraft))
+router.post("/assessments/:assessmentId/academic-mark-sheet/publish", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMICS_MANAGE), asyncHandler(postAcademicMarkSheetPublish))
+router.patch("/question-library/:questionRef/source-permission", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMICS_MANAGE), asyncHandler(patchQuestionPermission))
+router.get("/academic-intelligence/targeted-assessments", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_VIEW), asyncHandler(targetedAssessments))
+router.post("/academic-intelligence/targeted-assessments", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTERVENTION_MANAGE), asyncHandler(postTargetedAssessment))
+router.get("/academic-intelligence/targeted-assessments/:generatedRef", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_VIEW), asyncHandler(targetedAssessment))
+router.post("/academic-intelligence/targeted-assessments/:generatedRef/generate", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTERVENTION_MANAGE), asyncHandler(postTargetedAssessmentGenerate))
+router.put("/academic-intelligence/targeted-assessments/:generatedRef/review", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTERVENTION_MANAGE), asyncHandler(putTargetedAssessmentReview))
+router.post("/academic-intelligence/targeted-assessments/:generatedRef/replace-question", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTERVENTION_MANAGE), asyncHandler(postTargetedAssessmentReplacement))
+router.post("/academic-intelligence/targeted-assessments/:generatedRef/confirm-learners", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTERVENTION_MANAGE), asyncHandler(postTargetedLearnerConfirmation))
+router.post("/academic-intelligence/targeted-assessments/:generatedRef/validate", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTERVENTION_MANAGE), asyncHandler(validateTargetedAssessment))
+router.post("/academic-intelligence/targeted-assessments/:generatedRef/approve", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTERVENTION_MANAGE), asyncHandler(postTargetedAssessmentApproval))
+router.post("/academic-intelligence/targeted-assessments/:generatedRef/publish", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTERVENTION_MANAGE), asyncHandler(postTargetedAssessmentPublish))
+
+router.get("/library/dashboard", requireSchoolPermission(SCHOOL_PERMISSIONS.LIBRARY_DASHBOARD_VIEW), asyncHandler(librarianDashboard))
+router.get("/library/catalogue", requireSchoolPermission(SCHOOL_PERMISSIONS.LIBRARY_BOOK_VIEW), asyncHandler(physicalLibraryResources))
+router.post("/library/catalogue", requireSchoolPermission(SCHOOL_PERMISSIONS.LIBRARY_BOOK_CREATE), asyncHandler(postPhysicalLibraryResource))
+router.get("/library/loans", requireSchoolPermission(SCHOOL_PERMISSIONS.LIBRARY_LOAN_VIEW), asyncHandler(libraryLoans))
+router.post("/library/loans", requireSchoolPermission(SCHOOL_PERMISSIONS.LIBRARY_LOAN_CREATE), asyncHandler(postLibraryLoan))
+router.post("/library/loans/:loanRef/return", requireSchoolPermission(SCHOOL_PERMISSIONS.LIBRARY_LOAN_RETURN), asyncHandler(postLibraryReturn))
+router.get("/library/computers", requireSchoolPermission(SCHOOL_PERMISSIONS.LIBRARY_COMPUTER_VIEW), asyncHandler(libraryComputers))
+router.post("/library/computers", requireSchoolPermission(SCHOOL_PERMISSIONS.LIBRARY_COMPUTER_MANAGE), asyncHandler(postLibraryComputer))
+router.patch("/library/computers/:computerRef", requireSchoolPermission(SCHOOL_PERMISSIONS.LIBRARY_COMPUTER_MANAGE), asyncHandler(patchLibraryComputer))
+router.get("/teaching-resources", requireSchoolPermission(SCHOOL_PERMISSIONS.TEACHING_RESOURCE_VIEW), asyncHandler(teachingResources))
+router.post("/teaching-resources", requireSchoolPermission(SCHOOL_PERMISSIONS.TEACHING_RESOURCE_CREATE), asyncHandler(postTeachingResource))
+router.get("/teaching-resource-requests", requireSchoolPermission(SCHOOL_PERMISSIONS.TEACHING_RESOURCE_VIEW), asyncHandler(teachingResourceRequests))
+router.post("/teaching-resource-requests", requireSchoolPermission(SCHOOL_PERMISSIONS.TEACHING_RESOURCE_VIEW), asyncHandler(postTeachingResourceRequest))
+router.patch("/teaching-resource-requests/:requestRef", requireSchoolPermission(SCHOOL_PERMISSIONS.TEACHING_RESOURCE_REVIEW), asyncHandler(patchTeachingResourceRequest))
+router.post("/teaching-resources/:resourceRef/versions", requireSchoolPermission(SCHOOL_PERMISSIONS.TEACHING_RESOURCE_UPDATE), asyncHandler(postTeachingResourceVersion))
+router.get("/teaching-resources/:resourceRef", requireSchoolPermission(SCHOOL_PERMISSIONS.TEACHING_RESOURCE_VIEW), asyncHandler(teachingResource))
+router.get("/teaching-resources/:resourceRef/download", requireSchoolPermission(SCHOOL_PERMISSIONS.TEACHING_RESOURCE_DOWNLOAD), asyncHandler(downloadTeachingResource))
+router.patch("/teaching-resources/:resourceRef/status", requireSchoolPermission(SCHOOL_PERMISSIONS.TEACHING_RESOURCE_UPDATE), asyncHandler(patchTeachingResourceStatus))
+router.post("/teaching-resources/:resourceRef/reviews", requireSchoolPermission(SCHOOL_PERMISSIONS.TEACHING_RESOURCE_REVIEW), asyncHandler(postTeachingResourceReview))
+router.get("/print-requests", requireSchoolPermission(SCHOOL_PERMISSIONS.PRINT_REQUEST_VIEW), asyncHandler(printRequests))
+router.post("/print-requests", requireSchoolPermission(SCHOOL_PERMISSIONS.TEACHING_RESOURCE_PRINT), asyncHandler(postPrintRequest))
+router.patch("/print-requests/:requestRef", requireSchoolPermission(SCHOOL_PERMISSIONS.PRINT_REQUEST_PROCESS), asyncHandler(patchPrintRequest))
+router.get("/institutional-archive", requireSchoolPermission(SCHOOL_PERMISSIONS.ARCHIVED_TERM_VIEW), asyncHandler(archiveBrowser))
+router.get("/classroom-mode/setup", requireExactRole("teacher"), requireSchoolPermission(SCHOOL_PERMISSIONS.CLASSROOM_MODE_USE), asyncHandler(classroomSetup))
+router.get("/classroom-mode/history", requireExactRole("teacher"), requireSchoolPermission(SCHOOL_PERMISSIONS.CLASSROOM_MODE_USE), asyncHandler(classroomHistory))
+router.post("/classroom-mode/sessions", requireExactRole("teacher"), requireSchoolPermission(SCHOOL_PERMISSIONS.CLASSROOM_MODE_USE), asyncHandler(postClassroomSession))
+router.get("/classroom-mode/sessions/:sessionRef", requireExactRole("teacher"), requireSchoolPermission(SCHOOL_PERMISSIONS.CLASSROOM_MODE_USE), asyncHandler(classroomSession))
+router.patch("/classroom-mode/sessions/:sessionRef", requireExactRole("teacher"), requireSchoolPermission(SCHOOL_PERMISSIONS.CLASSROOM_MODE_USE), asyncHandler(patchClassroomSession))
+router.post("/classroom-mode/sessions/:sessionRef/attendance", requireExactRole("teacher"), requireSchoolPermission(SCHOOL_PERMISSIONS.CLASSROOM_MODE_USE), asyncHandler(classroomAttendance))
+router.post("/classroom-mode/sessions/:sessionRef/resources", requireExactRole("teacher"), requireSchoolPermission(SCHOOL_PERMISSIONS.CLASSROOM_MODE_USE), asyncHandler(classroomResource))
+router.post("/classroom-mode/sessions/:sessionRef/complete", requireExactRole("teacher"), requireSchoolPermission(SCHOOL_PERMISSIONS.CLASSROOM_MODE_USE), asyncHandler(completeClassroomSession))
+router.post("/director/reminders", requireDirectorAccess, asyncHandler(remind))
+router.post("/director/escalations", requireDirectorAccess, asyncHandler(escalate))
+router.get("/staff/attendance/today", requireRole("school_owner","headteacher","teacher"), asyncHandler(staffAttendanceToday))
+router.post("/staff/attendance", requireRole("school_owner","headteacher"), asyncHandler(recordAttendance))
+router.post("/staff/attendance/self-check-in", requireRole("teacher","headteacher"), asyncHandler(teacherSelfCheckIn))
+router.post("/director/finance/fee-reminders", requireDirectorAccess, asyncHandler(feeReminder))
+router.post("/director/finance/payment-promises", requireDirectorAccess, asyncHandler(paymentPromise))
+router.patch("/director/finance/payment-promises/:promiseId", requireDirectorAccess, asyncHandler(patchPaymentPromise))
+router.get("/director/settings/whatsapp", requireDirectorAccess, asyncHandler(whatsappSettings))
+router.patch("/director/settings/whatsapp", requireDirectorAccess, asyncHandler(patchWhatsappSettings))
+router.post("/system/run-reminder-engine", requireDirectorAccess, asyncHandler(executeReminderEngine))
+router.get("/director/withdrawals", requireDirectorAccess, asyncHandler(listDirectorWithdrawals))
 router.get("/student-portal", requireRole("student"), asyncHandler(getStudentPortal))
 router.post("/student-portal/announcements/:id/reaction", requireRole("student"), asyncHandler(reactToAnnouncement))
 router.post("/student-portal/announcements/:id/vote", requireRole("student"), asyncHandler(voteAnnouncementPoll))
@@ -492,10 +824,14 @@ router.post("/results/batches/:id/approve", requireRole("school_owner", "headtea
 router.post("/results/batches/:id/return", requireRole("school_owner", "headteacher"), asyncHandler(returnResultBatch))
 router.get("/reports", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(listReports))
 router.get("/users", requireRole("school_owner", "headteacher"), asyncHandler(listUsers))
+router.post("/users", requireRole("school_owner"), requireSchoolPermission(SCHOOL_PERMISSIONS.USERS_MANAGE), asyncHandler(createSchoolUser))
+router.post("/users/:userRef/guardian-links", requireRole("school_owner"), requireSchoolPermission(SCHOOL_PERMISSIONS.USERS_MANAGE), asyncHandler(linkParentGuardian))
+router.get("/users/:userRef/permissions", requireRole("school_owner"), asyncHandler(getUserPermissions))
+router.put("/users/:userRef/permissions", requireRole("school_owner"), asyncHandler(updateUserPermissions))
 router.get("/teachers", requireRole("school_owner", "headteacher"), asyncHandler(listTeachers))
 router.post("/teachers", requireRole("school_owner", "headteacher"), asyncHandler(createTeacher))
 router.get("/teachers/:id", requireRole("school_owner", "headteacher"), asyncHandler(getTeacher))
-router.get("/search", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(quickSearch))
+router.get("/search", requireRole("school_owner", "headteacher", "teacher", "bursar"), asyncHandler(quickSearch))
 router.get("/teacher-assignments", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(listTeacherAssignments))
 router.post("/teacher-assignments", requireRole("school_owner", "headteacher"), asyncHandler(createTeacherAssignment))
 router.patch("/teacher-assignments/:id", requireRole("school_owner", "headteacher"), asyncHandler(updateTeacherAssignment))
@@ -515,6 +851,10 @@ router.get("/classes/:classId/subjects/:subjectId/coverage", requireRole("school
 router.get("/admin/academic/coverage", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(getAcademicCoverage))
 router.get("/students", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(listStudents))
 router.get("/students/:id", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(getStudent))
+router.get("/students/:studentId/withdrawals", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(listStudentWithdrawalHistory))
+router.post("/students/:studentId/withdrawals", requireRole("school_owner", "headteacher"), asyncHandler(createStudentWithdrawal))
+router.patch("/students/:studentId/withdrawals/:withdrawalId/cancel", requireRole("school_owner", "headteacher"), asyncHandler(cancelStudentWithdrawal))
+router.get("/students/:studentId/withdrawal-status", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(getStudentWithdrawalStatus))
 router.patch("/students/:id", requireRole("school_owner", "headteacher"), asyncHandler(updateStudent))
 router.post("/students/photo", requireRole("school_owner", "headteacher"), asyncHandler(uploadStudentPhoto))
 router.post("/students", requireRole("school_owner", "headteacher"), asyncHandler(createStudent))
@@ -630,6 +970,39 @@ router.post("/syllabus/topics", requireRole("school_owner", "headteacher", "teac
 router.patch("/syllabus/topics/:id", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(updateSyllabusTopic))
 
 router.get("/questions", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(listQuestions))
+router.get("/assessment-templates", requireRole("school_owner", "headteacher", "teacher", "admin"), asyncHandler(listTemplates))
+router.post("/assessment-templates", requireRole("school_owner", "headteacher", "teacher", "admin"), asyncHandler(createTemplate))
+router.get("/assessment-templates/:templateRef", requireRole("school_owner", "headteacher", "teacher", "admin"), asyncHandler(getTemplate))
+router.patch("/assessment-templates/:templateRef", requireRole("school_owner", "headteacher", "teacher", "admin"), asyncHandler(updateTemplate))
+router.delete("/assessment-templates/:templateRef", requireRole("school_owner", "headteacher", "admin"), asyncHandler(deleteTemplate))
+router.post("/assessment-templates/:templateRef/approve", requireRole("school_owner", "headteacher", "admin"), asyncHandler(approveTemplate))
+router.post("/assessment-templates/:templateRef/archive", requireRole("school_owner", "headteacher", "admin"), asyncHandler(archiveTemplate))
+router.post("/assessment-templates/:templateRef/set-default", requireRole("school_owner", "headteacher", "admin"), asyncHandler(setDefaultTemplate))
+router.post("/assessment-templates/:templateRef/duplicate", requireRole("school_owner", "headteacher", "teacher", "admin"), asyncHandler(duplicateTemplate))
+router.post("/assessment-templates/:templateRef/apply-to-assessment", requireRole("school_owner", "headteacher", "teacher", "admin"), asyncHandler(applyTemplate))
+router.get("/assessment-templates/:templateRef/preview", requireRole("school_owner", "headteacher", "teacher", "admin"), asyncHandler(templatePreview))
+router.get("/assessment-template-settings", requireRole("school_owner", "headteacher", "teacher", "admin"), asyncHandler(getTemplateSettings))
+router.patch("/assessment-template-settings", requireRole("school_owner", "headteacher", "admin"), asyncHandler(patchTemplateSettings))
+router.post("/assessment-imports", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(createImport))
+router.get("/assessment-imports", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(listImports))
+router.get("/assessment-imports/:importRef", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(getImport))
+router.post("/assessment-imports/:importRef/start", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(startImport))
+router.get("/assessment-imports/:importRef/review", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(reviewImport))
+router.patch("/assessment-imports/:importRef/questions/:questionRef", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(updateImportQuestion))
+router.patch("/assessment-imports/:importRef/marking-items/:markingRef", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(updateImportMarking))
+router.post("/assessment-imports/:importRef/link-answer", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(linkAnswer))
+router.post("/assessment-imports/:importRef/approve", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(approveImport))
+router.post("/assessment-imports/:importRef/cancel", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(cancelImport))
+router.post("/assessment-imports/:importRef/extract-cover-template", requireRole("school_owner", "headteacher", "teacher", "admin"), asyncHandler(extractImportCoverTemplate))
+router.get("/assessment-imports/:importRef/template-candidates", requireRole("school_owner", "headteacher", "teacher", "admin"), asyncHandler(importTemplateCandidates))
+router.post("/assessment-imports/:importRef/match-cover-template", requireRole("school_owner", "headteacher", "teacher", "admin"), asyncHandler(matchImportCoverTemplate))
+router.post("/assessment-imports/:importRef/apply-template-match", requireRole("school_owner", "headteacher", "teacher", "admin"), asyncHandler(applyImportTemplateMatch))
+router.get("/assessment-imports/:importRef/pages/:documentType/:pageNumber/preview", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(pagePreview))
+router.get("/assessment-imports/:importRef/assets/:assetRef/preview", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(assetPreview))
+router.post("/assessment-imports/:importRef/extract-images", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(extractImages))
+router.get("/assessment-imports/:importRef/images", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(listImages))
+router.patch("/assessment-imports/:importRef/images/:assetRef", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(updateImage))
+router.delete("/assessment-imports/:importRef/images/:assetRef", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(deleteImage))
 router.post("/questions", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(createQuestion))
 router.post("/questions/source-assessments", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(sourceAssessmentQuestions))
 router.post("/questions/generate-draft", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(generateDraftQuestionBatch))

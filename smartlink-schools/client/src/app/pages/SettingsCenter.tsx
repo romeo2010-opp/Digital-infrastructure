@@ -227,8 +227,16 @@ export function SettingsCenter({ section }: { section: SettingsSection }) {
   const Icon = meta.icon
   const [savedMessage, setSavedMessage] = useState('')
   const [settingsModal, setSettingsModal] = useState<'invite' | 'password' | 'export' | null>(null)
+  const [setupEditModal, setSetupEditModal] = useState<'subject' | 'progression' | null>(null)
+  const [inviteForm, setInviteForm] = useState({ full_name: '', email: '', phone: '', role: 'teacher', student_ref: '', guardian_number: '1' })
+  const [inviteResult, setInviteResult] = useState<any>(null)
+  const [inviteError, setInviteError] = useState('')
+  const [inviteLoading, setInviteLoading] = useState(false)
   const [userSearch, setUserSearch] = useState('')
   const [dbUsers, setDbUsers] = useState<any[]>([])
+  const [permissionEditor, setPermissionEditor] = useState<any>(null)
+  const [permissionLoading, setPermissionLoading] = useState(false)
+  const [permissionError, setPermissionError] = useState('')
   const [dbClasses, setDbClasses] = useState<any[]>([])
   const [dbSubjects, setDbSubjects] = useState<any[]>([])
   const [dbProgressionRules, setDbProgressionRules] = useState<any[]>([])
@@ -356,12 +364,14 @@ export function SettingsCenter({ section }: { section: SettingsSection }) {
 
   const userRows = useMemo(() => {
     return dbUsers.map((row) => ({
-      id: row.id,
+      id: row.public_ref,
+      public_ref: row.public_ref,
       name: row.full_name || row.name || '-',
       email: row.email || '-',
       role: String(row.role || '').replaceAll('_', ' '),
       scope: row.role === 'teacher' ? 'Assigned classes' : row.role === 'bursar' ? 'Fees' : row.role === 'headteacher' ? 'Academics' : 'Whole school',
       status: row.is_active ? 'Active' : 'Disabled',
+      permissions: row.permissions || [],
     }))
   }, [dbUsers])
 
@@ -420,6 +430,44 @@ export function SettingsCenter({ section }: { section: SettingsSection }) {
   }, [userRows, userSearch])
 
   const canManageSchoolSetup = ['school_owner', 'headteacher'].includes(String(user?.role || '').toLowerCase())
+  const canEditPermissions = ['school_owner', 'director', 'owner'].includes(String(user?.role || '').toLowerCase())
+  const canInviteUsers = ['school_owner', 'director', 'owner', 'super_admin'].includes(String(user?.role || '').toLowerCase())
+
+  const openPermissionEditor = async (row: any) => {
+    if (!token || !canEditPermissions || !row?.public_ref) return
+    setPermissionLoading(true)
+    setPermissionError('')
+    try {
+      setPermissionEditor(await api.getUserPermissions(token, row.public_ref))
+    } catch (err: any) {
+      setPermissionError(err?.message || 'Unable to load user permissions.')
+    } finally {
+      setPermissionLoading(false)
+    }
+  }
+
+  const togglePermission = (code: string, allowed: boolean) => {
+    setPermissionEditor((current: any) => ({
+      ...current,
+      permissions: (current?.permissions || []).map((item: any) => item.code === code ? { ...item, allowed } : item),
+    }))
+  }
+
+  const saveUserPermissions = async () => {
+    if (!token || !permissionEditor?.user?.public_ref) return
+    setPermissionLoading(true)
+    setPermissionError('')
+    try {
+      const payload = await api.updateUserPermissions(token, permissionEditor.user.public_ref, permissionEditor.permissions.map((item: any) => ({ code: item.code, allowed: item.allowed })))
+      setPermissionEditor(payload)
+      await refreshSchoolSetup()
+      setSavedMessage('Permissions saved')
+    } catch (err: any) {
+      setPermissionError(err?.message || 'Unable to save user permissions.')
+    } finally {
+      setPermissionLoading(false)
+    }
+  }
 
   useEffect(() => {
     if (!token || section !== 'features') return
@@ -544,7 +592,32 @@ export function SettingsCenter({ section }: { section: SettingsSection }) {
     }
   }
 
-  const completeSettingsModal = () => {
+  const completeSettingsModal = async () => {
+    if (settingsModal === 'invite') {
+      if (inviteResult) {
+        setSettingsModal(null)
+        setInviteResult(null)
+        setInviteForm({ full_name: '', email: '', phone: '', role: 'teacher', student_ref: '', guardian_number: '1' })
+        return
+      }
+      if (!token || !inviteForm.full_name.trim() || !inviteForm.email.trim()) {
+        setInviteError('Full name and email address are required.')
+        return
+      }
+      setInviteLoading(true)
+      setInviteError('')
+      try {
+        const payload = await api.createSchoolUser(token, inviteForm)
+        setInviteResult(payload)
+        await refreshSchoolSetup()
+        setSavedMessage(`${payload.user?.full_name || 'School user'} added`)
+      } catch (err: any) {
+        setInviteError(err?.message || 'Unable to create the school user.')
+      } finally {
+        setInviteLoading(false)
+      }
+      return
+    }
     setSavedMessage('Saved')
     setSettingsModal(null)
   }
@@ -559,6 +632,7 @@ export function SettingsCenter({ section }: { section: SettingsSection }) {
     setEditingSubjectId(row.id)
     setSubjectForm({ name: row.name || '', code: row.code === '-' ? '' : row.code || '' })
     setSubjectError('')
+    setSetupEditModal('subject')
   }
 
   const saveSubject = async () => {
@@ -570,6 +644,7 @@ export function SettingsCenter({ section }: { section: SettingsSection }) {
       if (editingSubjectId) await api.updateSubject(token, editingSubjectId, subjectForm)
       else await api.createSubject(token, subjectForm)
       resetSubjectForm()
+      setSetupEditModal(null)
       await refreshSchoolSetup()
       setSavedMessage(wasEditing ? 'Subject updated' : 'Subject added')
     } catch (err: any) {
@@ -612,7 +687,7 @@ export function SettingsCenter({ section }: { section: SettingsSection }) {
         grade_level: classForm.grade_level,
         teacher_user_id: classForm.teacher_user_id || undefined,
       })
-      const classId = created?.class?.id || created?.id
+      const classId = created?.class?.public_ref || created?.public_ref
       if (classId && (classForm.is_terminal_class || classForm.to_class_id)) {
         await api.saveClassProgressionRule(token, {
           from_class_id: classId,
@@ -639,6 +714,7 @@ export function SettingsCenter({ section }: { section: SettingsSection }) {
       is_terminal_class: Boolean(row.is_terminal_class),
     })
     setClassError('')
+    setSetupEditModal('progression')
   }
 
   const saveProgressionRule = async () => {
@@ -662,6 +738,7 @@ export function SettingsCenter({ section }: { section: SettingsSection }) {
         is_active: true,
       })
       setProgressionRuleForm({ from_class_id: '', to_class_id: '', is_terminal_class: false })
+      setSetupEditModal(null)
       await refreshSchoolSetup()
       setSavedMessage('Progression rule saved')
     } catch (err: any) {
@@ -1095,13 +1172,13 @@ export function SettingsCenter({ section }: { section: SettingsSection }) {
               <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-[#6b7280]" />
               <Input value={userSearch} onChange={(event) => setUserSearch(event.target.value)} className="h-8 pl-9 text-[12px]" placeholder="Search staff, role or scope..." />
             </div>
-            <Button type="button" variant="outline" onClick={() => setSettingsModal('invite')} className="h-8 rounded-[5px] text-[12px]">
+            {canInviteUsers ? <Button type="button" variant="outline" onClick={() => { setInviteError(''); setInviteResult(null); setSettingsModal('invite') }} className="h-8 rounded-[5px] text-[12px]">
               <Users className="size-3.5" />
               Invite user
-            </Button>
+            </Button> : null}
           </Toolbar>
           <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_360px]">
-            <SectionCard title="School Users" subtitle="People with access to this school workspace.">
+            <SectionCard title="School Users" subtitle={canEditPermissions ? 'Select a user to adjust individual permission overrides.' : 'People with access to this school workspace.'}>
               <PortalTable
                 columns={[
                   { key: 'name', label: 'Name' },
@@ -1111,6 +1188,7 @@ export function SettingsCenter({ section }: { section: SettingsSection }) {
                   { key: 'status', label: 'Status', render: (row) => <Pill value={row.status} /> },
                 ]}
                 rows={filteredUsers}
+                onRowClick={canEditPermissions ? openPermissionEditor : undefined}
                 emptyMessage="No school users are available for this role."
               />
             </SectionCard>
@@ -1302,7 +1380,7 @@ export function SettingsCenter({ section }: { section: SettingsSection }) {
                 </div>
               ) : null}
 
-              {canManageSchoolSetup ? (
+              {canManageSchoolSetup && setupEditModal !== 'progression' ? (
                 <div className="grid gap-3 rounded-[6px] border border-[#e5e7eb] bg-white p-3">
                   <div className="text-[12px] font-bold text-[#111827]">Set Progression Rule</div>
                   <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_160px_auto] md:items-end">
@@ -1370,7 +1448,7 @@ export function SettingsCenter({ section }: { section: SettingsSection }) {
 
           <SectionCard title="Subjects" subtitle="Headteachers can set the school subjects used in assessments, homework and teacher assignments.">
             <div className="grid gap-3 p-4">
-              {canManageSchoolSetup ? (
+              {canManageSchoolSetup && setupEditModal !== 'subject' ? (
                 <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_160px_auto]">
                   <label className="grid gap-1.5 text-[11px] font-bold uppercase tracking-[0.08em] text-[#6b7280]">
                     Subject name
@@ -1543,6 +1621,33 @@ export function SettingsCenter({ section }: { section: SettingsSection }) {
       </section>
       {renderSection()}
       <ModalShell
+        open={setupEditModal === 'subject'}
+        onOpenChange={(open) => { if (!open) { setSetupEditModal(null); resetSubjectForm() } }}
+        title="Edit subject"
+        description="Update the subject name and code used throughout the school workspace."
+        footer={<><Button type="button" variant="outline" onClick={() => { setSetupEditModal(null); resetSubjectForm() }}>Cancel</Button><Button type="button" disabled={subjectLoading || !subjectForm.name.trim()} onClick={saveSubject}><Save className="size-3.5" />{subjectLoading ? 'Saving…' : 'Save subject'}</Button></>}
+      >
+        <div className="grid gap-3 md:grid-cols-2">
+          <label className="grid gap-1.5 text-[11px] font-bold uppercase tracking-[0.08em] text-[#6b7280]">Subject name<Input value={subjectForm.name} onChange={(event) => setSubjectForm({ ...subjectForm, name: event.target.value })} className="h-8 text-[12px]" /></label>
+          <label className="grid gap-1.5 text-[11px] font-bold uppercase tracking-[0.08em] text-[#6b7280]">Code<Input value={subjectForm.code} onChange={(event) => setSubjectForm({ ...subjectForm, code: event.target.value.toUpperCase() })} className="h-8 text-[12px] uppercase" /></label>
+          {subjectError ? <div className="rounded-[5px] border border-red-200 bg-red-50 p-3 text-[12px] text-red-700 md:col-span-2">{subjectError}</div> : null}
+        </div>
+      </ModalShell>
+      <ModalShell
+        open={setupEditModal === 'progression'}
+        onOpenChange={(open) => { if (!open) { setSetupEditModal(null); setClassError('') } }}
+        title="Edit progression rule"
+        description="Choose the next class or mark the current class as terminal."
+        footer={<><Button type="button" variant="outline" onClick={() => { setSetupEditModal(null); setClassError('') }}>Cancel</Button><Button type="button" disabled={classLoading || !progressionRuleForm.from_class_id} onClick={saveProgressionRule}><Save className="size-3.5" />{classLoading ? 'Saving…' : 'Save rule'}</Button></>}
+      >
+        <div className="grid gap-3 md:grid-cols-2">
+          <label className="grid gap-1.5 text-[11px] font-bold uppercase tracking-[0.08em] text-[#6b7280]">From class<select className={selectClassName()} value={progressionRuleForm.from_class_id} onChange={(event) => setProgressionRuleForm({ ...progressionRuleForm, from_class_id: event.target.value })}><option value="">Select class</option>{dbClasses.map((row) => <option key={row.id} value={row.id}>{row.name}</option>)}</select></label>
+          <label className="grid gap-1.5 text-[11px] font-bold uppercase tracking-[0.08em] text-[#6b7280]">Next class<select className={selectClassName()} value={progressionRuleForm.to_class_id} disabled={progressionRuleForm.is_terminal_class} onChange={(event) => setProgressionRuleForm({ ...progressionRuleForm, to_class_id: event.target.value })}><option value="">No next class</option>{dbClasses.map((row) => <option key={row.id} value={row.id}>{row.name}</option>)}</select></label>
+          <label className="flex h-8 items-center gap-2 text-[12px] font-semibold text-[#374151] md:col-span-2"><input type="checkbox" checked={progressionRuleForm.is_terminal_class} onChange={(event) => setProgressionRuleForm({ ...progressionRuleForm, is_terminal_class: event.target.checked, to_class_id: event.target.checked ? '' : progressionRuleForm.to_class_id })} />Terminal class</label>
+          {classError ? <div className="rounded-[5px] border border-red-200 bg-red-50 p-3 text-[12px] text-red-700 md:col-span-2">{classError}</div> : null}
+        </div>
+      </ModalShell>
+      <ModalShell
         open={Boolean(settingsModal)}
         onOpenChange={(open) => !open && setSettingsModal(null)}
         title={settingsModal === 'invite' ? 'Invite School User' : settingsModal === 'password' ? 'Update Password' : 'Prepare School Export'}
@@ -1550,21 +1655,35 @@ export function SettingsCenter({ section }: { section: SettingsSection }) {
         footer={(
           <>
             <Button type="button" variant="outline" className="h-8 rounded-[5px] text-[12px]" onClick={() => setSettingsModal(null)}>Cancel</Button>
-            <Button type="button" className="h-8 rounded-[5px] text-[12px]" onClick={completeSettingsModal}>{settingsModal === 'export' ? 'Prepare' : 'Save'}</Button>
+            <Button type="button" disabled={inviteLoading} className="h-8 rounded-[5px] text-[12px]" onClick={completeSettingsModal}>{settingsModal === 'export' ? 'Prepare' : settingsModal === 'invite' && inviteResult ? 'Done' : inviteLoading ? 'Creating…' : 'Save'}</Button>
           </>
         )}
       >
         <div className="grid gap-3">
           {settingsModal === 'invite' ? (
-            <>
-              <Input placeholder="Full name" className="h-8 text-[12px]" />
-              <Input type="email" placeholder="Email address" className="h-8 text-[12px]" />
-              <select className={selectClassName()} defaultValue="teacher">
-                <option value="teacher">Teacher</option>
-                <option value="bursar">Bursar</option>
-                <option value="headteacher">Headteacher</option>
-              </select>
-            </>
+            inviteResult ? (
+              <div className="grid gap-3 rounded-[7px] border border-emerald-200 bg-emerald-50 p-4 text-[12px] text-emerald-900">
+                <div className="font-semibold">{inviteResult.user?.full_name} can now sign in as {String(inviteResult.user?.role || '').replaceAll('_', ' ')}.</div>
+                <div>Temporary password</div>
+                <code className="select-all rounded-[5px] border border-emerald-200 bg-white px-3 py-2 font-mono text-[14px] font-semibold text-[#111827]">{inviteResult.temporary_password}</code>
+                <p className="text-[11px] leading-5 text-emerald-800">{inviteResult.temporary_password_notice}</p>
+              </div>
+            ) : (
+              <>
+                {inviteError ? <div className="rounded-[6px] border border-red-200 bg-red-50 p-3 text-[12px] text-red-700">{inviteError}</div> : null}
+                <Input value={inviteForm.full_name} onChange={(event) => setInviteForm({ ...inviteForm, full_name: event.target.value })} placeholder="Full name" className="h-8 text-[12px]" />
+                <Input type="email" value={inviteForm.email} onChange={(event) => setInviteForm({ ...inviteForm, email: event.target.value })} placeholder="Email address" className="h-8 text-[12px]" />
+                <Input value={inviteForm.phone} onChange={(event) => setInviteForm({ ...inviteForm, phone: event.target.value })} placeholder="Phone number (optional)" className="h-8 text-[12px]" />
+                <select className={selectClassName()} value={inviteForm.role} onChange={(event) => setInviteForm({ ...inviteForm, role: event.target.value })}>
+                  <option value="teacher">Teacher</option>
+                  <option value="bursar">Bursar</option>
+                  <option value="librarian">Librarian</option>
+                  <option value="headteacher">Headteacher</option>
+                  <option value="parent">Parent / guardian</option>
+                </select>
+                {inviteForm.role === 'parent' ? <div className="grid gap-2 rounded-[6px] border border-[#e2e8f0] bg-[#f8fafc] p-3"><Input value={inviteForm.student_ref} onChange={(event) => setInviteForm({ ...inviteForm, student_ref: event.target.value })} placeholder="Student public reference to link (optional)" className="h-8 text-[12px]" /><select className={selectClassName()} value={inviteForm.guardian_number} onChange={(event) => setInviteForm({ ...inviteForm, guardian_number: event.target.value })}><option value="1">Primary guardian</option><option value="2">Secondary guardian</option></select><p className="text-[10px] leading-4 text-[#64748b]">Only linked guardians can see published parent-safe academic insights. The student reference is a public UUID, never a database ID.</p></div> : null}
+              </>
+            )
           ) : null}
           {settingsModal === 'password' ? (
             <>
@@ -1587,6 +1706,24 @@ export function SettingsCenter({ section }: { section: SettingsSection }) {
               </select>
             </>
           ) : null}
+        </div>
+      </ModalShell>
+      <ModalShell
+        open={Boolean(permissionEditor)}
+        onOpenChange={(open) => !open && setPermissionEditor(null)}
+        title={permissionEditor?.user?.full_name ? `Permissions · ${permissionEditor.user.full_name}` : 'User permissions'}
+        description="Role defaults remain visible. Any change here becomes an explicit user-level allow or deny override."
+        className="max-w-3xl"
+        footer={<><Button type="button" variant="outline" onClick={() => setPermissionEditor(null)}>Close</Button><Button type="button" disabled={permissionLoading} onClick={saveUserPermissions}><Save className="size-3.5"/>{permissionLoading ? 'Saving…' : 'Save permissions'}</Button></>}
+      >
+        {permissionError ? <div className="rounded-[6px] border border-red-200 bg-red-50 p-3 text-[12px] text-red-700">{permissionError}</div> : null}
+        <div className="max-h-[62vh] divide-y overflow-y-auto rounded-[7px] border border-[#e2e8f0]">
+          {(permissionEditor?.permissions || []).map((item: any) => (
+            <div key={item.code} className="flex items-center justify-between gap-4 p-3">
+              <div className="min-w-0"><div className="text-[12px] font-semibold text-[#111827]">{item.label}</div><div className="mt-0.5 text-[11px] leading-4 text-[#64748b]">{item.description}</div><div className="mt-1 font-mono text-[9px] text-[#94a3b8]">{item.code} · role default {item.role_default ? 'allowed' : 'denied'}</div></div>
+              <Switch checked={Boolean(item.allowed)} onCheckedChange={(allowed) => togglePermission(item.code, allowed)} />
+            </div>
+          ))}
         </div>
       </ModalShell>
     </div>

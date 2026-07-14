@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router'
-import { FilePlus2, RotateCcw, Search, SlidersHorizontal, Trash2 } from 'lucide-react'
+import { FilePlus2, FileUp, LayoutTemplate, RotateCcw, Search, SlidersHorizontal, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { PortalTable } from '../components/PortalTable'
 import { SectionCard } from '../components/SectionCard'
@@ -113,10 +113,20 @@ export function ExamPaperStudioPage() {
               {(setup.session?.academic_year?.name || 'Current academic year')} · {(setup.session?.term?.name || 'Current term')}
             </p>
           </div>
-          <Button type="button" className="h-8 rounded-[5px] text-[12px]" onClick={() => navigate('/exam-builder/new')}>
-            <FilePlus2 className="size-3.5" />
-            New Paper
-          </Button>
+          <div className="flex gap-2">
+            <Button type="button" variant="outline" className="h-8 rounded-[5px] text-[12px]" onClick={() => navigate('/assessments/templates')}>
+              <LayoutTemplate className="size-3.5" />
+              Cover Templates
+            </Button>
+            <Button type="button" variant="outline" className="h-8 rounded-[5px] text-[12px]" onClick={() => navigate('/assessments/imports/new')}>
+              <FileUp className="size-3.5" />
+              Import Assessment
+            </Button>
+            <Button type="button" className="h-8 rounded-[5px] text-[12px]" onClick={() => navigate('/exam-builder/new')}>
+              <FilePlus2 className="size-3.5" />
+              Build Manually
+            </Button>
+          </div>
         </div>
       </section>
 

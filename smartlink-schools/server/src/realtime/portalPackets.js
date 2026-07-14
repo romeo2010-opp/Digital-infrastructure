@@ -10,7 +10,7 @@ import { getStudentPortal } from "../controllers/studentPortalController.js"
 import { HttpError } from "../utils/http.js"
 
 const packetKeys = new Set(["schoolDashboard", "studentPortal"])
-const schoolDashboardRoles = new Set(["school_owner", "headteacher", "teacher", "bursar", "super_admin"])
+const schoolDashboardRoles = new Set(["school_owner", "headteacher", "teacher", "bursar", "librarian", "super_admin"])
 
 function canUsePacket(user, key) {
   const role = String(user?.role || "").toLowerCase()

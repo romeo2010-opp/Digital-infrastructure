@@ -36,8 +36,23 @@ class SchoolsViewModel(application: Application) : AndroidViewModel(application)
     fun downloadReport(reportId: String, context: Context) { val session = mutableState.value.session ?: return; viewModelScope.launch { mutableState.value = mutableState.value.copy(isLoading = true); runCatching { repository.reportPdf(session.token, reportId) }.onSuccess { bytes -> val file = File(context.cacheDir, "report-card-$reportId.pdf").apply { writeBytes(bytes) }; val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", file); context.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri, "application/pdf").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)); mutableState.value = mutableState.value.copy(isLoading = false, successMessage = "Report PDF is ready.") }.onFailure { mutableState.value = mutableState.value.copy(isLoading = false, error = it.message ?: "Unable to download report PDF.") } } }
     private suspend fun loadWorkspace(session: SchoolSession, refreshing: Boolean = false) {
         mutableState.value = mutableState.value.copy(session = session, isLoading = true, error = null)
-        runCatching { if (session.isStudent) repository.studentPortal(session.token) to null else null to repository.schoolDashboard(session.token) }
-            .onSuccess { (portal, dashboard) -> mutableState.value = SchoolsUiState(session, portal, dashboard, successMessage = if (refreshing) "School information is up to date." else null) }
+        runCatching {
+            if (session.isStudent) {
+                Triple(repository.studentPortal(session.token), null, null)
+            } else {
+                val workspace = repository.staffWorkspace(session.token)
+                Triple(null, workspace.dashboard, workspace)
+            }
+        }
+            .onSuccess { (portal, dashboard, staffWorkspace) ->
+                mutableState.value = SchoolsUiState(
+                    session = session,
+                    studentPortal = portal,
+                    dashboard = dashboard,
+                    staffWorkspace = staffWorkspace,
+                    successMessage = if (refreshing) "School information is up to date." else null,
+                )
+            }
             .onFailure { mutableState.value = SchoolsUiState(session = session, error = it.message ?: "Could not load the school workspace.") }
     }
 }

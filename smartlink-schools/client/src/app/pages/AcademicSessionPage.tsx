@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router'
-import { AlertTriangle, Archive, ArrowLeft, CheckCircle2, ChevronDown, ChevronRight, Download, Eye, FileSpreadsheet, GraduationCap, Loader2, Lock, Play, Plus, RotateCcw, Search } from 'lucide-react'
+import { AlertTriangle, Archive, CheckCircle2, ChevronDown, ChevronRight, Download, Eye, FileSpreadsheet, GraduationCap, Loader2, Lock, Play, Plus, RotateCcw, Search } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
 import { PortalTable } from '../components/PortalTable'
 import { SectionCard } from '../components/SectionCard'
 import { SectionKpiStrip } from '../components/SectionKpiStrip'
+import { PageBackButton } from '../components/PageBackButton'
 import { SmartLinkLoadingState } from '../components/SmartLinkLoadingState'
 import { usePortal } from '../lib/portalContext'
 
@@ -353,7 +354,7 @@ export function AcademicTermDetailPage() {
       <section className="rounded-[6px] border border-[var(--mera-panel-border)] bg-[var(--mera-panel)] p-4 shadow-[var(--mera-shadow-card)]">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-3">
-            <button type="button" className="grid size-8 place-items-center rounded-[5px] border border-[#e2e8f0] text-[#475569]" onClick={() => navigate('/academic-sessions')}><ArrowLeft className="size-4" /></button>
+            <PageBackButton fallback="/academic-sessions" label="Back to academic sessions" iconOnly />
             <div>
               <h1 className="text-[22px] font-semibold tracking-[-0.035em] text-[var(--mera-panel-text)]">{term.name || 'Term'}</h1>
               <p className="mt-1 text-[13px] text-[var(--mera-panel-text-muted)]">{term.academic_year_name || '-'} / {statusLabel(term.status)} / {fmtDate(term.start_date)} to {fmtDate(term.end_date)}</p>
@@ -467,7 +468,7 @@ export function AcademicTermResultsPage() {
       <section className="rounded-[6px] border border-[var(--mera-panel-border)] bg-[var(--mera-panel)] p-4 shadow-[var(--mera-shadow-card)]">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-3">
-            <button type="button" className="grid size-8 place-items-center rounded-[5px] border border-[#e2e8f0] text-[#475569]" onClick={() => navigate(`/academic-sessions/terms/${termId}`)}><ArrowLeft className="size-4" /></button>
+            <PageBackButton fallback={`/academic-sessions/terms/${termId}`} label="Back to term" iconOnly />
             <div>
               <h1 className="text-[22px] font-semibold tracking-[-0.035em] text-[var(--mera-panel-text)]">Results Marksheet</h1>
               <p className="mt-1 text-[13px] text-[var(--mera-panel-text-muted)]">{payload?.term?.name || 'Term'} / {payload?.assessment?.name || payload?.class?.name || 'Class results'}</p>
@@ -587,7 +588,7 @@ export function TermCloseChecksPage() {
       <section className="rounded-[6px] border border-[var(--mera-panel-border)] bg-[var(--mera-panel)] p-4 shadow-[var(--mera-shadow-card)]">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-3">
-            <button type="button" className="grid size-8 place-items-center rounded-[5px] border border-[#e2e8f0] text-[#475569]" onClick={() => navigate(`/academic-sessions/terms/${termId}`)}><ArrowLeft className="size-4" /></button>
+            <PageBackButton fallback={`/academic-sessions/terms/${termId}`} label="Back to term" iconOnly />
             <div>
               <h1 className="text-[22px] font-semibold tracking-[-0.035em] text-[var(--mera-panel-text)]">Term Closing Checks</h1>
               <p className="mt-1 text-[13px] text-[var(--mera-panel-text-muted)]">{payload?.term?.name || 'Term'} must pass without exceptions before progression.</p>
@@ -713,7 +714,7 @@ export function TermProgressionPage() {
       <section className="rounded-[6px] border border-[var(--mera-panel-border)] bg-[var(--mera-panel)] p-4 shadow-[var(--mera-shadow-card)]">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-3">
-            <button type="button" className="grid size-8 place-items-center rounded-[5px] border border-[#e2e8f0] text-[#475569]" onClick={() => navigate(`/academic-sessions/terms/${termId}`)}><ArrowLeft className="size-4" /></button>
+            <PageBackButton fallback={`/academic-sessions/terms/${termId}`} label="Back to term" iconOnly />
             <div>
               <h1 className="text-[22px] font-semibold tracking-[-0.035em] text-[var(--mera-panel-text)]">Progression Preview</h1>
               <p className="mt-1 text-[13px] text-[var(--mera-panel-text-muted)]">{payload?.source_term?.name || 'Source term'} / {payload?.target_term?.name ? `target: ${payload.target_term.name}` : 'approve first, then open the next academic year term'}</p>

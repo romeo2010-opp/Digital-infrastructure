@@ -303,7 +303,7 @@ export function StudentCreationWizard({ onClose, onSaved }: { onClose: () => voi
         </div>
         <div className="grid gap-2 sm:grid-cols-3">
           <Button type="button" variant="outline" className="h-8 rounded-[5px] text-[12px]" onClick={reset}><RotateCcw className="size-3.5" /> Add Another Student</Button>
-          <Button type="button" variant="outline" className="h-8 rounded-[5px] text-[12px]" onClick={() => navigate(`/students/${student.id}`)}><UserRound className="size-3.5" /> View Student Profile</Button>
+          <Button type="button" variant="outline" className="h-8 rounded-[5px] text-[12px]" disabled={!student.public_ref} onClick={() => navigate(`/students/${student.public_ref}`)}><UserRound className="size-3.5" /> View Student Profile</Button>
           <Button type="button" className="h-8 rounded-[5px] text-[12px]" onClick={printAdmissionCard}><Printer className="size-3.5" /> Print Admission Card</Button>
         </div>
       </div>

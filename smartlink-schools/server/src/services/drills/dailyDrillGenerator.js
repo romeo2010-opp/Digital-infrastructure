@@ -67,7 +67,7 @@ async function chooseSubject(connection, schoolId, gradeId, studentId = null, cl
       AND l.class_id = ? AND l.subject_id = q.subject_id
       AND l.status = 'finalized' AND l.coverage_status <> 'postponed'
       AND l.lesson_date >= DATE_SUB(?, INTERVAL 7 DAY)
-     WHERE q.school_id = ? AND q.grade_id <=> ? AND q.approval_status = 'approved'
+     WHERE q.school_id = ? AND q.grade_id <=> ? AND q.approval_status = 'approved' AND COALESCE(q.is_daily_drill_eligible,1)=1
        AND q.correct_answer IS NOT NULL AND q.explanation IS NOT NULL
      GROUP BY subj.id, subj.name
      ORDER BY approved_question_count DESC, subj.name`,
@@ -332,7 +332,7 @@ async function loadTopicCandidates(connection, schoolId, studentId, subjectId, g
         AND stm.student_id = ? AND stm.subject_id = l.subject_id
         AND stm.topic_id = COALESCE(tlt.syllabus_subtopic_id, tlt.syllabus_topic_id, l.main_topic_id)
        JOIN question_bank q ON q.school_id = l.school_id AND q.subject_id = l.subject_id
-        AND q.grade_id <=> ? AND q.approval_status = 'approved'
+        AND q.grade_id <=> ? AND q.approval_status = 'approved' AND COALESCE(q.is_daily_drill_eligible,1)=1
         AND q.correct_answer IS NOT NULL AND q.explanation IS NOT NULL
         AND (q.topic_id = st.id OR q.subtopic_id = st.id)
        WHERE l.school_id = ? AND l.class_id = ? AND l.subject_id = ?
@@ -358,7 +358,7 @@ async function loadTopicCandidates(connection, schoolId, studentId, subjectId, g
      FROM student_topic_mastery stm
      JOIN syllabus_topics st ON st.id = stm.topic_id AND st.school_id = stm.school_id AND st.is_active = 1
      JOIN question_bank q ON q.school_id = stm.school_id AND q.subject_id = stm.subject_id
-      AND q.grade_id <=> ? AND q.approval_status = 'approved'
+      AND q.grade_id <=> ? AND q.approval_status = 'approved' AND COALESCE(q.is_daily_drill_eligible,1)=1
       AND q.correct_answer IS NOT NULL AND q.explanation IS NOT NULL
       AND (q.topic_id = stm.topic_id OR q.subtopic_id = stm.topic_id)
      WHERE stm.school_id = ? AND stm.student_id = ? AND stm.subject_id = ?
@@ -379,7 +379,7 @@ async function loadTopicCandidates(connection, schoolId, studentId, subjectId, g
      FROM student_topic_mastery stm
      JOIN syllabus_topics st ON st.id = stm.topic_id AND st.school_id = stm.school_id AND st.is_active = 1
      JOIN question_bank q ON q.school_id = stm.school_id AND q.subject_id = stm.subject_id
-      AND q.grade_id <=> ? AND q.approval_status = 'approved'
+      AND q.grade_id <=> ? AND q.approval_status = 'approved' AND COALESCE(q.is_daily_drill_eligible,1)=1
       AND q.correct_answer IS NOT NULL AND q.explanation IS NOT NULL
       AND (q.topic_id = stm.topic_id OR q.subtopic_id = stm.topic_id)
      WHERE stm.school_id = ? AND stm.student_id = ? AND stm.subject_id = ?
@@ -406,7 +406,7 @@ async function loadTopicCandidates(connection, schoolId, studentId, subjectId, g
         AND prereq_mastery.student_id = failed.student_id AND prereq_mastery.subject_id = failed.subject_id
         AND prereq_mastery.topic_id = prereq.id
        JOIN question_bank q ON q.school_id = failed.school_id AND q.subject_id = failed.subject_id
-        AND q.grade_id <=> ? AND q.approval_status = 'approved'
+        AND q.grade_id <=> ? AND q.approval_status = 'approved' AND COALESCE(q.is_daily_drill_eligible,1)=1
         AND q.correct_answer IS NOT NULL AND q.explanation IS NOT NULL
         AND (q.topic_id = prereq.id OR q.subtopic_id = prereq.id)
        WHERE failed.school_id = ? AND failed.student_id = ? AND failed.subject_id = ?
@@ -434,7 +434,7 @@ async function loadTopicCandidates(connection, schoolId, studentId, subjectId, g
        LEFT JOIN student_topic_mastery stm ON stm.school_id = ttp.school_id
         AND stm.student_id = ? AND stm.subject_id = ttp.subject_id AND stm.topic_id = ttp.topic_id
        JOIN question_bank q ON q.school_id = ttp.school_id AND q.subject_id = ttp.subject_id
-        AND q.grade_id <=> ? AND q.approval_status = 'approved'
+        AND q.grade_id <=> ? AND q.approval_status = 'approved' AND COALESCE(q.is_daily_drill_eligible,1)=1
         AND q.correct_answer IS NOT NULL AND q.explanation IS NOT NULL
         AND (q.topic_id = ttp.topic_id OR q.subtopic_id = ttp.topic_id)
        WHERE ttp.school_id = ? AND ttp.class_id = ? AND ttp.subject_id = ? AND ttp.is_current = 1
@@ -459,7 +459,7 @@ async function loadTopicCandidates(connection, schoolId, studentId, subjectId, g
        LEFT JOIN student_topic_mastery stm ON stm.school_id = st.school_id
         AND stm.student_id = ? AND stm.subject_id = st.subject_id AND stm.topic_id = st.id
        JOIN question_bank q ON q.school_id = st.school_id AND q.subject_id = st.subject_id
-        AND q.grade_id <=> st.grade_id AND q.approval_status = 'approved'
+        AND q.grade_id <=> st.grade_id AND q.approval_status = 'approved' AND COALESCE(q.is_daily_drill_eligible,1)=1
         AND q.correct_answer IS NOT NULL AND q.explanation IS NOT NULL
         AND (q.topic_id = st.id OR q.subtopic_id = st.id)
        WHERE st.school_id = ? AND st.grade_id <=> ? AND st.subject_id = ? AND st.is_active = 1
@@ -516,7 +516,7 @@ async function questionsForTopic(connection, schoolId, studentId, gradeId, subje
        AND q.grade_id <=> ?
        AND q.subject_id = ?
        AND (q.topic_id IN (${placeholders}) OR q.subtopic_id IN (${placeholders}))
-       AND q.approval_status = 'approved'
+       AND q.approval_status = 'approved' AND COALESCE(q.is_daily_drill_eligible,1)=1
        AND q.correct_answer IS NOT NULL
        AND q.explanation IS NOT NULL${difficultyClause}
      LIMIT ?`,
@@ -724,7 +724,7 @@ async function chooseRecentLessonTopic(connection, schoolId, subjectId, gradeId,
      ) taught
      JOIN syllabus_topics st ON st.id = taught.topic_id AND st.school_id = taught.school_id AND st.is_active = 1
      JOIN question_bank q ON q.school_id = taught.school_id
-      AND q.subject_id = taught.subject_id AND q.grade_id <=> ? AND q.approval_status = 'approved'
+      AND q.subject_id = taught.subject_id AND q.grade_id <=> ? AND q.approval_status = 'approved' AND COALESCE(q.is_daily_drill_eligible,1)=1
       AND q.correct_answer IS NOT NULL AND q.explanation IS NOT NULL
      JOIN syllabus_topics qt ON qt.id = q.topic_id AND qt.school_id = q.school_id
       AND qt.subject_id = q.subject_id AND qt.is_active = 1
@@ -766,7 +766,7 @@ async function chooseTopic(connection, schoolId, studentId, subjectId, gradeId, 
      FROM student_topic_mastery stm
      JOIN syllabus_topics st ON st.id = stm.topic_id AND st.school_id = stm.school_id
      JOIN question_bank q ON q.school_id = stm.school_id
-      AND q.subject_id = stm.subject_id AND q.grade_id <=> ? AND q.approval_status = 'approved'
+      AND q.subject_id = stm.subject_id AND q.grade_id <=> ? AND q.approval_status = 'approved' AND COALESCE(q.is_daily_drill_eligible,1)=1
       AND q.correct_answer IS NOT NULL AND q.explanation IS NOT NULL
      JOIN syllabus_topics qt ON qt.id = q.topic_id AND qt.school_id = q.school_id
       AND qt.subject_id = q.subject_id AND qt.is_active = 1
@@ -796,7 +796,7 @@ async function chooseTopic(connection, schoolId, studentId, subjectId, gradeId, 
      FROM teacher_topic_plan ttp
      JOIN syllabus_topics st ON st.id = ttp.topic_id AND st.school_id = ttp.school_id
      JOIN question_bank q ON q.school_id = ttp.school_id
-      AND q.subject_id = ttp.subject_id AND q.grade_id <=> ? AND q.approval_status = 'approved'
+      AND q.subject_id = ttp.subject_id AND q.grade_id <=> ? AND q.approval_status = 'approved' AND COALESCE(q.is_daily_drill_eligible,1)=1
       AND q.correct_answer IS NOT NULL AND q.explanation IS NOT NULL
      JOIN syllabus_topics qt ON qt.id = q.topic_id AND qt.school_id = q.school_id
       AND qt.subject_id = q.subject_id AND qt.is_active = 1
@@ -826,7 +826,7 @@ async function chooseTopic(connection, schoolId, studentId, subjectId, gradeId, 
      JOIN question_bank q ON q.school_id = st.school_id
       AND q.subject_id = st.subject_id
       AND q.grade_id <=> st.grade_id
-      AND q.approval_status = 'approved'
+      AND q.approval_status = 'approved' AND COALESCE(q.is_daily_drill_eligible,1)=1
       AND q.correct_answer IS NOT NULL AND q.explanation IS NOT NULL
      JOIN syllabus_topics qt ON qt.id = q.topic_id AND qt.school_id = q.school_id
       AND qt.subject_id = q.subject_id AND qt.is_active = 1
@@ -887,7 +887,7 @@ async function approvedQuestions(connection, schoolId, gradeId, subjectId, topic
        AND q.grade_id <=> ?
        AND q.subject_id = ?
        AND (q.topic_id IN (${placeholders}) OR q.subtopic_id IN (${placeholders}))
-       AND q.approval_status = 'approved'
+       AND q.approval_status = 'approved' AND COALESCE(q.is_daily_drill_eligible,1)=1
        AND q.correct_answer IS NOT NULL
        AND q.explanation IS NOT NULL${difficultyClause}${noveltyClause}
      ORDER BY FIELD(q.difficulty, 'easy', 'medium', 'hard'), RAND()

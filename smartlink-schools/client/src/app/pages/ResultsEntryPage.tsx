@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, CheckCircle2, Download, Eye, PencilLine, Printer, RotateCcw, Save, Search, Send } from 'lucide-react'
+import { CheckCircle2, Download, Eye, PencilLine, Printer, RotateCcw, Save, Search, Send } from 'lucide-react'
 import { useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
 import { Button } from '../components/ui/button'
@@ -7,6 +7,9 @@ import { Input } from '../components/ui/input'
 import { PortalTable } from '../components/PortalTable'
 import { SectionCard } from '../components/SectionCard'
 import { SectionKpiStrip } from '../components/SectionKpiStrip'
+import { PageBackButton } from '../components/PageBackButton'
+import { AcademicMarkSheetPanel } from '../components/AcademicMarkSheetPanel'
+import { AssessmentOperationalIntelligence } from '../components/AssessmentOperationalIntelligence'
 import { usePortal } from '../lib/portalContext'
 
 const GREENHILL_LOGO_URL = '/greenhill-logo.png'
@@ -92,6 +95,8 @@ function StatusPill({ value }: { value: any }) {
   const status = String(value || 'not_started').toLowerCase()
   const tone = ['approved', 'results_approved', 'locked'].includes(status)
     ? 'border-[#bbf7d0] bg-[#f0fdf4] text-[#166534]'
+    : status === 'absent'
+      ? 'border-[#cbd5e1] bg-[#f8fafc] text-[#475569]'
     : ['submitted', 'results_submitted', 'marking'].includes(status)
       ? 'border-[#bfdbfe] bg-[#eff6ff] text-[#1d4ed8]'
       : ['returned', 'draft'].includes(status)
@@ -139,6 +144,10 @@ function studentName(row: any) {
   return [row.first_name, row.last_name].filter(Boolean).join(' ') || row.name || '-'
 }
 
+function isAbsentRow(row: any) {
+  return Boolean(row?.absent || row?.withdrawal_status?.withdrawn) || String(row?.status || '').toLowerCase() === 'absent'
+}
+
 function surnameFirstName(row: any) {
   return [row.last_name, row.first_name].filter(Boolean).join(' ') || studentName(row)
 }
@@ -165,15 +174,17 @@ function escapeHtml(value: any) {
 
 function printableRows(rows: any[], totalMarks: any) {
   const computed = rows.map((row) => {
+    const absent = isAbsentRow(row)
     const score = validScoreValue(row.score, totalMarks)
     const percentage = score === null ? null : percentageForScore(score, totalMarks)
     return {
       row,
+      absent,
       score,
       percentage,
-      grade: percentage === null ? '' : gradeForPercentage(percentage),
+      grade: absent ? 'Absent' : percentage === null ? '' : gradeForPercentage(percentage),
       aggregate: percentage === null ? '' : aggregatePointForPercentage(percentage),
-      remark: percentage === null ? '' : Number(percentage) >= 50 ? 'PASS' : 'FAIL',
+      remark: absent ? 'Absent' : percentage === null ? '' : Number(percentage) >= 50 ? 'PASS' : 'FAIL',
     }
   })
   const ranked = [...computed].sort((a, b) => {
@@ -226,6 +237,7 @@ function buildMarksheetHtml({
   const code = subjectCode(subjectName)
   const ranked = printableRows(rows, totalMarks)
   const totalTookExam = ranked.filter((entry) => entry.score !== null).length
+  const totalAbsent = ranked.filter((entry) => entry.absent).length
   const passed = ranked.filter((entry) => entry.remark === 'PASS').length
   const failed = ranked.filter((entry) => entry.remark === 'FAIL').length
   const passRate = totalTookExam ? Math.round((passed / totalTookExam) * 100) : 0
@@ -236,8 +248,8 @@ function buildMarksheetHtml({
       <td class="center">${index + 1}</td>
       <td class="center">${escapeHtml(entry.row.student_id || entry.row.admission_no || '')}</td>
       <td>${escapeHtml(surnameFirstName(entry.row).toUpperCase())}</td>
-      <td class="center">${entry.score === null ? '' : escapeHtml(entry.score)}</td>
-      <td class="center strong">${entry.score === null ? '' : escapeHtml(entry.score)}</td>
+      <td class="center">${entry.absent ? 'Absent' : entry.score === null ? '' : escapeHtml(entry.score)}</td>
+      <td class="center strong">${entry.absent ? 'Absent' : entry.score === null ? '' : escapeHtml(entry.score)}</td>
       <td class="center strong">${entry.percentage === null ? '' : Math.round(Number(entry.percentage))}</td>
       <td class="center strong">${escapeHtml(entry.aggregate)}</td>
       <td class="center strong">${escapeHtml((entry as any).position)}</td>
@@ -301,6 +313,7 @@ function buildMarksheetHtml({
     </table>
     <section class="summary">
       <div><span>TOTAL TOOK EXAM:</span><span>${totalTookExam}</span></div>
+      <div><span>TOTAL ABSENT:</span><span>${totalAbsent}</span></div>
       <div><span>TOTAL PASSED:</span><span>${passed}</span></div>
       <div><span>TOTAL FAILED:</span><span>${failed}</span></div>
       <div><span>PASS RATE:</span><span>${passRate}%</span></div>
@@ -339,6 +352,7 @@ function MarksheetPrintPreview({
   const title = `${className} ${paperName} Results`
   const subtitle = [examSessionName, termName].filter(Boolean).join(' - ')
   const totalTookExam = ranked.filter((entry) => entry.score !== null).length
+  const totalAbsent = ranked.filter((entry) => entry.absent).length
   const passed = ranked.filter((entry) => entry.remark === 'PASS').length
   const failed = ranked.filter((entry) => entry.remark === 'FAIL').length
   const passRate = totalTookExam ? Math.round((passed / totalTookExam) * 100) : 0
@@ -390,8 +404,8 @@ function MarksheetPrintPreview({
                   <td className="text-center">{index + 1}</td>
                   <td className="text-center">{entry.row.student_id || entry.row.admission_no || ''}</td>
                   <td>{surnameFirstName(entry.row).toUpperCase()}</td>
-                  <td className="text-center">{entry.score ?? ''}</td>
-                  <td className="text-center font-black">{entry.score ?? ''}</td>
+                  <td className="text-center">{entry.absent ? 'Absent' : entry.score ?? ''}</td>
+                  <td className="text-center font-black">{entry.absent ? 'Absent' : entry.score ?? ''}</td>
                   <td className="text-center font-black">{entry.percentage === null ? '' : Math.round(Number(entry.percentage))}</td>
                   <td className="text-center font-black">{entry.aggregate}</td>
                   <td className="text-center font-black">{(entry as any).position}</td>
@@ -406,6 +420,7 @@ function MarksheetPrintPreview({
 
         <section className="mt-6 grid w-full max-w-[360px] gap-1 text-[12px] font-black uppercase">
           <div className="grid grid-cols-[1fr_90px]"><span>Total took exam:</span><span>{totalTookExam}</span></div>
+          <div className="grid grid-cols-[1fr_90px]"><span>Total absent:</span><span>{totalAbsent}</span></div>
           <div className="grid grid-cols-[1fr_90px]"><span>Total passed:</span><span>{passed}</span></div>
           <div className="grid grid-cols-[1fr_90px]"><span>Total failed:</span><span>{failed}</span></div>
           <div className="grid grid-cols-[1fr_90px]"><span>Pass rate:</span><span>{passRate}%</span></div>
@@ -530,9 +545,10 @@ export function ResultsEntryPage() {
     })
   }, [gradeFilter, rows, studentQuery, totalMarks])
 
-  const validScoredRows = rows.filter((row) => validScoreValue(row.score, totalMarks) !== null)
-  const completed = rows.filter((row) => hasScore(row.score)).length
-  const invalidCount = rows.filter((row) => isInvalidScore(row.score, totalMarks)).length
+  const absentRows = rows.filter(isAbsentRow)
+  const validScoredRows = rows.filter((row) => !isAbsentRow(row) && validScoreValue(row.score, totalMarks) !== null)
+  const completed = rows.filter((row) => !isAbsentRow(row) && hasScore(row.score)).length
+  const completedOrAbsent = completed + absentRows.length
   const percentages = validScoredRows
     .map((row) => percentageForScore(row.score, totalMarks))
     .filter((value): value is number => value !== null)
@@ -568,17 +584,17 @@ export function ResultsEntryPage() {
     },
     {
       label: 'Selected Sheet',
-      value: selectedAssessmentId ? `${totalTookExam}/${rows.length}` : 'None',
+      value: selectedAssessmentId ? `${completedOrAbsent}/${rows.length}` : 'None',
       helper: selectedAssessmentId ? paperName : 'choose an assessment',
       delta: selectedAssessmentId ? (sheetReadOnly ? 'view only' : 'editable') : 'not opened',
     },
   ]
 
   const sheetKpis = [
-    { label: 'Class average', value: `${classAverage}%`, helper: `${totalTookExam}/${rows.length} took exam`, delta: completed !== totalTookExam ? `${completed} entered` : 'updates as you type' },
+    { label: 'Class average', value: `${classAverage}%`, helper: `${totalTookExam}/${rows.length} took exam`, delta: absentRows.length ? `${absentRows.length} absent` : 'updates as you type' },
     { label: 'Pass rate', value: `${passRate}%`, helper: `${passCount}/${totalTookExam} passing students`, delta: 'passing / took exam', tone: passRate >= 70 ? ('good' as const) : passRate >= 50 ? ('warn' as const) : ('bad' as const) },
     { label: 'Students at risk', value: atRiskCount, helper: 'valid scores below pass mark', delta: 'review before submit', tone: atRiskCount ? ('warn' as const) : ('good' as const) },
-    { label: 'Invalid scores', value: invalidCount, helper: `outside 0-${totalMarks || '-'}`, delta: invalidCount ? 'fix needed' : 'ready', tone: invalidCount ? ('bad' as const) : ('good' as const) },
+    { label: 'Absent', value: absentRows.length, helper: 'withdrawal overlap', delta: 'not counted as zero', tone: absentRows.length ? ('warn' as const) : ('good' as const) },
   ]
 
   const refreshSetup = async () => {
@@ -703,7 +719,7 @@ export function ResultsEntryPage() {
     setError('')
     setMessage('')
     try {
-      await api.saveResultDraft(token, { assessment_id: selectedAssessmentId, entries: rows.map((row) => ({ student_id: row.id, enrollment_id: row.enrollment_id, score: row.score, comment: row.comment })) })
+      await api.saveResultDraft(token, { assessment_id: selectedAssessmentId, entries: rows.map((row) => ({ student_id: row.id, enrollment_id: row.enrollment_id, score: isAbsentRow(row) ? null : row.score, comment: row.comment, status: row.status })) })
       setMessage('Draft results saved.')
       toast.success('Draft results saved.')
       await loadSheet(selectedAssessmentId)
@@ -721,7 +737,7 @@ export function ResultsEntryPage() {
     setError('')
     setMessage('')
     try {
-      await api.submitResults(token, { assessment_id: selectedAssessmentId, entries: rows.map((row) => ({ student_id: row.id, enrollment_id: row.enrollment_id, score: row.score, comment: row.comment })) })
+      await api.submitResults(token, { assessment_id: selectedAssessmentId, entries: rows.map((row) => ({ student_id: row.id, enrollment_id: row.enrollment_id, score: isAbsentRow(row) ? null : row.score, comment: row.comment, status: row.status })) })
       setMessage('Results submitted for approval.')
       toast.success('Results submitted for approval.')
       await loadSheet(selectedAssessmentId)
@@ -778,14 +794,7 @@ export function ResultsEntryPage() {
         <header className="no-print sticky top-0 z-30 border-b border-[#d9dce3] bg-white/95 px-4 py-3 shadow-sm backdrop-blur">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex min-w-0 items-center gap-3">
-              <button
-                type="button"
-                onClick={() => navigate('/results')}
-                className="grid size-9 shrink-0 place-items-center rounded-[5px] border border-[#d9dce3] bg-white text-[#374151] hover:bg-[#f9fafb]"
-                aria-label="Back to results"
-              >
-                <ArrowLeft className="size-4" />
-              </button>
+              <PageBackButton fallback="/results" label="Back to results" iconOnly />
               <div className="min-w-0">
                 <p className="text-[11px] font-bold uppercase tracking-[0.1em] text-[#6b7280]">Greenhill marksheet</p>
                 <h1 className="truncate text-[20px] font-semibold tracking-[-0.035em] text-[#111827]">{className} - {paperName}</h1>
@@ -810,9 +819,14 @@ export function ResultsEntryPage() {
             <SectionKpiStrip items={sheetKpis} />
           </div>
 
+          <div className="no-print">
+            <AcademicMarkSheetPanel assessmentId={selectedAssessmentId} readOnly={sheetReadOnly} />
+            <AssessmentOperationalIntelligence assessmentId={selectedAssessmentId} />
+          </div>
+
           <SectionCard
-            title="Marks Entry"
-            subtitle={sheetLoading ? 'Loading marksheet...' : sheetReadOnly ? 'Submitted or approved sheets are view only.' : 'Enter marks and the grade-colored cells update immediately.'}
+            title="Overall-total compatibility sheet"
+            subtitle={sheetLoading ? 'Loading marksheet...' : sheetReadOnly ? 'Submitted or approved sheets are view only.' : 'Use this legacy fallback only when detailed question or topic marks are unavailable.'}
             actions={<StatusPill value={batch?.status || sheetAssessment?.status || 'draft'} />}
             className="no-print"
           >
@@ -831,7 +845,7 @@ export function ResultsEntryPage() {
                     </select>
                   </Field>
                 </div>
-                <div className="text-[12px] font-semibold text-[#6b7280]">{completed}/{rows.length} students scored</div>
+                <div className="text-[12px] font-semibold text-[#6b7280]">{completedOrAbsent}/{rows.length} scored or absent</div>
               </div>
 
               <div className="overflow-x-auto rounded-[6px] border border-[#d9dce3] bg-white">
@@ -852,7 +866,7 @@ export function ResultsEntryPage() {
                     </thead>
                     <tbody>
                       {visibleSheetRows.length ? visibleSheetRows.map((row, index) => {
-                        const score = row.score === '' ? '' : Number(row.score)
+                        const absent = isAbsentRow(row)
                         const invalid = isInvalidScore(row.score, totalMarks)
                         const percentage = percentageForScore(row.score, totalMarks)
                         const grade = gradeForScore(row.score, totalMarks)
@@ -866,18 +880,22 @@ export function ResultsEntryPage() {
                               <span className="text-[11px] text-[#8b8b8b]">{row.stream_section || row.class_name || '-'}</span>
                             </td>
                             <td className="px-3 py-2">
-                              <Input
-                                disabled={sheetReadOnly}
-                                type="number"
-                                min="0"
-                                max={totalMarks || undefined}
-                                className={`mx-auto h-8 w-24 rounded-[5px] border text-center text-[12px] font-bold shadow-none ${scoreTone}`}
-                                value={row.score ?? ''}
-                                onChange={(event) => updateRow(row.id, { score: event.target.value })}
-                              />
+                              {absent ? (
+                                <span className="mx-auto flex h-8 w-24 items-center justify-center rounded-[5px] border border-[#cbd5e1] bg-[#f8fafc] text-[12px] font-bold text-[#475569]">Absent</span>
+                              ) : (
+                                <Input
+                                  disabled={sheetReadOnly}
+                                  type="number"
+                                  min="0"
+                                  max={totalMarks || undefined}
+                                  className={`mx-auto h-8 w-24 rounded-[5px] border text-center text-[12px] font-bold shadow-none ${scoreTone}`}
+                                  value={row.score ?? ''}
+                                  onChange={(event) => updateRow(row.id, { score: event.target.value })}
+                                />
+                              )}
                             </td>
-                            <td className="px-3 py-2 text-center font-medium">{percentage === null ? '-' : `${Math.round(percentage)}%`}</td>
-                            <td className="px-3 py-2 text-center"><GradePill grade={grade} percentage={percentage} /></td>
+                            <td className="px-3 py-2 text-center font-medium">{absent ? 'Absent' : percentage === null ? '-' : `${Math.round(percentage)}%`}</td>
+                            <td className="px-3 py-2 text-center">{absent ? <span className="inline-flex rounded-[4px] border border-[#cbd5e1] bg-[#f8fafc] px-2 py-0.5 text-[11px] font-bold text-[#475569]">Absent</span> : <GradePill grade={grade} percentage={percentage} />}</td>
                             <td className="px-3 py-2"><StatusPill value={row.status || batch?.status || 'draft'} /></td>
                             <td className="px-3 py-2">
                               <Input disabled={sheetReadOnly} className="h-8 min-w-[180px] rounded-[5px] bg-white text-[12px]" value={row.comment || ''} onChange={(event) => updateRow(row.id, { comment: event.target.value })} />
@@ -896,7 +914,7 @@ export function ResultsEntryPage() {
                           <td className="px-3 py-2 text-center font-bold">{averageRawScore || '-'}</td>
                           <td className="px-3 py-2 text-center font-bold">{classAverage || '-'}%</td>
                           <td className="px-3 py-2 text-center"><GradePill grade={classAverage ? gradeForPercentage(classAverage) : ''} percentage={classAverage} /></td>
-                          <td className="px-3 py-2" colSpan={3}>{sheetReadOnly ? 'View only' : `${completed}/${rows.length} students scored`}</td>
+                          <td className="px-3 py-2" colSpan={3}>{sheetReadOnly ? 'View only' : `${completedOrAbsent}/${rows.length} scored or absent`}</td>
                         </tr>
                       </tfoot>
                     ) : null}

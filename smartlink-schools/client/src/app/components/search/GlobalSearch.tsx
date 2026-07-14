@@ -45,17 +45,17 @@ const iconMap: Record<string, any> = {
 
 const recentSearchKey = 'schools-global-search-recents'
 const placeholderHints = [
-  'Search students',
-  'Search parents',
-  'Search classes',
-  'Search homework',
-  'Search results',
+  'Students who have not paid',
+  'Outstanding balances',
+  'Paid students',
+  'Teachers currently on leave',
+  'Pending discount approvals',
 ]
 const suggestedSearches = [
-  { label: 'Fee balances', query: 'fee balances' },
-  { label: 'Late today', query: 'late today' },
-  { label: 'Word problems', query: 'word problems' },
-  { label: 'Pending homework', query: 'pending homework' },
+  { label: 'Outstanding balances', query: 'students who have not paid' },
+  { label: 'Paid students', query: 'fully paid students' },
+  { label: 'Staff on leave', query: 'teachers currently on leave' },
+  { label: 'Discount approvals', query: 'pending discount approvals' },
 ]
 
 const navigationResults: SearchResult[] = [

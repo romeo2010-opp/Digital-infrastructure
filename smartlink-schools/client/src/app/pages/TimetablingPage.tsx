@@ -3,7 +3,6 @@ import { useLocation, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
 import {
   AlertTriangle,
-  ArrowLeft,
   BookOpen,
   CalendarDays,
   CheckCircle2,
@@ -24,6 +23,7 @@ import { SectionCard } from '../components/SectionCard'
 import { SectionKpiStrip } from '../components/SectionKpiStrip'
 import { SmartLinkLoadingState } from '../components/SmartLinkLoadingState'
 import { Toolbar } from '../components/Toolbar'
+import { PageBackButton } from '../components/PageBackButton'
 import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
 import { usePortal } from '../lib/portalContext'
@@ -892,7 +892,7 @@ export function TimetablingPage({ personal = false }: { personal?: boolean }) {
           toast.message(solverJobMessage(nextJob, 'Solver generation was cancelled.'))
         }
         setGenerationJob(null)
-        await loadDetail(detail?.timetable?.id || timetableId)
+        await loadDetail(detail?.timetable?.public_ref || timetableId)
       }
     }, 2500)
     return () => window.clearInterval(timer)
@@ -904,7 +904,7 @@ export function TimetablingPage({ personal = false }: { personal?: boolean }) {
     setLoading(true)
     try {
       const response = await api.createTimetable(token, payload)
-      const id = response?.timetable?.id || response?.id || response?.timetable_id
+      const id = response?.timetable?.public_ref
       toast.success('Timetable created.')
       navigate(`${basePath}/${id || ''}/versions`)
     } catch (error: any) {
@@ -1036,10 +1036,7 @@ export function TimetablingPage({ personal = false }: { personal?: boolean }) {
     <main className="grid gap-3 p-4">
       <Toolbar>
         {isDetailRoute ? (
-          <Button type="button" variant="outline" onClick={() => navigate(basePath)} className="h-8 rounded-[5px] text-[12px]">
-            <ArrowLeft className="size-3.5" />
-            All timetables
-          </Button>
+          <PageBackButton fallback={basePath} label="Back to timetables" />
         ) : null}
         <div className="min-w-[240px] flex-1">
           <div className="text-[12px] font-semibold text-[#111827]">
@@ -1099,7 +1096,7 @@ export function TimetablingPage({ personal = false }: { personal?: boolean }) {
                       <button
                         type="button"
                         className="inline-flex h-7 items-center gap-1 rounded-[4px] border border-[#d7dde5] bg-white px-2 text-[11px] font-semibold text-[#374151] hover:bg-[#f8fafc]"
-                        onClick={(event) => { event.stopPropagation(); navigate(`${basePath}/${row.id}/versions`) }}
+                        onClick={(event) => { event.stopPropagation(); navigate(`${basePath}/${row.public_ref}/versions`) }}
                       >
                         <Eye className="size-3.5" />
                         Open
@@ -1108,7 +1105,7 @@ export function TimetablingPage({ personal = false }: { personal?: boolean }) {
                   },
                 ]}
                 rows={timetableRows}
-                onRowClick={(row) => navigate(`${basePath}/${row.id}/versions`)}
+                onRowClick={(row) => navigate(`${basePath}/${row.public_ref}/versions`)}
                 emptyMessage={`No ${mode === 'exam' ? 'exam timetables' : 'school timetables'} have been created yet.`}
               />
             </SectionCard>
@@ -1219,14 +1216,14 @@ export function TimetablingPage({ personal = false }: { personal?: boolean }) {
                         key: 'open',
                         label: 'Action',
                         render: (row) => (
-                          <button type="button" className="grid size-7 place-items-center rounded-[4px] border border-[#e2e8f0] text-[#374151]" onClick={(event) => { event.stopPropagation(); navigate(`${basePath}/${detail.timetable.id}/versions/${row.id}`) }} aria-label="Open version">
+                          <button type="button" className="grid size-7 place-items-center rounded-[4px] border border-[#e2e8f0] text-[#374151]" onClick={(event) => { event.stopPropagation(); navigate(`${basePath}/${detail.timetable.public_ref}/versions/${row.public_ref}`) }} aria-label="Open version">
                             <Eye className="size-3.5" />
                           </button>
                         ),
                       },
                     ]}
                     rows={versionRows}
-                    onRowClick={(row) => navigate(`${basePath}/${detail.timetable.id}/versions/${row.id}`)}
+                    onRowClick={(row) => navigate(`${basePath}/${detail.timetable.public_ref}/versions/${row.public_ref}`)}
                     emptyMessage="No versions have been created for this timetable."
                   />
                 </SectionCard>

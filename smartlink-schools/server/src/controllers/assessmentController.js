@@ -193,7 +193,8 @@ function blockQuestionToQuestion(block, index) {
   const questionType = content.question_type || metadata.question_type || "short_answer"
   const contentParts = Array.isArray(content.content_parts) ? content.content_parts : []
   const question = {
-    question_number: content.question_number || index + 1,
+    question_number: index + 1,
+    display_number: cleanText(content.question_number || metadata.original_question_number || index + 1).slice(0, 80),
     question_text: content.question_text || content.text || plainTextFromContentParts(contentParts),
     question_type: questionType,
     marks: content.marks || metadata.marks || "",
@@ -249,7 +250,7 @@ function buildBlocksFromQuestions(assessment = {}, questions = []) {
     blocks.push({
       block_type: "question",
       content_json: {
-        question_number: index + 1,
+        question_number: question.display_number || question.question_number || index + 1,
         question_text: question.question_text || "",
         content_parts: Array.isArray(question.content_parts) ? question.content_parts : [],
         question_type: question.question_type || "short_answer",
@@ -521,7 +522,8 @@ function normalizeQuestionInput(rawQuestions = [], mode = "draft") {
     }
 
     return {
-      question_number: Number(raw.question_number || raw.questionNumber || index + 1),
+      question_number: index + 1,
+      display_number: cleanText(raw.display_number || raw.displayNumber || raw.question_number || raw.questionNumber || index + 1).slice(0, 80),
       question_text: questionText,
       question_type: questionType,
       marks,
@@ -544,6 +546,32 @@ function normalizeQuestionInput(rawQuestions = [], mode = "draft") {
 }
 
 async function saveQuestions(connection, schoolId, assessmentId, questions, topicFallback = []) {
+  // The paper editor historically replaces question rows on every save. Keep
+  // canonical curriculum mappings by stable display number before that
+  // replacement so a later wording/layout edit cannot silently erase evidence
+  // precision.
+  const [[assessmentOwner]] = await connection.query("SELECT created_by FROM assessments WHERE school_id=? AND id=? LIMIT 1", [schoolId, assessmentId])
+  const mappingActorId = Number(assessmentOwner?.created_by || 0)
+  const [previousMappings] = await connection.query(
+    `SELECT aq.display_number,qtm.topic_id,qtm.allocation_type,qtm.allocated_marks,qtm.allocated_percentage,qtm.is_primary
+     FROM assessment_questions aq
+     JOIN question_topic_mappings qtm ON qtm.assessment_question_id=aq.id AND qtm.school_id=aq.school_id
+     WHERE aq.school_id=? AND aq.assessment_id=?`,
+    [schoolId, assessmentId],
+  ).catch((error) => {
+    if (error?.code === "ER_NO_SUCH_TABLE") return [[]]
+    throw error
+  })
+  const [previousObjectives] = await connection.query(
+    `SELECT aq.display_number,qom.learning_objective_id,qom.mapping_role
+     FROM assessment_questions aq
+     JOIN question_objective_mappings qom ON qom.assessment_question_id=aq.id AND qom.school_id=aq.school_id
+     WHERE aq.school_id=? AND aq.assessment_id=?`,
+    [schoolId, assessmentId],
+  ).catch((error) => {
+    if (error?.code === "ER_NO_SUCH_TABLE") return [[]]
+    throw error
+  })
   await connection.query(
     `DELETE qo
      FROM assessment_question_options qo
@@ -556,14 +584,15 @@ async function saveQuestions(connection, schoolId, assessmentId, questions, topi
   for (const [index, question] of questions.entries()) {
     const [result] = await connection.query(
       `INSERT INTO assessment_questions (
-        school_id, assessment_id, question_number, question_text, question_type, marks,
+        school_id, assessment_id, question_number, display_number, question_text, question_type, marks,
         topic_id, topic_text, subtopic_id, subtopic_text, difficulty, cognitive_skill,
         question_instructions, attachment_url, correct_answer, marking_scheme, explanation, sort_order
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         schoolId,
         assessmentId,
         question.question_number || index + 1,
+        question.display_number || String(question.question_number || index + 1),
         question.question_text,
         question.question_type,
         question.marks,
@@ -589,6 +618,22 @@ async function saveQuestions(connection, schoolId, assessmentId, questions, topi
         [question.options.map((option) => [schoolId, result.insertId, option.option_label, option.option_text, option.is_correct ? 1 : 0, option.sort_order])],
       )
     }
+    const displayNumber = String(question.display_number || question.question_number || index + 1)
+    const retainedTopics = previousMappings.filter((mapping) => String(mapping.display_number) === displayNumber)
+    const retainedObjectives = previousObjectives.filter((mapping) => String(mapping.display_number) === displayNumber)
+    if (retainedTopics.length) {
+      for (const mapping of retainedTopics) await connection.query(
+        `INSERT INTO question_topic_mappings (public_ref,school_id,assessment_question_id,topic_id,allocation_type,allocated_marks,allocated_percentage,is_primary,created_by,updated_by)
+         VALUES (UUID(),?,?,?,?,?,?,?,?,?)`,
+        [schoolId,result.insertId,mapping.topic_id,mapping.allocation_type,mapping.allocated_marks,mapping.allocated_percentage,mapping.is_primary,mappingActorId,mappingActorId],
+      )
+      await connection.query("UPDATE assessment_questions SET mapping_status='mapped' WHERE school_id=? AND id=?", [schoolId, result.insertId])
+    }
+    if (retainedObjectives.length) for (const mapping of retainedObjectives) await connection.query(
+      `INSERT INTO question_objective_mappings (public_ref,school_id,assessment_question_id,learning_objective_id,mapping_role,created_by,updated_by)
+       VALUES (UUID(),?,?,?,?,?,?)`,
+      [schoolId,result.insertId,mapping.learning_objective_id,mapping.mapping_role,mappingActorId,mappingActorId],
+    )
   }
 
   await connection.query("DELETE FROM assessment_topics WHERE school_id = ? AND assessment_id = ?", [schoolId, assessmentId])
@@ -638,6 +683,31 @@ async function loadQuestions(connection, schoolId, assessmentId) {
      ORDER BY sort_order, option_label, id`,
     [schoolId, ...questions.map((question) => question.id)],
   )
+  const questionIds = questions.map((question) => Number(question.id))
+  const placeholders = questionIds.map(() => "?").join(",")
+  const [topicMappings] = await connection.query(
+    `SELECT qtm.assessment_question_id,qtm.allocation_type,qtm.allocated_marks,qtm.allocated_percentage,qtm.is_primary,
+       st.public_ref topic_ref,st.topic_name
+     FROM question_topic_mappings qtm
+     JOIN syllabus_topics st ON st.id=qtm.topic_id AND st.school_id=qtm.school_id
+     WHERE qtm.school_id=? AND qtm.assessment_question_id IN (${placeholders})
+     ORDER BY qtm.is_primary DESC,qtm.id`,
+    [schoolId, ...questionIds],
+  ).catch((error) => {
+    if (error?.code === "ER_NO_SUCH_TABLE") return [[]]
+    throw error
+  })
+  const [objectiveMappings] = await connection.query(
+    `SELECT qom.assessment_question_id,qom.mapping_role,lo.public_ref objective_ref,lo.objective_text
+     FROM question_objective_mappings qom
+     JOIN learning_objectives lo ON lo.id=qom.learning_objective_id AND lo.school_id=qom.school_id
+     WHERE qom.school_id=? AND qom.assessment_question_id IN (${placeholders})
+     ORDER BY qom.mapping_role,qom.id`,
+    [schoolId, ...questionIds],
+  ).catch((error) => {
+    if (error?.code === "ER_NO_SUCH_TABLE") return [[]]
+    throw error
+  })
   const optionMap = new Map()
   options.forEach((option) => {
     const key = Number(option.question_id)
@@ -654,6 +724,7 @@ async function loadQuestions(connection, schoolId, assessmentId) {
   return questions.map((question) => ({
     id: Number(question.id),
     question_number: Number(question.question_number),
+    display_number: question.display_number || String(question.question_number),
     question_text: question.question_text,
     question_type: question.question_type,
     marks: Number(question.marks || 0),
@@ -664,6 +735,22 @@ async function loadQuestions(connection, schoolId, assessmentId) {
     difficulty: question.difficulty,
     cognitive_skill: question.cognitive_skill || "",
     question_instructions: question.question_instructions || "",
+    mapping_status: question.mapping_status || (question.topic_id ? "mapped" : "unmapped"),
+    syllabus_strand: question.syllabus_strand || "",
+    marking_points: safeJson(question.marking_points_json, []),
+    topic_mappings: topicMappings.filter((mapping) => Number(mapping.assessment_question_id) === Number(question.id)).map((mapping) => ({
+      topic_ref: mapping.topic_ref,
+      topic_name: mapping.topic_name,
+      allocation_type: mapping.allocation_type,
+      allocated_marks: mapping.allocated_marks === null ? null : Number(mapping.allocated_marks),
+      allocated_percentage: mapping.allocated_percentage === null ? null : Number(mapping.allocated_percentage),
+      is_primary: Boolean(mapping.is_primary),
+    })),
+    objective_mappings: objectiveMappings.filter((mapping) => Number(mapping.assessment_question_id) === Number(question.id)).map((mapping) => ({
+      objective_ref: mapping.objective_ref,
+      objective_text: mapping.objective_text,
+      mapping_role: mapping.mapping_role,
+    })),
     attachment_url: question.attachment_url || "",
     correct_answer: question.correct_answer || "",
     marking_scheme: question.marking_scheme || "",
@@ -1292,12 +1379,21 @@ export async function deleteAssessment(req, res) {
     const [[links]] = await connection.query(
       `SELECT
         (SELECT COUNT(*) FROM exam_timetable_entries WHERE school_id = ? AND assessment_id = ?) AS timetable_count,
+        (SELECT COUNT(*) FROM timetable_entries WHERE school_id = ? AND assessment_id = ?) AS weekly_timetable_count,
         (SELECT COUNT(*) FROM result_batches WHERE school_id = ? AND assessment_id = ?) AS result_batch_count,
         (SELECT COUNT(*) FROM subject_results WHERE school_id = ? AND assessment_id = ?) AS subject_result_count`,
-      [schoolId, assessmentId, schoolId, assessmentId, schoolId, assessmentId],
+      [schoolId, assessmentId, schoolId, assessmentId, schoolId, assessmentId, schoolId, assessmentId],
     )
-    if (Number(links?.timetable_count || 0) || Number(links?.result_batch_count || 0) || Number(links?.subject_result_count || 0)) {
-      throw new HttpError(409, "This draft is already linked to timetable or result records.")
+    if (Number(links?.timetable_count || 0) || Number(links?.weekly_timetable_count || 0) || Number(links?.result_batch_count || 0) || Number(links?.subject_result_count || 0)) {
+      throw new HttpError(409, "This draft is already linked to a timetable or student results. Remove those links before deleting the paper.", {
+        code: "ASSESSMENT_IN_USE",
+        details: {
+          exam_timetable_entries: Number(links?.timetable_count || 0),
+          timetable_entries: Number(links?.weekly_timetable_count || 0),
+          result_batches: Number(links?.result_batch_count || 0),
+          student_results: Number(links?.subject_result_count || 0),
+        },
+      })
     }
 
     const [mediaRows] = await connection.query(
@@ -1322,6 +1418,7 @@ export async function deleteAssessment(req, res) {
     await connection.query("DELETE FROM assessment_media WHERE school_id = ? AND assessment_id = ?", [schoolId, assessmentId])
     await connection.query("DELETE FROM assessment_questions WHERE school_id = ? AND assessment_id = ?", [schoolId, assessmentId])
     await connection.query("DELETE FROM assessment_topics WHERE school_id = ? AND assessment_id = ?", [schoolId, assessmentId])
+    await connection.query("UPDATE assessment_import_jobs SET assessment_id = NULL WHERE school_id = ? AND assessment_id = ?", [schoolId, assessmentId])
     await connection.query("DELETE FROM assessments WHERE school_id = ? AND id = ?", [schoolId, assessmentId])
 
     await connection.commit()

@@ -8,6 +8,7 @@ import { generateStudentId, validateStudentSetupPayload } from "../services/stud
 import { getActiveAcademicSession, requireActiveAcademicSession, sessionPayload } from "../services/academicSessionService.js"
 import { ensureFeeAccountsForActiveStudents } from "../services/financeAccountService.js"
 import { studentCodeSortSql } from "../utils/studentSort.js"
+import { getStudentWithdrawalHistory } from "../services/studentWithdrawalService.js"
 
 const STUDENT_PHOTO_TYPES = new Set(["image/png", "image/jpeg"])
 const STUDENT_PHOTO_EXTENSIONS = {
@@ -82,7 +83,7 @@ export async function listStudents(req, res) {
       })
     }
     const [unassignedRows] = await pool.query(
-      `SELECT s.id, s.class_id, COALESCE(s.student_id, s.admission_no) AS student_id, s.admission_no,
+      `SELECT s.id, s.public_ref, s.class_id, COALESCE(s.student_id, s.admission_no) AS student_id, s.admission_no,
         s.first_name, s.last_name, s.date_of_birth, s.gender, s.status,
         s.stream_section, s.enrollment_date, s.student_type, s.previous_school,
         NULL AS current_enrollment_id, NULL AS class_name, NULL AS academic_year_name, NULL AS term_name,
@@ -106,7 +107,7 @@ export async function listStudents(req, res) {
   }
 
   const [rows] = await pool.query(
-    `SELECT s.id, se.class_id, COALESCE(s.student_id, s.admission_no) AS student_id, s.admission_no,
+    `SELECT s.id, s.public_ref, se.class_id, COALESCE(s.student_id, s.admission_no) AS student_id, s.admission_no,
       s.first_name, s.last_name, s.date_of_birth, s.gender, s.status,
       COALESCE(se.stream_section, s.stream_section) AS stream_section, s.enrollment_date, s.student_type, s.previous_school,
       se.id AS current_enrollment_id, se.enrollment_type, se.enrollment_status,
@@ -150,8 +151,11 @@ export async function listStudents(req, res) {
 
 export async function getStudent(req, res) {
   const schoolId = getScopedSchoolId(req)
-  const studentId = Number(req.params.id || 0)
-  if (!studentId) throw new HttpError(400, "Student id is required")
+  const studentReference = String(req.params.id || "").trim()
+  if (!studentReference) throw new HttpError(400, "Student reference is required")
+  const [[studentReferenceRow]] = await pool.query("SELECT id FROM students WHERE school_id = ? AND public_ref = ? LIMIT 1", [schoolId, studentReference])
+  const studentId = Number(studentReferenceRow?.id || 0)
+  if (!studentId) throw new HttpError(404, "Student was not found")
 
   const teacherClassIds = await getTeacherClassIds(req, schoolId)
   const session = await getActiveAcademicSession(schoolId)
@@ -388,17 +392,44 @@ export async function getStudent(req, res) {
     [schoolId, studentId],
   )
   const [fees] = await pool.query(
-    `SELECT term_name, amount_due, amount_paid, status, due_date
+    `SELECT term_name, amount_due, discount_amount, penalty_amount, amount_paid,
+      amount_due + penalty_amount - discount_amount - amount_paid AS balance, status, due_date
      FROM fee_accounts
      WHERE school_id = ? AND student_id = ?
      ORDER BY due_date DESC`,
     [schoolId, studentId],
   )
+  const [discounts] = await pool.query(
+    `SELECT discount_type,amount_type,amount_value,applied_amount,reason,status,approved_at,applied_at
+     FROM finance_discounts WHERE school_id=? AND student_id=? ORDER BY created_at DESC`,
+    [schoolId, studentId],
+  )
+  const [paymentPlans] = await pool.query(
+    `SELECT fpp.total_balance,fpp.installment_amount,fpp.installment_count,
+      MIN(fpi.due_date) AS start_date,
+      MIN(CASE WHEN fpi.status IN ('upcoming','overdue') THEN fpi.due_date END) AS next_due_date,
+      COALESCE(SUM(CASE WHEN fpi.status='overdue' OR (fpi.status='upcoming' AND fpi.due_date<CURRENT_DATE) THEN fpi.amount ELSE 0 END),0) AS overdue_amount,
+      fpp.status,fpp.notes
+     FROM finance_payment_plans fpp
+     LEFT JOIN finance_payment_plan_installments fpi ON fpi.school_id=fpp.school_id AND fpi.payment_plan_id=fpp.id
+     WHERE fpp.school_id=? AND fpp.student_id=?
+     GROUP BY fpp.id,fpp.total_balance,fpp.installment_amount,fpp.installment_count,fpp.status,fpp.notes,fpp.created_at
+     ORDER BY fpp.created_at DESC LIMIT 10`,
+    [schoolId, studentId],
+  )
+  const feeSummary = fees.reduce((summary, account) => ({
+    billed: summary.billed + Number(account.amount_due || 0) + Number(account.penalty_amount || 0),
+    discounts: summary.discounts + Number(account.discount_amount || 0),
+    paid: summary.paid + Number(account.amount_paid || 0),
+    outstanding: summary.outstanding + Math.max(0, Number(account.balance || 0)),
+  }), { billed: 0, discounts: 0, paid: 0, outstanding: 0 })
+  const withdrawals = await getStudentWithdrawalHistory(pool, schoolId, studentId)
   res.json({
     student: {
       ...student,
       guardians,
       enrollments,
+      withdrawals,
       results,
       exam_reports: results,
       formal_assessment_results: formalAssessments,
@@ -406,14 +437,24 @@ export async function getStudent(req, res) {
       assessment_results: assessmentResults,
       attendance,
       fees,
+      fee_profile: {
+        category: student.fee_category || "standard",
+        configured_payment_plan: student.payment_plan || null,
+        summary: feeSummary,
+        accounts: fees,
+        discounts,
+        payment_plans: paymentPlans,
+        active_payment_plan: paymentPlans.find((plan) => plan.status === "active") || null,
+      },
     },
   })
 }
 
 export async function updateStudent(req, res) {
   const schoolId = getScopedSchoolId(req)
-  const studentId = Number(req.params.id || 0)
-  if (!studentId) throw new HttpError(400, "Student id is required")
+  const [[studentReference]] = await pool.query("SELECT id FROM students WHERE school_id=? AND public_ref=? LIMIT 1", [schoolId,String(req.params.id||"")])
+  const studentId = Number(studentReference?.id || 0)
+  if (!studentId) throw new HttpError(404, "Student was not found")
 
   const connection = await pool.getConnection()
   try {
@@ -518,12 +559,14 @@ export async function createStudent(req, res) {
     if (!classRow) throw new HttpError(400, "Selected class does not belong to this school")
 
     const studentId = await generateStudentId(connection, schoolId, student.enrollmentDate)
+    const publicRef = randomUUID()
     const [result] = await connection.query(
       `INSERT INTO students (
-        school_id, class_id, student_id, admission_no, first_name, last_name, date_of_birth, gender,
+        public_ref, school_id, class_id, student_id, admission_no, first_name, last_name, date_of_birth, gender,
         national_id, profile_photo_url, stream_section, enrollment_date, student_type, previous_school, status
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')`,
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')`,
       [
+        publicRef,
         schoolId,
         student.classId,
         studentId,
@@ -607,7 +650,7 @@ export async function createStudent(req, res) {
     await connection.commit()
     res.status(201).json({
       student: {
-        id: dbStudentId,
+        public_ref: publicRef,
         student_id: studentId,
         admission_no: studentId,
         first_name: student.firstName,

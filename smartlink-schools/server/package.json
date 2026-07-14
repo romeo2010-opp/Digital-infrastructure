@@ -6,7 +6,13 @@
   "scripts": {
     "build": "echo \"No server build step required\"",
     "db:apply": "node scripts/apply-sql.mjs",
+    "demo:greenfield": "node scripts/seed-greenfield-demo.mjs",
+    "demo:recalculate": "node scripts/recalculate-greenfield-demo.mjs",
+    "demo:validate": "node scripts/validate-greenfield-demo.mjs",
+    "demo:control": "node scripts/greenfield-demo-control.mjs",
+    "demo:academic-loop": "node scripts/run-academic-operations-demo.mjs",
     "dev": "node --watch src/server.js",
+    "test": "node --test test/*.test.js",
     "start": "node src/server.js"
   },
   "dependencies": {

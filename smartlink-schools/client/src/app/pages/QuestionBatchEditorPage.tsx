@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, CheckCircle2, Loader2, Save, XCircle } from 'lucide-react'
+import { CheckCircle2, Loader2, Save, XCircle } from 'lucide-react'
 import { useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
 import { SmartLinkLoadingState } from '../components/SmartLinkLoadingState'
+import { PageBackButton } from '../components/PageBackButton'
 import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
 import { Textarea } from '../components/ui/textarea'
@@ -124,9 +125,7 @@ export function QuestionBatchEditorPage() {
     <div className="flex h-screen overflow-hidden bg-[#f6f7f4] text-[#111827]">
       <aside className="hidden h-full w-[292px] shrink-0 flex-col border-r border-[#d7dde5] bg-[#fbfcf8] md:flex">
         <div className="flex h-14 items-center gap-2 border-b border-[#d7dde5] px-4">
-          <button type="button" className="grid size-8 place-items-center rounded-[5px] border border-[#d1d5db] bg-white text-[#4b5563]" onClick={() => navigate('/syllabus')} aria-label="Back">
-            <ArrowLeft className="size-4" />
-          </button>
+          <PageBackButton fallback="/syllabus" label="Back to syllabus" iconOnly />
           <div className="min-w-0">
             <div className="truncate text-[13px] font-semibold">Question Batch</div>
             <div className="text-[11px] font-medium text-[#64748b]">{valueLabel(batch.status)}</div>
@@ -163,10 +162,7 @@ export function QuestionBatchEditorPage() {
             <div className="truncate text-[14px] font-semibold text-[#111827]">{batch.topic_name || 'AI Draft Batch'}</div>
             <div className="text-[11px] font-medium text-[#64748b]">{batch.grade_name || '-'} / {batch.subject_name || '-'}</div>
           </div>
-          <Button type="button" variant="outline" className="h-8 rounded-[5px] text-[12px]" onClick={() => navigate('/syllabus')}>
-            <ArrowLeft className="size-3.5" />
-            Back
-          </Button>
+          <PageBackButton fallback="/syllabus" label="Back to syllabus" />
         </header>
 
         <div className="mx-auto grid w-full max-w-[1040px] gap-4 px-4 py-5 lg:px-8">

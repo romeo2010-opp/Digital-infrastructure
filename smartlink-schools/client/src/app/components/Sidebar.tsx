@@ -13,6 +13,7 @@ import {
   CalendarRange,
   FlaskConical,
   ClipboardList,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   ClipboardCheck,
@@ -21,12 +22,14 @@ import {
   FileText,
   Globe2,
   GraduationCap,
+  HeartHandshake,
   LayoutDashboard,
   Landmark,
   Lock,
   MessageSquare,
   Palette,
   PlugZap,
+  Printer,
   ReceiptText,
   ScrollText,
   Settings,
@@ -54,6 +57,12 @@ const studentPortalItem = {
   label: 'My Portal',
   path: '/student-portal',
   icon: GraduationCap,
+}
+
+const parentProgressItem = {
+  label: 'Child Progress',
+  path: '/parent-insights',
+  icon: HeartHandshake,
 }
 
 const financeItem = {
@@ -104,10 +113,79 @@ const bursarGroups = [
   },
 ] as const
 
+const directorOverviewItem = {
+  label: 'Overview',
+  path: '/overview',
+  icon: LayoutDashboard,
+}
+
+const directorGroups = [
+  {
+    label: 'Finance',
+    icon: ReceiptText,
+    items: [
+      { label: 'Fee Collection', path: '/finance/fee-collection', icon: Banknote },
+      { label: 'Outstanding Balances', path: '/finance/outstanding-balances', icon: AlertTriangle },
+      { label: 'Discounts & Bursaries', path: '/finance/discounts-bursaries', icon: ShieldCheck },
+      { label: 'Expenses', path: '/finance/expenses', icon: Banknote },
+      { label: 'Payroll', path: '/finance/payroll', icon: WalletCards },
+      { label: 'Financial Reports', path: '/finance/financial-reports', icon: FileBarChart },
+    ],
+  },
+  {
+    label: 'Admissions',
+    icon: Users,
+    items: [
+      { label: 'Enrollment Pipeline', path: '/admissions/enrollment-pipeline', icon: GraduationCap },
+      { label: 'Class Capacity', path: '/admissions/class-capacity', icon: Users },
+      { label: 'Withdrawals', path: '/admissions/withdrawals', icon: UserCircle2 },
+    ],
+  },
+  {
+    label: 'Academics',
+    icon: BookOpenCheck,
+    items: [
+      { label: 'Performance Overview', path: '/academics/performance-overview', icon: BarChart3 },
+      { label: 'At-Risk Students', path: '/academics/at-risk-students', icon: AlertTriangle },
+      { label: 'Subject Trends', path: '/academics/subject-trends', icon: FileBarChart },
+      { label: 'Marks Submission', path: '/academics/marks-submission', icon: ClipboardCheck },
+    ],
+  },
+  {
+    label: 'Staff',
+    icon: UserRound,
+    items: [
+      { label: 'Teacher Compliance', path: '/staff/teacher-compliance', icon: ShieldCheck },
+      { label: 'Attendance', path: '/staff/attendance', icon: CalendarCheck },
+      { label: 'Workload', path: '/staff/workload', icon: ClipboardList },
+      { label: 'Leave', path: '/staff/leave', icon: CalendarRange },
+    ],
+  },
+  {
+    label: 'Operations',
+    icon: ClipboardList,
+    items: [
+      { label: 'Incidents', path: '/operations/incidents', icon: AlertTriangle },
+      { label: 'Complaints', path: '/operations/complaints', icon: MessageSquare },
+      { label: 'Approvals', path: '/operations/approvals', icon: ClipboardCheck },
+    ],
+  },
+  {
+    label: 'Reports',
+    icon: FileBarChart,
+    items: [
+      { label: 'Director Report', path: '/reports/director-report', icon: FileText },
+      { label: 'Term Report', path: '/reports/term-report', icon: ScrollText },
+      { label: 'Export Center', path: '/reports/export-center', icon: Database },
+    ],
+  },
+] as const
+
 const groups = [
   {
     label: 'School Operations',
     items: [
+      { label: 'My Follow-Ups', path: '/tasks', icon: ClipboardList },
       { label: 'Classes', path: '/classes', icon: Users },
       { label: 'Students', path: '/students', icon: GraduationCap },
       { label: 'Teachers', path: '/teachers', icon: UserRound },
@@ -121,6 +199,8 @@ const groups = [
   {
     label: 'Teaching & Learning',
     items: [
+      { label: 'Classroom Mode', path: '/classroom', icon: BookOpenCheck },
+      { label: 'Academic Intelligence', path: '/academic-intelligence', icon: Sparkles, badge: 'Live' },
       { label: 'Homework', path: '/homework', icon: BookOpenCheck },
       { label: 'Lesson Log', path: '/teacher/lesson-log', icon: ClipboardList },
       { label: 'Timetables', path: '/timetables', icon: CalendarRange },
@@ -133,6 +213,20 @@ const groups = [
       { label: 'Daily Drill', path: '/daily-drill', icon: BookOpenCheck },
       { label: 'Exam Forecast', path: '/exam-forecast', icon: BarChart3 },
       { label: 'Exam Intelligence', path: '/exam-intelligence', icon: FlaskConical, badge: 'Soon' },
+    ],
+  },
+  {
+    label: 'Library & Resources',
+    items: [
+      { label: 'Library Dashboard', path: '/library/dashboard', icon: LayoutDashboard },
+      { label: 'Physical Catalogue', path: '/library/catalogue', icon: BookOpenCheck },
+      { label: 'Loans & Returns', path: '/library/loans', icon: ClipboardCheck },
+      { label: 'Library Computers', path: '/library/computers', icon: Database },
+      { label: 'Teaching Resources', path: '/library/resources', icon: FileText },
+      { label: 'Resource Review', path: '/library/resources/review', icon: ShieldCheck },
+      { label: 'Resource Requests', path: '/library/resource-requests', icon: ClipboardCheck },
+      { label: 'Institutional Archive', path: '/library/archive', icon: Database },
+      { label: 'Print Requests', path: '/library/print-requests', icon: Printer },
     ],
   },
   {
@@ -224,6 +318,7 @@ export function Sidebar({ user }: { user?: any; theme?: 'default' | 'light' }) {
     if (typeof window === 'undefined') return false
     return window.localStorage.getItem(sidebarStorageKey) === 'true'
   })
+  const [directorExpanded, setDirectorExpanded] = useState<Record<string, boolean>>(() => Object.fromEntries(directorGroups.map((group) => [group.label, true])))
   const userInitials = initialsFor(user)
   const displayName = displayNameFor(user)
   const roleName = roleNameFor(user)
@@ -231,9 +326,11 @@ export function Sidebar({ user }: { user?: any; theme?: 'default' | 'light' }) {
     ? dashboardItem
     : canAccessPath(user, studentPortalItem.path)
       ? studentPortalItem
-      : canAccessPath(user, financeItem.path)
-        ? financeItem
-        : dashboardItem
+      : canAccessPath(user, parentProgressItem.path)
+        ? parentProgressItem
+        : canAccessPath(user, financeItem.path)
+          ? financeItem
+          : dashboardItem
   const PrimaryIcon = primaryItem.icon
   const settingsMode = location.pathname.startsWith('/settings')
 
@@ -269,6 +366,131 @@ export function Sidebar({ user }: { user?: any; theme?: 'default' | 'light' }) {
     }`
   const labelClass = `${collapsed ? 'hidden' : 'block'} min-w-0 truncate max-md:hidden`
   const isBursarPortal = String(user?.role || '').toLowerCase() === 'bursar' && !settingsMode
+  const userRole = String(user?.role || '').toLowerCase()
+  const isDirectorPortal = ['school_owner', 'director', 'owner'].includes(userRole) && !settingsMode
+
+  const toggleDirectorGroup = (label: string) => {
+    setDirectorExpanded((current) => ({ ...current, [label]: !current[label] }))
+  }
+
+  if (isDirectorPortal) {
+    const directorNavItemClass = (active: boolean) =>
+      `relative flex h-8 w-full items-center gap-2 rounded-[5px] text-left text-[12px] font-medium tracking-[-0.012em] transition ${
+        collapsed ? 'justify-center px-0' : 'px-3'
+      } max-md:justify-center max-md:px-0 ${
+        active
+          ? 'bg-[#111111] text-white shadow-[0_6px_14px_rgba(0,0,0,0.12)]'
+          : 'text-[#6b7280] hover:bg-[#f7f8fa] hover:text-[#111827]'
+      }`
+
+    return (
+      <aside
+        className={`z-20 flex h-full min-h-0 flex-col overflow-hidden border-r border-[#e2e8f0] bg-white text-[#6b7280] transition-[width,min-width,max-width] duration-200 ${
+          collapsed ? 'w-14 min-w-14 max-w-14' : 'w-[276px] min-w-[276px] max-w-[276px]'
+        } max-md:w-14 max-md:min-w-14 max-md:max-w-14`}
+      >
+        <nav className="min-h-0 flex-1 overflow-y-auto px-2 py-3 [scrollbar-width:thin] [scrollbar-color:#cbd5e0_transparent]">
+          <div className="grid gap-1.5">
+            <button
+              type="button"
+              onClick={() => openPath(directorOverviewItem.path)}
+              title={directorOverviewItem.label}
+              aria-label={directorOverviewItem.label}
+              className={directorNavItemClass(location.pathname === '/overview')}
+            >
+              <LayoutDashboard className="size-4 shrink-0" />
+              <span className={labelClass}>{directorOverviewItem.label}</span>
+            </button>
+
+            {directorGroups.map((group) => {
+              const items = allowedItems(group.items)
+              if (!items.length) return null
+              const GroupIcon = group.icon
+              const expanded = directorExpanded[group.label] !== false
+              const groupActive = items.some((item) => location.pathname === item.path || location.pathname.startsWith(`${item.path}/`))
+              return (
+                <section key={group.label} className="min-w-0">
+                  <button
+                    type="button"
+                    onClick={() => toggleDirectorGroup(group.label)}
+                    title={group.label}
+                    aria-label={group.label}
+                    className={`relative flex h-8 w-full items-center gap-2 rounded-[5px] text-left text-[12px] font-semibold tracking-[-0.012em] transition ${
+                      collapsed ? 'justify-center px-0' : 'px-3'
+                    } max-md:justify-center max-md:px-0 ${
+                      groupActive ? 'text-[#111827]' : 'text-[#6b7280] hover:bg-[#f7f8fa] hover:text-[#111827]'
+                    }`}
+                  >
+                    <GroupIcon className="size-4 shrink-0" />
+                    <span className={labelClass}>{group.label}</span>
+                    {!collapsed ? <ChevronDown className={`ml-auto size-3.5 transition ${expanded ? '' : '-rotate-90'} max-md:hidden`} /> : null}
+                  </button>
+                  {expanded ? (
+                    <div className={`mt-0.5 grid gap-0.5 ${collapsed ? '' : 'pl-2'} max-md:pl-0`}>
+                      {items.map((item) => {
+                        const Icon = item.icon
+                        const active = location.pathname === item.path || location.pathname.startsWith(`${item.path}/`)
+                        return (
+                          <button
+                            key={`${item.path}-${item.label}`}
+                            type="button"
+                            onClick={() => openPath(item.path)}
+                            title={item.label}
+                            aria-label={item.label}
+                            className={directorNavItemClass(active)}
+                          >
+                            <Icon className="size-4 shrink-0" />
+                            <span className={labelClass}>{item.label}</span>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  ) : null}
+                </section>
+              )
+            })}
+
+            <div className={`${collapsed ? 'mx-auto h-px w-7 bg-[#e2e8f0]' : 'mx-3 my-1 h-px bg-[#e2e8f0]'} max-md:mx-auto max-md:h-px max-md:w-7 max-md:bg-[#e2e8f0]`} />
+            <button type="button" onClick={() => openPath('/audit-security')} title="Audit & Security" aria-label="Audit & Security" className={directorNavItemClass(isActive('/audit-security'))}>
+              <ScrollText className="size-4 shrink-0" />
+              <span className={labelClass}>Audit & Security</span>
+            </button>
+            <button type="button" onClick={() => openPath('/leadership-settings')} title="Settings" aria-label="Settings" className={directorNavItemClass(isActive('/leadership-settings'))}>
+              <Settings className="size-4 shrink-0" />
+              <span className={labelClass}>Settings</span>
+            </button>
+          </div>
+        </nav>
+
+        <div className="grid shrink-0 gap-1.5 border-t border-[#e2e8f0] px-2 py-2">
+          <button
+            type="button"
+            onClick={toggleCollapsed}
+            title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            className={`relative flex h-8 w-full items-center gap-2 rounded-[5px] text-left text-[12px] font-medium tracking-[-0.012em] text-[#6b7280] transition hover:bg-[#f7f8fa] hover:text-[#111827] ${
+              collapsed ? 'justify-center px-0' : 'px-3'
+            } max-md:hidden`}
+          >
+            {collapsed ? <ChevronRight className="size-4 shrink-0" /> : <ChevronLeft className="size-4 shrink-0" />}
+            <span className={labelClass}>{collapsed ? 'Expand' : 'Collapse'}</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => openPath('/settings/preferences')}
+            className={`flex h-10 items-center gap-2 rounded-[5px] text-left transition hover:bg-[#f7f8fa] ${collapsed ? 'justify-center px-0' : 'px-2'} max-md:justify-center max-md:px-0`}
+            title={displayName}
+          >
+            <span className="grid size-8 shrink-0 place-items-center rounded-full bg-[#111827] text-[11px] font-bold text-white">{userInitials || 'D'}</span>
+            <span className={`${collapsed ? 'hidden' : 'min-w-0 flex-1'} max-md:hidden`}>
+              <span className="block truncate text-[13px] font-semibold text-[#111827]">{displayName}</span>
+              <span className="mt-0.5 block truncate text-[11px] font-medium text-[#9ca3af]">{roleName}</span>
+            </span>
+          </button>
+        </div>
+      </aside>
+    )
+  }
 
   if (isBursarPortal) {
     const bursarNavItemClass = (active: boolean) =>

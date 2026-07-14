@@ -12,6 +12,7 @@ import {
 import { HttpError } from "../utils/http.js"
 import { studentCodeSortSql } from "../utils/studentSort.js"
 import { getReportPdfTemplateForSchool, normalizeReportPdfTemplateId } from "../services/reportSettingsService.js"
+import { broadcastSchoolNotification } from "../services/operationalCommunicationService.js"
 
 const FORMAL_ASSESSMENT_TYPES = new Set(["mid_term", "end_of_term_exam", "mock_exam", "final_exam"])
 const EXAM_TYPES = new Set(["end_of_term", "mid_term", "mock", "final", "custom"])
@@ -183,7 +184,7 @@ async function buildIssues(connection, schoolId, sessionId) {
   const [missingMarks] = await connection.query(
     `SELECT a.id, a.name, c.name AS class_name, subj.name AS subject_name,
        COUNT(DISTINCT se.student_id) AS expected_students,
-       COUNT(DISTINCT CASE WHEN re.score IS NOT NULL THEN re.student_id END) AS marked_students
+       COUNT(DISTINCT CASE WHEN re.score IS NOT NULL OR re.status = 'absent' THEN re.student_id END) AS marked_students
      FROM assessments a
      JOIN classes c ON c.id = a.class_id AND c.school_id = a.school_id
      JOIN subjects subj ON subj.id = a.subject_id AND subj.school_id = a.school_id
@@ -360,7 +361,8 @@ export async function getExamSession(req, res) {
     `SELECT rb.*, a.name AS assessment_name, a.total_marks, c.name AS class_name, subj.name AS subject_name,
       u.full_name AS teacher_name,
       COUNT(re.id) AS saved_marks,
-      SUM(CASE WHEN re.score IS NULL THEN 1 ELSE 0 END) AS missing_marks
+      SUM(CASE WHEN re.score IS NULL AND COALESCE(re.status, '') <> 'absent' THEN 1 ELSE 0 END) AS missing_marks,
+      SUM(CASE WHEN re.status = 'absent' THEN 1 ELSE 0 END) AS absent_marks
      FROM result_batches rb
      JOIN assessments a ON a.id = rb.assessment_id AND a.school_id = rb.school_id
      JOIN classes c ON c.id = rb.class_id AND c.school_id = rb.school_id
@@ -420,7 +422,7 @@ export async function transitionExamSession(req, res) {
   const connection = await pool.getConnection()
   try {
     await connection.beginTransaction()
-    const [[current]] = await connection.query("SELECT status FROM exam_sessions WHERE id = ? AND school_id = ? LIMIT 1", [sessionId, schoolId])
+    const [[current]] = await connection.query("SELECT status,name FROM exam_sessions WHERE id = ? AND school_id = ? LIMIT 1", [sessionId, schoolId])
     if (!current) throw new HttpError(404, "Exam session was not found")
     if (current.status === "archived") throw new HttpError(409, "Archived exam sessions are read-only")
     if (current.status === "locked" && status !== "archived") throw new HttpError(409, "Locked exam sessions can only be archived")
@@ -440,6 +442,9 @@ export async function transitionExamSession(req, res) {
       )
     }
     await connection.commit()
+    if (["scheduled", "in_progress"].includes(status) && current.status !== status) {
+      await broadcastSchoolNotification({schoolId,roles:["teacher","headteacher","school_owner","director","owner"],excludeUserId:req.user.id,title:`Exam session ${status === "scheduled" ? "opened" : "started"}`,message:`${current.name} is now ${status.replaceAll("_"," ")}. Review the session dates, papers and timetable.`,category:"academics",priority:"high",linkedEntityType:"exam_session",linkedEntityId:sessionId,createdBy:req.user.id})
+    }
     res.json({ ok: true, schedule_reset: scheduleReset })
   } catch (error) {
     await connection.rollback()
@@ -889,10 +894,10 @@ async function loadReportCardPayload(schoolId, cardId) {
   const attendedDays = Number(card.attended_days || 0)
   const normalizedSubjects = subjects.map((subject) => ({
     ...subject,
-    score: subject.score === null ? null : Number(subject.score),
-    raw_score: subject.raw_score === null ? subject.score === null ? null : Number(subject.score) : Number(subject.raw_score),
+    score: subject.entry_status === "absent" || subject.score === null ? null : Number(subject.score),
+    raw_score: subject.entry_status === "absent" || subject.raw_score === null ? subject.score === null ? null : Number(subject.score) : Number(subject.raw_score),
     total_marks: subject.total_marks === null ? null : Number(subject.total_marks),
-    total_percent: subject.score === null ? null : Number(subject.score),
+    total_percent: subject.entry_status === "absent" || subject.score === null ? null : Number(subject.score),
   }))
   const [formalAssessmentRows] = await pool.query(
     `SELECT re.id, re.score, re.grade, re.comment, re.status, re.last_saved_at, re.updated_at,
@@ -933,12 +938,14 @@ async function loadReportCardPayload(schoolId, cardId) {
     [schoolId, card.student_id, card.academic_year_id, card.term_id],
   )
   const normalizeAssessmentRow = (row, sourceType) => {
-    const score = row.score === null ? null : Number(row.score)
+    const absent = String(row.status || "").toLowerCase() === "absent"
+    const score = absent || row.score === null ? null : Number(row.score)
     const totalMarks = row.total_marks === null ? null : Number(row.total_marks)
     const percentage = score === null || !totalMarks ? null : Number(((score / totalMarks) * 100).toFixed(1))
     return {
       ...row,
       source_type: sourceType,
+      absent,
       score,
       raw_score: score,
       total_marks: totalMarks,
@@ -1075,6 +1082,7 @@ function reportGradeFromPercentage(value) {
 }
 
 function normalizeReportGrade(row) {
+  if (isAbsentReportResult(row)) return "Absent"
   const percentage = Number(row.total_percent ?? row.percentage)
   if (Number.isFinite(percentage)) return reportGradeFromPercentage(percentage)
   const explicitGrade = reportText(row.grade || row.raw_grade, "")
@@ -1082,7 +1090,12 @@ function normalizeReportGrade(row) {
   return "-"
 }
 
+function isAbsentReportResult(row) {
+  return Boolean(row?.absent) || String(row?.status || row?.entry_status || "").toLowerCase() === "absent"
+}
+
 function isWeakReportResult(row) {
+  if (isAbsentReportResult(row)) return false
   const grade = normalizeReportGrade(row).toUpperCase()
   const percentage = Number(row.total_percent ?? row.percentage)
   return grade === "U" || (Number.isFinite(percentage) && percentage < 50)
@@ -1354,7 +1367,7 @@ function ensureReportSpace(doc, y, neededHeight, topY = 42) {
 
 function drawReportResultRow(doc, fonts, row, x, y, widths) {
   const subject = reportText(row.subject_name || row.subject_code)
-  const mark = scoreLabel(row.raw_score ?? row.score)
+  const mark = isAbsentReportResult(row) ? "Absent" : scoreLabel(row.raw_score ?? row.score)
   const grade = normalizeReportGrade(row)
   const comment = reportText(row.comment)
   const teacher = reportText(row.teacher_name)

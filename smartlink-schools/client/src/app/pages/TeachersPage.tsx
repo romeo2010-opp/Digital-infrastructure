@@ -118,7 +118,7 @@ export function TeachersPage() {
               {copiedCredentials ? 'Copied' : 'Copy credentials'}
             </Button>
             <Button type="button" variant="outline" className="h-8 rounded-[5px] text-[12px]" onClick={() => setCreated(null)}><Plus className="size-3.5" /> Add Another Teacher</Button>
-            <Button type="button" variant="outline" className="h-8 rounded-[5px] text-[12px]" onClick={() => navigate(`/teachers/${created.teacher.id}`)}><UserRound className="size-3.5" /> View Teacher Profile</Button>
+            <Button type="button" variant="outline" className="h-8 rounded-[5px] text-[12px]" disabled={!created.teacher.public_ref} onClick={() => navigate(`/teachers/${created.teacher.public_ref}`)}><UserRound className="size-3.5" /> View Teacher Profile</Button>
             <Button type="button" className="h-8 rounded-[5px] text-[12px]" onClick={() => navigate('/classes')}>Assign Teacher to Subject/Class</Button>
           </div>
         </div>
@@ -161,7 +161,7 @@ export function TeachersPage() {
                 { key: 'employment_status', label: 'Status' },
               ]}
               rows={visibleTeachers}
-              onRowClick={(row) => navigate(`/teachers/${row.id}`)}
+              onRowClick={(row) => navigate(`/teachers/${row.public_ref}`)}
               emptyMessage="No teacher records found."
             />
           </div>

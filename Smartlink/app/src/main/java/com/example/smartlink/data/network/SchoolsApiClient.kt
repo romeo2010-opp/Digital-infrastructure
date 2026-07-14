@@ -58,6 +58,11 @@ class SchoolsApiClient(context: Context) {
     suspend fun downloadReportCard(token: String, reportId: String): ByteArray = download("/api/report-cards/$reportId/pdf", token)
     suspend fun students(token: String) = request("/api/students?limit=30", "GET", null, token)
     suspend fun fees(token: String) = request("/api/fees/dashboard", "GET", null, token)
+    suspend fun feeAccounts(token: String) = request("/api/fees/accounts?limit=30", "GET", null, token)
+    suspend fun attendance(token: String) = request("/api/attendance", "GET", null, token)
+    suspend fun homework(token: String) = request("/api/homework", "GET", null, token)
+    suspend fun results(token: String) = request("/api/results", "GET", null, token)
+    suspend fun schoolToday(token: String) = request("/api/school/today", "GET", null, token)
     suspend fun teacherToday(token: String) = request("/api/teacher/today", "GET", null, token)
     suspend fun notifications(token: String) = request("/api/notifications?limit=20", "GET", null, token)
 

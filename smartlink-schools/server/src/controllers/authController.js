@@ -5,7 +5,7 @@ import { signSession } from "../middleware/auth.js"
 import { HttpError } from "../utils/http.js"
 import { getActiveAcademicSession, sessionPayload } from "../services/academicSessionService.js"
 import { getSchoolFeatures } from "../services/schoolFeaturesService.js"
-import { probeAiConnection } from "../services/ai/aiClient.js"
+import { getEffectivePermissions } from "../services/authorizationService.js"
 import { getLoginAppearanceForUser } from "./preferencesController.js"
 
 const LAST_USER_COOKIE = "smartlink_schools_last_user"
@@ -74,12 +74,14 @@ async function decorateSessionUser(user) {
     [user.schoolId],
   )
   const schoolFeatures = await getSchoolFeatures(pool, user.schoolId)
+  const permissions = await getEffectivePermissions(user.schoolId, user.id, user.role)
   const baseUser = {
     ...user,
     schoolName: school?.name || null,
     schoolCity: school?.city || null,
     schoolCountry: school?.country || null,
     schoolFeatures,
+    permissions,
     academicSession: sessionPayload(session),
     mustChangePassword: Boolean(user.mustChangePassword),
   }
@@ -238,20 +240,8 @@ export async function login(req, res) {
   }
 
   const decoratedUser = await decorateSessionUser(sessionUser)
-  let ai = null
-  try {
-    ai = await probeAiConnection()
-  } catch (error) {
-    ai = {
-      ok: false,
-      online: false,
-      configured: false,
-      message: error?.message || "AI connection check failed",
-      checked_at: new Date().toISOString(),
-    }
-  }
   setLastUserCookie(req, res, sessionUser)
-  res.json({ token: signSession(decoratedUser), user: decoratedUser, ai })
+  res.json({ token: signSession(decoratedUser), user: decoratedUser })
 }
 
 export async function loginAppearance(req, res) {

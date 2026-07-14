@@ -4,11 +4,20 @@ import { HttpError } from "../utils/http.js"
 const roleRank = {
   super_admin: 7,
   school_owner: 6,
+  director: 6,
+  owner: 6,
   headteacher: 5,
   bursar: 4,
+  librarian: 4,
   teacher: 3,
   parent: 2,
   student: 1,
+}
+
+function effectiveRole(role) {
+  const value = String(role || "")
+  if (value === "director" || value === "owner") return "school_owner"
+  return value
 }
 
 export function signSession(user) {
@@ -24,6 +33,7 @@ export function signSession(user) {
       studentCode: user.studentCode || null,
       admissionNo: user.admissionNo || null,
       classId: user.classId || null,
+      permissions: Array.isArray(user.permissions) ? user.permissions : [],
     },
     process.env.JWT_SECRET || "smartlink-schools-dev-secret",
     { expiresIn: process.env.JWT_EXPIRES_IN || "8h" },
@@ -43,6 +53,7 @@ export function verifySessionToken(token) {
     studentCode: payload.studentCode || null,
     admissionNo: payload.admissionNo || null,
     classId: payload.classId ? Number(payload.classId) : null,
+    permissions: Array.isArray(payload.permissions) ? payload.permissions : [],
   }
 }
 
@@ -73,16 +84,25 @@ export function requirePasswordReady(req, _res, next) {
 export function requireRole(...allowedRoles) {
   return function roleGuard(req, _res, next) {
     if (!req.user) throw new HttpError(401, "Authentication required")
-    if (req.user.role === "super_admin") return next()
-    if (allowedRoles.includes(req.user.role)) return next()
+    const role = effectiveRole(req.user.role)
+    if (role === "super_admin") return next()
+    if (allowedRoles.includes(role) || allowedRoles.includes(req.user.role)) return next()
     throw new HttpError(403, "Insufficient role permissions")
+  }
+}
+
+export function requireExactRole(...allowedRoles) {
+  return function exactRoleGuard(req, _res, next) {
+    if (!req.user) throw new HttpError(401, "Authentication required")
+    if (allowedRoles.includes(String(req.user.role || ""))) return next()
+    throw new HttpError(403, "This workspace is restricted to the assigned role")
   }
 }
 
 export function requireMinimumRole(minimumRole) {
   return function rankGuard(req, _res, next) {
     if (!req.user) throw new HttpError(401, "Authentication required")
-    if ((roleRank[req.user.role] || 0) < (roleRank[minimumRole] || 0)) {
+    if ((roleRank[req.user.role] || roleRank[effectiveRole(req.user.role)] || 0) < (roleRank[minimumRole] || 0)) {
       throw new HttpError(403, "Insufficient role permissions")
     }
     next()

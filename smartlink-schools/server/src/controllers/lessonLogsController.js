@@ -10,6 +10,7 @@ import {
 import { getActiveAcademicSession, requireActiveAcademicSession, sessionPayload } from "../services/academicSessionService.js"
 import { getLessonLogSuggestions } from "../services/lessons/lessonLogSuggestionService.js"
 import { studentCodeSortSql } from "../utils/studentSort.js"
+import { syncCurriculumFromLesson } from "../services/academicIntelligenceEngine.js"
 
 const coverageStatuses = new Set(["introduced", "partially_taught", "fully_taught", "revised", "assessed", "postponed"])
 const lessonOutcomes = new Set(["students_understood", "mixed_understanding", "students_struggled", "not_assessed"])
@@ -581,9 +582,11 @@ export async function finalizeLessonLog(req, res) {
     )
     await audit(connection, schoolId, lessonLogId, req.user.id, "finalized", { status: existing.status }, { status: "finalized" })
     await connection.commit()
+    const curriculumUpdate = await syncCurriculumFromLesson(schoolId, lessonLogId, req.user).catch((error) => ({ updated: false, warning: error.message }))
     res.json({
       lesson_log: await loadLessonLogById(pool, schoolId, lessonLogId),
       drill_generation_available: true,
+      curriculum_update: curriculumUpdate,
       message: "Lesson log finalized. Daily Drills can now use the taught topic.",
     })
   } catch (error) {

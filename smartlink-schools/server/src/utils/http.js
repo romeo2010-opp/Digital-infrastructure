@@ -1,7 +1,11 @@
 export class HttpError extends Error {
-  constructor(status, message) {
+  constructor(status, message, options = {}) {
     super(message)
     this.status = status
+    this.code = options.code || null
+    this.details = options.details || null
+    this.expose = options.expose ?? status < 500
+    if (options.cause) this.cause = options.cause
   }
 }
 

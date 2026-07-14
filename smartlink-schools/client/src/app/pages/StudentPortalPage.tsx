@@ -271,6 +271,7 @@ function StudentAvatar({
 function gradeClass(grade: any, score: any) {
   const text = String(grade || "").toUpperCase();
   const number = Number(score || 0);
+  if (text === "ABSENT") return "bg-[#F1F5F9] text-[#475569]";
   if (text.startsWith("A") || number >= 80)
     return "bg-[#E1F5EE] text-[#085041]";
   if (text.startsWith("B") || number >= 70)
@@ -516,6 +517,7 @@ function Card({
 
 function SubjectRow({ subject, index }: { subject: any; index: number }) {
   const score = subject.total_percent ?? subject.score;
+  const absent = Boolean(subject.absent) || String(subject.status || subject.entry_status || "").toLowerCase() === "absent";
   return (
     <div className="flex items-center gap-2 border-b border-[#E7E5DE] py-2 text-[12px] last:border-b-0">
       <span
@@ -526,12 +528,12 @@ function SubjectRow({ subject, index }: { subject: any; index: number }) {
         {subject.subject_name || subject.name || "Subject"}
       </span>
       <span className="min-w-10 text-right font-medium text-[#20201d]">
-        {percent(score)}
+        {absent ? "Absent" : percent(score)}
       </span>
       <span
         className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${gradeClass(subject.grade, score)}`}
       >
-        {subject.grade || "-"}
+        {absent ? "Absent" : subject.grade || "-"}
       </span>
     </div>
   );
