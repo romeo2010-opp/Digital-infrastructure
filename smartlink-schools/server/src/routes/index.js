@@ -410,6 +410,7 @@ import {
   patchQuestionPermission,
   postAcademicMarkSheetDraft,
   postAcademicMarkSheetPublish,
+  postAcademicMarkSheetReopen,
   postTargetedAssessment,
   postTargetedAssessmentApproval,
   postTargetedAssessmentGenerate,
@@ -422,6 +423,25 @@ import {
   targetedAssessments,
   validateTargetedAssessment,
 } from "../controllers/academicOperationsController.js"
+import {
+  escalationPolicy,
+  learnerSupport,
+  postAcademicReviewRequest,
+  postGuardianSummaryDraft,
+  postSupportAssignment,
+  postSupportCarryForward,
+  postSupportEscalation,
+  postSupportIntervention,
+  postSupportOutcome,
+  postSupportReassessment,
+  postSupportResolution,
+  postSupportSession,
+  supportCase,
+  supportCases,
+  supportEvidence,
+  supportInterventions,
+  supportTimeline,
+} from "../controllers/academicSupportController.js"
 import {
   archiveBrowser,
   classroomAttendance,
@@ -603,6 +623,7 @@ router.get("/assessments/:assessmentId/operational-intelligence", requireSchoolP
 router.get("/assessments/:assessmentId/academic-mark-sheet", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_VIEW), asyncHandler(academicMarkSheet))
 router.post("/assessments/:assessmentId/academic-mark-sheet/draft", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMICS_MANAGE), asyncHandler(postAcademicMarkSheetDraft))
 router.post("/assessments/:assessmentId/academic-mark-sheet/publish", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMICS_MANAGE), asyncHandler(postAcademicMarkSheetPublish))
+router.post("/assessments/:assessmentId/academic-mark-sheet/reopen", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMICS_MANAGE), asyncHandler(postAcademicMarkSheetReopen))
 router.patch("/question-library/:questionRef/source-permission", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMICS_MANAGE), asyncHandler(patchQuestionPermission))
 router.get("/academic-intelligence/targeted-assessments", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_VIEW), asyncHandler(targetedAssessments))
 router.post("/academic-intelligence/targeted-assessments", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTERVENTION_MANAGE), asyncHandler(postTargetedAssessment))
@@ -614,6 +635,26 @@ router.post("/academic-intelligence/targeted-assessments/:generatedRef/confirm-l
 router.post("/academic-intelligence/targeted-assessments/:generatedRef/validate", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTERVENTION_MANAGE), asyncHandler(validateTargetedAssessment))
 router.post("/academic-intelligence/targeted-assessments/:generatedRef/approve", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTERVENTION_MANAGE), asyncHandler(postTargetedAssessmentApproval))
 router.post("/academic-intelligence/targeted-assessments/:generatedRef/publish", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTERVENTION_MANAGE), asyncHandler(postTargetedAssessmentPublish))
+
+// Persistent learner-support lifecycle. Read access follows the academic
+// intelligence permission and teacher assignment scope inside the service.
+router.get("/academic-support/cases", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_VIEW), asyncHandler(supportCases))
+router.get("/academic-support/learners/:learnerId", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_VIEW), asyncHandler(learnerSupport))
+router.get("/academic-support/escalation-policy", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_VIEW), asyncHandler(escalationPolicy))
+router.get("/academic-support/cases/:caseId", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_VIEW), asyncHandler(supportCase))
+router.get("/academic-support/cases/:caseId/timeline", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_VIEW), asyncHandler(supportTimeline))
+router.get("/academic-support/cases/:caseId/evidence", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_VIEW), asyncHandler(supportEvidence))
+router.get("/academic-support/cases/:caseId/interventions", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_VIEW), asyncHandler(supportInterventions))
+router.post("/academic-support/cases/:caseId/assign", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTERVENTION_MANAGE), asyncHandler(postSupportAssignment))
+router.post("/academic-support/cases/:caseId/create-intervention", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTERVENTION_MANAGE), asyncHandler(postSupportIntervention))
+router.post("/academic-support/cases/:caseId/record-session", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTERVENTION_MANAGE), asyncHandler(postSupportSession))
+router.post("/academic-support/cases/:caseId/schedule-reassessment", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTERVENTION_MANAGE), asyncHandler(postSupportReassessment))
+router.post("/academic-support/cases/:caseId/review-outcome", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTERVENTION_MANAGE), asyncHandler(postSupportOutcome))
+router.post("/academic-support/cases/:caseId/escalate", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_MANAGE), asyncHandler(postSupportEscalation))
+router.post("/academic-support/cases/:caseId/resolve", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTERVENTION_MANAGE), asyncHandler(postSupportResolution))
+router.post("/academic-support/cases/:caseId/carry-forward", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_MANAGE), asyncHandler(postSupportCarryForward))
+router.post("/academic-support/cases/:caseId/request-academic-review", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_MANAGE), asyncHandler(postAcademicReviewRequest))
+router.post("/academic-support/cases/:caseId/draft-guardian-summary", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_MANAGE), asyncHandler(postGuardianSummaryDraft))
 
 router.get("/library/dashboard", requireSchoolPermission(SCHOOL_PERMISSIONS.LIBRARY_DASHBOARD_VIEW), asyncHandler(librarianDashboard))
 router.get("/library/catalogue", requireSchoolPermission(SCHOOL_PERMISSIONS.LIBRARY_BOOK_VIEW), asyncHandler(physicalLibraryResources))

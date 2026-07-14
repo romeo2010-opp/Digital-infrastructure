@@ -11,6 +11,7 @@ import {
   listAuthoringTopics,
   listTargetedAssessments,
   publishAcademicMarkSheet,
+  reopenAcademicMarkSheet,
   publishTargetedAssessment,
   replaceTargetedAssessmentQuestion,
   saveAcademicMarkSheetDraft,
@@ -35,7 +36,7 @@ export async function putQuestionMappings(req, res) {
 }
 
 export async function academicMarkSheet(req, res) {
-  res.json(await getAcademicMarkSheet(getScopedSchoolId(req), assessmentId(req), req.query))
+  res.json(await getAcademicMarkSheet(getScopedSchoolId(req), assessmentId(req), req.query, req.user))
 }
 
 export async function postAcademicMarkSheetDraft(req, res) {
@@ -46,12 +47,16 @@ export async function postAcademicMarkSheetPublish(req, res) {
   res.json(await publishAcademicMarkSheet(getScopedSchoolId(req), assessmentId(req), req.user, req.body || {}))
 }
 
+export async function postAcademicMarkSheetReopen(req, res) {
+  res.json(await reopenAcademicMarkSheet(getScopedSchoolId(req), assessmentId(req), req.user, req.body || {}))
+}
+
 export async function assessmentOperationalIntelligence(req, res) {
-  res.json(await getAssessmentOperationalIntelligence(getScopedSchoolId(req), assessmentId(req)))
+  res.json(await getAssessmentOperationalIntelligence(getScopedSchoolId(req), assessmentId(req), req.user))
 }
 
 export async function targetedAssessments(req, res) {
-  res.json(await listTargetedAssessments(getScopedSchoolId(req), req.query))
+  res.json(await listTargetedAssessments(getScopedSchoolId(req), req.query, req.user))
 }
 
 export async function postTargetedAssessment(req, res) {
@@ -59,7 +64,7 @@ export async function postTargetedAssessment(req, res) {
 }
 
 export async function targetedAssessment(req, res) {
-  res.json(await getTargetedAssessment(getScopedSchoolId(req), String(req.params.generatedRef || "")))
+  res.json(await getTargetedAssessment(getScopedSchoolId(req), String(req.params.generatedRef || ""), req.user))
 }
 
 export async function postTargetedAssessmentGenerate(req, res) {
@@ -79,7 +84,7 @@ export async function postTargetedLearnerConfirmation(req, res) {
 }
 
 export async function validateTargetedAssessment(req, res) {
-  const record = await getTargetedAssessment(getScopedSchoolId(req), String(req.params.generatedRef || ""))
+  const record = await getTargetedAssessment(getScopedSchoolId(req), String(req.params.generatedRef || ""), req.user)
   const validation = validateGeneratedAssessmentDraft(record.version?.paper || {}, { totalMarks: record.assessment.total_marks })
   res.status(validation.valid ? 200 : 409).json({ validation })
 }

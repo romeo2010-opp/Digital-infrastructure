@@ -201,6 +201,7 @@ const groups = [
     items: [
       { label: 'Classroom Mode', path: '/classroom', icon: BookOpenCheck },
       { label: 'Academic Intelligence', path: '/academic-intelligence', icon: Sparkles, badge: 'Live' },
+      { label: 'Learner Support', path: '/learner-support', icon: HeartHandshake, badge: 'Live' },
       { label: 'Homework', path: '/homework', icon: BookOpenCheck },
       { label: 'Lesson Log', path: '/teacher/lesson-log', icon: ClipboardList },
       { label: 'Timetables', path: '/timetables', icon: CalendarRange },

@@ -161,22 +161,30 @@ async function loadSheetRows(schoolId, assessment, batchId) {
     ? await pool.query("SELECT * FROM result_entries WHERE school_id = ? AND result_batch_id = ?", [schoolId, batchId])
     : [[]]
   const entriesByStudent = new Map(entries.map((entry) => [Number(entry.student_id), entry]))
+  const [derivedEntries] = await pool.query(`SELECT lae.student_id,lae.overall_marks,lae.teacher_comment,lae.last_saved_at,lae.participation_status,ams.status sheet_status
+    FROM learner_assessment_entries lae
+    JOIN academic_mark_sheets ams ON ams.id=lae.mark_sheet_id AND ams.school_id=lae.school_id
+    WHERE lae.school_id=? AND ams.assessment_id=? AND ams.entry_mode='question'
+    ORDER BY FIELD(ams.status,'published','locked','submitted','draft'),ams.updated_at DESC`, [schoolId, assessment.id])
+  const derivedByStudent = new Map()
+  for (const entry of derivedEntries) if (!derivedByStudent.has(Number(entry.student_id))) derivedByStudent.set(Number(entry.student_id), entry)
   const withdrawalsByStudent = await getWithdrawalsForStudentsOnDate(pool, schoolId, students.map((student) => student.id), assessmentDate)
   return students.map((student) => {
     const entry = entriesByStudent.get(Number(student.id))
+    const derived = derivedByStudent.get(Number(student.id))
     const withdrawal = withdrawalsByStudent.get(Number(student.id)) || null
     const absent = Boolean(withdrawal)
     return {
       ...student,
       result_entry_id: entry?.id || null,
       enrollment_id: entry?.enrollment_id || student.enrollment_id || null,
-      score: absent ? "" : entry?.score ?? "",
-      grade: absent ? "" : entry?.grade || "",
-      comment: entry?.comment || "",
-      status: absent ? "absent" : entry?.status === "absent" ? "draft" : entry?.status || "draft",
+      score: absent ? "" : entry?.score ?? derived?.overall_marks ?? "",
+      grade: absent ? "" : entry?.grade || gradeFor(derived?.overall_marks, assessment.total_marks) || "",
+      comment: entry?.comment || derived?.teacher_comment || "",
+      status: absent ? "absent" : entry?.status === "absent" ? "draft" : entry?.status || (derived ? "derived" : "draft"),
       withdrawal_status: withdrawal ? { withdrawn: true, ...withdrawal } : null,
       absent,
-      last_saved_at: entry?.last_saved_at || null,
+      last_saved_at: entry?.last_saved_at || derived?.last_saved_at || null,
     }
   })
 }
@@ -763,8 +771,15 @@ export async function submitResults(req, res) {
     await connection.query("UPDATE result_entries SET status = CASE WHEN status = 'absent' THEN 'absent' ELSE 'submitted' END WHERE school_id = ? AND result_batch_id = ?", [schoolId, batch.id])
     await connection.query("UPDATE assessments SET status = 'results_submitted' WHERE id = ? AND school_id = ? AND exam_session_id IS NOT NULL", [assessmentId, schoolId])
     await connection.commit()
-    const intelligence = await ingestApprovedResultBatch(schoolId, batch.id, req.user).catch((error) => ({ queued: true, warning: error.message }))
-    res.json({ ok: true, batch_id: batch.id, academic_intelligence: intelligence })
+    res.json({
+      ok: true,
+      batch_id: batch.id,
+      academic_intelligence: {
+        processed: false,
+        state: "awaiting_approval",
+        message: "Submitted marks remain provisional until an authorised reviewer approves them.",
+      },
+    })
   } catch (error) {
     await connection.rollback()
     throw error

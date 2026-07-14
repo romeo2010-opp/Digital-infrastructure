@@ -8,6 +8,7 @@ import {
   recalculateStudentMastery,
   recordAcademicIntelligenceSnapshot,
 } from "./academicIntelligenceEngine.js"
+import { syncSupportCasesFromPublishedAssessment } from "./academicSupportService.js"
 import { generateDraftQuestions } from "./questions/questionDraftingService.js"
 
 const EPSILON = 0.01
@@ -32,9 +33,13 @@ const parseJson = (value, fallback = null) => {
   if (typeof value === "object" && !Buffer.isBuffer(value)) return value
   try { return JSON.parse(Buffer.isBuffer(value) ? value.toString("utf8") : String(value)) } catch { return fallback }
 }
-const masteryState = (percentage) => percentage === null || percentage === undefined
-  ? "not_assessed"
-  : percentage >= 85 ? "advanced" : percentage >= 70 ? "secure" : percentage >= 45 ? "developing" : "emerging"
+const masteryState = (percentage, config = {}) => {
+  if (percentage === null || percentage === undefined) return "not_assessed"
+  const secure = Number(config.mastery_threshold ?? config.masteryThreshold ?? 70)
+  const intervention = Number(config.intervention_threshold ?? config.interventionThreshold ?? 45)
+  const advanced = Number(config.advanced_threshold ?? Math.min(100, secure + 15))
+  return percentage >= advanced ? "advanced" : percentage >= secure ? "secure" : percentage >= intervention ? "developing" : "emerging"
+}
 
 export function sourcePermissionAllowsReuse(permission = {}, { transform = false } = {}) {
   const status = String(permission.permission_status || permission.status || "unknown_permission")
@@ -101,7 +106,7 @@ export function confidenceForEvidenceLevel(level, { mappedMarks = 0, questionCou
   return round(20 * coverage)
 }
 
-export function aggregateQuestionEvidence({ questions = [], marks = {} } = {}) {
+export function aggregateQuestionEvidence({ questions = [], marks = {}, config = {} } = {}) {
   const topics = new Map()
   let totalAwarded = 0
   let totalAvailable = 0
@@ -140,7 +145,7 @@ export function aggregateQuestionEvidence({ questions = [], marks = {} } = {}) {
     mapped_questions: mappedQuestions,
     mapping_coverage: round(mappingCoverage),
     confidence_score: confidenceForEvidenceLevel("question", { mappedMarks: totalAvailable, questionCount: markedQuestions, mappingCoverage }),
-    topics: [...topics.values()].map((topic) => ({ ...topic, marks_awarded: round(topic.marks_awarded), marks_available: round(topic.marks_available), percentage: topic.marks_available ? round(topic.marks_awarded / topic.marks_available * 100) : null, mastery_state: masteryState(topic.marks_available ? topic.marks_awarded / topic.marks_available * 100 : null) })),
+    topics: [...topics.values()].map((topic) => ({ ...topic, marks_awarded: round(topic.marks_awarded), marks_available: round(topic.marks_available), percentage: topic.marks_available ? round(topic.marks_awarded / topic.marks_available * 100) : null, mastery_state: masteryState(topic.marks_available ? topic.marks_awarded / topic.marks_available * 100 : null, config) })),
   }
 }
 
@@ -230,9 +235,18 @@ async function audit(connection, schoolId, actor, action, entityType, entityId, 
 }
 
 async function assessmentContext(connection, schoolId, assessmentId, lock = false) {
-  const [[assessment]] = await connection.query(`SELECT a.*,c.public_ref class_ref,c.name class_name,s.public_ref subject_ref,s.name subject_name FROM assessments a JOIN classes c ON c.id=a.class_id AND c.school_id=a.school_id JOIN subjects s ON s.id=a.subject_id AND s.school_id=a.school_id WHERE a.school_id=? AND a.id=? LIMIT 1${lock ? " FOR UPDATE" : ""}`, [schoolId, Number(assessmentId)])
+  const [[assessment]] = await connection.query(`SELECT a.*,c.public_ref class_ref,c.name class_name,s.public_ref subject_ref,s.name subject_name,sch.name school_name FROM assessments a JOIN classes c ON c.id=a.class_id AND c.school_id=a.school_id JOIN subjects s ON s.id=a.subject_id AND s.school_id=a.school_id JOIN schools sch ON sch.id=a.school_id WHERE a.school_id=? AND a.id=? LIMIT 1${lock ? " FOR UPDATE" : ""}`, [schoolId, Number(assessmentId)])
   if (!assessment) throw new HttpError(404, "Assessment was not found.")
   return assessment
+}
+
+async function assertTeacherAssessmentAccess(connection, schoolId, assessment, actor) {
+  if (String(actor?.role || "").toLowerCase() !== "teacher") return
+  const [[assignment]] = await connection.query(`SELECT id FROM teacher_class_subject_assignments
+    WHERE school_id=? AND teacher_id=? AND class_id=? AND subject_id=? AND role='subject_teacher' AND is_active=1
+      AND (academic_year_id IS NULL OR academic_year_id=?) AND (term_id IS NULL OR term_id=?) LIMIT 1`,
+  [schoolId, actor.id, assessment.class_id, assessment.subject_id, assessment.academic_year_id, assessment.term_id])
+  if (!assignment) throw new HttpError(403, "Teachers can only access marks and evidence for assigned subjects.")
 }
 
 async function loadMappedQuestions(connection, schoolId, assessmentId) {
@@ -338,8 +352,9 @@ async function loadLearners(connection, schoolId, assessment) {
   return rows
 }
 
-export async function getAcademicMarkSheet(schoolId, assessmentId, filters = {}) {
+export async function getAcademicMarkSheet(schoolId, assessmentId, filters = {}, actor = null) {
   const assessment = await assessmentContext(pool, schoolId, assessmentId)
+  await assertTeacherAssessmentAccess(pool, schoolId, assessment, actor)
   const mode = ENTRY_MODES.has(String(filters.mode)) ? String(filters.mode) : "question"
   const [questions, learners] = await Promise.all([loadMappedQuestions(pool, schoolId, assessment.id), loadLearners(pool, schoolId, assessment)])
   const topics = topicsFromQuestions(questions)
@@ -348,14 +363,15 @@ export async function getAcademicMarkSheet(schoolId, assessmentId, filters = {})
   if (sheet) {
     const [entryRows] = await pool.query("SELECT * FROM learner_assessment_entries WHERE school_id=? AND mark_sheet_id=?", [schoolId, sheet.id])
     const [questionRows] = mode === "question" ? await pool.query("SELECT student_id,assessment_question_id,marks_awarded,response_status FROM learner_question_marks WHERE school_id=? AND mark_sheet_id=?", [schoolId, sheet.id]) : [[]]
-    const [topicRows] = mode === "topic" ? await pool.query("SELECT student_id,topic_id,marks_awarded FROM learner_topic_results WHERE school_id=? AND mark_sheet_id=?", [schoolId, sheet.id]) : [[]]
+    const [topicRows] = mode !== "overall" ? await pool.query("SELECT student_id,topic_id,marks_awarded FROM learner_topic_results WHERE school_id=? AND mark_sheet_id=?", [schoolId, sheet.id]) : [[]]
     entries = learners.map((learner) => {
       const entry = entryRows.find((row) => Number(row.student_id) === Number(learner.student_id))
       return { ...learner, participation_status: entry?.participation_status || "pending", overall_marks: entry?.overall_marks === null || entry?.overall_marks === undefined ? "" : Number(entry.overall_marks), percentage: entry?.percentage === null || entry?.percentage === undefined ? null : Number(entry.percentage), mastery_state: entry?.mastery_state || "not_assessed", evidence_confidence: Number(entry?.evidence_confidence || 0), teacher_comment: entry?.teacher_comment || "", question_marks: Object.fromEntries(questionRows.filter((row) => Number(row.student_id) === Number(learner.student_id)).map((row) => [row.assessment_question_id, row.marks_awarded === null ? "" : Number(row.marks_awarded)])), topic_marks: Object.fromEntries(topicRows.filter((row) => Number(row.student_id) === Number(learner.student_id)).map((row) => [row.topic_id, row.marks_awarded === null ? "" : Number(row.marks_awarded)])) }
     })
   } else entries = learners.map((learner) => ({ ...learner, participation_status: "pending", overall_marks: "", percentage: null, mastery_state: "not_assessed", evidence_confidence: 0, teacher_comment: "", question_marks: {}, topic_marks: {} }))
   const mappedQuestionCount = questions.filter((question) => validateQuestionTopicMappings(question, question.topic_mappings).valid).length
-  return { assessment: { id: assessment.id, name: assessment.name, class_ref: assessment.class_ref, class_name: assessment.class_name, subject_ref: assessment.subject_ref, subject_name: assessment.subject_name, total_marks: Number(assessment.total_marks), status: assessment.status }, mark_sheet: sheet ? { public_ref: sheet.public_ref, entry_mode: sheet.entry_mode, evidence_level: sheet.evidence_level, status: sheet.status, completion_percentage: Number(sheet.completion_percentage), version_number: sheet.version_number, updated_at: sheet.updated_at } : null, mode, questions, topics, entries, mapping_coverage: questions.length ? round(mappedQuestionCount / questions.length * 100) : 0, evidence_notice: mode === "overall" ? "Topic-level intelligence will be unavailable because only final totals are being recorded." : mode === "topic" ? "Topic totals provide medium-precision evidence. Question and objective diagnostics will be unavailable." : "Question-level marks provide the highest available evidence precision." }
+  const completionPercentage = Number(sheet?.completion_percentage || 0)
+  return { assessment: { id: assessment.id, name: assessment.name, school_name: assessment.school_name, class_ref: assessment.class_ref, class_name: assessment.class_name, subject_ref: assessment.subject_ref, subject_name: assessment.subject_name, total_marks: Number(assessment.total_marks), status: assessment.status }, mark_sheet: sheet ? { public_ref: sheet.public_ref, entry_mode: sheet.entry_mode, evidence_level: sheet.evidence_level, status: sheet.status, completion_percentage: completionPercentage, version_number: sheet.version_number, updated_at: sheet.updated_at } : null, mode, questions, topics, entries, overall_ready: completionPercentage === 100 && entries.length > 0, mapping_coverage: questions.length ? round(mappedQuestionCount / questions.length * 100) : 0, evidence_notice: mode === "overall" ? "Overall results are derived from completed academic evidence and cannot be entered separately." : mode === "topic" ? "Topic totals provide medium-precision evidence. Question and objective diagnostics will be unavailable." : "Question-level marks are the source of truth. Topic totals and overall results are derived automatically." }
 }
 
 async function ensureMarkSheet(connection, schoolId, assessment, mode, actor, idempotencyKey = null) {
@@ -366,6 +382,36 @@ async function ensureMarkSheet(connection, schoolId, assessment, mode, actor, id
   return sheet
 }
 
+function legacyGrade(score, totalMarks) {
+  if (score === null || score === undefined) return null
+  const percentage = Number(score) / Math.max(1, Number(totalMarks || 0)) * 100
+  return percentage >= 80 ? "A" : percentage >= 70 ? "B" : percentage >= 60 ? "C" : percentage >= 50 ? "D" : "E"
+}
+
+async function syncDerivedOverallResults(connection, schoolId, assessment, actor, entries) {
+  const teacherId = String(actor?.role || "").toLowerCase() === "teacher"
+    ? Number(actor.id)
+    : Number(assessment.teacher_id || assessment.created_by || actor?.id || 0)
+  if (!teacherId) return null
+  const [[existing]] = await connection.query(`SELECT * FROM result_batches WHERE school_id=? AND assessment_id=? AND class_id=? AND subject_id=? AND teacher_id=? AND term_id=? LIMIT 1 FOR UPDATE`, [schoolId, assessment.id, assessment.class_id, assessment.subject_id, teacherId, assessment.term_id])
+  if (["submitted", "approved", "locked"].includes(String(existing?.status || ""))) throw new HttpError(409, "The overall result sheet has already been submitted and cannot be changed unless it is returned.")
+  let batch = existing
+  if (!batch) {
+    const [created] = await connection.query(`INSERT INTO result_batches (school_id,exam_session_id,assessment_id,academic_year_id,term_id,class_id,stream_section,subject_id,teacher_id,status) VALUES (?,?,?,?,?,?,?,?,?,'draft')`, [schoolId, assessment.exam_session_id || null, assessment.id, assessment.academic_year_id, assessment.term_id, assessment.class_id, assessment.stream_section || null, assessment.subject_id, teacherId])
+    batch = { id: Number(created.insertId), status: "draft" }
+  }
+  for (const entry of entries) {
+    const absent = ["absent", "excused"].includes(String(entry.participation_status || ""))
+    const score = absent || entry.overall_marks === null || entry.overall_marks === undefined ? null : Number(entry.overall_marks)
+    await connection.query(`INSERT INTO result_entries (school_id,result_batch_id,student_id,enrollment_id,score,grade,comment,status,last_saved_at)
+      VALUES (?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+      ON DUPLICATE KEY UPDATE enrollment_id=VALUES(enrollment_id),score=VALUES(score),grade=VALUES(grade),comment=VALUES(comment),status=VALUES(status),last_saved_at=CURRENT_TIMESTAMP`,
+    [schoolId, batch.id, entry.student_id, entry.enrollment_id || null, score, absent ? null : legacyGrade(score, assessment.total_marks), entry.teacher_comment || null, absent ? "absent" : "draft"])
+  }
+  await connection.query("UPDATE result_batches SET status='draft',return_reason=NULL,updated_at=CURRENT_TIMESTAMP WHERE school_id=? AND id=?", [schoolId, batch.id])
+  return batch.id
+}
+
 export async function saveAcademicMarkSheetDraft(schoolId, assessmentId, actor, body = {}) {
   const mode = String(body.mode || body.entry_mode || "question")
   if (!ENTRY_MODES.has(mode)) throw new HttpError(400, "Entry mode must be question, topic or overall.")
@@ -373,6 +419,8 @@ export async function saveAcademicMarkSheetDraft(schoolId, assessmentId, actor, 
   try {
     await connection.beginTransaction()
     const assessment = await assessmentContext(connection, schoolId, assessmentId, true)
+    await assertTeacherAssessmentAccess(connection, schoolId, assessment, actor)
+    const config = await getAcademicEngineConfig(schoolId, connection)
     const questions = await loadMappedQuestions(connection, schoolId, assessment.id)
     const topics = topicsFromQuestions(questions)
     if (mode === "question" && !questions.length) throw new HttpError(409, "Question-by-question entry requires authored assessment questions.")
@@ -383,15 +431,16 @@ export async function saveAcademicMarkSheetDraft(schoolId, assessmentId, actor, 
     const sheet = await ensureMarkSheet(connection, schoolId, assessment, mode, actor, body.idempotency_key)
     const allowedLearners = new Set((await loadLearners(connection, schoolId, assessment)).map((learner) => Number(learner.student_id)))
     let completed = 0
+    const derivedOverallEntries = []
     for (const input of entries) {
       const studentId = Number(input.student_id)
       if (!allowedLearners.has(studentId)) throw new HttpError(403, "One learner does not belong to this assessment class and session.")
       const participation = String(input.participation_status || "present")
       let aggregate = { total_awarded: null, total_available: Number(assessment.total_marks), percentage: null, confidence_score: 0, topics: [] }
       if (!["absent", "excused"].includes(participation)) {
-        if (mode === "question") aggregate = aggregateQuestionEvidence({ questions, marks: input.question_marks || {} })
+        if (mode === "question") aggregate = aggregateQuestionEvidence({ questions, marks: input.question_marks || {}, config })
         if (mode === "topic") {
-          const scored = topics.filter((topic) => input.topic_marks?.[topic.topic_id] !== "" && input.topic_marks?.[topic.topic_id] !== null && input.topic_marks?.[topic.topic_id] !== undefined).map((topic) => ({ ...topic, marks_awarded: Number(input.topic_marks[topic.topic_id]), percentage: topic.marks_available ? round(Number(input.topic_marks[topic.topic_id]) / topic.marks_available * 100) : null, mastery_state: masteryState(topic.marks_available ? Number(input.topic_marks[topic.topic_id]) / topic.marks_available * 100 : null) }))
+          const scored = topics.filter((topic) => input.topic_marks?.[topic.topic_id] !== "" && input.topic_marks?.[topic.topic_id] !== null && input.topic_marks?.[topic.topic_id] !== undefined).map((topic) => ({ ...topic, marks_awarded: Number(input.topic_marks[topic.topic_id]), percentage: topic.marks_available ? round(Number(input.topic_marks[topic.topic_id]) / topic.marks_available * 100) : null, mastery_state: masteryState(topic.marks_available ? Number(input.topic_marks[topic.topic_id]) / topic.marks_available * 100 : null, config) }))
           const available = scored.reduce((sum, topic) => sum + topic.marks_available, 0); const awarded = scored.reduce((sum, topic) => sum + topic.marks_awarded, 0)
           aggregate = { total_awarded: round(awarded), total_available: round(available), percentage: available ? round(awarded / available * 100) : null, confidence_score: confidenceForEvidenceLevel("topic", { mappedMarks: available, mappingCoverage: topics.length ? scored.length / topics.length * 100 : 0 }), topics: scored }
         }
@@ -401,13 +450,13 @@ export async function saveAcademicMarkSheetDraft(schoolId, assessmentId, actor, 
       const actualItems = mode === "question" ? aggregate.marked_questions || 0 : mode === "topic" ? aggregate.topics.length : aggregate.percentage === null ? 0 : 1
       const derivedParticipation = ["absent", "excused"].includes(participation) ? participation : actualItems === 0 ? "pending" : actualItems < expectedItems || participation === "incomplete" ? "incomplete" : "present"
       if (["present", "absent", "excused"].includes(derivedParticipation)) completed += 1
-      await connection.query(`INSERT INTO learner_assessment_entries (public_ref,school_id,mark_sheet_id,student_id,participation_status,overall_marks,percentage,mastery_state,evidence_confidence,is_official,teacher_comment,last_saved_at,created_by,updated_by) VALUES (?,?,?,?,?,?,?,?,?,0,?,CURRENT_TIMESTAMP,?,?) ON DUPLICATE KEY UPDATE participation_status=VALUES(participation_status),overall_marks=VALUES(overall_marks),percentage=VALUES(percentage),mastery_state=VALUES(mastery_state),evidence_confidence=VALUES(evidence_confidence),teacher_comment=VALUES(teacher_comment),last_saved_at=CURRENT_TIMESTAMP,updated_by=VALUES(updated_by)`, [randomUUID(), schoolId, sheet.id, studentId, derivedParticipation, aggregate.total_awarded, aggregate.percentage, masteryState(aggregate.percentage), aggregate.confidence_score, input.teacher_comment || null, actor.id, actor.id])
+      await connection.query(`INSERT INTO learner_assessment_entries (public_ref,school_id,mark_sheet_id,student_id,participation_status,overall_marks,percentage,mastery_state,evidence_confidence,is_official,teacher_comment,last_saved_at,created_by,updated_by) VALUES (?,?,?,?,?,?,?,?,?,0,?,CURRENT_TIMESTAMP,?,?) ON DUPLICATE KEY UPDATE participation_status=VALUES(participation_status),overall_marks=VALUES(overall_marks),percentage=VALUES(percentage),mastery_state=VALUES(mastery_state),evidence_confidence=VALUES(evidence_confidence),teacher_comment=VALUES(teacher_comment),last_saved_at=CURRENT_TIMESTAMP,updated_by=VALUES(updated_by)`, [randomUUID(), schoolId, sheet.id, studentId, derivedParticipation, aggregate.total_awarded, aggregate.percentage, masteryState(aggregate.percentage, config), aggregate.confidence_score, input.teacher_comment || null, actor.id, actor.id])
       const [[entry]] = await connection.query("SELECT id FROM learner_assessment_entries WHERE school_id=? AND mark_sheet_id=? AND student_id=? LIMIT 1", [schoolId, sheet.id, studentId])
       if (mode === "question") {
         await connection.query("DELETE FROM learner_question_marks WHERE school_id=? AND mark_sheet_id=? AND student_id=?", [schoolId, sheet.id, studentId])
         for (const question of questions) {
           const value = input.question_marks?.[question.id]
-          const marked = value !== "" && value !== null && value !== undefined
+          const marked = !["absent", "excused"].includes(derivedParticipation) && value !== "" && value !== null && value !== undefined
           await connection.query(`INSERT INTO learner_question_marks (public_ref,school_id,mark_sheet_id,learner_entry_id,student_id,assessment_question_id,marks_awarded,marks_available,response_status,is_official,created_by,updated_by) VALUES (?,?,?,?,?,?,?,?,?,0,?,?)`, [randomUUID(), schoolId, sheet.id, entry.id, studentId, question.id, marked ? Number(value) : null, question.marks, marked ? "marked" : "unmarked", actor.id, actor.id])
         }
       }
@@ -415,21 +464,23 @@ export async function saveAcademicMarkSheetDraft(schoolId, assessmentId, actor, 
         await connection.query("DELETE FROM learner_topic_results WHERE school_id=? AND mark_sheet_id=? AND student_id=?", [schoolId, sheet.id, studentId])
         for (const topic of aggregate.topics) await connection.query(`INSERT INTO learner_topic_results (public_ref,school_id,mark_sheet_id,learner_entry_id,student_id,topic_id,marks_awarded,marks_available,percentage,mastery_state,evidence_level,confidence_score,is_official,created_by,updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?,?)`, [randomUUID(), schoolId, sheet.id, entry.id, studentId, topic.topic_id, topic.marks_awarded, topic.marks_available, topic.percentage, topic.mastery_state, mode === "question" ? "question" : "topic", aggregate.confidence_score, actor.id, actor.id])
       }
+      derivedOverallEntries.push({ student_id: studentId, enrollment_id: input.enrollment_id || null, participation_status: derivedParticipation, overall_marks: aggregate.total_awarded, teacher_comment: input.teacher_comment || null })
     }
     const learnerCount = allowedLearners.size
     const completion = learnerCount ? round(completed / learnerCount * 100) : 0
     await connection.query("UPDATE academic_mark_sheets SET completion_percentage=?,updated_by=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND school_id=?", [completion, actor.id, sheet.id, schoolId])
+    const resultBatchId = await syncDerivedOverallResults(connection, schoolId, assessment, actor, derivedOverallEntries)
     await audit(connection, schoolId, actor, "ACADEMIC_MARK_SHEET_DRAFT_SAVED", "academic_mark_sheet", sheet.id, { assessment_id: assessment.id, mode, entries: entries.length, completion_percentage: completion })
     await connection.commit()
-    return { public_ref: sheet.public_ref, status: "draft", entry_mode: mode, completion_percentage: completion, provisional: true, official_evidence_created: false }
+    return { public_ref: sheet.public_ref, status: "draft", entry_mode: mode, completion_percentage: completion, overall_ready: completion === 100, result_batch_id: resultBatchId, provisional: true, official_evidence_created: false }
   } catch (error) { await connection.rollback(); throw error } finally { connection.release() }
 }
 
 async function upsertMasteryEvidence(connection, values) {
   const [[existing]] = await connection.query(`SELECT id FROM mastery_evidence WHERE school_id=? AND student_id=? AND source_entity_type=? AND source_entity_id=? AND topic_id <=> ? AND learning_objective_id <=> ? LIMIT 1`, [values.schoolId, values.studentId, values.sourceType, values.sourceId, values.topicId || null, values.objectiveId || null])
   const metadata = JSON.stringify(values.metadata || {})
-  if (existing) await connection.query(`UPDATE mastery_evidence SET academic_year_id=?,term_id=?,class_id=?,subject_id=?,topic_id=?,learning_objective_id=?,evidence_type=?,score_percentage=?,marks_awarded=?,marks_available=?,assessment_weight=?,evidence_granularity=?,evidence_at=CURRENT_TIMESTAMP,metadata_json=? WHERE school_id=? AND id=?`, [values.academicYearId, values.termId, values.classId, values.subjectId, values.topicId || null, values.objectiveId || null, values.evidenceType, values.percentage, values.awarded, values.available, values.weight, values.granularity, metadata, values.schoolId, existing.id])
-  else await connection.query(`INSERT INTO mastery_evidence (public_ref,school_id,academic_year_id,term_id,student_id,class_id,subject_id,topic_id,learning_objective_id,evidence_type,source_entity_type,source_entity_id,score_percentage,marks_awarded,marks_available,assessment_weight,evidence_granularity,evidence_at,metadata_json) VALUES (UUID(),?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP,?)`, [values.schoolId, values.academicYearId, values.termId, values.studentId, values.classId, values.subjectId, values.topicId || null, values.objectiveId || null, values.evidenceType, values.sourceType, values.sourceId, values.percentage, values.awarded, values.available, values.weight, values.granularity, metadata])
+  if (existing) await connection.query(`UPDATE mastery_evidence SET academic_year_id=?,term_id=?,class_id=?,subject_id=?,topic_id=?,learning_objective_id=?,evidence_type=?,assessment_id=?,question_id=?,score_percentage=?,marks_awarded=?,marks_available=?,assessment_weight=?,evidence_granularity=?,evidence_precision=?,publication_state='published',evidence_status='valid',evidence_at=CURRENT_TIMESTAMP,recorded_at=CURRENT_TIMESTAMP,metadata_json=? WHERE school_id=? AND id=?`, [values.academicYearId, values.termId, values.classId, values.subjectId, values.topicId || null, values.objectiveId || null, values.evidenceType, values.assessmentId || null, values.questionId || null, values.percentage, values.awarded, values.available, values.weight, values.granularity, values.precision || "limited", metadata, values.schoolId, existing.id])
+  else await connection.query(`INSERT INTO mastery_evidence (public_ref,school_id,academic_year_id,term_id,student_id,class_id,subject_id,topic_id,learning_objective_id,evidence_type,source_entity_type,source_entity_id,assessment_id,question_id,score_percentage,marks_awarded,marks_available,assessment_weight,evidence_granularity,evidence_precision,publication_state,evidence_status,evidence_at,recorded_at,metadata_json) VALUES (UUID(),?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'published','valid',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,?)`, [values.schoolId, values.academicYearId, values.termId, values.studentId, values.classId, values.subjectId, values.topicId || null, values.objectiveId || null, values.evidenceType, values.sourceType, values.sourceId, values.assessmentId || null, values.questionId || null, values.percentage, values.awarded, values.available, values.weight, values.granularity, values.precision || "limited", metadata])
 }
 
 async function reconcileTopicFinding(connection, schoolId, assessment, sheet, topic, config, actor) {
@@ -484,6 +535,7 @@ export async function publishAcademicMarkSheet(schoolId, assessmentId, actor, bo
   try {
     await connection.beginTransaction()
     const assessment = await assessmentContext(connection, schoolId, assessmentId, true)
+    await assertTeacherAssessmentAccess(connection, schoolId, assessment, actor)
     const [[sheet]] = await connection.query("SELECT * FROM academic_mark_sheets WHERE school_id=? AND assessment_id=? AND entry_mode=? LIMIT 1 FOR UPDATE", [schoolId, assessment.id, mode])
     if (!sheet) throw new HttpError(409, "Save the mark sheet draft before publishing.")
     if (["published", "locked"].includes(sheet.status)) { await connection.commit(); return { public_ref: sheet.public_ref, status: sheet.status, duplicate: true } }
@@ -511,31 +563,77 @@ export async function publishAcademicMarkSheet(schoolId, assessmentId, actor, bo
           for (const mapping of mappingValidation.mappings.filter((item) => Number(item.allocated_marks) > 0)) {
             const available = Number(mapping.allocated_marks); const awarded = Number(mark.marks_available) ? Number(mark.marks_awarded) * available / Number(mark.marks_available) : 0
             const primaryObjective = question.objective_mappings?.find((objective) => objective.mapping_role === "primary") || question.objective_mappings?.[0]
-            await upsertMasteryEvidence(connection, { schoolId, academicYearId: assessment.academic_year_id, termId: assessment.term_id, studentId: entry.student_id, classId: assessment.class_id, subjectId: assessment.subject_id, topicId: mapping.topic_id, objectiveId: primaryObjective?.learning_objective_id || null, evidenceType, sourceType: "learner_question_mark", sourceId: mark.id, percentage: round(awarded / available * 100), awarded: round(awarded), available, weight: evidenceType === "reassessment" ? .85 : .9, granularity: primaryObjective ? "objective" : "topic", metadata: { assessment_id: assessment.id, assessment_name: assessment.name, question_id: question.id, question_number: question.display_number, mark_sheet_ref: sheet.public_ref, evidence_level: "question" } })
-            await recalculateStudentMastery(schoolId, entry.student_id, assessment.subject_id, { topic_id: mapping.topic_id, learning_objective_id: primaryObjective?.learning_objective_id || null }, connection)
+            await upsertMasteryEvidence(connection, { schoolId, academicYearId: assessment.academic_year_id, termId: assessment.term_id, studentId: entry.student_id, classId: assessment.class_id, subjectId: assessment.subject_id, topicId: mapping.topic_id, objectiveId: primaryObjective?.learning_objective_id || null, evidenceType, sourceType: "learner_question_mark", sourceId: mark.id, assessmentId: assessment.id, questionId: question.id, precision: "question", percentage: round(awarded / available * 100), awarded: round(awarded), available, weight: evidenceType === "reassessment" ? .85 : .9, granularity: primaryObjective ? "objective" : "topic", metadata: { assessment_id: assessment.id, assessment_name: assessment.name, question_id: question.id, question_number: question.display_number, mark_sheet_ref: sheet.public_ref, evidence_level: "question" } })
+            await recalculateStudentMastery(schoolId, entry.student_id, assessment.subject_id, { academic_year_id: assessment.academic_year_id, term_id: assessment.term_id, topic_id: mapping.topic_id, learning_objective_id: primaryObjective?.learning_objective_id || null }, connection)
           }
         }
       } else if (mode === "topic") {
         const [topicResults] = await connection.query("SELECT * FROM learner_topic_results WHERE school_id=? AND mark_sheet_id=? AND student_id=? AND marks_awarded IS NOT NULL", [schoolId, sheet.id, entry.student_id])
         for (const result of topicResults) {
-          await upsertMasteryEvidence(connection, { schoolId, academicYearId: assessment.academic_year_id, termId: assessment.term_id, studentId: entry.student_id, classId: assessment.class_id, subjectId: assessment.subject_id, topicId: result.topic_id, objectiveId: null, evidenceType, sourceType: "learner_topic_result", sourceId: result.id, percentage: Number(result.percentage), awarded: Number(result.marks_awarded), available: Number(result.marks_available), weight: evidenceType === "reassessment" ? .8 : .7, granularity: "topic", metadata: { assessment_id: assessment.id, assessment_name: assessment.name, mark_sheet_ref: sheet.public_ref, evidence_level: "topic" } })
-          await recalculateStudentMastery(schoolId, entry.student_id, assessment.subject_id, { topic_id: result.topic_id }, connection)
+          await upsertMasteryEvidence(connection, { schoolId, academicYearId: assessment.academic_year_id, termId: assessment.term_id, studentId: entry.student_id, classId: assessment.class_id, subjectId: assessment.subject_id, topicId: result.topic_id, objectiveId: null, evidenceType, sourceType: "learner_topic_result", sourceId: result.id, assessmentId: assessment.id, precision: "topic", percentage: Number(result.percentage), awarded: Number(result.marks_awarded), available: Number(result.marks_available), weight: evidenceType === "reassessment" ? .8 : .7, granularity: "topic", metadata: { assessment_id: assessment.id, assessment_name: assessment.name, mark_sheet_ref: sheet.public_ref, evidence_level: "topic" } })
+          await recalculateStudentMastery(schoolId, entry.student_id, assessment.subject_id, { academic_year_id: assessment.academic_year_id, term_id: assessment.term_id, topic_id: result.topic_id }, connection)
         }
       } else {
-        await upsertMasteryEvidence(connection, { schoolId, academicYearId: assessment.academic_year_id, termId: assessment.term_id, studentId: entry.student_id, classId: assessment.class_id, subjectId: assessment.subject_id, topicId: null, objectiveId: null, evidenceType: "assessment_total", sourceType: "learner_assessment_entry", sourceId: entry.id, percentage: Number(entry.percentage), awarded: Number(entry.overall_marks), available: Number(assessment.total_marks), weight: .8, granularity: "limited", metadata: { assessment_id: assessment.id, assessment_name: assessment.name, mark_sheet_ref: sheet.public_ref, limitation: "Overall total only; exact topic diagnosis is unavailable." } })
+        await upsertMasteryEvidence(connection, { schoolId, academicYearId: assessment.academic_year_id, termId: assessment.term_id, studentId: entry.student_id, classId: assessment.class_id, subjectId: assessment.subject_id, topicId: null, objectiveId: null, evidenceType: "assessment_total", sourceType: "learner_assessment_entry", sourceId: entry.id, assessmentId: assessment.id, precision: "overall", percentage: Number(entry.percentage), awarded: Number(entry.overall_marks), available: Number(assessment.total_marks), weight: .8, granularity: "limited", metadata: { assessment_id: assessment.id, assessment_name: assessment.name, mark_sheet_ref: sheet.public_ref, limitation: "Overall total only; exact topic diagnosis is unavailable." } })
       }
-      await recalculateStudentMastery(schoolId, entry.student_id, assessment.subject_id, {}, connection)
+      await recalculateStudentMastery(schoolId, entry.student_id, assessment.subject_id, { academic_year_id: assessment.academic_year_id, term_id: assessment.term_id }, connection)
     }
     const classMastery = await recalculateClassMastery(schoolId, { classId: assessment.class_id, subjectId: assessment.subject_id, academicYearId: assessment.academic_year_id, termId: assessment.term_id }, connection)
     const config = await getAcademicEngineConfig(schoolId, connection)
     const findings = []
     if (mode !== "overall") for (const topic of topics) findings.push(await reconcileTopicFinding(connection, schoolId, assessment, { ...sheet, evidence_level: mode }, topic, config, actor))
+    const supportCases = mode === "overall"
+      ? { cases_touched: [], weak_evidence_count: 0 }
+      : await syncSupportCasesFromPublishedAssessment(connection, schoolId, assessment, actor)
     const interventionOutcome = await evaluateLinkedReassessment(connection, schoolId, sheet, actor)
-    await audit(connection, schoolId, actor, "ACADEMIC_MARK_SHEET_PUBLISHED", "academic_mark_sheet", sheet.id, { assessment_id: assessment.id, mode, learners: present.length, scoped_topics: mode === "overall" ? 0 : topics.length, intervention_outcome: interventionOutcome })
+    await audit(connection, schoolId, actor, "ACADEMIC_MARK_SHEET_PUBLISHED", "academic_mark_sheet", sheet.id, { assessment_id: assessment.id, mode, learners: present.length, scoped_topics: mode === "overall" ? 0 : topics.length, intervention_outcome: interventionOutcome, support_cases: supportCases })
     await connection.commit()
     await recordAcademicIntelligenceSnapshot({ schoolId, academicYearId: assessment.academic_year_id, termId: assessment.term_id, scopeType: "class", scopeRef: assessment.class_ref, metricKey: "mapped_assessment_published", metricValue: classMastery.average_mastery, confidenceScore: findings.filter(Boolean).length ? round(findings.filter(Boolean).reduce((sum, finding) => sum + Number(finding.confidence || 0), 0) / findings.filter(Boolean).length) : 20, evidenceState: mode === "overall" ? "limited" : "sufficient", reason: mode === "overall" ? "Overall totals published; no topic claim was created." : "Mapped marks published and scoped intelligence recalculated.", evidenceSummary: { assessment_id: assessment.id, mode, topics: topics.map((topic) => topic.topic_ref), intervention_outcome: interventionOutcome }, formulaVersion: "academic-operations-v1" })
-    return { public_ref: sheet.public_ref, status: "published", evidence_level: mode, learners_published: present.length, topics_recalculated: mode === "overall" ? 0 : topics.length, class_mastery: classMastery, findings: findings.filter(Boolean), intervention_outcome: interventionOutcome, limitations: mode === "overall" ? ["Topic-level intelligence is unavailable because only final totals were recorded."] : [] }
+    return { public_ref: sheet.public_ref, status: "published", evidence_level: mode, learners_published: present.length, topics_recalculated: mode === "overall" ? 0 : topics.length, class_mastery: classMastery, findings: findings.filter(Boolean), support_cases: supportCases, intervention_outcome: interventionOutcome, limitations: mode === "overall" ? ["Topic-level intelligence is unavailable because only final totals were recorded."] : [] }
   } catch (error) { await connection.rollback(); throw error } finally { connection.release() }
+}
+
+export async function reopenAcademicMarkSheet(schoolId, assessmentId, actor, body = {}) {
+  const mode = String(body.mode || body.entry_mode || 'question')
+  if (!ENTRY_MODES.has(mode)) throw new HttpError(400, 'Entry mode must be question, topic or overall.')
+  const connection = await pool.getConnection()
+  try {
+    await connection.beginTransaction()
+    const assessment = await assessmentContext(connection, schoolId, assessmentId, true)
+    await assertTeacherAssessmentAccess(connection, schoolId, assessment, actor)
+    const [[sheet]] = await connection.query('SELECT * FROM academic_mark_sheets WHERE school_id=? AND assessment_id=? AND entry_mode=? LIMIT 1 FOR UPDATE', [schoolId, assessment.id, mode])
+    if (!sheet) throw new HttpError(404, 'Academic mark sheet was not found.')
+    if (!['published', 'locked'].includes(String(sheet.status))) {
+      await connection.commit()
+      return { public_ref: sheet.public_ref, status: sheet.status, duplicate: true }
+    }
+    const [[finalBatch]] = await connection.query(`SELECT id,status FROM result_batches WHERE school_id=? AND assessment_id=? AND status IN ('submitted','approved','locked') LIMIT 1`, [schoolId, assessment.id])
+    if (finalBatch) throw new HttpError(409, 'Return the submitted overall results for correction before reopening academic evidence.')
+    await connection.query(`UPDATE learner_support_case_evidence ce
+      JOIN mastery_evidence me ON me.id=ce.mastery_evidence_id AND me.school_id=ce.school_id
+      SET ce.evidence_status='invalidated',ce.updated_by=?
+      WHERE ce.school_id=? AND me.assessment_id=? AND ce.evidence_status='valid'`, [actor.id, schoolId, assessment.id])
+    await connection.query(`UPDATE mastery_evidence SET publication_state='invalidated',evidence_status='invalidated' WHERE school_id=? AND assessment_id=? AND publication_state IN ('published','locked')`, [schoolId, assessment.id])
+    await connection.query('UPDATE learner_assessment_entries SET is_official=0,updated_by=? WHERE school_id=? AND mark_sheet_id=?', [actor.id, schoolId, sheet.id])
+    await connection.query('UPDATE learner_question_marks SET is_official=0,updated_by=? WHERE school_id=? AND mark_sheet_id=?', [actor.id, schoolId, sheet.id])
+    await connection.query('UPDATE learner_topic_results SET is_official=0,updated_by=? WHERE school_id=? AND mark_sheet_id=?', [actor.id, schoolId, sheet.id])
+    await connection.query(`UPDATE academic_mark_sheets SET status='draft',published_by=NULL,published_at=NULL,updated_by=?,version_number=version_number+1,updated_at=CURRENT_TIMESTAMP WHERE school_id=? AND id=?`, [actor.id, schoolId, sheet.id])
+    const [learners] = await connection.query('SELECT DISTINCT student_id FROM learner_assessment_entries WHERE school_id=? AND mark_sheet_id=?', [schoolId, sheet.id])
+    const [topics] = await connection.query('SELECT DISTINCT topic_id FROM learner_topic_results WHERE school_id=? AND mark_sheet_id=? AND topic_id IS NOT NULL', [schoolId, sheet.id])
+    for (const learner of learners) {
+      await recalculateStudentMastery(schoolId, learner.student_id, assessment.subject_id, { academic_year_id: assessment.academic_year_id, term_id: assessment.term_id }, connection)
+      for (const topic of topics) await recalculateStudentMastery(schoolId, learner.student_id, assessment.subject_id, { academic_year_id: assessment.academic_year_id, term_id: assessment.term_id, topic_id: topic.topic_id }, connection)
+    }
+    await recalculateClassMastery(schoolId, { classId: assessment.class_id, subjectId: assessment.subject_id, academicYearId: assessment.academic_year_id, termId: assessment.term_id }, connection)
+    await audit(connection, schoolId, actor, 'ACADEMIC_MARK_SHEET_REOPENED', 'academic_mark_sheet', sheet.id, { assessment_id: assessment.id, mode, invalidated_official_evidence: true })
+    await connection.commit()
+    return { public_ref: sheet.public_ref, status: 'draft', entry_mode: mode, version_number: Number(sheet.version_number || 1) + 1 }
+  } catch (error) {
+    await connection.rollback()
+    throw error
+  } finally {
+    connection.release()
+  }
 }
 
 async function resolveRef(connection, table, schoolId, ref, numeric = null) {
@@ -707,8 +805,9 @@ export async function replaceTargetedAssessmentQuestion(schoolId, ref, actor, bo
   } catch (error) { await connection.rollback(); throw error } finally { connection.release() }
 }
 
-export async function getTargetedAssessment(schoolId, ref) {
+export async function getTargetedAssessment(schoolId, ref, actor = null) {
   const generated = await generatedContext(pool, schoolId, ref)
+  await assertTeacherAssessmentAccess(pool, schoolId, generated, actor)
   const [[version]] = await pool.query("SELECT public_ref,version_number,paper_json,validation_json,approval_status,change_summary,created_at FROM generated_assessment_versions WHERE school_id=? AND generated_assessment_id=? ORDER BY version_number DESC LIMIT 1", [schoolId, generated.id])
   const [learners] = await pool.query(`SELECT gal.public_ref,s.public_ref student_ref,CONCAT(s.first_name,' ',s.last_name) student_name,gal.selection_reason,gal.evidence_json,gal.confidence_score,gal.confirmed_at FROM generated_assessment_learners gal JOIN students s ON s.id=gal.student_id AND s.school_id=gal.school_id WHERE gal.school_id=? AND gal.generated_assessment_id=? ORDER BY s.last_name,s.first_name`, [schoolId, generated.id])
   return { assessment: { public_ref: generated.public_ref, source_finding_ref: generated.source_finding_ref, class_name: generated.class_name, subject_name: generated.subject_name, topic_ref: generated.topic_ref, topic_name: generated.topic_name, subtopic_ref: generated.subtopic_ref, subtopic_name: generated.subtopic_name, purpose: generated.purpose, title: generated.title, duration_minutes: generated.duration_minutes, total_marks: Number(generated.total_marks), question_count: generated.question_count, status: generated.status, generation_source: generated.generation_source, provider: generated.provider, model: generated.model, published_assessment_id: generated.assessment_id }, version: version ? { ...version, paper: parseJson(version.paper_json, {}), validation: parseJson(version.validation_json, {}), paper_json: undefined, validation_json: undefined } : null, learners: learners.map((learner) => ({ ...learner, evidence: parseJson(learner.evidence_json, {}), evidence_json: undefined, confirmed: Boolean(learner.confirmed_at) })) }
@@ -770,18 +869,21 @@ export async function publishTargetedAssessment(schoolId, ref, actor) {
       if (question.source_question_id) await connection.query(`INSERT INTO question_source_lineage (public_ref,school_id,assessment_question_id,source_question_bank_id,transformation_type,provider,model,prompt_version,created_by) VALUES (UUID(),?,?,?,?,?,?,?,?)`, [schoolId, questionResult.insertId, question.source_question_id, question.transformation_type || "verbatim", generated.provider, generated.model, generated.prompt_version, actor.id])
     }
     await connection.query("UPDATE generated_assessments SET assessment_id=?,status='published',updated_by=? WHERE id=? AND school_id=?", [assessmentResult.insertId, actor.id, generated.id, schoolId])
+    const publishedAssessment = { ...generated, id: assessmentResult.insertId, academic_year_id: generated.academic_year_id, term_id: generated.term_id, class_id: generated.class_id, subject_id: generated.subject_id }
+    const markSheet = await ensureMarkSheet(connection, schoolId, publishedAssessment, "question", actor, `targeted-assessment:${generated.public_ref}`)
     if (generated.intervention_id && generated.purpose === "intervention_reassessment") {
       const [[baseline]] = await connection.query(`SELECT ams.id FROM academic_mark_sheets ams JOIN learner_topic_results ltr ON ltr.mark_sheet_id=ams.id AND ltr.school_id=ams.school_id AND ltr.topic_id=? AND ltr.is_official=1 WHERE ams.school_id=? AND ams.class_id=? AND ams.subject_id=? AND ams.status IN ('published','locked') GROUP BY ams.id,ams.published_at ORDER BY ams.published_at DESC LIMIT 1`, [generated.topic_id, schoolId, generated.class_id, generated.subject_id])
       await connection.query(`INSERT INTO academic_intervention_reassessments (public_ref,school_id,intervention_id,generated_assessment_id,baseline_mark_sheet_id,success_criterion_json) VALUES (UUID(),?,?,?,?,?)`, [schoolId, generated.intervention_id, generated.id, baseline?.id || null, JSON.stringify({ success_threshold: 60, minimum_change: 5 })]).catch((error) => { if (error.code !== "ER_DUP_ENTRY") throw error })
     }
-    await audit(connection, schoolId, actor, "TARGETED_ASSESSMENT_PUBLISHED", "generated_assessment", generated.id, { assessment_id: assessmentResult.insertId, version: version.version_number })
+    await audit(connection, schoolId, actor, "TARGETED_ASSESSMENT_PUBLISHED", "generated_assessment", generated.id, { assessment_id: assessmentResult.insertId, mark_sheet_ref: markSheet.public_ref, version: version.version_number })
     await connection.commit()
-    return { public_ref: ref, status: "published", assessment_id: Number(assessmentResult.insertId), mark_sheet_path: `/results/${assessmentResult.insertId}?mode=question`, teacher_reviewed: true }
+    return { public_ref: ref, status: "published", assessment_id: Number(assessmentResult.insertId), mark_sheet_ref: markSheet.public_ref, mark_sheet_path: `/results/${assessmentResult.insertId}?mode=question`, teacher_reviewed: true }
   } catch (error) { await connection.rollback(); throw error } finally { connection.release() }
 }
 
-export async function listTargetedAssessments(schoolId, filters = {}) {
+export async function listTargetedAssessments(schoolId, filters = {}, actor = null) {
   const params = [schoolId]; const clauses = []
+  if (String(actor?.role || '').toLowerCase() === 'teacher') { clauses.push("EXISTS (SELECT 1 FROM teacher_class_subject_assignments tcsa WHERE tcsa.school_id=ga.school_id AND tcsa.teacher_id=? AND tcsa.class_id=ga.class_id AND tcsa.subject_id=ga.subject_id AND tcsa.role='subject_teacher' AND tcsa.is_active=1)"); params.push(Number(actor.id)) }
   if (filters.status) { clauses.push("ga.status=?"); params.push(String(filters.status)) }
   if (filters.class_ref) { clauses.push("c.public_ref=?"); params.push(String(filters.class_ref)) }
   const [rows] = await pool.query(`SELECT ga.public_ref,ga.source_finding_ref,ga.title,ga.purpose,ga.duration_minutes,ga.total_marks,ga.question_count,ga.status,ga.generation_source,ga.assessment_id,ga.created_at,ga.updated_at,c.public_ref class_ref,c.name class_name,s.public_ref subject_ref,s.name subject_name,COALESCE(parent.public_ref,t.public_ref) topic_ref,COALESCE(parent.topic_name,t.topic_name) topic_name,IF(parent.id IS NULL,NULL,t.public_ref) subtopic_ref,IF(parent.id IS NULL,NULL,t.topic_name) subtopic_name,(SELECT COUNT(*) FROM generated_assessment_learners gal WHERE gal.school_id=ga.school_id AND gal.generated_assessment_id=ga.id) learner_count,(SELECT COUNT(*) FROM generated_assessment_learners gal WHERE gal.school_id=ga.school_id AND gal.generated_assessment_id=ga.id AND gal.confirmed_at IS NOT NULL) confirmed_learner_count FROM generated_assessments ga JOIN classes c ON c.id=ga.class_id AND c.school_id=ga.school_id JOIN subjects s ON s.id=ga.subject_id AND s.school_id=ga.school_id LEFT JOIN syllabus_topics t ON t.id=ga.topic_id AND t.school_id=ga.school_id LEFT JOIN syllabus_topics parent ON parent.id=t.parent_topic_id AND parent.school_id=t.school_id WHERE ga.school_id=?${clauses.length ? ` AND ${clauses.join(" AND ")}` : ""} ORDER BY ga.updated_at DESC LIMIT 100`, params)
@@ -801,8 +903,9 @@ export async function updateQuestionSourcePermission(schoolId, questionRef, acto
   return { question_ref: questionRef, permission_status: status, reuse_allowed: Boolean(reuseAllowed), transformation_allowed: Boolean(transformationAllowed) }
 }
 
-export async function getAssessmentOperationalIntelligence(schoolId, assessmentId) {
+export async function getAssessmentOperationalIntelligence(schoolId, assessmentId, actor = null) {
   const assessment = await assessmentContext(pool, schoolId, assessmentId)
+  await assertTeacherAssessmentAccess(pool, schoolId, assessment, actor)
   const questions = await loadMappedQuestions(pool, schoolId, assessment.id)
   const [questionStats] = await pool.query(`SELECT aq.id,aq.display_number,aq.question_text,aq.marks,COUNT(lqm.id) attempts,ROUND(AVG(lqm.marks_awarded),2) average_mark,ROUND(AVG(lqm.marks_awarded/NULLIF(lqm.marks_available,0)*100),2) success_rate,ROUND(SUM(lqm.marks_awarded=0)/NULLIF(COUNT(lqm.id),0)*100,2) zero_mark_rate,ROUND(SUM(lqm.marks_awarded=lqm.marks_available)/NULLIF(COUNT(lqm.id),0)*100,2) full_mark_rate,ROUND(SUM(lqm.response_status='omitted')/NULLIF(COUNT(lqm.id),0)*100,2) omission_rate FROM assessment_questions aq LEFT JOIN learner_question_marks lqm ON lqm.assessment_question_id=aq.id AND lqm.school_id=aq.school_id AND lqm.is_official=1 WHERE aq.school_id=? AND aq.assessment_id=? GROUP BY aq.id ORDER BY aq.sort_order,aq.id`, [schoolId, assessment.id])
   const [entries] = await pool.query(`SELECT lae.overall_marks,lae.percentage,lae.participation_status FROM learner_assessment_entries lae JOIN academic_mark_sheets ams ON ams.id=lae.mark_sheet_id AND ams.school_id=lae.school_id WHERE lae.school_id=? AND ams.assessment_id=? AND lae.is_official=1`, [schoolId, assessment.id])

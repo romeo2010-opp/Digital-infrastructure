@@ -123,6 +123,7 @@ export const routePermissions: Array<{ path: string; permissions: MeraPermission
   { path: '/library/print-requests', permissions: [MERA_PERMISSIONS.PRINT_REQUEST_VIEW, 'TEACHING_RESOURCE_PRINT'] },
   { path: '/library/archive', permissions: [MERA_PERMISSIONS.ARCHIVED_TERM_VIEW] },
   { path: '/academic-intelligence', permissions: [MERA_PERMISSIONS.ACADEMIC_INTELLIGENCE_VIEW] },
+  { path: '/learner-support', permissions: [MERA_PERMISSIONS.ACADEMIC_INTELLIGENCE_VIEW] },
   { path: '/classroom', permissions: [MERA_PERMISSIONS.CLASSROOM_MODE_USE] },
 ]
 

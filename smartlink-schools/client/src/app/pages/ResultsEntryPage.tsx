@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
-import { CheckCircle2, Download, Eye, PencilLine, Printer, RotateCcw, Save, Search, Send } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { CheckCircle2, Download, Eye, PencilLine, Printer, RotateCcw, Search, Send } from 'lucide-react'
 import { useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
 import { Button } from '../components/ui/button'
@@ -12,7 +12,6 @@ import { AcademicMarkSheetPanel } from '../components/AcademicMarkSheetPanel'
 import { AssessmentOperationalIntelligence } from '../components/AssessmentOperationalIntelligence'
 import { usePortal } from '../lib/portalContext'
 
-const GREENHILL_LOGO_URL = '/greenhill-logo.png'
 const selectClassName = 'h-8 w-full rounded-[5px] border border-[#d9dce3] bg-white px-2 text-[12px] font-medium text-[#111827] outline-none focus:border-[#111827]/35'
 const labelClass = 'grid gap-1.5 text-[11px] font-bold uppercase tracking-[0.08em] text-[#6b7280]'
 
@@ -217,6 +216,7 @@ function safeFileName(value: string) {
 
 function buildMarksheetHtml({
   logoSrc,
+  schoolName,
   rows,
   totalMarks,
   subjectName,
@@ -226,6 +226,7 @@ function buildMarksheetHtml({
   examSessionName,
 }: {
   logoSrc: string
+  schoolName: string
   rows: any[]
   totalMarks: number
   subjectName: string
@@ -288,9 +289,9 @@ function buildMarksheetHtml({
 <body>
   <main class="sheet">
     <section class="heading">
-      <img src="${escapeHtml(logoSrc || GREENHILL_LOGO_URL)}" alt="Greenhill logo" />
+      ${logoSrc ? `<img src="${escapeHtml(logoSrc)}" alt="${escapeHtml(schoolName)} logo" />` : `<div style="display:grid;width:82px;height:82px;place-items:center;border:2px solid #000;border-radius:50%;font-size:28px;font-weight:900">${escapeHtml(schoolName.slice(0, 2).toUpperCase())}</div>`}
       <div>
-        <h1>REIGN INTERNATIONAL ACADEMY</h1>
+        <h1>${escapeHtml(schoolName.toUpperCase())}</h1>
         <h2>${escapeHtml(title.toUpperCase())}</h2>
         ${subtitle ? `<div class="meta">${escapeHtml(subtitle)}</div>` : ''}
       </div>
@@ -330,6 +331,7 @@ function buildMarksheetHtml({
 
 function MarksheetPrintPreview({
   logoSrc,
+  schoolName,
   rows,
   totalMarks,
   subjectName,
@@ -339,6 +341,7 @@ function MarksheetPrintPreview({
   examSessionName,
 }: {
   logoSrc: string
+  schoolName: string
   rows: any[]
   totalMarks: number
   subjectName: string
@@ -358,33 +361,33 @@ function MarksheetPrintPreview({
   const passRate = totalTookExam ? Math.round((passed / totalTookExam) * 100) : 0
 
   return (
-    <section id="greenhill-print-area" className="rounded-[8px] border border-[#d1d5db] bg-white p-4 shadow-[var(--mera-shadow-card)] print:rounded-none print:border-0 print:p-0 print:shadow-none">
+    <section id="school-marksheet-print-area" className="rounded-[8px] border border-[#d1d5db] bg-white p-4 shadow-[var(--mera-shadow-card)] print:rounded-none print:border-0 print:p-0 print:shadow-none">
       <style>{`
-        #greenhill-print-area .greenhill-report-table { width: 100%; border-collapse: collapse; color: #000; font-family: Arial, Helvetica, sans-serif; font-size: 13px; line-height: 1.05; }
-        #greenhill-print-area .greenhill-report-table th,
-        #greenhill-print-area .greenhill-report-table td { border: 1px solid #000; padding: 5px 5px; vertical-align: middle; }
-        #greenhill-print-area .greenhill-report-table th { background: #cfcfcf; text-align: center; font-weight: 900; font-size: 14px; }
-        #greenhill-print-area .greenhill-report-table tbody tr:nth-child(even) td { background: #dedede; }
+        #school-marksheet-print-area .school-report-table { width: 100%; border-collapse: collapse; color: #000; font-family: Arial, Helvetica, sans-serif; font-size: 13px; line-height: 1.05; }
+        #school-marksheet-print-area .school-report-table th,
+        #school-marksheet-print-area .school-report-table td { border: 1px solid #000; padding: 5px 5px; vertical-align: middle; }
+        #school-marksheet-print-area .school-report-table th { background: #cfcfcf; text-align: center; font-weight: 900; font-size: 14px; }
+        #school-marksheet-print-area .school-report-table tbody tr:nth-child(even) td { background: #dedede; }
         @media print {
           @page { size: A4 landscape; margin: 10mm; }
           body * { visibility: hidden !important; }
-          #greenhill-print-area, #greenhill-print-area * { visibility: visible !important; }
-          #greenhill-print-area { position: absolute; inset: 0 auto auto 0; width: 100%; background: #fff; }
+          #school-marksheet-print-area, #school-marksheet-print-area * { visibility: visible !important; }
+          #school-marksheet-print-area { position: absolute; inset: 0 auto auto 0; width: 100%; background: #fff; }
           .no-print { display: none !important; }
         }
       `}</style>
       <div className="mx-auto max-w-[1180px] bg-white text-[#000] print:max-w-none">
         <header className="mb-7 grid grid-cols-[80px_1fr] items-center gap-6 rounded-[18px] border-[3px] border-[#000] px-6 py-5">
-          <img src={logoSrc || GREENHILL_LOGO_URL} alt="Greenhill logo" className="size-20 object-contain" />
+          {logoSrc ? <img src={logoSrc} alt={`${schoolName} logo`} className="size-20 object-contain" /> : <div className="grid size-20 place-items-center rounded-full border-2 border-black text-[26px] font-black">{schoolName.slice(0, 2).toUpperCase()}</div>}
           <div>
-            <h2 className="m-0 text-[30px] font-black uppercase leading-none tracking-[0.02em] text-[#000]">Greenhill Secondary School</h2>
+            <h2 className="m-0 text-[30px] font-black uppercase leading-none tracking-[0.02em] text-[#000]">{schoolName}</h2>
             <h3 className="m-0 mt-5 text-[26px] font-black uppercase leading-none tracking-[0.02em] text-[#000]">{title}</h3>
             {subtitle ? <p className="m-0 mt-2 text-[11px] font-bold uppercase tracking-[0.08em] text-[#111]">{subtitle}</p> : null}
           </div>
         </header>
 
         <div className="overflow-x-auto">
-          <table className="greenhill-report-table min-w-[880px]">
+          <table className="school-report-table min-w-[880px]">
             <thead>
               <tr>
                 <th className="w-10"></th>
@@ -450,10 +453,9 @@ export function ResultsEntryPage() {
   const [rows, setRows] = useState<any[]>([])
   const [studentQuery, setStudentQuery] = useState('')
   const [gradeFilter, setGradeFilter] = useState('all')
-  const [logoDataUrl, setLogoDataUrl] = useState('')
+  const [academicEvidenceState, setAcademicEvidenceState] = useState<any>({ loading: true, overall_ready: false, completion_percentage: 0 })
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
-  const [unsaved, setUnsaved] = useState(false)
   const [returnReason, setReturnReason] = useState('')
 
   const role = String(user?.role || '').toLowerCase()
@@ -532,7 +534,12 @@ export function ResultsEntryPage() {
   const paperName = sheetAssessment?.name || sheetAssessment?.assessment_name || sheet?.assessment?.name || '-'
   const examSessionName = sheetAssessment?.exam_session_name || sheet?.assessment?.exam_session_name || ''
   const termName = sheetAssessment?.term_label || sheetAssessment?.term_name || sheet?.assessment?.term_name || '-'
+  const schoolName = user?.schoolName || user?.school_name || sheet?.assessment?.school_name || 'SmartLink School'
   const sheetReadOnly = assessmentSubmittedLike({ ...sheetAssessment, batch }) || ['locked', 'archived'].includes(String(sheetAssessment?.status || '').toLowerCase())
+  const overallReady = Boolean(academicEvidenceState.overall_ready)
+  const handleAcademicStateChange = useCallback((next: any) => {
+    setAcademicEvidenceState((current: any) => current.overall_ready === next.overall_ready && current.loading === next.loading && current.completion_percentage === next.completion_percentage ? current : next)
+  }, [])
 
   const visibleSheetRows = useMemo(() => {
     const query = studentQuery.trim().toLowerCase()
@@ -608,7 +615,6 @@ export function ResultsEntryPage() {
     const payload = await api.getResultSheet(token, { assessment_id: assessmentId })
     setSheet(payload)
     setRows(payload?.rows || [])
-    setUnsaved(false)
     setStudentQuery('')
     setGradeFilter('all')
     return payload
@@ -626,7 +632,8 @@ export function ResultsEntryPage() {
       return
     }
     const html = buildMarksheetHtml({
-      logoSrc: logoDataUrl || GREENHILL_LOGO_URL,
+      logoSrc: '',
+      schoolName,
       rows,
       totalMarks,
       subjectName,
@@ -639,7 +646,7 @@ export function ResultsEntryPage() {
     const href = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = href
-    link.download = `${safeFileName(`greenhill-${className}-${paperName}-marksheet`)}.html`
+    link.download = `${safeFileName(`${schoolName}-${className}-${paperName}-marksheet`)}.html`
     document.body.appendChild(link)
     link.click()
     link.remove()
@@ -661,27 +668,14 @@ export function ResultsEntryPage() {
   }, [token])
 
   useEffect(() => {
-    fetch(GREENHILL_LOGO_URL)
-      .then((response) => response.blob())
-      .then((blob) => new Promise<string>((resolve, reject) => {
-        const reader = new FileReader()
-        reader.onload = () => resolve(String(reader.result || ''))
-        reader.onerror = reject
-        reader.readAsDataURL(blob)
-      }))
-      .then(setLogoDataUrl)
-      .catch(() => setLogoDataUrl(''))
-  }, [])
-
-  useEffect(() => {
     if (!routeAssessmentId) {
       setSelectedAssessmentId('')
       setSheet(null)
       setRows([])
-      setUnsaved(false)
       return
     }
     setSelectedAssessmentId(String(routeAssessmentId))
+    setAcademicEvidenceState({ loading: true, overall_ready: false, completion_percentage: 0 })
     if (!token) return
     setSheetLoading(true)
     setError('')
@@ -705,31 +699,8 @@ export function ResultsEntryPage() {
       setSelectedAssessmentId('')
       setSheet(null)
       setRows([])
-      setUnsaved(false)
     }
   }, [assessmentRows, isSheetPage, selectedAssessmentId])
-
-  const updateRow = (studentId: any, patch: any) => {
-    setRows((current) => current.map((row) => Number(row.id) === Number(studentId) ? { ...row, ...patch } : row))
-    setUnsaved(true)
-  }
-
-  const saveDraft = async () => {
-    if (!token || !selectedAssessmentId) return
-    setError('')
-    setMessage('')
-    try {
-      await api.saveResultDraft(token, { assessment_id: selectedAssessmentId, entries: rows.map((row) => ({ student_id: row.id, enrollment_id: row.enrollment_id, score: isAbsentRow(row) ? null : row.score, comment: row.comment, status: row.status })) })
-      setMessage('Draft results saved.')
-      toast.success('Draft results saved.')
-      await loadSheet(selectedAssessmentId)
-      await refreshSetup()
-    } catch (err: any) {
-      const nextError = err?.message || 'Unable to save draft results.'
-      setError(nextError)
-      toast.error(nextError)
-    }
-  }
 
   const submitFinal = async () => {
     if (!token || !selectedAssessmentId) return
@@ -796,17 +767,15 @@ export function ResultsEntryPage() {
             <div className="flex min-w-0 items-center gap-3">
               <PageBackButton fallback="/results" label="Back to results" iconOnly />
               <div className="min-w-0">
-                <p className="text-[11px] font-bold uppercase tracking-[0.1em] text-[#6b7280]">Greenhill marksheet</p>
+                <p className="text-[11px] font-bold uppercase tracking-[0.1em] text-[#6b7280]">{schoolName} marksheet</p>
                 <h1 className="truncate text-[20px] font-semibold tracking-[-0.035em] text-[#111827]">{className} - {paperName}</h1>
                 <p className="truncate text-[12px] font-medium text-[#6b7280]">{subjectName} - {termName}{examSessionName ? ` - ${examSessionName}` : ''}</p>
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              {unsaved ? <span className="rounded-[5px] border border-[#fed7aa] bg-[#fff7ed] px-3 py-2 text-[12px] font-semibold text-[#c2410c]">Unsaved changes</span> : null}
-              <Button type="button" variant="outline" className="h-9 rounded-[5px] text-[12px]" onClick={downloadMarksheet}><Download className="size-3.5" /> Download marksheet</Button>
-              <Button type="button" variant="outline" className="h-9 rounded-[5px] text-[12px]" onClick={printMarksheet}><Printer className="size-3.5" /> Print / Save PDF</Button>
-              <Button disabled={!rows.length || sheetReadOnly} type="button" variant="outline" className="h-9 rounded-[5px] text-[12px]" onClick={saveDraft}><Save className="size-3.5" /> Save draft</Button>
-              <Button disabled={!rows.length || sheetReadOnly} type="button" className="h-9 rounded-[5px] text-[12px]" onClick={submitFinal}><Send className="size-3.5" /> Submit results</Button>
+              <Button disabled={!overallReady} type="button" variant="outline" className="h-9 rounded-[5px] text-[12px]" onClick={downloadMarksheet}><Download className="size-3.5" /> Download marksheet</Button>
+              <Button disabled={!overallReady} type="button" variant="outline" className="h-9 rounded-[5px] text-[12px]" onClick={printMarksheet}><Printer className="size-3.5" /> Print / Save PDF</Button>
+              <Button disabled={!overallReady || !rows.length || sheetReadOnly} type="button" className="h-9 rounded-[5px] text-[12px]" onClick={submitFinal}><Send className="size-3.5" /> Submit derived results</Button>
             </div>
           </div>
         </header>
@@ -820,13 +789,13 @@ export function ResultsEntryPage() {
           </div>
 
           <div className="no-print">
-            <AcademicMarkSheetPanel assessmentId={selectedAssessmentId} readOnly={sheetReadOnly} />
+            <AcademicMarkSheetPanel assessmentId={selectedAssessmentId} readOnly={sheetReadOnly} onStateChange={handleAcademicStateChange} onSaved={async () => { await loadSheet(selectedAssessmentId); await refreshSetup() }} />
             <AssessmentOperationalIntelligence assessmentId={selectedAssessmentId} />
           </div>
 
-          <SectionCard
-            title="Overall-total compatibility sheet"
-            subtitle={sheetLoading ? 'Loading marksheet...' : sheetReadOnly ? 'Submitted or approved sheets are view only.' : 'Use this legacy fallback only when detailed question or topic marks are unavailable.'}
+          {overallReady ? <SectionCard
+            title="Overall marksheet"
+            subtitle={sheetLoading ? 'Loading marksheet...' : 'Calculated automatically from the completed live academic evidence above. Marks cannot be entered again here.'}
             actions={<StatusPill value={batch?.status || sheetAssessment?.status || 'draft'} />}
             className="no-print"
           >
@@ -884,13 +853,13 @@ export function ResultsEntryPage() {
                                 <span className="mx-auto flex h-8 w-24 items-center justify-center rounded-[5px] border border-[#cbd5e1] bg-[#f8fafc] text-[12px] font-bold text-[#475569]">Absent</span>
                               ) : (
                                 <Input
-                                  disabled={sheetReadOnly}
+                                  disabled
                                   type="number"
                                   min="0"
                                   max={totalMarks || undefined}
                                   className={`mx-auto h-8 w-24 rounded-[5px] border text-center text-[12px] font-bold shadow-none ${scoreTone}`}
                                   value={row.score ?? ''}
-                                  onChange={(event) => updateRow(row.id, { score: event.target.value })}
+                                  readOnly
                                 />
                               )}
                             </td>
@@ -898,7 +867,7 @@ export function ResultsEntryPage() {
                             <td className="px-3 py-2 text-center">{absent ? <span className="inline-flex rounded-[4px] border border-[#cbd5e1] bg-[#f8fafc] px-2 py-0.5 text-[11px] font-bold text-[#475569]">Absent</span> : <GradePill grade={grade} percentage={percentage} />}</td>
                             <td className="px-3 py-2"><StatusPill value={row.status || batch?.status || 'draft'} /></td>
                             <td className="px-3 py-2">
-                              <Input disabled={sheetReadOnly} className="h-8 min-w-[180px] rounded-[5px] bg-white text-[12px]" value={row.comment || ''} onChange={(event) => updateRow(row.id, { comment: event.target.value })} />
+                              <Input disabled className="h-8 min-w-[180px] rounded-[5px] bg-white text-[12px]" value={row.comment || ''} />
                             </td>
                             <td className="px-3 py-2 text-[#6b7280]">{row.last_saved_at ? new Date(row.last_saved_at).toLocaleString() : '-'}</td>
                           </tr>
@@ -922,10 +891,15 @@ export function ResultsEntryPage() {
                 </div>
               </div>
             </div>
-          </SectionCard>
+          </SectionCard> : (
+            <SectionCard title="Overall marksheet" subtitle="Available after all learner evidence has been entered and saved.">
+              <div className="p-5 text-[12px] font-medium text-[#64748b]">Complete the Live Academic Evidence grid first. The overall marksheet, preview, and download will then appear automatically—no second marks entry is required.</div>
+            </SectionCard>
+          )}
 
-          <MarksheetPrintPreview
-            logoSrc={logoDataUrl || GREENHILL_LOGO_URL}
+          {overallReady ? <MarksheetPrintPreview
+            logoSrc=""
+            schoolName={schoolName}
             rows={rows}
             totalMarks={totalMarks}
             subjectName={subjectName}
@@ -933,7 +907,7 @@ export function ResultsEntryPage() {
             paperName={paperName}
             termName={termName}
             examSessionName={examSessionName}
-          />
+          /> : null}
         </main>
       </div>
     )
@@ -945,7 +919,7 @@ export function ResultsEntryPage() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h1 className="text-[22px] font-semibold tracking-[-0.035em] text-[var(--mera-panel-text)]">Results</h1>
-            <p className="mt-1 max-w-3xl text-[13px] leading-5 text-[var(--mera-panel-text-muted)]">Select an active-term assessment, then open its dedicated Greenhill marksheet page.</p>
+            <p className="mt-1 max-w-3xl text-[13px] leading-5 text-[var(--mera-panel-text-muted)]">Select an active-term assessment, enter its academic evidence once, then review the automatically derived overall marksheet.</p>
           </div>
         </div>
       </section>

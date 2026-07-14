@@ -736,9 +736,14 @@ export async function getAcademicEngineConfig(schoolId, connection = pool) {
  * tables; this endpoint gives the analytical layer one tenant-scoped shape
  * and never returns internal database identifiers to callers.
  */
-export async function getCanonicalAcademicEvidence(schoolId, filters = {}) {
+export async function getCanonicalAcademicEvidence(schoolId, filters = {}, actor = null) {
   const params = [schoolId]
   const clauses = []
+  const teacherId = String(actor?.role || '').toLowerCase() === 'teacher' ? Number(actor.id) : null
+  if (teacherId) {
+    clauses.push(`EXISTS (SELECT 1 FROM teacher_class_subject_assignments tcsa WHERE tcsa.school_id=me.school_id AND tcsa.teacher_id=? AND tcsa.class_id=me.class_id AND tcsa.subject_id=me.subject_id AND tcsa.role='subject_teacher' AND tcsa.is_active=1)`)
+    params.push(teacherId)
+  }
   const addRefFilter = async (table, column, queryKey) => {
     if (!filters[queryKey]) return
     const id = await scopedIdByRef(table, schoolId, filters[queryKey])
@@ -838,26 +843,44 @@ function masteryScopeWhere(scope) {
 export async function recalculateStudentMastery(schoolId, studentId, subjectId, scope = {}, connection = pool) {
   const config = await getAcademicEngineConfig(schoolId, connection)
   const selected = masteryScopeWhere(scope)
+  let academicYearId = scope.academic_year_id === undefined ? null : scope.academic_year_id
+  let termId = scope.term_id === undefined ? null : scope.term_id
+  if (scope.academic_year_id === undefined || scope.term_id === undefined) {
+    const [[latestScope]] = await connection.query(
+      `SELECT academic_year_id,term_id FROM mastery_evidence
+       WHERE school_id=? AND student_id=? AND subject_id=? AND ${selected.clause}
+       ORDER BY evidence_at DESC,id DESC LIMIT 1`,
+      [schoolId, studentId, subjectId, ...selected.params],
+    )
+    if (scope.academic_year_id === undefined) academicYearId = latestScope?.academic_year_id ?? null
+    if (scope.term_id === undefined) termId = latestScope?.term_id ?? null
+  }
   const [evidence] = await connection.query(
-    `SELECT * FROM mastery_evidence WHERE school_id=? AND student_id=? AND subject_id=? AND ${selected.clause} ORDER BY evidence_at`,
-    [schoolId, studentId, subjectId, ...selected.params],
+    `SELECT * FROM mastery_evidence
+     WHERE school_id=? AND student_id=? AND subject_id=? AND ${selected.clause}
+       AND academic_year_id <=> ? AND term_id <=> ?
+       AND publication_state IN ('published','locked') AND evidence_status='valid'
+     ORDER BY evidence_at`,
+    [schoolId, studentId, subjectId, ...selected.params, academicYearId, termId],
   )
   const calculated = calculateMastery(evidence, config)
   const ref = randomUUID()
+  const scopeKey = `${selected.level}:${scope.topic_id||0}:${scope.subtopic_id||0}:${scope.learning_objective_id||0}`
+  const sessionScopeKey = `${academicYearId||0}:${termId||0}:${scopeKey}`
   await connection.query(
     `INSERT INTO academic_mastery_records (
-      public_ref,school_id,student_id,subject_id,topic_id,subtopic_id,learning_objective_id,mastery_level,scope_key,
+      public_ref,school_id,academic_year_id,term_id,student_id,subject_id,topic_id,subtopic_id,learning_objective_id,mastery_level,scope_key,session_scope_key,
       mastery_score,confidence_score,mastery_status,trend,evidence_count,calculation_explanation_json,last_evidence_at,last_recalculated_at
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
     ON DUPLICATE KEY UPDATE mastery_score=VALUES(mastery_score),confidence_score=VALUES(confidence_score),
       mastery_status=IF(manually_overridden=1,mastery_status,VALUES(mastery_status)),trend=VALUES(trend),
       evidence_count=VALUES(evidence_count),calculation_explanation_json=VALUES(calculation_explanation_json),
       last_evidence_at=VALUES(last_evidence_at),last_recalculated_at=CURRENT_TIMESTAMP`,
-    [ref, schoolId, studentId, subjectId, scope.topic_id || null, scope.subtopic_id || null, scope.learning_objective_id || null,
-      selected.level, `${selected.level}:${scope.topic_id||0}:${scope.subtopic_id||0}:${scope.learning_objective_id||0}`, calculated.mastery_score, calculated.confidence_score, calculated.mastery_status, calculated.trend,
+    [ref, schoolId, academicYearId, termId, studentId, subjectId, scope.topic_id || null, scope.subtopic_id || null, scope.learning_objective_id || null,
+      selected.level, scopeKey, sessionScopeKey, calculated.mastery_score, calculated.confidence_score, calculated.mastery_status, calculated.trend,
       calculated.evidence_count, JSON.stringify(calculated.explanation), calculated.last_evidence_at],
   )
-  return calculated
+  return { ...calculated, academic_year_id: academicYearId, term_id: termId }
 }
 
 export async function recalculateQuestionAnalytics(schoolId,questionId,connection=pool){
@@ -875,7 +898,7 @@ export async function recalculateClassMastery(schoolId,{classId,subjectId,academ
   let enrollmentClause=''
   if(academicYearId){enrollmentClause+=' AND se.academic_year_id=?';params.push(academicYearId)}
   if(termId){enrollmentClause+=' AND se.term_id=?';params.push(termId)}
-  const [rows]=await connection.query(`SELECT amr.mastery_score,amr.confidence_score,amr.mastery_status FROM student_enrollments se JOIN academic_mastery_records amr ON amr.school_id=se.school_id AND amr.student_id=se.student_id AND amr.subject_id=? AND amr.mastery_level='subject' AND amr.scope_key='subject:0:0:0' WHERE se.school_id=? AND se.class_id=? AND se.enrollment_status='active'${enrollmentClause}`,[subjectId,schoolId,classId,...params.slice(3)])
+  const [rows]=await connection.query(`SELECT amr.mastery_score,amr.confidence_score,amr.mastery_status FROM student_enrollments se JOIN academic_mastery_records amr ON amr.school_id=se.school_id AND amr.student_id=se.student_id AND amr.subject_id=? AND amr.mastery_level='subject' AND amr.scope_key='subject:0:0:0' AND amr.academic_year_id <=> ? AND amr.term_id <=> ? WHERE se.school_id=? AND se.class_id=? AND se.enrollment_status='active'${enrollmentClause}`,[subjectId,academicYearId,termId,schoolId,classId,...params.slice(3)])
   const scores=rows.map((row)=>Number(row.mastery_score)).filter(Number.isFinite).sort((a,b)=>a-b)
   const average=scores.length?scores.reduce((sum,value)=>sum+value,0)/scores.length:null
   const median=scores.length?(scores.length%2?scores[(scores.length-1)/2]:(scores[scores.length/2-1]+scores[scores.length/2])/2):null
@@ -897,9 +920,12 @@ export async function ingestApprovedResultBatch(schoolId, batchId, actor = null)
       [schoolId, batchId],
     )
     if (!batch) throw new HttpError(404, "Result batch was not found")
+    if (!['approved','locked'].includes(String(batch.status || ''))) {
+      throw new HttpError(409, "Only approved or locked result batches can create official academic evidence")
+    }
     const [entries] = await connection.query(
       `SELECT re.student_id,re.score,re.status FROM result_entries re
-       WHERE re.school_id=? AND re.result_batch_id=? AND re.status IN ('submitted','approved','locked') AND re.score IS NOT NULL`,
+       WHERE re.school_id=? AND re.result_batch_id=? AND re.status IN ('approved','locked') AND re.score IS NOT NULL`,
       [schoolId, batchId],
     )
     const assessmentWeight = /exam|final|end_of_term/i.test(String(batch.assessment_type || "")) ? 1.2 : 0.8
@@ -932,7 +958,7 @@ export async function ingestApprovedResultBatch(schoolId, batchId, actor = null)
             batch.total_marks, assessmentWeight, metadata],
         )
       }
-      await recalculateStudentMastery(schoolId, entry.student_id, batch.subject_id, {}, connection)
+      await recalculateStudentMastery(schoolId, entry.student_id, batch.subject_id, { academic_year_id: batch.academic_year_id, term_id: batch.term_id }, connection)
     }
     const classMastery=await recalculateClassMastery(schoolId,{classId:batch.class_id,subjectId:batch.subject_id,academicYearId:batch.academic_year_id,termId:batch.term_id},connection)
     const config = await getAcademicEngineConfig(schoolId, connection)
@@ -1078,7 +1104,7 @@ export async function syncCurriculumFromLesson(schoolId, lessonLogId, actor = nu
   }
 }
 
-export async function getStudentAcademicIntelligence(schoolId, studentRef) {
+export async function getStudentAcademicIntelligence(schoolId, studentRef, actor = null) {
   const [[student]] = await pool.query(
     `SELECT s.id,s.public_ref,s.first_name,s.last_name,c.name class_name
      FROM students s LEFT JOIN classes c ON c.id=s.class_id AND c.school_id=s.school_id
@@ -1086,6 +1112,15 @@ export async function getStudentAcademicIntelligence(schoolId, studentRef) {
     [schoolId, studentRef],
   )
   if (!student) throw new HttpError(404, "Student was not found")
+  let allowedSubjects = null
+  if (String(actor?.role || '').toLowerCase() === 'teacher') {
+    const [assigned] = await pool.query(`SELECT DISTINCT subj.name subject_name FROM student_enrollments se
+      JOIN teacher_class_subject_assignments tcsa ON tcsa.school_id=se.school_id AND tcsa.class_id=se.class_id AND tcsa.teacher_id=? AND tcsa.subject_id IS NOT NULL AND tcsa.role='subject_teacher' AND tcsa.is_active=1
+      JOIN subjects subj ON subj.id=tcsa.subject_id AND subj.school_id=tcsa.school_id
+      WHERE se.school_id=? AND se.student_id=? AND se.enrollment_status='active'`, [actor.id, schoolId, student.id])
+    if (!assigned.length) throw new HttpError(403, 'Teachers can only view learner intelligence for their assigned class subjects.')
+    allowedSubjects = new Set(assigned.map((row) => row.subject_name))
+  }
   const [mastery, evidence, interventions, recommendations, readiness, parentInsights] = await Promise.all([
     pool.query(
       `SELECT amr.public_ref,amr.mastery_level,amr.mastery_score,amr.confidence_score,amr.mastery_status,amr.trend,
@@ -1117,8 +1152,8 @@ export async function getStudentAcademicIntelligence(schoolId, studentRef) {
       [schoolId, student.id],
     ),
     pool.query(
-      `SELECT ar.public_ref,ar.title,ar.reason,ar.suggested_action,ar.priority,ar.confidence_score,ar.status,ar.due_at
-       FROM academic_recommendations ar WHERE ar.school_id=? AND ar.student_id=? ORDER BY FIELD(ar.status,'NEW','ACCEPTED','IN_PROGRESS','COMPLETED','DISMISSED'),ar.created_at DESC LIMIT 30`,
+      `SELECT ar.public_ref,ar.title,ar.reason,ar.suggested_action,ar.priority,ar.confidence_score,ar.status,ar.due_at,subj.name subject_name
+       FROM academic_recommendations ar LEFT JOIN subjects subj ON subj.id=ar.subject_id AND subj.school_id=ar.school_id WHERE ar.school_id=? AND ar.student_id=? ORDER BY FIELD(ar.status,'NEW','ACCEPTED','IN_PROGRESS','COMPLETED','DISMISSED'),ar.created_at DESC LIMIT 30`,
       [schoolId, student.id],
     ),
     pool.query(
@@ -1134,20 +1169,21 @@ export async function getStudentAcademicIntelligence(schoolId, studentRef) {
       FROM parent_academic_insights pai LEFT JOIN subjects subj ON subj.id=pai.subject_id AND subj.school_id=pai.school_id
       WHERE pai.school_id=? AND pai.student_id=? ORDER BY pai.created_at DESC LIMIT 30`,[schoolId,student.id]),
   ])
+  const visible = (rows) => allowedSubjects === null ? rows : rows.filter((row) => row.subject_name && allowedSubjects.has(row.subject_name))
   return {
     student: { public_ref: student.public_ref, name: `${student.first_name} ${student.last_name}`, class_name: student.class_name },
-    mastery: mastery[0].map((row) => ({ ...row, calculation_explanation: jsonValue(row.calculation_explanation_json, {}) })),
-    evidence: evidence[0].map((row) => ({ ...row, metadata: jsonValue(row.metadata_json, {}) })),
-    interventions: interventions[0],
-    recommendations: recommendations[0],
-    exam_readiness: readiness[0].map((row) => ({ ...row, factors: jsonValue(row.factors_json, {}), risks: jsonValue(row.risks_json, []), missing_data: jsonValue(row.missing_data_json, []), recommendations: jsonValue(row.recommendations_json, []) })),
-    parent_insights: parentInsights[0].map((row)=>({...row,strengths:jsonValue(row.strengths_json,[]),focus_areas:jsonValue(row.focus_areas_json,[]),home_support:jsonValue(row.home_support_json,[]),completed_interventions:jsonValue(row.completed_interventions_json,[]),strengths_json:undefined,focus_areas_json:undefined,home_support_json:undefined,completed_interventions_json:undefined})),
+    mastery: visible(mastery[0]).map((row) => ({ ...row, calculation_explanation: jsonValue(row.calculation_explanation_json, {}) })),
+    evidence: visible(evidence[0]).map((row) => ({ ...row, metadata: jsonValue(row.metadata_json, {}) })),
+    interventions: visible(interventions[0]),
+    recommendations: visible(recommendations[0]),
+    exam_readiness: visible(readiness[0]).map((row) => ({ ...row, factors: jsonValue(row.factors_json, {}), risks: jsonValue(row.risks_json, []), missing_data: jsonValue(row.missing_data_json, []), recommendations: jsonValue(row.recommendations_json, []) })),
+    parent_insights: visible(parentInsights[0]).map((row)=>({...row,strengths:jsonValue(row.strengths_json,[]),focus_areas:jsonValue(row.focus_areas_json,[]),home_support:jsonValue(row.home_support_json,[]),completed_interventions:jsonValue(row.completed_interventions_json,[]),strengths_json:undefined,focus_areas_json:undefined,home_support_json:undefined,completed_interventions_json:undefined})),
   }
 }
 
 export async function createParentAcademicInsight(schoolId,actor,body={}) {
   const studentRef=String(body.student_ref||'')
-  const intelligence=await getStudentAcademicIntelligence(schoolId,studentRef)
+  const intelligence=await getStudentAcademicIntelligence(schoolId,studentRef,actor)
   const [[student]]=await pool.query("SELECT id,first_name,last_name FROM students WHERE school_id=? AND public_ref=? LIMIT 1",[schoolId,studentRef])
   if(!student)throw new HttpError(404,'Student was not found.')
   let subjectId=null
@@ -1210,18 +1246,21 @@ export async function getParentPortalAcademicInsights(schoolId,actor) {
   return {students}
 }
 
-export async function getAcademicCommandCentre(schoolId, filters = {}) {
+export async function getAcademicCommandCentre(schoolId, filters = {}, actor = null) {
+  const teacherId = String(actor?.role || "").toLowerCase() === "teacher" ? Number(actor.id) : null
   const params = [schoolId]
   let clause = ""
   if (filters.term_id) { clause += " AND cdr.term_id=?"; params.push(Number(filters.term_id)) }
   if (filters.class_id) { clause += " AND cdr.class_id=?"; params.push(Number(filters.class_id)) }
   if (filters.subject_id) { clause += " AND cdr.subject_id=?"; params.push(Number(filters.subject_id)) }
+  if (teacherId) { clause += " AND EXISTS (SELECT 1 FROM teacher_class_subject_assignments tcsa WHERE tcsa.school_id=cdr.school_id AND tcsa.teacher_id=? AND tcsa.class_id=cdr.class_id AND tcsa.subject_id=cdr.subject_id AND tcsa.role='subject_teacher' AND tcsa.is_active=1)"; params.push(teacherId) }
   const scopedFilter = (columns) => {
     const values = [schoolId]
     let sql = ''
     if (filters.term_id && columns.term_id) { sql += ` AND ${columns.term_id}=?`; values.push(Number(filters.term_id)) }
     if (filters.class_id && columns.class_id) { sql += ` AND ${columns.class_id}=?`; values.push(Number(filters.class_id)) }
     if (filters.subject_id && columns.subject_id) { sql += ` AND ${columns.subject_id}=?`; values.push(Number(filters.subject_id)) }
+    if (teacherId && columns.class_id && columns.subject_id) { sql += ` AND EXISTS (SELECT 1 FROM teacher_class_subject_assignments tcsa WHERE tcsa.school_id=? AND tcsa.teacher_id=? AND tcsa.class_id=${columns.class_id} AND tcsa.subject_id=${columns.subject_id} AND tcsa.role='subject_teacher' AND tcsa.is_active=1)`; values.push(schoolId, teacherId) }
     return { sql, values }
   }
   const alertScope = scopedFilter({ term_id: 'aa.term_id', class_id: 'aa.class_id', subject_id: 'aa.subject_id' })
@@ -1283,16 +1322,16 @@ export async function getAcademicCommandCentre(schoolId, filters = {}) {
       JOIN question_bank q ON q.id=qa.question_id AND q.school_id=qa.school_id
       JOIN subjects s ON s.id=q.subject_id AND s.school_id=q.school_id
       LEFT JOIN syllabus_topics t ON t.id=q.topic_id AND t.school_id=q.school_id
-      WHERE qa.school_id=? ORDER BY JSON_LENGTH(COALESCE(qa.flags_json,JSON_ARRAY())) DESC,qa.total_attempts DESC LIMIT 50`,[schoolId]),
+      WHERE qa.school_id=?${teacherId ? " AND EXISTS (SELECT 1 FROM teacher_class_subject_assignments tcsa WHERE tcsa.school_id=qa.school_id AND tcsa.teacher_id=? AND tcsa.subject_id=q.subject_id AND tcsa.role='subject_teacher' AND tcsa.is_active=1)" : ""} ORDER BY JSON_LENGTH(COALESCE(qa.flags_json,JSON_ARRAY())) DESC,qa.total_attempts DESC LIMIT 50`,teacherId?[schoolId,teacherId]:[schoolId]),
     pool.query(`SELECT public_ref,scope_type,scope_ref,metric_key,metric_value,confidence_score,evidence_state,reason,evidence_summary_json,created_at
       FROM academic_intelligence_snapshots WHERE school_id=? ORDER BY created_at DESC LIMIT 30`,[schoolId]),
     pool.query(`SELECT 'intervention' signal_type,ai.public_ref,CONCAT('Support succeeded: ',ai.issue) title,
       JSON_OBJECT('outcome',ai.outcome,'completed_at',ai.completed_at) evidence,ai.completed_at changed_at
-      FROM academic_interventions ai WHERE ai.school_id=? AND ai.status='completed' AND ai.outcome='improved'
+      FROM academic_interventions ai WHERE ai.school_id=? AND ai.status='completed' AND ai.outcome='improved'${teacherId ? " AND EXISTS (SELECT 1 FROM teacher_class_subject_assignments tcsa WHERE tcsa.school_id=ai.school_id AND tcsa.teacher_id=? AND tcsa.class_id=ai.class_id AND tcsa.subject_id=ai.subject_id AND tcsa.role='subject_teacher' AND tcsa.is_active=1)" : ""}
       UNION ALL
       SELECT 'resolved_risk',aa.public_ref,CONCAT('Risk resolved: ',aa.title),aa.evidence_json,aa.resolved_at
-      FROM academic_alerts aa WHERE aa.school_id=? AND aa.status='resolved'
-      ORDER BY changed_at DESC LIMIT 20`,[schoolId,schoolId]),
+      FROM academic_alerts aa WHERE aa.school_id=? AND aa.status='resolved'${teacherId ? " AND EXISTS (SELECT 1 FROM teacher_class_subject_assignments tcsa WHERE tcsa.school_id=aa.school_id AND tcsa.teacher_id=? AND tcsa.class_id=aa.class_id AND tcsa.subject_id=aa.subject_id AND tcsa.role='subject_teacher' AND tcsa.is_active=1)" : ""}
+      ORDER BY changed_at DESC LIMIT 20`,teacherId?[schoolId,teacherId,schoolId,teacherId]:[schoolId,schoolId]),
   ])
   const alertRows=alerts[0].map((row)=>({...row,evidence:jsonValue(row.evidence_json,{}),evidence_json:undefined}))
   const recommendationRows=recommendations[0].map((row)=>({...row,evidence:jsonValue(row.evidence_json,{}),evidence_json:undefined}))
@@ -1313,9 +1352,9 @@ export async function getAcademicCommandCentre(schoolId, filters = {}) {
     interventions: interventions[0],
     readiness: readinessRows,
     positive_signals: positiveSignals[0].map((row)=>({...row,evidence:jsonValue(row.evidence,{}),changed_at:row.changed_at})),
-    meaningful_changes: meaningfulChanges[0].map((row)=>({...row,evidence_summary:jsonValue(row.evidence_summary_json,{}),evidence_summary_json:undefined})),
+    meaningful_changes: teacherId ? [] : meaningfulChanges[0].map((row)=>({...row,evidence_summary:jsonValue(row.evidence_summary_json,{}),evidence_summary_json:undefined})),
     operational_counts:{classes_needing_action:new Set(alertRows.map((row)=>row.class_ref).filter(Boolean)).size,active_interventions:interventions[0].length,overdue_actions:recommendationRows.filter((row)=>row.due_at&&new Date(row.due_at)<new Date()).length,positive_signals:positiveSignals[0].length,evidence_gaps:incomplete.length},
-    migration_reports:migrationReports[0].map((row)=>({...row,detail:jsonValue(row.detail_json,{}),detail_json:undefined})),
+    migration_reports:teacherId ? [] : migrationReports[0].map((row)=>({...row,detail:jsonValue(row.detail_json,{}),detail_json:undefined})),
     question_analytics:questionAnalytics[0].map((row)=>({...row,flags:jsonValue(row.flags_json,[]),flags_json:undefined})),
   }
 }
@@ -1333,8 +1372,19 @@ export async function getAcademicIntelligenceHistory(schoolId, filters = {}) {
   return { history: runs.map((row) => ({ ...row, input_summary: jsonValue(row.input_summary_json, {}), output_summary: jsonValue(row.output_summary_json, {}), input_summary_json: undefined, output_summary_json: undefined })) }
 }
 
-export async function getAcademicFindingExplanation(schoolId, findingRef) {
+export async function getAcademicFindingExplanation(schoolId, findingRef, actor = null) {
   const ref = String(findingRef || '')
+  if (String(actor?.role || '').toLowerCase() === 'teacher') {
+    const scopeTables = ['academic_mastery_records', 'academic_alerts', 'academic_recommendations', 'exam_readiness_snapshots']
+    let scope = null
+    for (const table of scopeTables) {
+      const [[row]] = await pool.query(`SELECT class_id,subject_id FROM ${table} WHERE school_id=? AND public_ref=? LIMIT 1`, [schoolId, ref])
+      if (row) { scope = row; break }
+    }
+    if (!scope?.class_id || !scope?.subject_id) throw new HttpError(404, 'Academic finding was not found.')
+    const [[assignment]] = await pool.query(`SELECT id FROM teacher_class_subject_assignments WHERE school_id=? AND teacher_id=? AND class_id=? AND subject_id=? AND role='subject_teacher' AND is_active=1 LIMIT 1`, [schoolId, actor.id, scope.class_id, scope.subject_id])
+    if (!assignment) throw new HttpError(404, 'Academic finding was not found.')
+  }
   const queries = [
     ['mastery', `SELECT public_ref,mastery_score,confidence_score,mastery_status,trend,evidence_count,calculation_explanation_json,last_evidence_at,last_recalculated_at FROM academic_mastery_records WHERE school_id=? AND public_ref=? LIMIT 1`],
     ['alert', `SELECT public_ref,alert_type,severity,title,message,evidence_json,status,created_at,updated_at FROM academic_alerts WHERE school_id=? AND public_ref=? LIMIT 1`],

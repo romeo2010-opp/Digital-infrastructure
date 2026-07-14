@@ -4,19 +4,23 @@ import fs from "fs"
 import fsp from "fs/promises"
 import os from "os"
 import path from "path"
-import { execFile } from "child_process"
+import { execFile, spawnSync } from "child_process"
 import { promisify } from "util"
 import PDFDocument from "pdfkit"
 import { cropPdfVisualRegions, extractEmbeddedPdfImages, parsePdfImageList } from "../src/services/pdfImageExtractionService.js"
 
 const run = promisify(execFile)
+const commandExists = (command) => spawnSync(process.platform === "win32" ? "where.exe" : "which", [command], { stdio: "ignore" }).status === 0
+const imageCommand = process.platform === "win32" ? "magick" : "convert"
+const pdfToolchainAvailable = commandExists("pdfimages") && commandExists("pdftoppm") && commandExists("identify") && commandExists(imageCommand)
+const pdfToolchainTest = pdfToolchainAvailable ? test : test.skip
 
 async function fixtureFolder() {
   return fsp.mkdtemp(path.join(os.tmpdir(), "smartlink-pdf-images-"))
 }
 
 async function makeImage(filePath, color, width = 240, height = 160) {
-  await run("convert", ["-size", `${width}x${height}`, `xc:${color}`, "-fill", "black", "-draw", `line 10,10 ${width - 10},${height - 10}`, filePath])
+  await run(imageCommand, ["-size", `${width}x${height}`, `xc:${color}`, "-fill", "black", "-draw", `line 10,10 ${width - 10},${height - 10}`, filePath])
 }
 
 async function makePdf(filePath, draw) {
@@ -37,7 +41,7 @@ test("parses Poppler embedded-image metadata", () => {
   assert.deepEqual(rows[0], { page_number: 4, embedded_number: 2, embedded_type: "image", width: 408, height: 276, encoding: "jpeg", interpolation: "yes", object_id: 34 })
 })
 
-test("extracts original embedded images with dimensions, MIME type and checksum", async (t) => {
+pdfToolchainTest("extracts original embedded images with dimensions, MIME type and checksum", async (t) => {
   const folder = await fixtureFolder(); t.after(() => fsp.rm(folder, { recursive: true, force: true }))
   const first = path.join(folder, "first.png"), second = path.join(folder, "second.jpg"), pdf = path.join(folder, "images.pdf"), output = path.join(folder, "output")
   await makeImage(first, "white")
@@ -49,7 +53,7 @@ test("extracts original embedded images with dimensions, MIME type and checksum"
   assert.ok(result.assets.some((asset) => asset.mime_type === "image/jpeg"))
 })
 
-test("crops a vector diagram at print resolution and keeps question association", async (t) => {
+pdfToolchainTest("crops a vector diagram at print resolution and keeps question association", async (t) => {
   const folder = await fixtureFolder(); t.after(() => fsp.rm(folder, { recursive: true, force: true }))
   const pdf = path.join(folder, "vector.pdf")
   await makePdf(pdf, (doc) => { doc.fontSize(16).text("1. Study the diagram.", 50, 80); doc.circle(260, 300, 90).stroke(); doc.moveTo(170, 300).lineTo(350, 300).stroke(); doc.text("A", 250, 285) })
@@ -61,7 +65,7 @@ test("crops a vector diagram at print resolution and keeps question association"
   assert.ok(result.assets[0].width > 500)
 })
 
-test("marks low-confidence visual association for review", async (t) => {
+pdfToolchainTest("marks low-confidence visual association for review", async (t) => {
   const folder = await fixtureFolder(); t.after(() => fsp.rm(folder, { recursive: true, force: true }))
   const pdf = path.join(folder, "uncertain.pdf")
   await makePdf(pdf, (doc) => { doc.rect(100, 200, 250, 180).stroke() })
@@ -70,7 +74,7 @@ test("marks low-confidence visual association for review", async (t) => {
   assert.equal(result.assets[0].assignment_status, "suggested")
 })
 
-test("does not save a full-page scan as an extracted question image", async (t) => {
+pdfToolchainTest("does not save a full-page scan as an extracted question image", async (t) => {
   const folder = await fixtureFolder(); t.after(() => fsp.rm(folder, { recursive: true, force: true }))
   const scan = path.join(folder, "scan.jpg"), pdf = path.join(folder, "scan.pdf"), output = path.join(folder, "output")
   await makeImage(scan, "white", 1200, 1600)
@@ -80,7 +84,7 @@ test("does not save a full-page scan as an extracted question image", async (t) 
   assert.equal(result.assets.length, 0)
 })
 
-test("PDF with no images completes with an empty image list", async (t) => {
+pdfToolchainTest("PDF with no images completes with an empty image list", async (t) => {
   const folder = await fixtureFolder(); t.after(() => fsp.rm(folder, { recursive: true, force: true }))
   const pdf = path.join(folder, "text.pdf"), output = path.join(folder, "output")
   await makePdf(pdf, (doc) => doc.fontSize(14).text("1. Explain photosynthesis.", 50, 80))
@@ -89,7 +93,7 @@ test("PDF with no images completes with an empty image list", async (t) => {
   assert.deepEqual(result.assets, [])
 })
 
-test("corrupt PDF reports extraction failure without producing assets", async (t) => {
+pdfToolchainTest("corrupt PDF reports extraction failure without producing assets", async (t) => {
   const folder = await fixtureFolder(); t.after(() => fsp.rm(folder, { recursive: true, force: true }))
   const pdf = path.join(folder, "corrupt.pdf"), output = path.join(folder, "output")
   await fsp.writeFile(pdf, "not a pdf")

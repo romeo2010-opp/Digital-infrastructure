@@ -48,6 +48,7 @@ import { TaskDetailPage } from './pages/TaskDetailPage'
 import { LibrarianPortalPage, TeachingResourceDetailPage } from './pages/LibrarianPortalPage'
 import { ClassroomModePage } from './pages/ClassroomModePage'
 import { AcademicIntelligencePage } from './pages/AcademicIntelligencePage'
+import { LearnerSupportPage } from './pages/LearnerSupportPage'
 import { ParentAcademicInsightsPage } from './pages/ParentAcademicInsightsPage'
 
 const routeMeta = [
@@ -56,6 +57,7 @@ const routeMeta = [
   { path: '/library', title: 'Library & Institutional Resources', subtitle: 'Physical resources, teaching materials, archives and print operations' },
   { path: '/classroom', title: 'Classroom Mode', subtitle: 'Fast teacher-operated lesson workflow without student devices' },
   { path: '/academic-intelligence', title: 'Academic Intelligence', subtitle: 'Explainable mastery, pacing, readiness and next actions' },
+  { path: '/learner-support', title: 'Learner Support Centre', subtitle: 'Persistent intervention, reassessment and escalation cases' },
   { path: '/parent-insights', title: 'Child Progress', subtitle: 'School-approved learning updates and support at home' },
   { path: '/student-portal', title: 'Student Portal', subtitle: 'Results, fees, timetable, homework, attendance and notices' },
   { path: '/search', title: 'School Search', subtitle: 'Search students, parents, classes, homework and results' },
@@ -328,6 +330,8 @@ function SchoolRoutes({ landingPath }: { landingPath: string }) {
       <Route path="/classroom" element={<ClassroomModePage />} />
       <Route path="/classroom/:sessionRef" element={<ClassroomModePage />} />
       <Route path="/academic-intelligence" element={<AcademicIntelligencePage />} />
+      <Route path="/learner-support" element={<LearnerSupportPage />} />
+      <Route path="/learner-support/:caseId" element={<LearnerSupportPage />} />
       <Route path="/parent-insights" element={<ParentAcademicInsightsPage />} />
       <Route path="/finance/payroll" element={<PayrollPage />} />
       <Route path="/finance/payroll/:runRef" element={<PayrollPage />} />
