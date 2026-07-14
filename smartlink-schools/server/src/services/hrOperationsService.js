@@ -160,6 +160,7 @@ async function leaveByRef(connection,schoolId,ref,lock=false){const [[row]]=awai
 export async function getLeaveDashboard(schoolId,filters={}) {
   const conditions=["lr.school_id=?"],params=[schoolId]
   if(filters.status){conditions.push("lr.status=?");params.push(filters.status)} if(filters.leave_type){conditions.push("lr.leave_type=?");params.push(filters.leave_type)}
+  if(filters.staff_user_id){conditions.push("lr.staff_user_id=?");params.push(Number(filters.staff_user_id))}
   const [rows]=await pool.query(`SELECT lr.public_ref,u.public_ref staff_ref,u.full_name staff_name,u.role,lr.leave_type,lr.start_date,lr.end_date,lr.total_days,lr.reason,lr.status,coverage.public_ref coverage_ref,coverage.full_name coverage_name,approver.full_name approved_by_name,creator.full_name requested_by_name,lr.approved_at,lr.decision_notes,lr.created_at,
     GROUP_CONCAT(DISTINCT CONCAT(c.name,COALESCE(CONCAT(' · ',subj.name),'')) ORDER BY c.name SEPARATOR ', ') affected_responsibilities
     FROM staff_leave_requests lr JOIN users u ON u.id=lr.staff_user_id AND u.school_id=lr.school_id LEFT JOIN users coverage ON coverage.id=lr.coverage_staff_user_id LEFT JOIN users approver ON approver.id=lr.approved_by LEFT JOIN users creator ON creator.id=lr.created_by
@@ -169,6 +170,14 @@ export async function getLeaveDashboard(schoolId,filters={}) {
   const current=rows.filter((r)=>r.status==="approved"&&String(r.start_date).slice(0,10)<=today&&String(r.end_date).slice(0,10)>=today)
   const typeCounts=rows.reduce((m,r)=>(m[r.leave_type]=(m[r.leave_type]||0)+1,m),{})
   return {settings:await getHrSettings(schoolId),requests:rows,summary:{currently_on_leave:current.length,pending:rows.filter((r)=>r.status==="pending").length,ending_this_week:current.filter((r)=>String(r.end_date).slice(0,10)<=weekEnd).length,uncovered:current.filter((r)=>!r.coverage_ref).length,approved:rows.filter((r)=>r.status==="approved").length,rejected_or_cancelled:rows.filter((r)=>["rejected","cancelled"].includes(r.status)).length},leave_by_type:Object.entries(typeCounts).map(([name,value])=>({name,value}))}
+}
+
+export async function getOwnLeaveDashboard(schoolId,userId) {
+  const dashboard=await getLeaveDashboard(schoolId,{staff_user_id:userId})
+  const [balances]=await pool.query("SELECT public_ref,leave_type,leave_year,entitlement_days,used_days,remaining_days FROM staff_leave_balances WHERE school_id=? AND staff_user_id=? ORDER BY leave_year DESC,leave_type",[schoolId,userId])
+  const today=new Date().toISOString().slice(0,10)
+  const upcoming=dashboard.requests.filter((row)=>["pending","approved"].includes(row.status)&&String(row.end_date).slice(0,10)>=today).length
+  return {...dashboard,balances,summary:{...dashboard.summary,upcoming}}
 }
 
 export async function getLeaveRequest(schoolId,ref){const leave=await leaveByRef(pool,schoolId,ref);const dashboard=await getLeaveDashboard(schoolId);const request=dashboard.requests.find((r)=>r.public_ref===ref);const [balances]=await pool.query("SELECT public_ref,leave_type,leave_year,entitlement_days,used_days,remaining_days FROM staff_leave_balances WHERE school_id=? AND staff_user_id=? ORDER BY leave_year DESC,leave_type",[schoolId,leave.staff_user_id]);return {request,balances}}
@@ -182,6 +191,28 @@ export async function createLeaveRequest(schoolId,actor,body={}) {
     const [[saved]]=await connection.query("SELECT public_ref FROM staff_leave_requests WHERE id=?",[result.insertId]);await audit(schoolId,actor.id,"LEAVE_REQUEST_CREATED","staff_leave",result.insertId,{staff_ref:staff.public_ref,type,start,end});
     const settings=await getHrSettings(schoolId);if(settings.notify_director_leave_request)await broadcastSchoolNotification({schoolId,roles:["school_owner","director","owner","headteacher"],excludeUserId:actor.id,title:"Leave request awaiting review",message:`${staff.full_name} requested ${type.replaceAll("_"," ")} leave from ${start} to ${end}.`,category:"staff",priority:"high",linkedEntityType:"staff_leave",linkedEntityId:result.insertId,createdBy:actor.id});return {public_ref:saved.public_ref}
   }finally{connection.release()}
+}
+
+export async function createOwnLeaveRequest(schoolId,actor,body={}) {
+  const [[staff]]=await pool.query("SELECT public_ref FROM users WHERE school_id=? AND id=? AND is_active=1 LIMIT 1",[schoolId,actor.id])
+  if(!staff)throw new HttpError(403,"Your staff account is not active in this school")
+  return createLeaveRequest(schoolId,actor,{...body,staff_user_ref:staff.public_ref,coverage_staff_ref:null})
+}
+
+export async function cancelOwnLeaveRequest(schoolId,actor,ref) {
+  const connection=await pool.getConnection()
+  let leave
+  try{
+    await connection.beginTransaction()
+    leave=await leaveByRef(connection,schoolId,ref,true)
+    if(Number(leave.staff_user_id)!==Number(actor.id))throw new HttpError(403,"You can only cancel your own leave request")
+    if(leave.status!=="pending")throw new HttpError(409,"Only a pending leave request can be cancelled by staff")
+    await connection.query("UPDATE staff_leave_requests SET status='cancelled',decision_notes=COALESCE(decision_notes,'Cancelled by staff member') WHERE id=? AND school_id=?",[leave.id,schoolId])
+    await connection.commit()
+  }catch(error){await connection.rollback();throw error}finally{connection.release()}
+  await audit(schoolId,actor.id,"LEAVE_CANCELLED_BY_STAFF","staff_leave",leave.id,{leave_ref:ref})
+  await broadcastSchoolNotification({schoolId,roles:["school_owner","director","owner","headteacher"],excludeUserId:actor.id,title:"Leave request cancelled",message:`A pending ${String(leave.leave_type).replaceAll("_"," ")} leave request was cancelled by the staff member.`,category:"staff",linkedEntityType:"staff_leave",linkedEntityId:leave.id,createdBy:actor.id})
+  return {ok:true,public_ref:ref,status:"cancelled"}
 }
 
 export async function transitionLeave(schoolId,actor,ref,action,body={}) {

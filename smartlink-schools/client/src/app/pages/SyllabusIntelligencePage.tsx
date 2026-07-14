@@ -757,7 +757,16 @@ export function SyllabusIntelligencePage() {
         />
       </SectionCard>
 
-      <SectionCard title="Syllabus Documents" subtitle="One stable syllabus document per year level and subject.">
+      <SectionCard
+        title="Syllabus Documents"
+        subtitle="Create a blank syllabus document from scratch or build one from an import. Uploading material is optional."
+        actions={(
+          <Button type="button" className="h-8 rounded-[5px] text-[12px]" onClick={() => navigate('/syllabus/create')}>
+            <Plus className="size-3.5" />
+            New blank document
+          </Button>
+        )}
+      >
         <PortalTable
           rows={manualEntries}
           columns={[
@@ -798,7 +807,7 @@ export function SyllabusIntelligencePage() {
               ),
             },
           ]}
-          emptyMessage={loading ? 'Loading syllabus documents...' : 'No syllabus documents yet.'}
+          emptyMessage={loading ? 'Loading syllabus documents...' : 'No syllabus documents yet. Create a blank document without importing a file.'}
         />
         {manualEntries.length ? (
           <div className="grid gap-2 border-t border-[#e2e8f0] p-4">
@@ -1301,7 +1310,7 @@ export function SyllabusIntelligencePage() {
           <div className="flex items-center gap-2">
             <Button type="button" className="h-8 rounded-[5px] text-[12px]" onClick={() => navigate('/syllabus/create')}>
               <Plus className="size-3.5" />
-              Create
+              New Syllabus Document
             </Button>
             <Button type="button" variant="outline" className="h-8 rounded-[5px] text-[12px]" disabled={loading || busy} onClick={load}><RotateCcw className="size-3.5" /> Refresh</Button>
           </div>

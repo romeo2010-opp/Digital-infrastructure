@@ -348,6 +348,8 @@ import {
 import { requireAuth, requireExactRole, requirePasswordReady, requireRole } from "../middleware/auth.js"
 import { requireSchoolPermission, SCHOOL_PERMISSIONS } from "../services/authorizationService.js"
 import {
+  cancelMyLeave,
+  createMyLeave,
   createLeave,
   createRun,
   generateItems,
@@ -355,6 +357,7 @@ import {
   leaveDashboard,
   leaveRequest,
   leaveTransition,
+  myLeaveDashboard,
   patchHrSettings,
   patchLeave,
   patchLeaveBalance,
@@ -533,6 +536,9 @@ router.post("/director/finance/payroll/runs/:runRef/:action(approve|pay|cancel)"
 router.patch("/director/finance/payroll/items/:itemRef", requireSchoolPermission(SCHOOL_PERMISSIONS.PAYROLL_MANAGE), asyncHandler(patchPayrollItem))
 router.post("/director/finance/payroll/salary-profiles", requireSchoolPermission(SCHOOL_PERMISSIONS.PAYROLL_MANAGE), asyncHandler(saveProfile))
 router.patch("/director/finance/payroll/salary-profiles/:profileRef", requireSchoolPermission(SCHOOL_PERMISSIONS.PAYROLL_MANAGE), asyncHandler(saveProfile))
+router.get("/staff/leave/me", requireRole("school_owner", "director", "owner", "headteacher", "teacher", "bursar", "librarian"), asyncHandler(myLeaveDashboard))
+router.post("/staff/leave/me", requireRole("school_owner", "director", "owner", "headteacher", "teacher", "bursar", "librarian"), asyncHandler(createMyLeave))
+router.post("/staff/leave/me/:leaveRef/cancel", requireRole("school_owner", "director", "owner", "headteacher", "teacher", "bursar", "librarian"), asyncHandler(cancelMyLeave))
 router.get("/director/staff/leave", requireSchoolPermission(SCHOOL_PERMISSIONS.LEAVE_VIEW), asyncHandler(leaveDashboard))
 router.post("/director/staff/leave", requireSchoolPermission(SCHOOL_PERMISSIONS.LEAVE_MANAGE), asyncHandler(createLeave))
 router.get("/director/staff/leave/:leaveRef", requireSchoolPermission(SCHOOL_PERMISSIONS.LEAVE_VIEW), asyncHandler(leaveRequest))

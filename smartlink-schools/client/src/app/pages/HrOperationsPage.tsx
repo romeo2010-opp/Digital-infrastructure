@@ -84,6 +84,88 @@ export function PayslipPage(){const {runRef,itemRef}=useParams();const {token,ap
 
 export function LeavePage(){const {leaveRef}=useParams();return leaveRef?<LeaveDetail leaveRef={leaveRef}/>:<LeaveOverview/>}
 
+export function MyLeavePage() {
+  const { token, api, runAction } = usePortal()
+  const [data, setData] = useState<any>({ requests: [], balances: [], summary: {} })
+  const [open, setOpen] = useState(false)
+  const [error, setError] = useState('')
+  const [form, setForm] = useState<any>({ leave_type: 'sick', start_date: '', end_date: '', reason: '' })
+
+  const refresh = async () => {
+    if (!token) return
+    try {
+      setData(await api.getMyLeaveDashboard(token))
+      setError('')
+    } catch (err: any) {
+      setError(err?.message || 'Unable to load your leave requests.')
+    }
+  }
+
+  useEffect(() => { refresh() }, [token])
+
+  const create = async () => {
+    await runAction(() => api.createMyLeaveRequest(token, form), 'Submitting leave request...', { refresh: false })
+    setOpen(false)
+    setForm({ leave_type: 'sick', start_date: '', end_date: '', reason: '' })
+    await refresh()
+  }
+
+  const cancel = async (row: any) => {
+    if (!window.confirm('Cancel this pending leave request?')) return
+    await runAction(() => api.cancelMyLeaveRequest(token, row.public_ref), 'Cancelling leave request...', { refresh: false })
+    await refresh()
+  }
+
+  const summary = data.summary || {}
+  const annualBalance = (data.balances || []).find((row: any) => row.leave_type === 'annual')
+  return (
+    <main className="grid gap-3 p-4">
+      <PageHeader
+        eyebrow="Staff self-service"
+        title="My Leave"
+        description="Request leave, follow its approval status and review your available leave balance. Leadership assigns teaching coverage during review."
+        actions={<Button onClick={() => setOpen(true)}><Plus className="size-4" />Request leave</Button>}
+      />
+      {error ? <div className="rounded border border-red-200 bg-red-50 p-3 text-red-700">{error}</div> : null}
+      <SectionKpiStrip items={[
+        { label: 'My Pending Requests', value: summary.pending || 0, tone: summary.pending ? 'warn' : 'good' },
+        { label: 'My Approved Leave', value: summary.approved || 0, tone: 'good' },
+        { label: 'My Upcoming Leave', value: summary.upcoming || 0 },
+        { label: 'Annual Days Remaining', value: annualBalance?.remaining_days ?? 'Not configured', helper: annualBalance ? `${annualBalance.leave_year} entitlement` : 'Ask leadership to configure entitlement' },
+      ]} />
+      <SectionCard title="My Leave Requests" subtitle="Only your own requests are visible here.">
+        <PortalTable
+          columns={[
+            { key: 'leave_type', label: 'Type', render: (row) => label(row.leave_type) },
+            { key: 'start_date', label: 'Start', render: (row) => date(row.start_date) },
+            { key: 'end_date', label: 'End', render: (row) => date(row.end_date) },
+            { key: 'total_days', label: 'Days' },
+            { key: 'coverage_name', label: 'Coverage', render: (row) => row.coverage_name || 'Assigned during review' },
+            { key: 'status', label: 'Status', render: (row) => badge(row.status) },
+            { key: 'actions', label: 'Actions', render: (row) => row.status === 'pending' ? <Button type="button" variant="outline" className="h-7 text-[11px]" onClick={(event) => { event.stopPropagation(); cancel(row) }}>Cancel</Button> : null },
+          ]}
+          rows={data.requests || []}
+          emptyMessage="You have not submitted a leave request yet."
+        />
+      </SectionCard>
+      <ModalShell
+        open={open}
+        onOpenChange={setOpen}
+        title="Request leave"
+        description="Your request will be sent to school leadership for approval and coverage planning."
+        footer={<><Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button><Button disabled={!form.start_date || !form.end_date || !form.reason.trim()} onClick={create}>Submit request</Button></>}
+      >
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className={`${labelClass} sm:col-span-2`}>Leave type<select className={selectClass} value={form.leave_type} onChange={(event) => setForm({ ...form, leave_type: event.target.value })}>{['sick','annual','maternity','paternity','compassionate','unpaid','study','other'].map((value) => <option key={value} value={value}>{label(value)}</option>)}</select></label>
+          <label className={labelClass}>Start date<Input type="date" value={form.start_date} onChange={(event) => setForm({ ...form, start_date: event.target.value })} /></label>
+          <label className={labelClass}>End date<Input type="date" min={form.start_date || undefined} value={form.end_date} onChange={(event) => setForm({ ...form, end_date: event.target.value })} /></label>
+          <label className={`${labelClass} sm:col-span-2`}>Reason<Textarea value={form.reason} onChange={(event) => setForm({ ...form, reason: event.target.value })} placeholder="Explain the reason and anything leadership should consider." /></label>
+        </div>
+      </ModalShell>
+    </main>
+  )
+}
+
 function LeaveOverview(){const {token,api,runAction}=usePortal();const navigate=useNavigate();const [data,setData]=useState<any>({requests:[],summary:{},leave_by_type:[]});const [staff,setStaff]=useState<any[]>([]);const [open,setOpen]=useState(false);const [error,setError]=useState('');const [form,setForm]=useState<any>({staff_user_ref:'',leave_type:'sick',start_date:'',end_date:'',reason:'',coverage_staff_ref:''});const refresh=async()=>{try{setData(await api.getLeaveDashboard(token));const users=await api.listUsers(token);setStaff((users.users||[]).filter((u:any)=>['teacher','headteacher'].includes(u.role)))}catch(err:any){setError(err?.message||'Unable to load staff leave.')}};useEffect(()=>{refresh()},[token]);const summary=data.summary||{};const create=async()=>{await runAction(()=>api.createLeaveRequest(token,form),'Creating leave request...',{refresh:false});setOpen(false);await refresh()};const max=Math.max(1,...(data.leave_by_type||[]).map((r:any)=>Number(r.value)));return <main className="grid gap-3 p-4"><PageHeader eyebrow="Staff operations" title="Leave" description="Approved leave, pending requests, teaching coverage and attendance impact." actions={<Button onClick={()=>setOpen(true)}><Plus className="size-4"/>Create leave request</Button>}/>{error?<div className="rounded border border-red-200 bg-red-50 p-3 text-red-700">{error}</div>:null}<SectionKpiStrip items={[{label:'Currently on Leave',value:summary.currently_on_leave||0,tone:summary.currently_on_leave?'warn':'good'},{label:'Pending Requests',value:summary.pending||0,tone:summary.pending?'warn':'good'},{label:'Ending This Week',value:summary.ending_this_week||0},{label:'Uncovered Leave',value:summary.uncovered||0,tone:summary.uncovered?'bad':'good'},{label:'Approved Leave',value:summary.approved||0},{label:'Rejected / Cancelled',value:summary.rejected_or_cancelled||0}]}/><div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_340px]"><SectionCard title="Leave Requests" subtitle="Select a request to review details, coverage and attendance impact."><PortalTable columns={[{key:'staff_name',label:'Staff'},{key:'leave_type',label:'Type',render:(r)=>label(r.leave_type)},{key:'start_date',label:'Start',render:(r)=>date(r.start_date)},{key:'end_date',label:'End',render:(r)=>date(r.end_date)},{key:'total_days',label:'Days'},{key:'coverage_name',label:'Coverage',render:(r)=>r.coverage_name||'Not assigned'},{key:'status',label:'Status',render:(r)=>badge(r.status)}]} rows={data.requests||[]} onRowClick={(row)=>navigate(`/staff/leave/${row.public_ref}`)} emptyMessage="No leave requests have been recorded. Approved leave will appear here and will affect staff attendance."/></SectionCard><SectionCard title="Leave by Type" subtitle="Recorded requests in the current school dataset."><div className="grid gap-3 p-4">{(data.leave_by_type||[]).map((row:any)=><div key={row.name}><div className="flex justify-between text-[12px]"><span>{label(row.name)}</span><strong>{row.value}</strong></div><div className="mt-1 h-2 overflow-hidden rounded-full bg-[#ede9fe]"><div className="h-full rounded-full bg-gradient-to-r from-[#5b21d6] to-[#ec268f]" style={{width:`${Number(row.value)/max*100}%`}}/></div></div>)}{!data.leave_by_type?.length?<div className="text-[12px] text-[#64748b]">No leave trend is available yet.</div>:null}</div></SectionCard></div><ModalShell open={open} onOpenChange={setOpen} title="Create leave request" description="Approved leave appears as On Leave in staff attendance, not Absent." footer={<><Button variant="outline" onClick={()=>setOpen(false)}>Cancel</Button><Button disabled={!form.staff_user_ref||!form.start_date||!form.end_date||!form.reason} onClick={create}>Submit request</Button></>}><div className="grid gap-3 sm:grid-cols-2"><label className={`${labelClass} sm:col-span-2`}>Staff member<select className={selectClass} value={form.staff_user_ref} onChange={(e)=>setForm({...form,staff_user_ref:e.target.value})}><option value="">Select staff</option>{staff.map((u:any)=><option key={u.public_ref} value={u.public_ref}>{u.full_name}</option>)}</select></label><label className={labelClass}>Leave type<select className={selectClass} value={form.leave_type} onChange={(e)=>setForm({...form,leave_type:e.target.value})}>{['sick','annual','maternity','paternity','compassionate','unpaid','study','other'].map((v)=><option key={v} value={v}>{label(v)}</option>)}</select></label><label className={labelClass}>Coverage teacher<select className={selectClass} value={form.coverage_staff_ref} onChange={(e)=>setForm({...form,coverage_staff_ref:e.target.value})}><option value="">Not assigned</option>{staff.filter((u:any)=>u.public_ref!==form.staff_user_ref).map((u:any)=><option key={u.public_ref} value={u.public_ref}>{u.full_name}</option>)}</select></label><label className={labelClass}>Start date<Input type="date" value={form.start_date} onChange={(e)=>setForm({...form,start_date:e.target.value})}/></label><label className={labelClass}>End date<Input type="date" value={form.end_date} onChange={(e)=>setForm({...form,end_date:e.target.value})}/></label><label className={`${labelClass} sm:col-span-2`}>Reason<Textarea value={form.reason} onChange={(e)=>setForm({...form,reason:e.target.value})}/></label></div></ModalShell></main>}
 
 function LeaveDetail({leaveRef}:{leaveRef:string}){const {token,api,runAction}=usePortal();const [data,setData]=useState<any>({request:null,balances:[]});const [staff,setStaff]=useState<any[]>([]);const [coverage,setCoverage]=useState('');const [notes,setNotes]=useState('');const [error,setError]=useState('');const refresh=async()=>{try{setData(await api.getLeaveRequest(token,leaveRef));const users=await api.listUsers(token);setStaff((users.users||[]).filter((u:any)=>['teacher','headteacher'].includes(u.role)))}catch(err:any){setError(err?.message||'Unable to load leave request.')}};useEffect(()=>{refresh()},[token,leaveRef]);const request=data.request;const act=async(action:any)=>{if(!window.confirm(`${label(action)} this leave request?`))return;await runAction(()=>api.transitionLeave(token,leaveRef,action,{coverage_staff_ref:coverage||undefined,decision_notes:notes||undefined}),`${label(action)} leave...`,{refresh:false});await refresh()};const saveCoverage=async()=>{await runAction(()=>api.updateLeaveRequest(token,leaveRef,{coverage_staff_ref:coverage,decision_notes:notes}),'Saving leave coverage...',{refresh:false});await refresh()};if(!request)return <main className="p-4"><PageBackButton fallback="/staff/leave" label="Back to Leave"/><div className="mt-4 text-[13px] text-[#64748b]">{error||'Loading leave request…'}</div></main>;return <main className="grid gap-3 p-4"><PageBackButton fallback="/staff/leave" label="Back to Leave"/><PageHeader eyebrow="Leave detail" title={`${request.staff_name} · ${label(request.leave_type)}`} description={`${date(request.start_date)} to ${date(request.end_date)} · ${request.total_days} days`} actions={<>{request.status==='pending'?<><Button onClick={()=>act('approve')}><Check className="size-4"/>Approve</Button><Button variant="destructive" onClick={()=>act('reject')}><XCircle className="size-4"/>Reject</Button></>:null}{request.status==='approved'?<Button onClick={()=>act('complete')}>Mark returned</Button>:null}{['pending','approved'].includes(request.status)?<Button variant="outline" onClick={()=>act('cancel')}>Cancel</Button>:null}</>}/><SectionKpiStrip items={[{label:'Status',value:label(request.status),tone:request.status==='approved'?'good':request.status==='pending'?'warn':'neutral'},{label:'Duration',value:`${request.total_days} days`},{label:'Coverage',value:request.coverage_name||'Not assigned',tone:request.coverage_name?'good':'warn'},{label:'Attendance',value:request.status==='approved'?'On Leave':'No change',helper:'during approved period'}]}/><div className="grid gap-3 xl:grid-cols-2"><SectionCard title="Leave Details" subtitle="Request, decision and approval record."><div className="grid gap-3 p-4 text-[13px]"><div><div className="text-[11px] uppercase text-[#64748b]">Reason</div><div>{request.reason}</div></div><div className="grid grid-cols-2 gap-3"><div><div className="text-[11px] uppercase text-[#64748b]">Requested by</div><div>{request.requested_by_name}</div></div><div><div className="text-[11px] uppercase text-[#64748b]">Approved by</div><div>{request.approved_by_name||'-'}</div></div></div><div><div className="text-[11px] uppercase text-[#64748b]">Affected responsibilities</div><div>{request.affected_responsibilities||'No active teaching assignments found.'}</div></div></div></SectionCard><SectionCard title="Coverage" subtitle="Assign another teacher to reduce class disruption."><div className="grid gap-3 p-4"><label className={labelClass}>Coverage teacher<select className={selectClass} value={coverage||request.coverage_ref||''} onChange={(e)=>setCoverage(e.target.value)}><option value="">Not assigned</option>{staff.filter((u:any)=>u.public_ref!==request.staff_ref).map((u:any)=><option key={u.public_ref} value={u.public_ref}>{u.full_name}</option>)}</select></label><label className={labelClass}>Director notes<Textarea value={notes} onChange={(e)=>setNotes(e.target.value)} placeholder={request.decision_notes||'Coverage or decision notes'}/></label><Button variant="outline" onClick={saveCoverage}><Save className="size-4"/>Save coverage</Button></div></SectionCard></div><SectionCard title="Leave Balances" subtitle="Configured entitlement and used days for this staff member."><PortalTable columns={[{key:'leave_type',label:'Type',render:(r)=>label(r.leave_type)},{key:'leave_year',label:'Year'},{key:'entitlement_days',label:'Entitlement'},{key:'used_days',label:'Used'},{key:'remaining_days',label:'Remaining'}]} rows={data.balances||[]} emptyMessage="No leave balance has been configured for this staff member."/></SectionCard></main>}

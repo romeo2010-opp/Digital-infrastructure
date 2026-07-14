@@ -146,12 +146,15 @@ function chart(type, title, data, config = {}) {
 
 function makePage({ section, title, description, session, kpis = [], insights = [], charts = [], tables = [], filters = [], report_sections = [], detail = null, empty_state = null }) {
   const firstTable = tables[0] || { rows: [], columns: [] }
+  const selectedKpis = [...new Map(kpis.map((item) => [String(item?.label || "").trim().toLowerCase(), item])).values()]
+    .slice(0, 4)
+    .map((item) => ({ ...item, id: `${section}:${String(item.label || "metric").toLowerCase().replace(/[^a-z0-9]+/g, "-")}` }))
   return {
     section,
     title,
     description,
     session: sessionPayload(session),
-    kpis,
+    kpis: selectedKpis,
     insights,
     charts,
     tables,
@@ -1184,7 +1187,7 @@ async function buildOverviewPage(schoolId, session, settings) {
     session,
     kpis: [
       kpi("Open Director Tasks", numberValue(taskMetrics.open_tasks), `${numberValue(taskMetrics.due_today)} due today`, taskMetrics.open_tasks ? "warn" : "good"),
-      kpi("Pending Approvals", operations.metrics.pendingApprovals, "decisions waiting", operations.metrics.pendingApprovals ? "warn" : "good"),
+      kpi("Leadership Decisions Waiting", operations.metrics.pendingApprovals, "decisions waiting", operations.metrics.pendingApprovals ? "warn" : "good"),
       kpi("Overdue Follow-Ups", numberValue(taskMetrics.overdue_tasks), "past due", taskMetrics.overdue_tasks ? "bad" : "good"),
       kpi("Today's Fee Collection", moneyLabel(finance.totals.collected_today), `${moneyLabel(finance.totals.collected_week)} this week`, "neutral"),
       kpi("Pending Marks", marks.metrics.draftBatches + marks.metrics.pendingBatches + marks.metrics.overdueBatches, "teacher submissions", marks.metrics.overdueBatches ? "bad" : "warn"),
@@ -1289,7 +1292,7 @@ async function buildFinancePage(schoolId, section, session, settings) {
         kpi("Total Discounts Granted", moneyLabel(discounts.totalDiscounts), "estimated reduction", "warn"),
         kpi("Students on Discount", discounts.students, "unique learners", "neutral"),
         kpi("Discount Value %", percentLabel(percentValue(discounts.totalDiscounts, billed)), "of billed fees", percentValue(discounts.totalDiscounts, billed) > 10 ? "warn" : "neutral"),
-        kpi("Pending Approvals", discounts.pending, "discount records", discounts.pending ? "warn" : "good"),
+        kpi("Discount Decisions Waiting", discounts.pending, "discount records", discounts.pending ? "warn" : "good"),
         kpi("Largest Discount", moneyLabel(discounts.largest), "single discount", "neutral"),
         kpi("Scholarship/Bursary Count", discounts.rows.filter((row) => ["scholarship", "hardship"].includes(row.discount_type)).length, "support categories", "neutral"),
       ],
@@ -1657,7 +1660,7 @@ async function buildOperationsPage(schoolId, section, session, settings) {
       kpis: [
         kpi("Open Incidents", operations.metrics.openIncidents, "open or investigating", operations.metrics.openIncidents ? "warn" : "good"),
         kpi("Critical Incidents", operations.metrics.criticalIncidents, "director attention", operations.metrics.criticalIncidents ? "bad" : "good"),
-        kpi("Resolved This Term", operations.metrics.resolvedIncidents, "closed incidents", "good"),
+        kpi("Incident Resolutions This Term", operations.metrics.resolvedIncidents, "closed incidents", "good"),
         kpi("Repeat Student Incidents", "-", "requires repeat analysis", "neutral"),
         kpi("Escalation Threshold", settings.incident_escalation_threshold, "critical trigger", "neutral"),
         kpi("Incidents This Week", operations.incidents.filter((row) => daysBetween(row.incident_date, new Date()) <= 7).length, "last 7 days", "neutral"),
@@ -1676,7 +1679,7 @@ async function buildOperationsPage(schoolId, section, session, settings) {
       kpis: [
         kpi("Open Complaints", operations.metrics.openComplaints, "open or in progress", operations.metrics.openComplaints ? "warn" : "good"),
         kpi("Urgent Complaints", operations.metrics.urgentComplaints, "priority urgent", operations.metrics.urgentComplaints ? "bad" : "good"),
-        kpi("Resolved This Term", operations.metrics.resolvedComplaints, "resolved complaints", "good"),
+        kpi("Complaint Resolutions This Term", operations.metrics.resolvedComplaints, "resolved complaints", "good"),
         kpi("Overdue Days", settings.complaint_overdue_days, "director threshold", "neutral"),
         kpi("Older Than Threshold", operations.complaints.filter((row) => ["open", "in_progress"].includes(row.status) && daysBetween(row.created_at, new Date()) > settings.complaint_overdue_days).length, "needs follow-up", "warn"),
         kpi("Top Category", operations.complaints[0]?.category || "-", "current records", "neutral"),
@@ -1716,13 +1719,12 @@ async function buildReportsPage(schoolId, section, session, settings) {
     getOperationsAnalytics(schoolId, session),
   ])
   const risks = await getAtRiskStudents(schoolId, session, settings, academic, finance)
+  const reportPrefix = section === "reports-term-report" ? "Term" : "Director"
   const commonKpis = [
-    kpi("Collection Rate", percentLabel(finance.totals.collection_rate), "term revenue", finance.totals.collection_rate >= settings.fee_collection_target_percent ? "good" : "warn"),
-    kpi("Active Students", students.active, `${students.newAdmissions} new admissions`, "neutral"),
-    kpi("Withdrawals This Term", withdrawals.metrics.activeWithdrawals + withdrawals.metrics.permanentThisTerm, "active/permanent", withdrawals.metrics.activeWithdrawals ? "warn" : "good"),
-    kpi("Overall Pass Rate", percentLabel(academic.passRate), "academic health", academic.passRate >= 70 ? "good" : "warn"),
-    kpi("At-Risk Students", risks.length, "interventions", risks.length ? "warn" : "good"),
-    kpi("Staff Compliance", percentLabel(percentValue(marks.metrics.submittedBatches + marks.metrics.lockedBatches, marks.metrics.totalExpectedBatches)), "marks submitted", "neutral"),
+    kpi(`${reportPrefix} Review Areas`, 6, "finance, enrollment, academics, staff and risk", "neutral"),
+    kpi(`${reportPrefix} Evidence Tables`, 2, "risk and class capacity", "good"),
+    kpi(`${reportPrefix} Charts Ready`, 2, "finance and academic summaries", "good"),
+    kpi(`${reportPrefix} Priority Risk Items`, risks.length + operations.metrics.pendingApprovals, "learner risks plus pending decisions", risks.length || operations.metrics.pendingApprovals ? "warn" : "good"),
   ]
   if (section === "reports-export-center") {
     const exports = [
@@ -1746,6 +1748,7 @@ async function buildReportsPage(schoolId, section, session, settings) {
         kpi("Export Options", exports.length, "available datasets", "neutral"),
         kpi("CSV Ready", exports.filter((row) => row.status === "ready").length, "supported now", "good"),
         kpi("PDF Ready", 0, "not enabled yet", "neutral"),
+        kpi("Protected Export Areas", new Set(exports.map((row) => row.id.split("-")[0])).size, "permission-scoped data groups", "neutral"),
       ],
       insights: [{ tone: "neutral", message: "CSV export datasets are defined from actual Director analytics. PDF export remains disabled until print templates are added.", metric: "exports" }],
       tables: [table("Export Options", exports, ["export_name", "description", "supported_formats", "status"])],

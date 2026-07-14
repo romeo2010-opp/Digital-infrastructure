@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   AlertTriangle,
   ArrowLeft,
@@ -81,6 +81,7 @@ const bursarGroups = [
   {
     label: 'Manage',
     items: [
+      { label: 'My Leave', path: '/my-leave', icon: CalendarRange },
       { label: 'Student Accounts', path: '/fees/accounts', icon: WalletCards },
       { label: 'Invoices', path: '/fees/invoices', icon: FileText },
       { label: 'Payments', path: '/fees/payments', icon: Banknote },
@@ -128,7 +129,6 @@ const directorGroups = [
       { label: 'Outstanding Balances', path: '/finance/outstanding-balances', icon: AlertTriangle },
       { label: 'Discounts & Bursaries', path: '/finance/discounts-bursaries', icon: ShieldCheck },
       { label: 'Expenses', path: '/finance/expenses', icon: Banknote },
-      { label: 'Payroll', path: '/finance/payroll', icon: WalletCards },
       { label: 'Financial Reports', path: '/finance/financial-reports', icon: FileBarChart },
     ],
   },
@@ -186,6 +186,7 @@ const groups = [
     label: 'School Operations',
     items: [
       { label: 'My Follow-Ups', path: '/tasks', icon: ClipboardList },
+      { label: 'My Leave', path: '/my-leave', icon: CalendarRange },
       { label: 'Classes', path: '/classes', icon: Users },
       { label: 'Students', path: '/students', icon: GraduationCap },
       { label: 'Teachers', path: '/teachers', icon: UserRound },
@@ -319,7 +320,7 @@ export function Sidebar({ user }: { user?: any; theme?: 'default' | 'light' }) {
     if (typeof window === 'undefined') return false
     return window.localStorage.getItem(sidebarStorageKey) === 'true'
   })
-  const [directorExpanded, setDirectorExpanded] = useState<Record<string, boolean>>(() => Object.fromEntries(directorGroups.map((group) => [group.label, true])))
+  const [directorExpanded, setDirectorExpanded] = useState<Record<string, boolean>>({})
   const userInitials = initialsFor(user)
   const displayName = displayNameFor(user)
   const roleName = roleNameFor(user)
@@ -370,8 +371,13 @@ export function Sidebar({ user }: { user?: any; theme?: 'default' | 'light' }) {
   const userRole = String(user?.role || '').toLowerCase()
   const isDirectorPortal = ['school_owner', 'director', 'owner'].includes(userRole) && !settingsMode
 
+  useEffect(() => {
+    const activeGroup = directorGroups.find((group) => group.items.some((item) => location.pathname === item.path || location.pathname.startsWith(`${item.path}/`)))
+    if (activeGroup) setDirectorExpanded({ [activeGroup.label]: true })
+  }, [location.pathname])
+
   const toggleDirectorGroup = (label: string) => {
-    setDirectorExpanded((current) => ({ ...current, [label]: !current[label] }))
+    setDirectorExpanded((current) => current[label] ? {} : { [label]: true })
   }
 
   if (isDirectorPortal) {
@@ -407,7 +413,7 @@ export function Sidebar({ user }: { user?: any; theme?: 'default' | 'light' }) {
               const items = allowedItems(group.items)
               if (!items.length) return null
               const GroupIcon = group.icon
-              const expanded = directorExpanded[group.label] !== false
+              const expanded = Boolean(directorExpanded[group.label])
               const groupActive = items.some((item) => location.pathname === item.path || location.pathname.startsWith(`${item.path}/`))
               return (
                 <section key={group.label} className="min-w-0">

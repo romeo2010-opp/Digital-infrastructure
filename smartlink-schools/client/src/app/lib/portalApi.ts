@@ -1381,6 +1381,18 @@ export const portalApi = {
     return request(`/api/director/staff/leave${queryString(filters)}`, { token })
   },
 
+  getMyLeaveDashboard(token: string) {
+    return request('/api/staff/leave/me', { token })
+  },
+
+  createMyLeaveRequest(token: string, payload: any) {
+    return request('/api/staff/leave/me', { method: 'POST', token, body: payload })
+  },
+
+  cancelMyLeaveRequest(token: string, leaveRef: string) {
+    return request(`/api/staff/leave/me/${encodeURIComponent(leaveRef)}/cancel`, { method: 'POST', token })
+  },
+
   getLeaveRequest(token: string, leaveRef: string) {
     return request(`/api/director/staff/leave/${encodeURIComponent(leaveRef)}`, { token })
   },

@@ -77,7 +77,14 @@ export function SectionKpiStrip({
   className?: string
 }) {
   const [drilldown, setDrilldown] = useState<DrilldownConfig | null>(null)
-  const safeItems = useMemo(() => items || [], [items])
+  const safeItems = useMemo(() => {
+    const unique = new Map<string, SectionKpiItem>()
+    for (const item of items || []) {
+      const key = String(item?.label || '').trim().toLowerCase()
+      if (key && !unique.has(key)) unique.set(key, item)
+    }
+    return [...unique.values()].slice(0, 4)
+  }, [items])
 
   return (
     <>

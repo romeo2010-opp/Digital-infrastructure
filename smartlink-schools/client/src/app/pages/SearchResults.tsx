@@ -25,7 +25,6 @@ const filters = [
   ['fees', 'Fees'],
   ['discounts', 'Discounts'],
   ['leave', 'Leave'],
-  ['payroll', 'Payroll'],
   ['calendar', 'Calendar'],
   ['messages', 'Messages'],
 ]
@@ -43,8 +42,8 @@ export function SearchResultsPage() {
   const [error, setError] = useState('')
   const results: SearchResult[] = useMemo(() => payload?.results || [], [payload])
   const isTeacher = String(user?.role || '').toLowerCase() === 'teacher'
-  const activeType = isTeacher && ['teachers', 'fees', 'discounts', 'leave', 'payroll'].includes(type) ? 'all' : type
-  const visibleFilters = useMemo(() => filters.filter(([value]) => !(isTeacher && ['teachers', 'fees', 'discounts', 'leave', 'payroll'].includes(value))), [isTeacher])
+  const activeType = isTeacher && ['teachers', 'fees', 'discounts', 'leave'].includes(type) ? 'all' : type
+  const visibleFilters = useMemo(() => filters.filter(([value]) => !(isTeacher && ['teachers', 'fees', 'discounts', 'leave'].includes(value))), [isTeacher])
   const searchHelpText = isTeacher ? 'Search people, pages and academic records inside your assigned classes and subjects.' : 'Search permitted school data using names, statuses, dates or a natural-language question.'
 
   useEffect(() => {

@@ -36,7 +36,7 @@ import { TimetablingPage } from './pages/TimetablingPage'
 import { SchedulingSettingsPage } from './pages/SchedulingSettingsPage'
 import { PublicLandingPage } from './pages/PublicLandingPage'
 import { BursarFinancePage } from './pages/BursarFinancePage'
-import { LeavePage, PayrollPage, PayslipPage } from './pages/HrOperationsPage'
+import { LeavePage, MyLeavePage, PayrollPage, PayslipPage } from './pages/HrOperationsPage'
 import { AssessmentImportPage } from './pages/AssessmentImportPage'
 import { AssessmentTemplatesPage } from './pages/AssessmentTemplatesPage'
 import { FeeReceiptPrintPage } from './pages/FeeReceiptPrintPage'
@@ -333,6 +333,7 @@ function SchoolRoutes({ landingPath }: { landingPath: string }) {
       <Route path="/learner-support" element={<LearnerSupportPage />} />
       <Route path="/learner-support/:caseId" element={<LearnerSupportPage />} />
       <Route path="/parent-insights" element={<ParentAcademicInsightsPage />} />
+      <Route path="/my-leave" element={<MyLeavePage />} />
       <Route path="/finance/payroll" element={<PayrollPage />} />
       <Route path="/finance/payroll/:runRef" element={<PayrollPage />} />
       <Route path="/finance/payroll/:runRef/items/:itemRef/payslip" element={<PayslipPage />} />

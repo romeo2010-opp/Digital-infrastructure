@@ -167,6 +167,7 @@ const roleRoutePrefixes: Record<string, string[]> = {
   headteacher: ['/'],
   bursar: [
     '/tasks',
+    '/my-leave',
     '/search',
     '/fees',
     '/finance/payroll',
@@ -180,6 +181,7 @@ const roleRoutePrefixes: Record<string, string[]> = {
   librarian: [
     '/dashboard',
     '/tasks',
+    '/my-leave',
     '/search',
     '/library/dashboard',
     '/library/catalogue',
@@ -197,6 +199,7 @@ const roleRoutePrefixes: Record<string, string[]> = {
   ],
   teacher: [
     '/tasks',
+    '/my-leave',
     '/dashboard',
     '/search',
     '/academic-sessions',
