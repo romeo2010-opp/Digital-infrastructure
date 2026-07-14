@@ -872,7 +872,7 @@ router.put("/users/:userRef/permissions", requireRole("school_owner"), asyncHand
 router.get("/teachers", requireRole("school_owner", "headteacher"), asyncHandler(listTeachers))
 router.post("/teachers", requireRole("school_owner", "headteacher"), asyncHandler(createTeacher))
 router.get("/teachers/:id", requireRole("school_owner", "headteacher"), asyncHandler(getTeacher))
-router.get("/search", requireRole("school_owner", "headteacher", "teacher", "bursar"), asyncHandler(quickSearch))
+router.get("/search", requireRole("school_owner", "headteacher", "teacher", "bursar", "librarian"), requireSchoolPermission(SCHOOL_PERMISSIONS.AWARE_SEARCH), asyncHandler(quickSearch))
 router.get("/teacher-assignments", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(listTeacherAssignments))
 router.post("/teacher-assignments", requireRole("school_owner", "headteacher"), asyncHandler(createTeacherAssignment))
 router.patch("/teacher-assignments/:id", requireRole("school_owner", "headteacher"), asyncHandler(updateTeacherAssignment))

@@ -11,6 +11,7 @@ export type SearchResult = {
   matchedField?: string | null
   groupType?: string
   groupLabel?: string
+  relevance?: number
 }
 
 export function routeForSearchResult(result: SearchResult) {
@@ -24,6 +25,8 @@ export function routeForSearchResult(result: SearchResult) {
       return '/teachers'
     case 'CLASS':
       return '/classes'
+    case 'SUBJECT':
+      return '/syllabus'
     case 'PARENT':
     case 'GUARDIAN':
       return '/parents'
@@ -31,6 +34,12 @@ export function routeForSearchResult(result: SearchResult) {
     case 'RECEIPT':
     case 'PAYMENT':
       return '/fees'
+    case 'DISCOUNT':
+      return '/finance/discounts-bursaries'
+    case 'LEAVE':
+      return '/staff/leave'
+    case 'PAYROLL':
+      return '/finance/payroll'
     case 'ATTENDANCE':
       return '/attendance'
     case 'HOMEWORK':
@@ -43,6 +52,10 @@ export function routeForSearchResult(result: SearchResult) {
       return '/assessment-insights'
     case 'DRILL':
       return '/daily-drill'
+    case 'SUPPORT':
+      return '/learner-support'
+    case 'EVENT':
+      return '/calendar'
     case 'FORECAST':
       return '/exam-forecast'
     case 'MESSAGE':

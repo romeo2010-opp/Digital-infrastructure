@@ -5,7 +5,9 @@ import { getActiveAcademicSession, sessionPayload } from "../services/academicSe
 import { studentCodeSortSql } from "../utils/studentSort.js"
 import { randomUUID } from "crypto"
 import bcrypt from "bcryptjs"
-import { getEffectivePermissions, listPermissionState, replacePermissionOverrides, SCHOOL_PERMISSIONS, userHasPermission } from "../services/authorizationService.js"
+import { getEffectivePermissions, listPermissionState, replacePermissionOverrides } from "../services/authorizationService.js"
+import { interpretAwareSearch } from "../services/awareSearchService.js"
+import { searchSchoolRecords } from "../services/schoolSearchService.js"
 
 const STAFF_INVITE_ROLES = new Set(["teacher", "headteacher", "bursar", "librarian", "parent"])
 
@@ -496,94 +498,15 @@ export async function updateUserPermissions(req, res) {
   ))
 }
 
-function awareSearchIntent(value) {
-  const query = String(value || "").trim().toLowerCase().replace(/[^a-z0-9\s-]/g, " ").replace(/\s+/g, " ")
-  if (/(outstanding|unpaid|not paid|haven't paid|have not paid|debtors?|arrears|owe|owing)/.test(query)) return { type: "fees", state: "outstanding", label: "Outstanding fee balances" }
-  if (/(part(ly|ially) paid|partial payments?)/.test(query)) return { type: "fees", state: "partial", label: "Partially paid fee accounts" }
-  if (/(fully paid|paid students?|settled|cleared fees?)/.test(query)) return { type: "fees", state: "paid", label: "Paid fee accounts" }
-  if (/(pending discounts?|discount approvals?|bursar(y|ies)|waivers?)/.test(query)) return { type: "discounts", state: "pending", label: "Pending discount and bursary requests" }
-  if (/(on leave|leave today|currently.*leave)/.test(query)) return { type: "leave", state: "current", label: "Staff currently on leave" }
-  if (/(pending leave|leave requests?|staff leave)/.test(query)) return { type: "leave", state: "pending", label: "Staff leave requests" }
-  if (/(payroll|salary|salaries|unpaid staff)/.test(query)) return { type: "payroll", state: "all", label: "Payroll records" }
-  return null
-}
-
 export async function quickSearch(req, res) {
   const schoolId = getScopedSchoolId(req)
   const session = await getActiveAcademicSession(schoolId)
   const teacherClassIds = await getTeacherClassIds(req, schoolId)
-  const classScope = scopedInClause(teacherClassIds, "se.class_id")
-  const classTableScope = scopedInClause(teacherClassIds, "c.id")
   const rawQuery = String(req.query.q || "").trim()
-  const intent = awareSearchIntent(rawQuery)
-  const like = `%${intent ? "" : rawQuery}%`
-  const limit = Math.min(20, Math.max(5, Number(req.query.limit || 10)))
-  const canViewFees = await userHasPermission(req.user, SCHOOL_PERMISSIONS.FEES_VIEW)
-  const canViewLeave = await userHasPermission(req.user, SCHOOL_PERMISSIONS.LEAVE_VIEW)
-  const canViewPayroll = await userHasPermission(req.user, SCHOOL_PERMISSIONS.PAYROLL_VIEW)
-
-  const [students] = intent || session.setupRequired ? [[]] : await pool.query(
-    `SELECT s.public_ref,CONCAT(s.first_name,' ',s.last_name) title,c.name class_name,s.admission_no
-     FROM student_enrollments se JOIN students s ON s.id=se.student_id AND s.school_id=se.school_id
-     JOIN classes c ON c.id=se.class_id AND c.school_id=se.school_id
-     WHERE se.school_id=? AND se.academic_year_id=? AND se.term_id=? AND se.enrollment_status='active' AND s.status='active'
-       AND CONCAT(s.first_name,' ',s.last_name,' ',s.admission_no,' ',COALESCE(s.student_id,''),' ',c.name) LIKE ?${classScope.clause}
-     ORDER BY ${studentCodeSortSql("s")},s.last_name LIMIT ?`,
-    [schoolId,session.academicYearId,session.termId,like,...classScope.params,limit],
-  )
-  const [classes] = intent || session.setupRequired ? [[]] : await pool.query(
-    `SELECT c.public_ref,c.name,c.grade_level,u.full_name teacher_name,COUNT(DISTINCT se.student_id) student_count
-     FROM classes c LEFT JOIN users u ON u.id=c.teacher_user_id AND u.school_id=c.school_id
-     LEFT JOIN student_enrollments se ON se.class_id=c.id AND se.school_id=c.school_id AND se.academic_year_id=? AND se.term_id=? AND se.enrollment_status='active'
-     WHERE c.school_id=? AND CONCAT(c.name,' ',COALESCE(c.grade_level,''),' ',COALESCE(u.full_name,'')) LIKE ?${classTableScope.clause}
-     GROUP BY c.id,c.public_ref,c.name,c.grade_level,u.full_name ORDER BY c.name LIMIT ?`,
-    [session.academicYearId,session.termId,schoolId,like,...classTableScope.params,limit],
-  )
-  const [teachers] = intent || req.user.role === "teacher" ? [[]] : await pool.query(
-    `SELECT public_ref,full_name,email,phone,employment_status FROM users
-     WHERE school_id=? AND role IN ('teacher','headteacher') AND CONCAT(full_name,' ',COALESCE(email,''),' ',COALESCE(phone,'')) LIKE ?
-     ORDER BY full_name LIMIT ?`, [schoolId,like,limit],
-  )
-
-  let feeCondition = ""
-  if (intent?.type === "fees" && intent.state === "outstanding") feeCondition = "AND f.amount_due+f.penalty_amount-f.discount_amount-f.amount_paid>0"
-  if (intent?.type === "fees" && intent.state === "partial") feeCondition = "AND f.amount_paid>0 AND f.amount_due+f.penalty_amount-f.discount_amount-f.amount_paid>0"
-  if (intent?.type === "fees" && intent.state === "paid") feeCondition = "AND f.amount_paid>0 AND f.amount_due+f.penalty_amount-f.discount_amount-f.amount_paid<=0"
-  const [fees] = !canViewFees || session.setupRequired || (intent && intent.type !== "fees") ? [[]] : await pool.query(
-    `SELECT s.public_ref student_public_ref,CONCAT(s.first_name,' ',s.last_name) title,c.name class_name,f.status,
-      f.amount_due+f.penalty_amount-f.discount_amount-f.amount_paid balance
-     FROM fee_accounts f JOIN students s ON s.id=f.student_id AND s.school_id=f.school_id
-     JOIN student_enrollments se ON se.student_id=s.id AND se.school_id=s.school_id AND se.academic_year_id=? AND se.term_id=? AND se.enrollment_status='active'
-     JOIN classes c ON c.id=se.class_id AND c.school_id=se.school_id
-     WHERE f.school_id=? AND s.status='active' AND CONCAT(s.first_name,' ',s.last_name,' ',f.status,' ',c.name) LIKE ? ${feeCondition}${classScope.clause}
-     ORDER BY balance DESC,${studentCodeSortSql("s")} LIMIT ?`,
-    [session.academicYearId,session.termId,schoolId,like,...classScope.params,limit],
-  )
-  const [discounts] = !canViewFees || intent?.type !== "discounts" ? [[]] : await pool.query(
-    `SELECT s.public_ref student_public_ref,CONCAT(s.first_name,' ',s.last_name) title,d.discount_type,d.amount_type,d.amount_value,d.status
-     FROM finance_discounts d JOIN students s ON s.id=d.student_id AND s.school_id=d.school_id
-     WHERE d.school_id=? AND d.status='pending' ORDER BY d.created_at DESC LIMIT ?`, [schoolId,limit],
-  )
-  const [leave] = !canViewLeave || intent?.type !== "leave" ? [[]] : await pool.query(
-    `SELECT lr.public_ref,u.full_name,lr.leave_type,lr.start_date,lr.end_date,lr.status FROM staff_leave_requests lr
-     JOIN users u ON u.id=lr.staff_user_id AND u.school_id=lr.school_id WHERE lr.school_id=?
-     ${intent.state === "current" ? "AND lr.status='approved' AND CURDATE() BETWEEN lr.start_date AND lr.end_date" : "AND lr.status='pending'"}
-     ORDER BY lr.start_date,u.full_name LIMIT ?`, [schoolId,limit],
-  )
-  const [payroll] = !canViewPayroll || intent?.type !== "payroll" ? [[]] : await pool.query(
-    "SELECT public_ref,title,payroll_period_start,payroll_period_end,status,total_net_pay,currency FROM payroll_runs WHERE school_id=? ORDER BY payroll_period_end DESC LIMIT ?",
-    [schoolId,limit],
-  )
-
-  const groups = [
-    { type:"students",label:"Learners",results:students.map((r)=>({id:r.public_ref,title:r.title,subtitle:`${r.class_name} · ${r.admission_no}`,resultType:"STUDENT",className:r.class_name,route:`/students/${r.public_ref}`})) },
-    { type:"teachers",label:"Teachers",results:teachers.map((r)=>({id:r.public_ref,title:r.full_name,subtitle:r.phone||r.email||"No contact",resultType:"TEACHER",status:r.employment_status,route:`/teachers/${r.public_ref}`})) },
-    { type:"classes",label:"Classes",results:classes.map((r)=>({id:r.public_ref,title:r.name,subtitle:`${r.grade_level||"Class"} · ${Number(r.student_count).toLocaleString()} learners`,resultType:"CLASS",status:r.teacher_name||"Unassigned",route:`/classes/${r.public_ref}`})) },
-    { type:"fees",label:"Fees",results:fees.map((r)=>({id:r.student_public_ref,title:r.title,subtitle:`${r.class_name} · MWK ${Number(r.balance).toLocaleString()}`,resultType:"FEE",status:r.status,className:r.class_name,route:"/fees/accounts"})) },
-    { type:"discounts",label:"Discount approvals",results:discounts.map((r)=>({id:r.student_public_ref,title:r.title,subtitle:`${String(r.discount_type).replaceAll("_"," ")} · ${r.amount_type === "percent" ? `${Number(r.amount_value)}%` : `MWK ${Number(r.amount_value).toLocaleString()}`}`,resultType:"DISCOUNT",status:r.status,route:"/finance/discounts-bursaries"})) },
-    { type:"leave",label:"Staff leave",results:leave.map((r)=>({id:r.public_ref,title:r.full_name,subtitle:`${String(r.leave_type).replaceAll("_"," ")} · ${String(r.start_date).slice(0,10)} to ${String(r.end_date).slice(0,10)}`,resultType:"LEAVE",status:r.status,route:`/staff/leave/${r.public_ref}`})) },
-    { type:"payroll",label:"Payroll",results:payroll.map((r)=>({id:r.public_ref,title:r.title,subtitle:`${String(r.payroll_period_start).slice(0,10)} to ${String(r.payroll_period_end).slice(0,10)} · ${r.currency} ${Number(r.total_net_pay).toLocaleString()}`,resultType:"PAYROLL",status:r.status,route:`/finance/payroll/${r.public_ref}`})) },
-  ].filter((group)=>group.results.length)
-  const results = groups.flatMap((group)=>group.results.map((row)=>({...row,groupType:group.type,groupLabel:group.label})))
-  res.json({groups,results,total:results.length,interpretation:intent?.label||null,session:sessionPayload(session),setup_required:session.setupRequired})
+  if (rawQuery.length < 2) throw new HttpError(400, "Enter at least two characters to search.")
+  const limit = Math.min(50, Math.max(5, Number(req.query.limit || 10)))
+  const interpretation = interpretAwareSearch(rawQuery, { type: req.query.type })
+  const permissions = await getEffectivePermissions(schoolId, req.user.id, req.user.role)
+  const search = await searchSchoolRecords({ db: pool, schoolId, session, user: req.user, teacherClassIds, permissions, interpretation, limit })
+  res.json({ ...search, interpretation: interpretation.label, understood: interpretation, session: sessionPayload(session), setup_required: session.setupRequired })
 }

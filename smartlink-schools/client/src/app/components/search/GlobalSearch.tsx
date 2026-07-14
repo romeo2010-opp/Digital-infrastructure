@@ -25,7 +25,6 @@ const iconMap: Record<string, any> = {
   STUDENT: GraduationCap,
   CLASS: Users,
   PARENT: UserRound,
-  GUARDIAN: UserRound,
   FEE: ReceiptText,
   RECEIPT: ReceiptText,
   PAYMENT: ReceiptText,
@@ -41,39 +40,29 @@ const iconMap: Record<string, any> = {
   REPORT: FileText,
   USER: Users,
   ROLE: Users,
+  TEACHER: Users,
+  GUARDIAN: UserRound,
+  SUBJECT: BookOpenCheck,
+  DISCOUNT: ReceiptText,
+  LEAVE: CalendarCheck,
+  PAYROLL: ReceiptText,
+  SUPPORT: Sparkles,
+  EVENT: CalendarCheck,
 }
 
 const recentSearchKey = 'schools-global-search-recents'
 const placeholderHints = [
-  'Students who have not paid',
-  'Outstanding balances',
-  'Paid students',
-  'Teachers currently on leave',
-  'Pending discount approvals',
+  'Search any learner, class, assessment or page',
+  'Ask: who was absent today?',
+  'Try a name, status, topic or natural-language question',
+  'Ask: open support cases for fractions',
 ]
 const suggestedSearches = [
-  { label: 'Outstanding balances', query: 'students who have not paid' },
-  { label: 'Paid students', query: 'fully paid students' },
-  { label: 'Staff on leave', query: 'teachers currently on leave' },
-  { label: 'Discount approvals', query: 'pending discount approvals' },
+  { label: 'People and classes', query: 'learners in year 5' },
+  { label: 'Attendance and dates', query: 'who was absent today' },
+  { label: 'Academic evidence', query: 'published mathematics assessments' },
+  { label: 'Learner support', query: 'open support cases' },
 ]
-
-const navigationResults: SearchResult[] = [
-  { id: 'nav-dashboard', title: 'Dashboard', subtitle: 'School command centre', resultType: 'NAVIGATION', route: '/dashboard' },
-  { id: 'nav-students', title: 'Students', subtitle: 'Learner registry and profiles', resultType: 'NAVIGATION', route: '/students' },
-  { id: 'nav-parents', title: 'Parents', subtitle: 'Guardian contacts and communication preferences', resultType: 'NAVIGATION', route: '/parents' },
-  { id: 'nav-fees', title: 'Fees', subtitle: 'Balances, receipts and reminders', resultType: 'NAVIGATION', route: '/fees' },
-  { id: 'nav-attendance', title: 'Attendance', subtitle: 'Daily registers and absence alerts', resultType: 'NAVIGATION', route: '/attendance' },
-  { id: 'nav-homework', title: 'Homework', subtitle: 'Assignments and due-date reminders', resultType: 'NAVIGATION', route: '/homework' },
-  { id: 'nav-results', title: 'Results', subtitle: 'Marks and report-card summaries', resultType: 'NAVIGATION', route: '/results' },
-  { id: 'nav-insights', title: 'Assessment Insights', subtitle: 'Weak topics and support plans', resultType: 'NAVIGATION', route: '/assessment-insights' },
-  { id: 'nav-reports', title: 'Reports', subtitle: 'Academic, attendance and fee summaries', resultType: 'NAVIGATION', route: '/reports' },
-]
-
-function navigationForUser(user: any) {
-  const role = String(user?.role || '').toLowerCase()
-  return navigationResults.filter((item) => !(role === 'teacher' && item.route === '/fees'))
-}
 
 function flattenApiGroups(payload: any): SearchResult[] {
   return (payload?.groups || []).flatMap((group: any) =>
@@ -100,10 +89,10 @@ function readRecentSearches() {
 function groupResults(results: SearchResult[]) {
   const groups = [
     { type: 'navigation', label: 'Navigation', results: results.filter((result) => result.resultType === 'NAVIGATION') },
-    { type: 'learners', label: 'Learners & Parents', results: results.filter((result) => ['STUDENT', 'PARENT', 'GUARDIAN', 'CLASS'].includes(result.resultType)) },
-    { type: 'operations', label: 'School Operations', results: results.filter((result) => ['FEE', 'RECEIPT', 'PAYMENT', 'ATTENDANCE', 'MESSAGE'].includes(result.resultType)) },
-    { type: 'learning', label: 'Teaching & Learning', results: results.filter((result) => ['HOMEWORK', 'RESULT', 'ASSESSMENT', 'INSIGHT', 'DRILL', 'FORECAST'].includes(result.resultType)) },
-    { type: 'admin', label: 'Administration', results: results.filter((result) => ['REPORT', 'USER', 'ROLE'].includes(result.resultType)) },
+    { type: 'people', label: 'People & Classes', results: results.filter((result) => ['STUDENT', 'TEACHER', 'PARENT', 'GUARDIAN', 'CLASS'].includes(result.resultType)) },
+    { type: 'learning', label: 'Teaching & Learning', results: results.filter((result) => ['SUBJECT', 'HOMEWORK', 'RESULT', 'ASSESSMENT', 'INSIGHT', 'DRILL', 'FORECAST', 'SUPPORT'].includes(result.resultType)) },
+    { type: 'operations', label: 'School Operations', results: results.filter((result) => ['FEE', 'RECEIPT', 'PAYMENT', 'DISCOUNT', 'ATTENDANCE', 'LEAVE', 'PAYROLL', 'EVENT', 'MESSAGE'].includes(result.resultType)) },
+    { type: 'admin', label: 'Administration', results: results.filter((result) => ['REPORT', 'USER', 'ROLE', 'LIBRARY', 'TIMETABLE'].includes(result.resultType)) },
   ]
   return groups.filter((group) => group.results.length > 0)
 }
@@ -156,7 +145,7 @@ function ResultRow({
 
 export function GlobalSearch() {
   const navigate = useNavigate()
-  const { token, api, user } = usePortal()
+  const { token, api } = usePortal()
   const rootRef = useRef<HTMLDivElement | null>(null)
   const inputRef = useRef<HTMLInputElement | null>(null)
   const [query, setQuery] = useState('')
@@ -165,18 +154,12 @@ export function GlobalSearch() {
   const [recentSearches, setRecentSearches] = useState<string[]>(() => readRecentSearches())
   const [placeholderIndex, setPlaceholderIndex] = useState(0)
   const [serverResults, setServerResults] = useState<SearchResult[]>([])
+  const [understood, setUnderstood] = useState<any>(null)
   const hasSearchableQuery = query.trim().length >= 2
-  const navigationMatches = useMemo(() => {
-    const value = query.trim().toLowerCase()
-    if (!value) return []
-    return navigationForUser(user).filter((result) =>
-      [result.title, result.subtitle, result.resultType].some((field) => String(field || '').toLowerCase().includes(value)),
-    )
-  }, [query, user])
   const matchingResults = useMemo(() => {
     if (!hasSearchableQuery) return []
-    return [...navigationMatches, ...serverResults].slice(0, 12)
-  }, [hasSearchableQuery, navigationMatches, serverResults])
+    return serverResults.slice(0, 12)
+  }, [hasSearchableQuery, serverResults])
   const groups = useMemo(() => groupResults(matchingResults), [matchingResults])
   const flatResults = useMemo(() => flattenGroups(groups), [groups])
   const matchingSuggestions = useMemo(() => {
@@ -195,15 +178,22 @@ export function GlobalSearch() {
   useEffect(() => {
     if (!hasSearchableQuery || !token) {
       setServerResults([])
+      setUnderstood(null)
       return
     }
 
     const controller = new AbortController()
     const timer = window.setTimeout(() => {
       api.quickSearch(token, query.trim(), 12, controller.signal)
-        .then((payload: any) => setServerResults(flattenApiGroups(payload)))
+        .then((payload: any) => {
+          setServerResults(flattenApiGroups(payload))
+          setUnderstood(payload?.understood || null)
+        })
         .catch((error: any) => {
-          if (error?.name !== 'AbortError') setServerResults([])
+          if (error?.name !== 'AbortError') {
+            setServerResults([])
+            setUnderstood(null)
+          }
         })
     }, 160)
 
@@ -340,6 +330,12 @@ export function GlobalSearch() {
           {flatResults.length ? (
             <>
               <div className="max-h-[28rem] overflow-y-auto py-1">
+                {understood ? (
+                  <div className="border-b border-[#e2e8f0] bg-[#f8fafc] px-3 py-2 text-[10px] text-[#64748b]">
+                    <span className="font-semibold text-[#374151]">Understood:</span> {understood.label}
+                    {understood.corrections?.length ? <span> · corrected {understood.corrections.map((item: any) => `${item.from} → ${item.to}`).join(', ')}</span> : null}
+                  </div>
+                ) : null}
                 {groups.map((group) => (
                   <section key={group.type} className="border-b border-[#e2e8f0] last:border-b-0">
                     <div className="px-3 pb-1 pt-2 text-[10px] font-bold uppercase tracking-[0.1em] text-[#9ca3af]">{group.label}</div>

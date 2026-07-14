@@ -13,14 +13,21 @@ import { renderPill } from '../lib/portalUtils'
 const filters = [
   ['all', 'All'],
   ['students', 'Students'],
+  ['guardians', 'Parents'],
   ['teachers', 'Teachers'],
   ['classes', 'Classes'],
+  ['subjects', 'Subjects'],
+  ['assessments', 'Assessments'],
+  ['results', 'Results'],
+  ['homework', 'Homework'],
+  ['attendance', 'Attendance'],
+  ['support', 'Learner Support'],
   ['fees', 'Fees'],
   ['discounts', 'Discounts'],
   ['leave', 'Leave'],
   ['payroll', 'Payroll'],
-  ['homework', 'Homework'],
-  ['reports', 'Reports'],
+  ['calendar', 'Calendar'],
+  ['messages', 'Messages'],
 ]
 
 export function SearchResultsPage() {
@@ -36,9 +43,9 @@ export function SearchResultsPage() {
   const [error, setError] = useState('')
   const results: SearchResult[] = useMemo(() => payload?.results || [], [payload])
   const isTeacher = String(user?.role || '').toLowerCase() === 'teacher'
-  const activeType = isTeacher && type === 'teachers' ? 'all' : type
-  const visibleFilters = useMemo(() => filters.filter(([value]) => !(isTeacher && value === 'teachers')), [isTeacher])
-  const searchHelpText = isTeacher ? 'Search students and classes in your assigned scope.' : 'Ask for permitted school data in plain English, such as “students who have not paid”.'
+  const activeType = isTeacher && ['teachers', 'fees', 'discounts', 'leave', 'payroll'].includes(type) ? 'all' : type
+  const visibleFilters = useMemo(() => filters.filter(([value]) => !(isTeacher && ['teachers', 'fees', 'discounts', 'leave', 'payroll'].includes(value))), [isTeacher])
+  const searchHelpText = isTeacher ? 'Search people, pages and academic records inside your assigned classes and subjects.' : 'Search permitted school data using names, statuses, dates or a natural-language question.'
 
   useEffect(() => {
     setInput(query)
@@ -95,7 +102,7 @@ export function SearchResultsPage() {
         </div>
       </div>
 
-      <SectionCard title="Aware Search" subtitle="Plain-language search is interpreted deterministically and only queries records your role is allowed to view.">
+      <SectionCard title="Aware Search" subtitle="Compositional language understanding, typo tolerance and fuzzy ranking are applied only to records your role is allowed to view.">
         <div className="space-y-3 px-4 py-3">
           <div className="flex flex-wrap items-end gap-2">
             <FieldControl label="Search query" className="min-w-[260px] flex-1">
@@ -108,7 +115,7 @@ export function SearchResultsPage() {
                   onKeyDown={(event) => {
                     if (event.key === 'Enter') commitSearch()
                   }}
-                  placeholder={isTeacher ? 'Search a student or class...' : 'Try: students who have not paid'}
+                  placeholder={isTeacher ? 'Search a learner, topic, assessment or support case...' : 'Search any person, record, page, status or date...'}
                 />
               </div>
             </FieldControl>
@@ -133,6 +140,14 @@ export function SearchResultsPage() {
             ))}
           </div>
           </div>
+          {payload?.understood ? (
+            <div className="rounded-md border border-[#e2e8f0] bg-[#f8fafc] px-3 py-2 text-[11px] text-[#64748b]">
+              <span className="font-semibold text-[#374151]">Search understanding:</span> {payload.understood.label}
+              {payload.understood.entities?.length ? <span> · entities: {payload.understood.entities.join(', ')}</span> : null}
+              {payload.understood.states?.length ? <span> · states: {payload.understood.states.join(', ')}</span> : null}
+              {payload.understood.corrections?.length ? <span> · corrections: {payload.understood.corrections.map((item: any) => `${item.from} → ${item.to}`).join(', ')}</span> : null}
+            </div>
+          ) : null}
         </div>
       </SectionCard>
 
