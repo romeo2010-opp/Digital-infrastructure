@@ -226,12 +226,58 @@ async function caseChildRows(schoolId, caseId, actor, selectSql, params = []) {
 
 export async function getSupportTimeline(schoolId, caseId, actor, filters = {}) {
   const limit = Math.min(100, Math.max(1, number(filters.limit, 50)))
-  const rows = await caseChildRows(schoolId, caseId, actor, `SELECT e.public_ref,e.occurred_at,e.event_type,e.summary,e.evidence_json,e.status,e.linked_entity_type,e.linked_entity_ref,CONCAT(u.first_name,' ',u.last_name) responsible_user FROM learner_support_case_events e JOIN learner_support_cases c ON c.school_id=e.school_id AND c.id=e.case_id LEFT JOIN users u ON u.school_id=e.school_id AND u.id=e.responsible_user_id WHERE e.school_id=? AND c.public_ref=? ORDER BY e.occurred_at DESC,e.id DESC LIMIT ?`, [limit])
+  const rows = await caseChildRows(schoolId, caseId, actor, `WITH target_case AS (
+    SELECT id,school_id FROM learner_support_cases WHERE school_id=? AND public_ref=?
+  ), case_assessments AS (
+    SELECT ce.case_id,GROUP_CONCAT(DISTINCT a.name ORDER BY a.name SEPARATOR ' · ') assessment_names
+    FROM learner_support_case_evidence ce
+    JOIN target_case tc ON tc.school_id=ce.school_id AND tc.id=ce.case_id
+    JOIN assessments a ON a.school_id=ce.school_id AND a.id=ce.assessment_id
+    WHERE ce.evidence_status='valid'
+    GROUP BY ce.case_id
+  )
+  SELECT e.public_ref,e.occurred_at,e.event_type,e.summary,e.evidence_json,e.status,e.linked_entity_type,e.linked_entity_ref,
+    CONCAT(u.first_name,' ',u.last_name) responsible_user,
+    CASE WHEN e.event_type='multi_subject_review_detected' THEN ca.assessment_names ELSE COALESCE(a.name,ca.assessment_names) END assessment_name
+  FROM learner_support_case_events e
+  JOIN target_case tc ON tc.school_id=e.school_id AND tc.id=e.case_id
+  LEFT JOIN users u ON u.school_id=e.school_id AND u.id=e.responsible_user_id
+  LEFT JOIN assessments a ON a.school_id=e.school_id AND e.linked_entity_type='assessment' AND a.id=CAST(e.linked_entity_ref AS UNSIGNED)
+  LEFT JOIN case_assessments ca ON ca.case_id=e.case_id
+  ORDER BY e.occurred_at DESC,e.id DESC LIMIT ?`, [limit])
   return { timeline: rows }
 }
 
 export async function getSupportEvidence(schoolId, caseId, actor) {
-  const rows = await caseChildRows(schoolId, caseId, actor, `SELECT ce.public_ref,ce.evidence_role,ce.evidence_precision,ce.score_percentage,ce.marks_awarded,ce.marks_available,ce.confidence_score,ce.comparable,ce.comparability_json,ce.evidence_status,ce.observed_at,a.name assessment_name,st.topic_name,lo.objective_text FROM learner_support_case_evidence ce JOIN learner_support_cases c ON c.school_id=ce.school_id AND c.id=ce.case_id LEFT JOIN assessments a ON a.school_id=ce.school_id AND a.id=ce.assessment_id LEFT JOIN syllabus_topics st ON st.school_id=ce.school_id AND st.id=ce.topic_id LEFT JOIN learning_objectives lo ON lo.school_id=ce.school_id AND lo.id=ce.objective_id WHERE ce.school_id=? AND c.public_ref=? ORDER BY ce.observed_at DESC,ce.id DESC`)
+  const rows = await caseChildRows(schoolId, caseId, actor, `WITH target_case AS (
+    SELECT id,school_id,evidence_confidence FROM learner_support_cases WHERE school_id=? AND public_ref=?
+  ), case_assessments AS (
+    SELECT ce.case_id,GROUP_CONCAT(DISTINCT a.name ORDER BY a.name SEPARATOR ' · ') assessment_names
+    FROM learner_support_case_evidence ce
+    JOIN target_case tc ON tc.school_id=ce.school_id AND tc.id=ce.case_id
+    JOIN assessments a ON a.school_id=ce.school_id AND a.id=ce.assessment_id
+    WHERE ce.evidence_status='valid'
+    GROUP BY ce.case_id
+  )
+  SELECT ce.public_ref,ce.evidence_role,ce.evidence_precision,ce.score_percentage,ce.marks_awarded,ce.marks_available,
+    ce.confidence_score,ce.comparable,ce.comparability_json,ce.evidence_status,ce.observed_at,a.name assessment_name,
+    st.topic_name,lo.objective_text,NULL event_type,NULL summary,'assessment' evidence_kind
+  FROM learner_support_case_evidence ce
+  JOIN target_case tc ON tc.school_id=ce.school_id AND tc.id=ce.case_id
+  LEFT JOIN assessments a ON a.school_id=ce.school_id AND a.id=ce.assessment_id
+  LEFT JOIN syllabus_topics st ON st.school_id=ce.school_id AND st.id=ce.topic_id
+  LEFT JOIN learning_objectives lo ON lo.school_id=ce.school_id AND lo.id=ce.objective_id
+  UNION ALL
+  SELECT e.public_ref,'detection' evidence_role,'limited' evidence_precision,NULL score_percentage,NULL marks_awarded,NULL marks_available,
+    tc.evidence_confidence confidence_score,0 comparable,e.evidence_json comparability_json,'valid' evidence_status,e.occurred_at observed_at,
+    CASE WHEN e.event_type='multi_subject_review_detected' THEN ca.assessment_names ELSE COALESCE(a.name,ca.assessment_names) END assessment_name,
+    NULL topic_name,NULL objective_text,e.event_type,e.summary,'case_event' evidence_kind
+  FROM learner_support_case_events e
+  JOIN target_case tc ON tc.school_id=e.school_id AND tc.id=e.case_id
+  LEFT JOIN assessments a ON a.school_id=e.school_id AND e.linked_entity_type='assessment' AND a.id=CAST(e.linked_entity_ref AS UNSIGNED)
+  LEFT JOIN case_assessments ca ON ca.case_id=e.case_id
+  WHERE e.event_type IN ('case_detected','multi_subject_review_detected','class_issue_detected','format_pattern_detected')
+  ORDER BY observed_at DESC,public_ref DESC`)
   return { evidence: rows }
 }
 

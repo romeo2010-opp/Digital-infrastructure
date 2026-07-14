@@ -67,29 +67,6 @@ function validScoreValue(score: any, totalMarks: any) {
   return numericScore
 }
 
-function isInvalidScore(score: any, totalMarks: any) {
-  if (!hasScore(score)) return false
-  const numericScore = Number(score)
-  const numericTotal = Number(totalMarks || 0)
-  return !Number.isFinite(numericScore) || !Number.isFinite(numericTotal) || numericTotal <= 0 || numericScore < 0 || numericScore > numericTotal
-}
-
-function gradeForScore(score: any, totalMarks: any) {
-  const percentage = percentageForScore(score, totalMarks)
-  return percentage === null ? '' : gradeForPercentage(percentage)
-}
-
-function gradeToneClass(grade: any, percentage?: any, invalid = false) {
-  if (invalid) return 'border-[#ef4444] bg-[#fef2f2] text-[#991b1b]'
-  const value = String(grade || gradeForPercentage(percentage)).toUpperCase()
-  if (value === 'A') return 'border-[#34d399] bg-[#ecfdf5] text-[#065f46]'
-  if (value === 'B') return 'border-[#60a5fa] bg-[#eff6ff] text-[#1d4ed8]'
-  if (value === 'C') return 'border-[#fbbf24] bg-[#fffbeb] text-[#92400e]'
-  if (value === 'D') return 'border-[#fb7185] bg-[#fff1f2] text-[#9f1239]'
-  if (value === 'E' || value === 'F') return 'border-[#f87171] bg-[#fef2f2] text-[#991b1b]'
-  return 'border-[#d9dce3] bg-white text-[#111827]'
-}
-
 function StatusPill({ value }: { value: any }) {
   const status = String(value || 'not_started').toLowerCase()
   const tone = ['approved', 'results_approved', 'locked'].includes(status)
@@ -102,11 +79,6 @@ function StatusPill({ value }: { value: any }) {
         ? 'border-[#fed7aa] bg-[#fff7ed] text-[#c2410c]'
         : 'border-[#e5e7eb] bg-[#f9fafb] text-[#4b5563]'
   return <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${tone}`}>{statusLabel(status)}</span>
-}
-
-function GradePill({ grade, percentage }: { grade: any; percentage?: any }) {
-  const value = String(grade || gradeForPercentage(percentage) || '-').toUpperCase()
-  return <span className={`inline-flex min-w-8 justify-center rounded-[4px] border px-2 py-0.5 text-[11px] font-bold ${gradeToneClass(value, percentage)}`}>{value}</span>
 }
 
 function assessmentBatch(row: any) {
@@ -361,7 +333,7 @@ function MarksheetPrintPreview({
   const passRate = totalTookExam ? Math.round((passed / totalTookExam) * 100) : 0
 
   return (
-    <section id="school-marksheet-print-area" className="rounded-[8px] border border-[#d1d5db] bg-white p-4 shadow-[var(--mera-shadow-card)] print:rounded-none print:border-0 print:p-0 print:shadow-none">
+    <section id="school-marksheet-print-area" className="hidden rounded-[8px] border border-[#d1d5db] bg-white p-4 shadow-[var(--mera-shadow-card)] print:block print:rounded-none print:border-0 print:p-0 print:shadow-none">
       <style>{`
         #school-marksheet-print-area .school-report-table { width: 100%; border-collapse: collapse; color: #000; font-family: Arial, Helvetica, sans-serif; font-size: 13px; line-height: 1.05; }
         #school-marksheet-print-area .school-report-table th,
@@ -449,10 +421,7 @@ export function ResultsEntryPage() {
   const [assessmentQuery, setAssessmentQuery] = useState('')
   const [selectedAssessmentId, setSelectedAssessmentId] = useState(routeAssessmentId ? String(routeAssessmentId) : '')
   const [sheet, setSheet] = useState<any>(null)
-  const [sheetLoading, setSheetLoading] = useState(false)
   const [rows, setRows] = useState<any[]>([])
-  const [studentQuery, setStudentQuery] = useState('')
-  const [gradeFilter, setGradeFilter] = useState('all')
   const [academicEvidenceState, setAcademicEvidenceState] = useState<any>({ loading: true, overall_ready: false, completion_percentage: 0 })
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
@@ -541,17 +510,6 @@ export function ResultsEntryPage() {
     setAcademicEvidenceState((current: any) => current.overall_ready === next.overall_ready && current.loading === next.loading && current.completion_percentage === next.completion_percentage ? current : next)
   }, [])
 
-  const visibleSheetRows = useMemo(() => {
-    const query = studentQuery.trim().toLowerCase()
-    return rows.filter((row) => {
-      const scoreGrade = gradeForScore(row.score, totalMarks)
-      if (gradeFilter !== 'all' && scoreGrade !== gradeFilter) return false
-      if (!query) return true
-      const searchable = [studentName(row), row.student_id, row.admission_no, row.stream_section, row.class_name].join(' ').toLowerCase()
-      return searchable.includes(query)
-    })
-  }, [gradeFilter, rows, studentQuery, totalMarks])
-
   const absentRows = rows.filter(isAbsentRow)
   const validScoredRows = rows.filter((row) => !isAbsentRow(row) && validScoreValue(row.score, totalMarks) !== null)
   const completed = rows.filter((row) => !isAbsentRow(row) && hasScore(row.score)).length
@@ -561,7 +519,6 @@ export function ResultsEntryPage() {
     .filter((value): value is number => value !== null)
   const totalTookExam = percentages.length
   const classAverage = percentages.length ? Number((percentages.reduce((sum, value) => sum + value, 0) / percentages.length).toFixed(0)) : 0
-  const averageRawScore = validScoredRows.length ? Number((validScoredRows.reduce((sum, row) => sum + Number(row.score || 0), 0) / validScoredRows.length).toFixed(0)) : 0
   const passCount = percentages.filter((value) => value >= 50).length
   const passRate = totalTookExam ? Math.round((passCount / totalTookExam) * 100) : 0
   const atRiskCount = percentages.filter((value) => value < 50).length
@@ -615,8 +572,6 @@ export function ResultsEntryPage() {
     const payload = await api.getResultSheet(token, { assessment_id: assessmentId })
     setSheet(payload)
     setRows(payload?.rows || [])
-    setStudentQuery('')
-    setGradeFilter('all')
     return payload
   }
 
@@ -677,7 +632,6 @@ export function ResultsEntryPage() {
     setSelectedAssessmentId(String(routeAssessmentId))
     setAcademicEvidenceState({ loading: true, overall_ready: false, completion_percentage: 0 })
     if (!token) return
-    setSheetLoading(true)
     setError('')
     loadSheet(String(routeAssessmentId))
       .catch((err: any) => {
@@ -687,7 +641,6 @@ export function ResultsEntryPage() {
         setError(nextError)
         toast.error(nextError)
       })
-      .finally(() => setSheetLoading(false))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [routeAssessmentId, token])
 
@@ -792,110 +745,6 @@ export function ResultsEntryPage() {
             <AcademicMarkSheetPanel assessmentId={selectedAssessmentId} readOnly={sheetReadOnly} onStateChange={handleAcademicStateChange} onSaved={async () => { await loadSheet(selectedAssessmentId); await refreshSetup() }} />
             <AssessmentOperationalIntelligence assessmentId={selectedAssessmentId} />
           </div>
-
-          {overallReady ? <SectionCard
-            title="Overall marksheet"
-            subtitle={sheetLoading ? 'Loading marksheet...' : 'Calculated automatically from the completed live academic evidence above. Marks cannot be entered again here.'}
-            actions={<StatusPill value={batch?.status || sheetAssessment?.status || 'draft'} />}
-            className="no-print"
-          >
-            <div className="grid gap-3 p-4">
-              <div className="flex flex-wrap items-end justify-between gap-3 rounded-[6px] border border-[#d9dce3] bg-[#fafafa] p-3">
-                <div className="grid gap-2 md:grid-cols-[minmax(240px,360px)_150px]">
-                  <label className="relative grid gap-1.5 text-[11px] font-bold uppercase tracking-[0.08em] text-[#6b7280]">
-                    Find student
-                    <Search className="absolute bottom-2 left-3 size-3.5 text-[#9ca3af]" />
-                    <Input className="h-8 pl-8 text-[12px]" placeholder="Find student..." value={studentQuery} onChange={(event) => setStudentQuery(event.target.value)} />
-                  </label>
-                  <Field label="Grade">
-                    <select className={selectClassName} value={gradeFilter} onChange={(event) => setGradeFilter(event.target.value)}>
-                      <option value="all">All grades</option>
-                      {['A', 'B', 'C', 'D', 'E'].map((grade) => <option key={grade} value={grade}>{grade}</option>)}
-                    </select>
-                  </Field>
-                </div>
-                <div className="text-[12px] font-semibold text-[#6b7280]">{completedOrAbsent}/{rows.length} scored or absent</div>
-              </div>
-
-              <div className="overflow-x-auto rounded-[6px] border border-[#d9dce3] bg-white">
-                <div>
-                  <table className="w-full min-w-[920px] text-left text-[12px]">
-                    <thead className="sticky top-0 z-10 bg-[#fafafa] text-[#6b7280] shadow-[0_1px_0_0_#e5e7eb]">
-                      <tr>
-                        <th className="w-12 px-3 py-2 font-medium">#</th>
-                        <th className="px-3 py-2 font-medium">Student ID</th>
-                        <th className="px-3 py-2 font-medium">Name</th>
-                        <th className="px-3 py-2 text-center font-medium">{subjectName} /{totalMarks || '-'}</th>
-                        <th className="px-3 py-2 text-center font-medium">Avg %</th>
-                        <th className="px-3 py-2 text-center font-medium">Grade</th>
-                        <th className="px-3 py-2 font-medium">Status</th>
-                        <th className="px-3 py-2 font-medium">Comment</th>
-                        <th className="px-3 py-2 font-medium">Last Saved</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {visibleSheetRows.length ? visibleSheetRows.map((row, index) => {
-                        const absent = isAbsentRow(row)
-                        const invalid = isInvalidScore(row.score, totalMarks)
-                        const percentage = percentageForScore(row.score, totalMarks)
-                        const grade = gradeForScore(row.score, totalMarks)
-                        const scoreTone = gradeToneClass(grade, percentage, invalid)
-                        return (
-                          <tr key={row.id} className="border-b border-[#eef2f7] text-[#111827] last:border-0 hover:bg-[#fafafa]">
-                            <td className="px-3 py-2 text-[#8b8b8b]">{index + 1}</td>
-                            <td className="px-3 py-2 text-[#8b8b8b]">{row.student_id || row.admission_no}</td>
-                            <td className="px-3 py-2">
-                              <span className="block font-semibold text-[#0f172a]">{studentName(row)}</span>
-                              <span className="text-[11px] text-[#8b8b8b]">{row.stream_section || row.class_name || '-'}</span>
-                            </td>
-                            <td className="px-3 py-2">
-                              {absent ? (
-                                <span className="mx-auto flex h-8 w-24 items-center justify-center rounded-[5px] border border-[#cbd5e1] bg-[#f8fafc] text-[12px] font-bold text-[#475569]">Absent</span>
-                              ) : (
-                                <Input
-                                  disabled
-                                  type="number"
-                                  min="0"
-                                  max={totalMarks || undefined}
-                                  className={`mx-auto h-8 w-24 rounded-[5px] border text-center text-[12px] font-bold shadow-none ${scoreTone}`}
-                                  value={row.score ?? ''}
-                                  readOnly
-                                />
-                              )}
-                            </td>
-                            <td className="px-3 py-2 text-center font-medium">{absent ? 'Absent' : percentage === null ? '-' : `${Math.round(percentage)}%`}</td>
-                            <td className="px-3 py-2 text-center">{absent ? <span className="inline-flex rounded-[4px] border border-[#cbd5e1] bg-[#f8fafc] px-2 py-0.5 text-[11px] font-bold text-[#475569]">Absent</span> : <GradePill grade={grade} percentage={percentage} />}</td>
-                            <td className="px-3 py-2"><StatusPill value={row.status || batch?.status || 'draft'} /></td>
-                            <td className="px-3 py-2">
-                              <Input disabled className="h-8 min-w-[180px] rounded-[5px] bg-white text-[12px]" value={row.comment || ''} />
-                            </td>
-                            <td className="px-3 py-2 text-[#6b7280]">{row.last_saved_at ? new Date(row.last_saved_at).toLocaleString() : '-'}</td>
-                          </tr>
-                        )
-                      }) : (
-                        <tr><td className="px-3 py-8 text-center text-[#6b7280]" colSpan={9}>{sheetLoading ? 'Loading marksheet...' : 'No students match this marksheet filter.'}</td></tr>
-                      )}
-                    </tbody>
-                    {rows.length ? (
-                      <tfoot className="border-t border-[#e5e7eb] bg-[#f8fafc] text-[#0f172a]">
-                        <tr>
-                          <td className="px-3 py-2 font-bold" colSpan={3}>Class average</td>
-                          <td className="px-3 py-2 text-center font-bold">{averageRawScore || '-'}</td>
-                          <td className="px-3 py-2 text-center font-bold">{classAverage || '-'}%</td>
-                          <td className="px-3 py-2 text-center"><GradePill grade={classAverage ? gradeForPercentage(classAverage) : ''} percentage={classAverage} /></td>
-                          <td className="px-3 py-2" colSpan={3}>{sheetReadOnly ? 'View only' : `${completedOrAbsent}/${rows.length} scored or absent`}</td>
-                        </tr>
-                      </tfoot>
-                    ) : null}
-                  </table>
-                </div>
-              </div>
-            </div>
-          </SectionCard> : (
-            <SectionCard title="Overall marksheet" subtitle="Available after all learner evidence has been entered and saved.">
-              <div className="p-5 text-[12px] font-medium text-[#64748b]">Complete the Live Academic Evidence grid first. The overall marksheet, preview, and download will then appear automatically—no second marks entry is required.</div>
-            </SectionCard>
-          )}
 
           {overallReady ? <MarksheetPrintPreview
             logoSrc=""

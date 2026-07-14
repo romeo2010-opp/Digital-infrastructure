@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { CheckCircle2, Cloud, CloudOff, RotateCcw, Save, Send } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from './ui/button'
@@ -72,6 +72,7 @@ export function AcademicMarkSheetPanel({
   const [saving, setSaving] = useState(false)
   const [dirty, setDirty] = useState(false)
   const [online, setOnline] = useState(navigator.onLine)
+  const wasOverallReady = useRef(false)
   const storageKey = `smartlink:academic-marks:${assessmentId}:${sourceMode}`
 
   const load = async () => {
@@ -101,6 +102,7 @@ export function AcademicMarkSheetPanel({
   }
 
   useEffect(() => {
+    wasOverallReady.current = false
     setSourceMode('question')
     setMode('question')
   }, [assessmentId])
@@ -143,6 +145,11 @@ export function AcademicMarkSheetPanel({
     return { complete, total: entries.length, percentage: entries.length ? Math.round(complete / entries.length * 100) : 0 }
   }, [entries, sourceColumns, sourceMode])
   const overallReady = completion.percentage === 100 && completion.total > 0 && !dirty
+
+  useEffect(() => {
+    if (overallReady && !wasOverallReady.current) setMode('overall')
+    wasOverallReady.current = overallReady
+  }, [overallReady])
 
   useEffect(() => {
     onStateChange?.({ source_mode: sourceMode, completion_percentage: completion.percentage, overall_ready: overallReady, published, loading })
@@ -225,6 +232,7 @@ export function AcademicMarkSheetPanel({
     try {
       await api.reopenAcademicMarkSheet(token, assessmentId, { mode: sourceMode })
       toast.success('Evidence reopened for correction. The question cells are editable again.')
+      setMode(sourceMode)
       await load()
       await onSaved?.()
     } catch (error: any) {
@@ -242,10 +250,9 @@ export function AcademicMarkSheetPanel({
     <div className="grid gap-3 p-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="inline-flex rounded-[6px] border border-[#d9dce3] bg-[#f8fafc] p-1">
-          {(Object.keys(modeLabels) as EntryMode[]).filter((value) => value !== 'question' || sourceMode === 'question').map((value) => {
-            const locked = value === 'overall' && !overallReady
+          {(Object.keys(modeLabels) as EntryMode[]).filter((value) => (value !== 'question' || sourceMode === 'question') && (value !== 'overall' || overallReady)).map((value) => {
             const label = value === 'topic' && sourceMode === 'question' ? 'Derived topic totals' : modeLabels[value]
-            return <button key={value} type="button" disabled={locked} title={locked ? 'Finish and save all learner evidence first.' : undefined} onClick={() => setMode(value)} className={`rounded-[4px] px-3 py-1.5 text-[11px] font-semibold disabled:cursor-not-allowed disabled:opacity-40 ${mode === value ? 'bg-white text-[#111827] shadow-sm' : 'text-[#64748b]'}`}>{label}</button>
+            return <button key={value} type="button" onClick={() => setMode(value)} className={`rounded-[4px] px-3 py-1.5 text-[11px] font-semibold ${mode === value ? 'bg-white text-[#111827] shadow-sm' : 'text-[#64748b]'}`}>{label}</button>
           })}
         </div>
         <div className="flex items-center gap-2">
