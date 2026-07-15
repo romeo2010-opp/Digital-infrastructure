@@ -8,7 +8,7 @@ import { usePortal } from '../lib/portalContext'
 
 const selectClass = 'h-8 rounded-[5px] border border-[#d9dce3] bg-white px-2 text-[11px] text-[#111827]'
 
-export function TargetedAssessmentWorkflow({ setup, finding, rows = [], onRefresh }: { setup: any; finding?: any; rows?: any[]; onRefresh?: () => void }) {
+export function TargetedAssessmentWorkflow({ setup, finding, supportCase, rows = [], onRefresh }: { setup: any; finding?: any; supportCase?: any; rows?: any[]; onRefresh?: () => void }) {
   const { token, api } = usePortal()
   const [form, setForm] = useState<any>({ class_ref: '', subject_ref: '', topic_ref: '', subtopic_ref: '', title: 'Targeted diagnostic assessment', purpose: 'diagnostic', duration_minutes: 20, total_marks: 20, question_count: 5, use_ai: false })
   const [activeRef, setActiveRef] = useState('')
@@ -30,6 +30,16 @@ export function TargetedAssessmentWorkflow({ setup, finding, rows = [], onRefres
     setForm((current: any) => ({ ...current, class_ref: classRow?.public_ref || current.class_ref, subject_ref: subjectRow?.public_ref || current.subject_ref, topic_ref: directTopic?.public_ref || parentTopic?.public_ref || current.topic_ref, subtopic_ref: selectedSubtopic?.public_ref || '', title: finding.topic_name ? `${finding.topic_name} targeted diagnostic` : current.title }))
   }, [finding, setup])
 
+  useEffect(() => {
+    if (!supportCase) return
+    const classRow = (setup?.classes || []).find((item: any) => item.public_ref === supportCase.class_ref)
+    const subjectRow = classRow?.subjects?.find((item: any) => item.public_ref === supportCase.subject_ref)
+    const directTopic = subjectRow?.topics?.find((item: any) => item.public_ref === supportCase.topic_ref)
+    const parentTopic = subjectRow?.topics?.find((item: any) => (item.subtopics || []).some((subtopic: any) => subtopic.public_ref === supportCase.topic_ref))
+    const selectedSubtopic = parentTopic?.subtopics?.find((item: any) => item.public_ref === supportCase.topic_ref)
+    setForm((current: any) => ({ ...current, class_ref: classRow?.public_ref || supportCase.class_ref || current.class_ref, subject_ref: subjectRow?.public_ref || supportCase.subject_ref || current.subject_ref, topic_ref: directTopic?.public_ref || parentTopic?.public_ref || supportCase.topic_ref || current.topic_ref, subtopic_ref: selectedSubtopic?.public_ref || '', title: supportCase.topic_name ? `${supportCase.topic_name} support reassessment` : current.title, purpose: 'intervention_reassessment' }))
+  }, [setup, supportCase])
+
   const loadRecord = async (ref = activeRef) => {
     if (!ref) return
     const response = await api.getTargetedAssessment(token, ref)
@@ -49,7 +59,9 @@ export function TargetedAssessmentWorkflow({ setup, finding, rows = [], onRefres
       return response
     } catch (error: any) { toast.error(error.message || 'Unable to continue the assessment workflow.'); return null } finally { setWorking(false) }
   }
-  const create = () => run(() => api.createTargetedAssessment(token, { ...form, finding_ref: finding?.public_ref || null, auto_select_below_threshold: true, difficulty_distribution: { easy: 30, medium: 50, challenging: 20 } }), 'Targeted assessment draft created with a proposed learner group.')
+  const create = () => run(() => supportCase?.public_ref
+    ? api.createCaseTargetedAssessment(token, supportCase.public_ref, { ...form, difficulty_distribution: { easy: 30, medium: 50, challenging: 20 } })
+    : api.createTargetedAssessment(token, { ...form, finding_ref: finding?.public_ref || null, auto_select_below_threshold: true, difficulty_distribution: { easy: 30, medium: 50, challenging: 20 } }), 'Targeted assessment draft created with a proposed learner group.')
   const confirmLearners = () => run(() => api.confirmTargetedAssessmentLearners(token, activeRef, { student_refs: (record?.learners || []).map((learner: any) => learner.student_ref) }), 'Targeted learner list confirmed.')
   const generate = () => run(() => api.generateTargetedAssessment(token, activeRef, { use_ai: form.use_ai }), 'Question paper and marking scheme generated for teacher review.')
   const saveReview = () => run(() => api.saveTargetedAssessmentReview(token, activeRef, { paper, change_summary: 'Teacher-reviewed wording, answers and marking points' }), 'Teacher review saved as a new version.')

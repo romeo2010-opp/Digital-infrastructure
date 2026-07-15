@@ -19,6 +19,7 @@ function routeForNotification(item: any) {
   if (type === 'EXAM_SESSION') return '/exam-sessions'
   if (type === 'PAYROLL_RUN') return id && !/^\d+$/.test(id) ? `/finance/payroll/${encodeURIComponent(id)}` : '/finance/payroll'
   if (type === 'STAFF_LEAVE') return id && !/^\d+$/.test(id) ? `/staff/leave/${encodeURIComponent(id)}` : '/staff/leave'
+  if (type === 'PARENT_ACADEMIC_INSIGHT') return '/student-portal'
   if (!id) return ''
   if (type === 'DIRECTOR_TASK') return `/tasks/${encodeURIComponent(id)}`
   if (type === 'STUDENT') return '/students'
@@ -98,9 +99,9 @@ export function NotificationDrawer({
             {unreadCount ? `${unreadCount} unread notification${unreadCount === 1 ? '' : 's'}` : 'All notifications are read.'}
           </DrawerDescription>
         </DrawerHeader>
-        <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="min-h-0 flex-1 overflow-y-auto bg-[#f8fafc]">
           {!selected ? (
-            <div className="divide-y divide-[#f1f5f9]">
+            <div className="grid gap-2 p-3">
               {items.length ? items.map((item: any, index: number) => {
                 const unread = !item.readAt
                 return (
@@ -110,21 +111,19 @@ export function NotificationDrawer({
                     disabled={actionLoading}
                     onClick={() => selectNotification(item)}
                     style={{ animationDelay: `${Math.min(index * 22, 180)}ms` }}
-                    className="mera-notification-list-item block w-full px-5 py-4 text-left transition hover:bg-[#f9fafb] focus-visible:bg-[#f9fafb] focus-visible:outline-none disabled:opacity-60"
+                    className="mera-notification-list-item block w-full rounded-[8px] border border-[#e2e8f0] bg-white px-4 py-3 text-left shadow-sm transition hover:border-[#cbd5e1] hover:bg-white focus-visible:bg-white focus-visible:outline-none disabled:opacity-60"
                   >
-                    <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
-                      <div className="flex items-start gap-3">
-                        <span className={`mt-1 size-2 rounded-full ${unread ? 'bg-[#2563eb]' : 'bg-[#d1d5db]'}`} />
-                        <span className="min-w-0">
-                          <span className="block text-[13px] font-bold leading-5 text-[#111827]">{item.title}</span>
-                          <span className="mt-1 block line-clamp-2 text-[12px] leading-5 text-[#6b7280]">{item.message || 'No message body.'}</span>
-                        </span>
+                    <div className="flex items-start gap-3">
+                      <span className={`mt-1.5 size-2 shrink-0 rounded-full ${unread ? 'bg-[#2563eb]' : 'bg-[#d1d5db]'}`} />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                          <span className="min-w-0 truncate text-[13px] font-bold leading-5 text-[#111827]">{item.title}</span>
+                          <span className="rounded-full border border-[#e2e8f0] bg-[#f8fafc] px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.06em] text-[#64748b]">{item.type || 'Notification'}</span>
+                        </div>
+                        <span className="mt-1 block line-clamp-2 text-[12px] leading-5 text-[#6b7280]">{item.message || 'No message body.'}</span>
+                        <span className="mt-2 block text-[11px] font-semibold text-[#94a3b8]">{normalizeDate(item.createdAt)}</span>
                       </div>
-                      <div className="flex items-center gap-2 text-[11px] font-semibold text-[#9ca3af] sm:justify-end">
-                        <span>{item.type || 'Notification'}</span>
-                        <span>{normalizeDate(item.createdAt)}</span>
-                        <ArrowRight className="size-3.5" />
-                      </div>
+                      <ArrowRight className="mt-1 size-4 shrink-0 text-[#94a3b8]" />
                     </div>
                   </button>
                 )

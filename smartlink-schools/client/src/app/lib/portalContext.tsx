@@ -1,7 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { canAccessPath, firstAccessiblePath, hasAnyPermission, hasPermission } from './access'
-import { clearSession, portalApi, readStoredSession, resolvePortalWebSocketUrl, storeSession } from './portalApi'
+import { clearSession, portalApi, readStoredSession, resolvePortalWebSocketUrl, storeSession, subscribePortalRequestActivity } from './portalApi'
 import { writeLastLoginAppearance } from './loginAppearanceCache'
 import { MERA_PACKET_KEYS, filterPacketKeysForUser, normalizePacketKeys, routePacketKeys, routeSyncPacketKeys, type MeraPacketKey, type MeraPacketStatus, type MeraRealtimeMode } from './packetRegistry'
 
@@ -99,6 +99,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
   const [pendingLoginChallenge, setPendingLoginChallenge] = useState<any>(null)
   const [preferences, setPreferences] = useState<any>(defaultPreferences)
   const [preferencesLoading, setPreferencesLoading] = useState(false)
+  const [pendingRequestCount, setPendingRequestCount] = useState(0)
 
   const token = session?.accessToken || ''
   const user = session?.user || null
@@ -116,6 +117,8 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     dataRef.current = data
   }, [data])
+
+  useEffect(() => subscribePortalRequestActivity(setPendingRequestCount), [])
 
   useEffect(() => {
     packetStatusRef.current = packetStatus
@@ -951,6 +954,8 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
       liveDataLoading,
       actionLoading,
       actionLabel,
+      networkLoading: pendingRequestCount > 0,
+      pendingRequestCount,
       bootLoading,
       loginSuccessGate,
       loginPreloadSettled,
@@ -997,7 +1002,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
         portalApi.getHoardingWatchlistDetail(token, stationPublicId),
       api: portalApi,
     }),
-    [session, user, token, data, packetStatus, packetErrors, realtimeMode, realtimePulse, portalSyncEvent, loading, packetLoading, liveDataLoading, actionLoading, actionLabel, bootLoading, loginSuccessGate, loginPreloadSettled, error, loginError, pendingLoginChallenge, selectedProfile, selectedProfileEnforcement, preferences, preferencesLoading, requestPackets, requestRoutePackets, refreshVisibleModules, refreshSession, usePortalPacket, openProfile, finishLoginSuccessGate, previewPreferences],
+    [session, user, token, data, packetStatus, packetErrors, realtimeMode, realtimePulse, portalSyncEvent, loading, packetLoading, liveDataLoading, actionLoading, actionLabel, pendingRequestCount, bootLoading, loginSuccessGate, loginPreloadSettled, error, loginError, pendingLoginChallenge, selectedProfile, selectedProfileEnforcement, preferences, preferencesLoading, requestPackets, requestRoutePackets, refreshVisibleModules, refreshSession, usePortalPacket, openProfile, finishLoginSuccessGate, previewPreferences],
   )
 
   return <PortalContext.Provider value={value}>{children}</PortalContext.Provider>

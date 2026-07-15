@@ -49,7 +49,6 @@ import { LibrarianPortalPage, TeachingResourceDetailPage } from './pages/Librari
 import { ClassroomModePage } from './pages/ClassroomModePage'
 import { AcademicIntelligencePage } from './pages/AcademicIntelligencePage'
 import { LearnerSupportPage } from './pages/LearnerSupportPage'
-import { ParentAcademicInsightsPage } from './pages/ParentAcademicInsightsPage'
 
 const routeMeta = [
   { path: '/dashboard', title: 'School Dashboard', subtitle: 'Students, fees, attendance and academic progress' },
@@ -332,7 +331,7 @@ function SchoolRoutes({ landingPath }: { landingPath: string }) {
       <Route path="/academic-intelligence" element={<AcademicIntelligencePage />} />
       <Route path="/learner-support" element={<LearnerSupportPage />} />
       <Route path="/learner-support/:caseId" element={<LearnerSupportPage />} />
-      <Route path="/parent-insights" element={<ParentAcademicInsightsPage />} />
+      <Route path="/parent-insights" element={<Navigate to="/student-portal" replace />} />
       <Route path="/my-leave" element={<MyLeavePage />} />
       <Route path="/finance/payroll" element={<PayrollPage />} />
       <Route path="/finance/payroll/:runRef" element={<PayrollPage />} />
@@ -428,6 +427,7 @@ function SchoolRoutes({ landingPath }: { landingPath: string }) {
       <Route path="/settings/notifications" element={<SettingsCenter section="notifications" />} />
       <Route path="/settings/security" element={<SettingsCenter section="security" />} />
       <Route path="/settings/profile" element={<SettingsCenter section="profile" />} />
+      <Route path="/settings/my-leave" element={<MyLeavePage />} />
       <Route path="/settings/users" element={<SettingsCenter section="users" />} />
       <Route path="/settings/audit" element={<SettingsCenter section="audit" />} />
       <Route path="/settings/organization" element={<SettingsCenter section="organization" />} />
@@ -567,8 +567,8 @@ function PortalShell() {
     return <Navigate to={landingPath} replace />
   }
 
-  const isStudentApp = String(user?.role || '').toLowerCase() === 'student'
-  if (isStudentApp) {
+  const isLearnerFacingApp = ['student', 'parent'].includes(String(user?.role || '').toLowerCase())
+  if (isLearnerFacingApp) {
     return (
       <div className="h-screen overflow-hidden bg-[#F4F5F2] text-[#20201d]">
         <ActionLoadingOverlay visible={actionLoading} label={actionLabel} />
@@ -683,6 +683,20 @@ function shouldRenderPublicSite() {
   return localHosts.has(hostname) && (window.location.pathname.startsWith('/public') || window.location.pathname.startsWith('/setup'))
 }
 
+function GlobalRequestActivity() {
+  const { networkLoading, pendingRequestCount } = usePortal()
+  return (
+    <div
+      className={`pointer-events-none fixed inset-x-0 top-0 z-[200] h-[3px] overflow-hidden bg-transparent transition-opacity duration-200 ${networkLoading ? 'opacity-100' : 'opacity-0'}`}
+      role="progressbar"
+      aria-label={networkLoading ? `Loading data from ${pendingRequestCount} request${pendingRequestCount === 1 ? '' : 's'}` : 'Data loaded'}
+      aria-hidden={!networkLoading}
+    >
+      <div className="h-full w-full animate-pulse bg-[#185FA5]" />
+    </div>
+  )
+}
+
 export default function App() {
   if (shouldRenderPublicSite()) {
     return (
@@ -696,6 +710,7 @@ export default function App() {
   return (
     <PortalProvider>
       <BrowserRouter>
+        <GlobalRequestActivity />
         <PortalShell />
         <Toaster />
       </BrowserRouter>

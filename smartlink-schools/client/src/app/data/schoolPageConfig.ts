@@ -229,17 +229,18 @@ export const schoolPages: Record<SchoolPageKey, {
   parents: {
     title: 'Parents',
     subtitle: 'Guardian contacts, linked children and communication preferences.',
-    action: 'Add parent',
+    action: 'Activate parent access',
     columns: [
       { key: 'parent', label: 'Parent' },
       { key: 'student', label: 'Linked Student' },
       { key: 'className', label: 'Class' },
       { key: 'phone', label: 'Phone' },
       { key: 'relationship', label: 'Relationship' },
+      { key: 'accountStatus', label: 'Portal Account' },
     ],
     sideTitle: 'Guardian Data',
     sideItems: [
-      { label: 'Contacts', value: 'Live', detail: 'Loaded from parent-student links.' },
+      { label: 'Contacts', value: 'Live', detail: 'Loaded from canonical student guardian records.' },
       { label: 'Messaging', value: 'Ready', detail: 'Use compose message for outreach.' },
       { label: 'Teacher scope', value: 'Enforced', detail: 'Teachers see linked guardians for their learners.' },
     ],

@@ -158,8 +158,8 @@ export function LoginScreen({
               : showCodeStep
               ? `Enter the code sent to ${pendingChallenge?.maskedEmail || 'your school email'}`
               : isStudentMode
-              ? 'Students and guardians can open results, fees, homework and notices here'
-              : 'Staff can enter their email and password to access the school workspace'}
+              ? 'Students can open results, fees, homework and notices here'
+              : 'Staff and parents can enter their email and password to access their workspace'}
           </p>
         </header>
 
@@ -252,7 +252,7 @@ export function LoginScreen({
               </label>
             ) : (
               <label className="block">
-                <span className={fieldLabelClass}>Staff Email</span>
+                <span className={fieldLabelClass}>Email</span>
                 <Input
                   type="email"
                   value={email}
@@ -281,11 +281,11 @@ export function LoginScreen({
             {error ? <p className="m-0 rounded-[6px] border border-[#efcaca] bg-[#fff1f1] px-3 py-2 text-[12px] leading-[1.45] text-[#9b3838]">{error}</p> : null}
 
             <Button type="submit" className={`mt-3 ${primaryButtonClass}`} disabled={loading}>
-              {loading ? 'Signing in...' : isStudentMode ? 'Student Login' : 'Staff Login'}
+              {loading ? 'Signing in...' : isStudentMode ? 'Student Login' : 'Email Login'}
             </Button>
 
             <p className="m-0 pt-1 text-center text-[13px] font-normal leading-5 text-[var(--login-text)]">
-              {isStudentMode ? 'Are you an admin?' : 'Student or guardian?'}{' '}
+              {isStudentMode ? 'Staff or parent?' : 'Student?'}{' '}
               <button
                 type="button"
                 className="font-normal text-[var(--login-link)] hover:underline"

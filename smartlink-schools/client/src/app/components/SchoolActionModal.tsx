@@ -9,6 +9,7 @@ import { resolvePortalAssetUrl } from '../lib/portalApi'
 export type SchoolActionKind =
   | 'class'
   | 'student'
+  | 'parent'
   | 'payment'
   | 'attendance'
   | 'homework'
@@ -21,6 +22,7 @@ export type SchoolActionKind =
 const actionMeta: Record<SchoolActionKind, { title: string; description: string; submit: string }> = {
   class: { title: 'Create Class', description: 'Add a class and optionally assign a teacher.', submit: 'Create class' },
   student: { title: 'Add Student', description: 'Create a learner record linked to a class.', submit: 'Save student' },
+  parent: { title: 'Activate Guardian Parent Access', description: 'Use the guardian already recorded on the learner. This adds login access; it does not create a separate parent record.', submit: 'Activate parent access' },
   payment: { title: 'Record Payment', description: 'Post a fee payment and generate a receipt.', submit: 'Record payment' },
   attendance: { title: 'Mark Attendance', description: 'Update one learner attendance state for today.', submit: 'Save attendance' },
   homework: { title: 'Create Homework', description: 'Publish homework to a class and subject.', submit: 'Create homework' },
@@ -71,6 +73,8 @@ export function SchoolActionModal({
   const [financeInvoices, setFinanceInvoices] = useState<any[]>([])
   const [attendanceRows, setAttendanceRows] = useState<any[]>([])
   const [staff, setStaff] = useState<any[]>([])
+  const [guardianRows, setGuardianRows] = useState<any[]>([])
+  const [createdParent, setCreatedParent] = useState<any>(null)
   const [messageImageUploading, setMessageImageUploading] = useState(false)
   const [messageImageError, setMessageImageError] = useState('')
   const [form, setForm] = useState<any>({
@@ -117,6 +121,13 @@ export function SchoolActionModal({
     report_type: 'Term summary',
     date_from: today(),
     date_to: today(),
+    parent_mode: 'create',
+    guardian_key: '',
+    parent_user_ref: '',
+    parent_full_name: '',
+    parent_email: '',
+    parent_phone: '',
+    parent_relationship: 'guardian',
   })
 
   useEffect(() => {
@@ -129,7 +140,8 @@ export function SchoolActionModal({
       api.listFinanceInvoices?.(token).catch(() => ({ invoices: [] })),
       api.listAttendance?.(token).catch(() => ({ attendance: [] })),
       api.listUsers?.(token).catch(() => ({ users: [] })),
-    ]).then(([classPayload, subjectPayload, feePayload, invoicePayload, attendancePayload, userPayload]) => {
+      api.listParents?.(token).catch(() => ({ parents: [] })),
+    ]).then(([classPayload, subjectPayload, feePayload, invoicePayload, attendancePayload, userPayload, parentPayload]) => {
       if (cancelled) return
       setClasses(classPayload?.classes || [])
       setSubjects(subjectPayload?.subjects || [])
@@ -137,11 +149,29 @@ export function SchoolActionModal({
       setFinanceInvoices(invoicePayload?.invoices || [])
       setAttendanceRows(attendancePayload?.attendance || [])
       setStaff(userPayload?.users || [])
+      setGuardianRows(parentPayload?.parents || [])
     })
     return () => {
       cancelled = true
     }
   }, [api, open, token])
+
+  useEffect(() => {
+    if (!open) return
+    setCreatedParent(null)
+    if (action === 'parent') {
+      setForm((current: any) => ({
+        ...current,
+        parent_mode: 'create',
+        guardian_key: '',
+        parent_user_ref: '',
+        parent_full_name: '',
+        parent_email: '',
+        parent_phone: '',
+        parent_relationship: 'guardian',
+      }))
+    }
+  }, [action, open])
 
   const selectedAttendanceStudent = useMemo(
     () => attendanceRows.find((row) => String(row.student_id) === String(form.student_id)),
@@ -176,10 +206,30 @@ export function SchoolActionModal({
   const homeworkSubjectHint = selectedClass?.subject_assignments?.length
     ? 'Showing subjects assigned to this class.'
     : 'Showing all school subjects for this class.'
+  const selectedGuardian = useMemo(
+    () => guardianRows.find((row) => `${row.student_ref}:${row.guardian_number}` === form.guardian_key),
+    [form.guardian_key, guardianRows],
+  )
+  const parentAccounts = useMemo(
+    () => staff.filter((row) => row.role === 'parent' && row.is_active),
+    [staff],
+  )
 
   const update = (key: string, value: any) => setForm((current: any) => ({ ...current, [key]: value }))
   const selectHomeworkClass = (value: string) => {
     setForm((current: any) => ({ ...current, class_id: value, subject_id: '' }))
+  }
+  const selectGuardianRecord = (value: string) => {
+    const guardian = guardianRows.find((row) => `${row.student_ref}:${row.guardian_number}` === value)
+    setForm((current: any) => ({
+      ...current,
+      guardian_key: value,
+      parent_mode: guardian?.guardian_missing ? 'create' : current.parent_mode,
+      parent_full_name: guardian?.guardian_name || current.parent_full_name,
+      parent_email: guardian?.guardian_email || current.parent_email,
+      parent_phone: guardian?.guardian_phone || current.parent_phone,
+      parent_relationship: guardian?.relationship || current.parent_relationship || 'guardian',
+    }))
   }
 
   const selectInvoiceNumber = (value: string) => {
@@ -264,6 +314,24 @@ export function SchoolActionModal({
           gender: form.gender || null,
         })
       }
+      if (action === 'parent') {
+        if (!selectedGuardian) throw new Error('Select the learner and guardian record to link.')
+        const link = {
+          student_ref: selectedGuardian.student_ref,
+          guardian_number: Number(selectedGuardian.guardian_number),
+        }
+        if (form.parent_mode === 'link_existing') {
+          return api.linkParentGuardian(token, form.parent_user_ref, link)
+        }
+        return api.createSchoolUser(token, {
+          role: 'parent',
+          full_name: form.parent_full_name,
+          email: form.parent_email,
+          phone: form.parent_phone || null,
+          relationship: form.parent_relationship || 'guardian',
+          ...link,
+        })
+      }
       if (action === 'payment') {
         return api.recordPayment(token, {
           fee_account_id: form.fee_account_id,
@@ -334,8 +402,12 @@ export function SchoolActionModal({
       return { ok: true }
     }
 
-    await runAction(run, `${meta.submit}...`, { refresh: false })
+    const result = await runAction(run, `${meta.submit}...`, { refresh: false })
     onSaved?.()
+    if (action === 'parent' && form.parent_mode === 'create' && result?.temporary_password) {
+      setCreatedParent(result)
+      return
+    }
     onOpenChange(false)
   }
 
@@ -377,13 +449,25 @@ export function SchoolActionModal({
       className={action === 'message' ? 'max-w-4xl' : ''}
       footer={(
         <>
-          <Button type="button" variant="outline" className="h-8 rounded-[5px] text-[12px]" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button type="submit" form="school-action-form" disabled={messageImageUploading} className="h-8 rounded-[5px] text-[12px]">
-            {messageImageUploading ? 'Uploading image...' : meta.submit}
-          </Button>
+          <Button type="button" variant="outline" className="h-8 rounded-[5px] text-[12px]" onClick={() => onOpenChange(false)}>{createdParent ? 'Done' : 'Cancel'}</Button>
+          {!createdParent ? (
+            <Button type="submit" form="school-action-form" disabled={messageImageUploading} className="h-8 rounded-[5px] text-[12px]">
+              {messageImageUploading ? 'Uploading image...' : meta.submit}
+            </Button>
+          ) : null}
         </>
       )}
     >
+      {createdParent ? (
+        <div className="grid gap-3 rounded-[6px] border border-[#bbf7d0] bg-[#f0fdf4] p-4 text-[12px] text-[#166534]">
+          <div className="font-semibold">Parent login created and linked to {selectedGuardian?.first_name} {selectedGuardian?.last_name}.</div>
+          <div className="grid gap-1 rounded-[5px] border border-[#dcfce7] bg-white p-3 text-[#111827]">
+            <span><strong>Email:</strong> {createdParent.user?.email}</span>
+            <span><strong>Temporary password:</strong> <code className="font-mono">{createdParent.temporary_password}</code></span>
+          </div>
+          <p>Share this password securely once. The parent must change it at first login.</p>
+        </div>
+      ) : (
       <form id="school-action-form" className="grid gap-3" onSubmit={submit}>
         {action === 'class' ? (
           <div className="grid gap-3 sm:grid-cols-2">
@@ -395,6 +479,46 @@ export function SchoolActionModal({
                 <option key={row.id} value={row.id}>{row.full_name || row.name || row.email}</option>
               ))}
             </select>
+          </div>
+        ) : null}
+
+        {action === 'parent' ? (
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className={`${labelClassName()} sm:col-span-2`}>
+              Access method
+              <select className={selectClassName()} value={form.parent_mode} onChange={(event) => update('parent_mode', event.target.value)}>
+                <option value="create">Activate login for this guardian</option>
+                <option value="link_existing" disabled={Boolean(selectedGuardian?.guardian_missing)}>Use this guardian’s existing login</option>
+              </select>
+            </label>
+            <label className={`${labelClassName()} sm:col-span-2`}>
+              Learner and guardian
+              <select required className={selectClassName()} value={form.guardian_key} onChange={(event) => selectGuardianRecord(event.target.value)}>
+                <option value="">Select guardian record</option>
+                {guardianRows.map((row) => (
+                  <option key={row.guardian_ref || `${row.student_ref}:${row.guardian_number}`} value={`${row.student_ref}:${row.guardian_number}`} disabled={Boolean(row.parent_ref)}>
+                    {row.first_name} {row.last_name} · {row.class_name} · {row.guardian_missing ? 'guardian not recorded' : `${row.guardian_name} (${row.relationship})`}{row.parent_ref ? ` · ${row.account_status.replaceAll('_', ' ')}` : ''}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {form.parent_mode === 'link_existing' ? (
+              <label className={`${labelClassName()} sm:col-span-2`}>
+                Existing parent login
+                <select required className={selectClassName()} value={form.parent_user_ref} onChange={(event) => update('parent_user_ref', event.target.value)}>
+                  <option value="">Select parent account</option>
+                  {parentAccounts.map((row) => <option key={row.public_ref} value={row.public_ref}>{row.full_name} · {row.email}</option>)}
+                </select>
+              </label>
+            ) : (
+              <>
+                <Input required readOnly={!selectedGuardian?.guardian_missing} aria-label="Guardian name" placeholder="Guardian full name" value={form.parent_full_name} onChange={(event) => update('parent_full_name', event.target.value)} className={`h-8 text-[12px] sm:col-span-2 ${selectedGuardian?.guardian_missing ? '' : 'bg-[#f8fafc]'}`} />
+                {selectedGuardian?.guardian_missing ? <select required className={selectClassName()} value={form.parent_relationship} onChange={(event) => update('parent_relationship', event.target.value)}><option value="guardian">Guardian</option><option value="mother">Mother</option><option value="father">Father</option><option value="grandparent">Grandparent</option><option value="aunt">Aunt</option><option value="uncle">Uncle</option><option value="other">Other</option></select> : null}
+                <Input required type="email" placeholder="Login email" value={form.parent_email} onChange={(event) => update('parent_email', event.target.value)} className="h-8 text-[12px]" />
+                <Input placeholder="Phone number" value={form.parent_phone} onChange={(event) => update('parent_phone', event.target.value)} className="h-8 text-[12px]" />
+              </>
+            )}
+            {selectedGuardian ? <div className="sm:col-span-2 rounded-[6px] border border-[#dce3ed] bg-[#f8fafc] px-3 py-2 text-[12px] text-[#475569]">{selectedGuardian.guardian_missing ? <><strong>No guardian has been recorded for this learner yet.</strong> Saving will create the guardian as the canonical parent record and activate that same person’s login.</> : <><strong>{selectedGuardian.guardian_name} is already the parent/guardian record.</strong> This step only activates their Parent Portal login for {selectedGuardian.first_name} {selectedGuardian.last_name}.</>}</div> : null}
           </div>
         ) : null}
 
@@ -650,6 +774,7 @@ export function SchoolActionModal({
           </div>
         ) : null}
       </form>
+      )}
     </ModalShell>
   )
 }

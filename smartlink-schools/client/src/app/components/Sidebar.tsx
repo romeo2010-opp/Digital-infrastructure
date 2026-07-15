@@ -60,8 +60,8 @@ const studentPortalItem = {
 }
 
 const parentProgressItem = {
-  label: 'Child Progress',
-  path: '/parent-insights',
+  label: 'Family Portal',
+  path: '/student-portal',
   icon: HeartHandshake,
 }
 
@@ -245,6 +245,7 @@ const settingsGroups = [
     label: 'My Account',
     items: [
       { label: 'Profile', path: '/settings/profile', icon: UserCircle2 },
+      { label: 'My Leave', path: '/settings/my-leave', icon: CalendarRange },
       { label: 'Preferences', path: '/settings/preferences', icon: Palette },
       { label: 'Personalized', path: '/settings/personalized', icon: Palette },
       { label: 'Notifications', path: '/settings/notifications', icon: Bell },
@@ -324,13 +325,14 @@ export function Sidebar({ user }: { user?: any; theme?: 'default' | 'light' }) {
   const userInitials = initialsFor(user)
   const displayName = displayNameFor(user)
   const roleName = roleNameFor(user)
+  const isParent = String(user?.role || '').toLowerCase() === 'parent'
   const primaryItem = canAccessPath(user, dashboardItem.path)
     ? dashboardItem
-    : canAccessPath(user, studentPortalItem.path)
+    : isParent && canAccessPath(user, parentProgressItem.path)
+      ? parentProgressItem
+      : canAccessPath(user, studentPortalItem.path)
       ? studentPortalItem
-      : canAccessPath(user, parentProgressItem.path)
-        ? parentProgressItem
-        : canAccessPath(user, financeItem.path)
+      : canAccessPath(user, financeItem.path)
           ? financeItem
           : dashboardItem
   const PrimaryIcon = primaryItem.icon

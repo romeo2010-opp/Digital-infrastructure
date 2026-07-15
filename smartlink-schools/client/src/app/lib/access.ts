@@ -173,6 +173,7 @@ const roleRoutePrefixes: Record<string, string[]> = {
     '/finance/payroll',
     '/exam-intelligence',
     '/settings/profile',
+    '/settings/my-leave',
     '/settings/preferences',
     '/settings/personalized',
     '/settings/notifications',
@@ -192,6 +193,7 @@ const roleRoutePrefixes: Record<string, string[]> = {
     '/library/archive',
     '/library/print-requests',
     '/settings/profile',
+    '/settings/my-leave',
     '/settings/preferences',
     '/settings/personalized',
     '/settings/notifications',
@@ -218,6 +220,7 @@ const roleRoutePrefixes: Record<string, string[]> = {
     '/teacher/classes',
     '/classroom',
     '/academic-intelligence',
+    '/learner-support',
     '/library/resources',
     '/library/print-requests',
     '/results',
@@ -234,12 +237,13 @@ const roleRoutePrefixes: Record<string, string[]> = {
     '/messages',
     '/reports',
     '/settings/profile',
+    '/settings/my-leave',
     '/settings/preferences',
     '/settings/personalized',
     '/settings/notifications',
     '/settings/security',
   ],
-  parent: ['/parent-insights', '/my-timetable', '/my-exams', '/homework', '/exam-intelligence', '/messages', '/settings/profile', '/settings/preferences', '/settings/personalized', '/settings/notifications', '/settings/security'],
+  parent: ['/student-portal', '/parent-insights', '/my-timetable', '/my-exams', '/homework', '/exam-intelligence', '/messages', '/settings/profile', '/settings/preferences', '/settings/personalized', '/settings/notifications', '/settings/security'],
   student: ['/student-portal', '/my-timetable', '/my-exams', '/exam-intelligence', '/settings/profile', '/settings/preferences', '/settings/personalized', '/settings/security'],
 }
 
@@ -250,7 +254,7 @@ const roleLandingPath: Record<string, string> = {
   bursar: '/fees/dashboard',
   librarian: '/library/dashboard',
   teacher: '/dashboard',
-  parent: '/parent-insights',
+  parent: '/student-portal',
   student: '/student-portal',
 }
 
