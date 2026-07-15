@@ -391,10 +391,10 @@ export async function createQuestion(req, res) {
   const approvalStatus = isTeacher(req) && requestedStatus === "approved" ? "pending_review" : requestedStatus
   const [result] = await pool.query(
     `INSERT INTO question_bank (
-      school_id, curriculum_id, grade_id, subject_id, topic_id, subtopic_id, question_type, question_text,
+      public_ref, school_id, curriculum_id, grade_id, subject_id, topic_id, subtopic_id, question_type, question_text,
       options_json, correct_answer, accepted_answers_json, explanation, difficulty, skill_type, marks,
       common_mistake, confidence, source_type, approval_status, created_by
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (UUID(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       schoolId,
       req.body.curriculum_id || null,
@@ -529,10 +529,10 @@ export async function sourceAssessmentQuestions(req, res) {
 
       const [result] = await connection.query(
         `INSERT INTO question_bank (
-          school_id, curriculum_id, grade_id, subject_id, topic_id, subtopic_id, question_type,
+          public_ref, school_id, curriculum_id, grade_id, subject_id, topic_id, subtopic_id, question_type,
           question_text, options_json, correct_answer, accepted_answers_json, explanation,
           difficulty, skill_type, marks, source_type, approval_status, created_by
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'teacher_created', 'pending_review', ?)`,
+        ) VALUES (UUID(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'teacher_created', 'pending_review', ?)`,
         [
           schoolId,
           topic.curriculum_id || null,
@@ -665,10 +665,10 @@ export async function generateDraftQuestionBatch(req, res) {
     for (const question of generatedQuestions) {
       const [questionResult] = await connection.query(
         `INSERT INTO question_bank (
-          school_id, curriculum_id, grade_id, subject_id, topic_id, subtopic_id, question_type,
+          public_ref, school_id, curriculum_id, grade_id, subject_id, topic_id, subtopic_id, question_type,
           question_text, options_json, correct_answer, accepted_answers_json, explanation,
           common_mistake, difficulty, skill_type, marks, confidence, source_type, approval_status, created_by, ai_model_used
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ai_generated', 'pending_review', ?, ?)`,
+        ) VALUES (UUID(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ai_generated', 'pending_review', ?, ?)`,
         [
           schoolId,
           topic.curriculum_id || null,

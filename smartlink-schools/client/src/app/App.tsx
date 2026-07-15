@@ -685,15 +685,41 @@ function shouldRenderPublicSite() {
 
 function GlobalRequestActivity() {
   const { networkLoading, pendingRequestCount } = usePortal()
+  const [elapsedSeconds, setElapsedSeconds] = useState(0)
+
+  useEffect(() => {
+    if (!networkLoading) {
+      setElapsedSeconds(0)
+      return
+    }
+    const startedAt = Date.now()
+    const timer = window.setInterval(() => setElapsedSeconds((Date.now() - startedAt) / 1000), 250)
+    return () => window.clearInterval(timer)
+  }, [networkLoading])
+
+  const estimate = Math.min(20, Math.max(5, 4 + Number(pendingRequestCount || 1) * 2))
+  const progress = networkLoading
+    ? Math.min(94, Math.round(6 + (1 - Math.exp(-elapsedSeconds / Math.max(estimate * 0.55, 1))) * 88))
+    : 100
+  const remaining = Math.max(0, Math.ceil(estimate - elapsedSeconds))
+
   return (
-    <div
-      className={`pointer-events-none fixed inset-x-0 top-0 z-[200] h-[3px] overflow-hidden bg-transparent transition-opacity duration-200 ${networkLoading ? 'opacity-100' : 'opacity-0'}`}
-      role="progressbar"
-      aria-label={networkLoading ? `Loading data from ${pendingRequestCount} request${pendingRequestCount === 1 ? '' : 's'}` : 'Data loaded'}
-      aria-hidden={!networkLoading}
-    >
-      <div className="h-full w-full animate-pulse bg-[#185FA5]" />
-    </div>
+    <>
+      <div
+        className={`pointer-events-none fixed inset-x-0 top-0 z-[200] h-[4px] overflow-hidden bg-[#dbeafe] transition-opacity duration-200 ${networkLoading ? 'opacity-100' : 'opacity-0'}`}
+        role="progressbar"
+        aria-label={networkLoading ? `Loading data from ${pendingRequestCount} request${pendingRequestCount === 1 ? '' : 's'}` : 'Data loaded'}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={progress}
+        aria-hidden={!networkLoading}
+      >
+        <div className="h-full bg-[#185FA5] shadow-[0_0_12px_rgba(24,95,165,0.4)] transition-[width] duration-300 ease-out" style={{ width: `${progress}%` }} />
+      </div>
+      <div className={`pointer-events-none fixed right-3 top-3 z-[199] rounded-full border border-[#bfdbfe] bg-white/95 px-2.5 py-1 text-[10px] font-semibold tabular-nums text-[#185FA5] shadow-sm transition-all duration-200 ${networkLoading && elapsedSeconds >= 0.5 ? 'translate-y-0 opacity-100' : '-translate-y-2 opacity-0'}`}>
+        {progress}% · {remaining > 0 ? `~${remaining}s left` : 'finishing'}
+      </div>
+    </>
   )
 }
 

@@ -379,6 +379,16 @@ export function Sidebar({ user }: { user?: any; theme?: 'default' | 'light' }) {
   }, [location.pathname])
 
   const toggleDirectorGroup = (label: string) => {
+    if (collapsed) {
+      setCollapsed(false)
+      try {
+        window.localStorage.setItem(sidebarStorageKey, 'false')
+      } catch {
+        // Local storage can be unavailable in private contexts.
+      }
+      setDirectorExpanded({ [label]: true })
+      return
+    }
     setDirectorExpanded((current) => current[label] ? {} : { [label]: true })
   }
 
@@ -427,15 +437,15 @@ export function Sidebar({ user }: { user?: any; theme?: 'default' | 'light' }) {
                     className={`relative flex h-8 w-full items-center gap-2 rounded-[5px] text-left text-[12px] font-semibold tracking-[-0.012em] transition ${
                       collapsed ? 'justify-center px-0' : 'px-3'
                     } max-md:justify-center max-md:px-0 ${
-                      groupActive ? 'text-[#111827]' : 'text-[#6b7280] hover:bg-[#f7f8fa] hover:text-[#111827]'
+                      groupActive ? `${collapsed ? 'bg-[#f1f5f9]' : ''} text-[#111827]` : 'text-[#6b7280] hover:bg-[#f7f8fa] hover:text-[#111827]'
                     }`}
                   >
                     <GroupIcon className="size-4 shrink-0" />
                     <span className={labelClass}>{group.label}</span>
                     {!collapsed ? <ChevronDown className={`ml-auto size-3.5 transition ${expanded ? '' : '-rotate-90'} max-md:hidden`} /> : null}
                   </button>
-                  {expanded ? (
-                    <div className={`mt-0.5 grid gap-0.5 ${collapsed ? '' : 'pl-2'} max-md:pl-0`}>
+                  {expanded && !collapsed ? (
+                    <div className="mt-0.5 grid gap-0.5 pl-2 max-md:pl-0">
                       {items.map((item) => {
                         const Icon = item.icon
                         const active = location.pathname === item.path || location.pathname.startsWith(`${item.path}/`)
