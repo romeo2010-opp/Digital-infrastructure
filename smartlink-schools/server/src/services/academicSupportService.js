@@ -1,6 +1,8 @@
 import { randomUUID } from "crypto"
 import { pool } from "../config/db.js"
 import { HttpError } from "../utils/http.js"
+import { createInAppNotification } from "./operationalCommunicationService.js"
+import { createTargetedAssessmentDraft } from "./academicOperationsService.js"
 
 export const DEFAULT_ESCALATION_POLICY = Object.freeze({
   firstWeakEvidenceAction: "teacher_follow_up",
@@ -33,6 +35,26 @@ const STRATEGY_SEQUENCE = Object.freeze([
 ])
 
 const number = (value, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback
+let supportSchemaCache = null
+let supportSchemaCheckedAt = 0
+async function supportSchemaCapabilities(db = pool) {
+  if (supportSchemaCache && Date.now() - supportSchemaCheckedAt < 30_000) return supportSchemaCache
+  const [columns] = await db.query(`SELECT table_name,column_name FROM information_schema.columns
+    WHERE table_schema=DATABASE() AND table_name IN ('learner_support_case_assignments','learner_support_case_notes','intervention_sessions','academic_intervention_reassessments')`)
+  const available = new Set(columns.map((row) => `${row.table_name}.${row.column_name}`))
+  supportSchemaCache = {
+    assignments: available.has("learner_support_case_assignments.id"),
+    notes: available.has("learner_support_case_notes.id"),
+    sessionDetails: available.has("intervention_sessions.duration_minutes") && available.has("intervention_sessions.teacher_observation") && available.has("intervention_sessions.next_action"),
+    reassessmentDueAt: available.has("academic_intervention_reassessments.due_at"),
+  }
+  supportSchemaCheckedAt = Date.now()
+  return supportSchemaCache
+}
+async function optionalRows(db, sql, params = []) {
+  try { return (await db.query(sql, params))[0] }
+  catch (error) { if (["ER_NO_SUCH_TABLE", "ER_BAD_FIELD_ERROR"].includes(error?.code)) return []; throw error }
+}
 const json = (value, fallback = {}) => {
   if (value === null || value === undefined || value === "") return fallback
   if (typeof value === "object" && !Buffer.isBuffer(value)) return value
@@ -139,19 +161,98 @@ async function activePolicy(schoolId, db = pool) {
   return { row: row || null, policy: normalizeEscalationPolicy(row?.policy_json) }
 }
 
-function teacherScopeSql(actor, alias = "c") {
-  if (String(actor?.role || "").toLowerCase() !== "teacher") return { sql: "", params: [] }
-  return {
-    sql: ` AND (${alias}.owner_user_id=? OR EXISTS (SELECT 1 FROM teacher_class_subject_assignments tcsa WHERE tcsa.school_id=${alias}.school_id AND tcsa.teacher_id=? AND tcsa.class_id=${alias}.class_id AND tcsa.subject_id=${alias}.subject_id AND tcsa.role='subject_teacher' AND tcsa.is_active=1))`,
-    params: [actor.id, actor.id],
-  }
+const SUPPORT_ACTIONS = Object.freeze({
+  view: "view", acknowledge: "acknowledge", completeAssignment: "complete_assignment", acceptOwnership: "accept_ownership", requestReassignment: "request_reassignment",
+  createIntervention: "create_intervention", recordSession: "record_session", addNote: "add_note", createAssessment: "create_assessment",
+  scheduleReassessment: "schedule_reassessment", reviewOutcome: "review_outcome", requestReview: "request_review",
+  recommendEscalation: "recommend_escalation", assign: "assign", escalate: "escalate", resolve: "resolve",
+  carryForward: "carry_forward", guardianSummary: "guardian_summary",
+})
+
+export const LEARNER_SUPPORT_ACTION_MATRIX = Object.freeze({
+  teacher: [SUPPORT_ACTIONS.view, SUPPORT_ACTIONS.acknowledge, SUPPORT_ACTIONS.acceptOwnership, SUPPORT_ACTIONS.requestReassignment, SUPPORT_ACTIONS.createIntervention, SUPPORT_ACTIONS.recordSession, SUPPORT_ACTIONS.addNote, SUPPORT_ACTIONS.createAssessment, SUPPORT_ACTIONS.scheduleReassessment, SUPPORT_ACTIONS.requestReview, SUPPORT_ACTIONS.recommendEscalation],
+  support_teacher: [SUPPORT_ACTIONS.view, SUPPORT_ACTIONS.acknowledge, SUPPORT_ACTIONS.requestReassignment, SUPPORT_ACTIONS.createIntervention, SUPPORT_ACTIONS.recordSession, SUPPORT_ACTIONS.addNote, SUPPORT_ACTIONS.createAssessment, SUPPORT_ACTIONS.scheduleReassessment, SUPPORT_ACTIONS.requestReview, SUPPORT_ACTIONS.recommendEscalation],
+  coordinator: Object.values(SUPPORT_ACTIONS).filter((action) => action !== SUPPORT_ACTIONS.guardianSummary),
+  headteacher: Object.values(SUPPORT_ACTIONS),
+})
+
+function activeAssignmentClause(assignmentAlias, caseAlias) {
+  return `${assignmentAlias}.is_active=1 AND (${assignmentAlias}.academic_year_id IS NULL OR ${caseAlias}.academic_year_id IS NULL OR ${assignmentAlias}.academic_year_id=${caseAlias}.academic_year_id) AND (${assignmentAlias}.term_id IS NULL OR ${caseAlias}.current_term_id IS NULL OR ${assignmentAlias}.term_id=${caseAlias}.current_term_id)`
 }
 
-async function lockedCase(db, schoolId, caseId, actor) {
-  const scope = teacherScopeSql(actor)
-  const [[record]] = await db.query(`SELECT c.* FROM learner_support_cases c WHERE c.school_id=? AND (c.public_ref=? OR c.id=?)${scope.sql} LIMIT 1 FOR UPDATE`, [schoolId, String(caseId), number(caseId), ...scope.params])
-  if (!record) throw new HttpError(404, "Learner support case was not found or is outside your assignment.")
-  return record
+function learnerSupportScopeSql(actor, alias = "c", capabilities = { assignments: true }) {
+  const role = String(actor?.role || "").toLowerCase()
+  if (role === "super_admin" || role === "headteacher") return { sql: "", params: [] }
+  const userId = number(actor?.id)
+  if (!userId) return { sql: " AND 1=0", params: [] }
+  const activeSubject = activeAssignmentClause("support_subject_assignment", alias)
+  const activeClass = activeAssignmentClause("support_class_assignment", alias)
+  const clauses = [
+    `${alias}.owner_user_id=?`,
+    `EXISTS (SELECT 1 FROM intervention_cycles support_owned_cycle WHERE support_owned_cycle.school_id=${alias}.school_id AND support_owned_cycle.case_id=${alias}.id AND support_owned_cycle.owner_user_id=?)`,
+  ]
+  const params = [userId, userId]
+  if (capabilities.assignments) {
+    clauses.push(`EXISTS (SELECT 1 FROM learner_support_case_assignments support_explicit_assignment WHERE support_explicit_assignment.school_id=${alias}.school_id AND support_explicit_assignment.case_id=${alias}.id AND support_explicit_assignment.assigned_user_id=? AND support_explicit_assignment.assignment_status<>'removed')`)
+    params.push(userId)
+  }
+  clauses.push(
+    `EXISTS (SELECT 1 FROM users support_actor WHERE support_actor.school_id=${alias}.school_id AND support_actor.id=? AND support_actor.role='teacher' AND support_actor.role_type IN ('deputy_headteacher','admin_teacher') AND support_actor.is_active=1)`,
+    `EXISTS (SELECT 1 FROM teacher_class_subject_assignments support_subject_assignment WHERE support_subject_assignment.school_id=${alias}.school_id AND support_subject_assignment.teacher_id=? AND support_subject_assignment.class_id=${alias}.class_id AND support_subject_assignment.subject_id=${alias}.subject_id AND support_subject_assignment.role='subject_teacher' AND ${activeSubject})`,
+    `EXISTS (SELECT 1 FROM teacher_class_subject_assignments support_class_assignment WHERE support_class_assignment.school_id=${alias}.school_id AND support_class_assignment.teacher_id=? AND support_class_assignment.class_id=${alias}.class_id AND support_class_assignment.role='class_teacher' AND ${activeClass})`,
+    `EXISTS (SELECT 1 FROM classes support_class WHERE support_class.school_id=${alias}.school_id AND support_class.id=${alias}.class_id AND support_class.teacher_user_id=?)`,
+  )
+  params.push(userId, userId, userId, userId)
+  return { sql: ` AND (${clauses.join(" OR ")})`, params }
+}
+
+export function learnerSupportActionAllowed(access = {}, requestedAction = SUPPORT_ACTIONS.view, caseRecord = {}) {
+  if (!access.relationships?.length) return false
+  const relationship = new Set(access.relationships)
+  if (access.isHeadteacher) return LEARNER_SUPPORT_ACTION_MATRIX.headteacher.includes(requestedAction)
+  if (access.isCoordinator) return LEARNER_SUPPORT_ACTION_MATRIX.coordinator.includes(requestedAction)
+  if (requestedAction === SUPPORT_ACTIONS.view) return true
+  if ([SUPPORT_ACTIONS.assign, SUPPORT_ACTIONS.escalate, SUPPORT_ACTIONS.resolve, SUPPORT_ACTIONS.carryForward, SUPPORT_ACTIONS.guardianSummary].includes(requestedAction)) return false
+  if (requestedAction === SUPPORT_ACTIONS.reviewOutcome) return relationship.has("owner") || relationship.has("support_teacher")
+  if (requestedAction === SUPPORT_ACTIONS.acknowledge) return relationship.has("owner") || relationship.has("support_teacher") || relationship.has("action_assignee")
+  if (requestedAction === SUPPORT_ACTIONS.completeAssignment) return Boolean(access.hasOpenAssignment)
+  if (requestedAction === SUPPORT_ACTIONS.acceptOwnership) return ["detected", "teacher_follow_up", "intervention_active"].includes(String(caseRecord.status)) && ["subject_teacher", "class_teacher", "support_teacher"].some((item) => relationship.has(item))
+  return ["owner", "support_teacher", "subject_teacher", "class_teacher", "action_assignee"].some((item) => relationship.has(item))
+}
+
+export async function canAccessLearnerSupportCase({ userId, schoolId, caseId, requestedAction = SUPPORT_ACTIONS.view, actorRole = null, db = pool, lock = false }) {
+  const [[record]] = await db.query(`SELECT c.* FROM learner_support_cases c WHERE c.school_id=? AND (c.public_ref=? OR c.id=?) LIMIT 1${lock ? " FOR UPDATE" : ""}`, [schoolId, String(caseId), number(caseId)])
+  if (!record) return { allowed: false, reason: "not_found", relationships: [], case: null }
+  const role = String(actorRole || "").toLowerCase()
+  if (role === "super_admin") return { allowed: true, relationships: ["headteacher"], isHeadteacher: true, isCoordinator: true, case: record }
+  const [[actor]] = await db.query("SELECT id,role,role_type,is_active,employment_status FROM users WHERE school_id=? AND id=? LIMIT 1", [schoolId, number(userId)])
+  if (!actor?.is_active || actor.employment_status === "suspended" || actor.employment_status === "left") return { allowed: false, reason: "inactive_user", relationships: [], case: record }
+  const relationships = []
+  const isHeadteacher = actor.role === "headteacher" || actor.role_type === "headteacher"
+  const isCoordinator = isHeadteacher || (actor.role === "teacher" && ["deputy_headteacher", "admin_teacher"].includes(actor.role_type))
+  if (isHeadteacher) relationships.push("headteacher")
+  else if (isCoordinator) relationships.push("coordinator")
+  if (number(record.owner_user_id) === number(userId)) relationships.push("owner")
+  const [cycleOwnerRows, explicitRows, subjectRows, classRows, primaryClassRows] = await Promise.all([
+    db.query("SELECT 1 FROM intervention_cycles WHERE school_id=? AND case_id=? AND owner_user_id=? LIMIT 1", [schoolId, record.id, userId]).then(([rows]) => rows),
+    optionalRows(db, "SELECT assignment_type,assignment_status FROM learner_support_case_assignments WHERE school_id=? AND case_id=? AND assigned_user_id=? AND assignment_status<>'removed'", [schoolId, record.id, userId]),
+    db.query("SELECT 1 FROM teacher_class_subject_assignments WHERE school_id=? AND teacher_id=? AND class_id=? AND subject_id=? AND role='subject_teacher' AND is_active=1 AND (academic_year_id IS NULL OR ? IS NULL OR academic_year_id=?) AND (term_id IS NULL OR ? IS NULL OR term_id=?) LIMIT 1", [schoolId, userId, record.class_id, record.subject_id, record.academic_year_id, record.academic_year_id, record.current_term_id, record.current_term_id]).then(([rows]) => rows),
+    db.query("SELECT 1 FROM teacher_class_subject_assignments WHERE school_id=? AND teacher_id=? AND class_id=? AND role='class_teacher' AND is_active=1 AND (academic_year_id IS NULL OR ? IS NULL OR academic_year_id=?) AND (term_id IS NULL OR ? IS NULL OR term_id=?) LIMIT 1", [schoolId, userId, record.class_id, record.academic_year_id, record.academic_year_id, record.current_term_id, record.current_term_id]).then(([rows]) => rows),
+    db.query("SELECT 1 FROM classes WHERE school_id=? AND id=? AND teacher_user_id=? LIMIT 1", [schoolId, record.class_id, userId]).then(([rows]) => rows),
+  ])
+  if (cycleOwnerRows.length && !relationships.includes("owner")) relationships.push("owner")
+  for (const assignment of explicitRows) relationships.push(assignment.assignment_type === "support_teacher" ? "support_teacher" : assignment.assignment_type === "action" ? "action_assignee" : "owner")
+  if (subjectRows.length) relationships.push("subject_teacher")
+  if (classRows.length || primaryClassRows.length) relationships.push("class_teacher")
+  const access = { relationships: [...new Set(relationships)], hasOpenAssignment: explicitRows.some((assignment) => ["assigned", "acknowledged", "reassignment_requested"].includes(assignment.assignment_status)), isHeadteacher, isCoordinator, actorRole: actor.role, roleType: actor.role_type }
+  return { ...access, allowed: learnerSupportActionAllowed(access, requestedAction, record), case: record }
+}
+
+async function lockedCase(db, schoolId, caseId, actor, requestedAction) {
+  const access = await canAccessLearnerSupportCase({ userId: actor?.id, schoolId, caseId, requestedAction, actorRole: actor?.role, db, lock: true })
+  if (!access.case) throw new HttpError(404, "Learner support case was not found.")
+  if (!access.allowed) throw new HttpError(403, "You are not authorised to perform this learner-support action.")
+  return { record: access.case, access }
 }
 
 function assertVersion(record, body = {}) {
@@ -161,6 +262,26 @@ function assertVersion(record, body = {}) {
 async function event(db, schoolId, caseRecord, actor, type, summary, options = {}) {
   const key = options.idempotencyKey || null
   await db.query(`INSERT INTO learner_support_case_events (public_ref,school_id,case_id,term_id,event_type,summary,evidence_json,status,responsible_user_id,linked_entity_type,linked_entity_ref,idempotency_key,created_by,updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE id=id`, [randomUUID(), schoolId, caseRecord.id, options.termId || caseRecord.current_term_id || null, type, summary, JSON.stringify(options.evidence || {}), options.status || caseRecord.status, actor?.id || null, options.linkedType || null, options.linkedRef || null, key, actor?.id || null, actor?.id || null])
+}
+
+export async function recordSupportCaseEvent(db, schoolId, caseRecord, actor, type, summary, options = {}) {
+  return event(db, schoolId, caseRecord, actor, type, summary, options)
+}
+
+export async function getInterventionDeliveryMetrics(db, schoolId, cycleId) {
+  const [[delivery], [attendanceRows]] = await Promise.all([
+    db.query("SELECT COUNT(*) recorded,SUM(status='completed') completed,SUM(status='partially_completed') partially_completed FROM intervention_sessions WHERE school_id=? AND cycle_id=?", [schoolId, cycleId]).then(([rows]) => rows),
+    db.query("SELECT COUNT(*) eligible,SUM(attendance_status IN ('present','late')) attended FROM intervention_session_attendance attendance JOIN intervention_sessions session ON session.id=attendance.session_id AND session.school_id=attendance.school_id WHERE attendance.school_id=? AND session.cycle_id=? AND session.status IN ('completed','partially_completed')", [schoolId, cycleId]),
+  ])
+  const attendance = attendanceRows[0] || {}
+  return {
+    recordedSessions: number(delivery?.recorded),
+    completedSessions: number(delivery?.completed),
+    partiallyCompletedSessions: number(delivery?.partially_completed),
+    deliveredSessions: number(delivery?.completed) + number(delivery?.partially_completed) * 0.5,
+    attendanceEligible: number(attendance.eligible),
+    attendedSessions: number(attendance.attended),
+  }
 }
 
 async function duplicateMutation(db, schoolId, caseRecord, key) {
@@ -184,43 +305,111 @@ export async function getEscalationPolicy(schoolId) {
 }
 
 export async function listSupportCases(schoolId, actor, filters = {}) {
+  const capabilities = await supportSchemaCapabilities()
   const page = Math.max(1, number(filters.page, 1)); const limit = Math.min(100, Math.max(1, number(filters.limit, 25))); const offset = (page - 1) * limit
   const where = ["c.school_id=?"]; const params = [schoolId]
   if (filters.status) { where.push("c.status=?"); params.push(String(filters.status)) }
   if (filters.owner_user_id) { where.push("c.owner_user_id=?"); params.push(number(filters.owner_user_id)) }
   if (filters.learner_id) { where.push("(c.learner_id=? OR EXISTS (SELECT 1 FROM learner_support_case_members cm WHERE cm.school_id=c.school_id AND cm.case_id=c.id AND cm.learner_id=? AND cm.membership_status='active'))"); params.push(number(filters.learner_id), number(filters.learner_id)) }
   if (filters.term_id) { where.push("c.current_term_id=?"); params.push(number(filters.term_id)) }
+  const termScope = String(filters.term_scope || "current")
+  if (!filters.term_id && termScope === "current") where.push("(c.current_term_id IS NULL OR EXISTS (SELECT 1 FROM terms support_term WHERE support_term.school_id=c.school_id AND support_term.id=c.current_term_id AND support_term.status IN ('open','marking')))")
+  if (!filters.term_id && termScope === "previous") where.push("EXISTS (SELECT 1 FROM terms support_term WHERE support_term.school_id=c.school_id AND support_term.id=c.current_term_id AND support_term.status IN ('closed','archived'))")
   if (filters.overdue === "true" || filters.overdue === true) where.push("c.next_review_at<CURRENT_TIMESTAMP")
-  const scope = teacherScopeSql(actor); where.push(`1=1${scope.sql}`); params.push(...scope.params)
+  if (filters.scope_type) { where.push("c.scope_type=?"); params.push(String(filters.scope_type)) }
+  if (filters.priority === "high") where.push("c.severity IN ('high','urgent')")
+  if (filters.queue === "assigned") {
+    where.push(capabilities.assignments ? "(c.owner_user_id=? OR EXISTS (SELECT 1 FROM learner_support_case_assignments queue_assignment WHERE queue_assignment.school_id=c.school_id AND queue_assignment.case_id=c.id AND queue_assignment.assigned_user_id=? AND queue_assignment.assignment_status<>'removed'))" : "c.owner_user_id=?")
+    params.push(actor.id)
+    if (capabilities.assignments) params.push(actor.id)
+  }
+  if (filters.queue === "classes") { where.push("EXISTS (SELECT 1 FROM teacher_class_subject_assignments queue_class WHERE queue_class.school_id=c.school_id AND queue_class.teacher_id=? AND queue_class.class_id=c.class_id AND queue_class.role='class_teacher' AND queue_class.is_active=1)"); params.push(actor.id) }
+  if (filters.queue === "subjects") { where.push("EXISTS (SELECT 1 FROM teacher_class_subject_assignments queue_subject WHERE queue_subject.school_id=c.school_id AND queue_subject.teacher_id=? AND queue_subject.class_id=c.class_id AND queue_subject.subject_id=c.subject_id AND queue_subject.role='subject_teacher' AND queue_subject.is_active=1)"); params.push(actor.id) }
+  if (filters.queue === "awaiting_action") {
+    where.push(capabilities.assignments ? "EXISTS (SELECT 1 FROM learner_support_case_assignments awaiting_assignment WHERE awaiting_assignment.school_id=c.school_id AND awaiting_assignment.case_id=c.id AND awaiting_assignment.assigned_user_id=? AND awaiting_assignment.assignment_status='assigned')" : "1=0")
+    if (capabilities.assignments) params.push(actor.id)
+  }
+  if (filters.queue === "needs_attention") where.push("c.status NOT IN ('resolved','closed_inconclusive','transferred') AND (c.next_review_at IS NULL OR c.next_review_at<=DATE_ADD(CURRENT_TIMESTAMP,INTERVAL 2 DAY))")
+  if (filters.queue === "recently_improved") where.push("c.successful_cycle_count>0 AND c.updated_at>=DATE_SUB(CURRENT_TIMESTAMP,INTERVAL 30 DAY)")
+  if (filters.queue === "reassessment") where.push("c.status='reassessment_pending'")
+  if (filters.queue === "strategy_review") where.push("c.status='strategy_review'")
+  if (filters.queue === "resolved") where.push("c.status IN ('resolved','closed_inconclusive')")
+  const search = String(filters.search || "").trim()
+  if (search) {
+    where.push("(c.public_ref LIKE ? OR s.first_name LIKE ? OR s.last_name LIKE ? OR s.admission_no LIKE ? OR cl.name LIKE ? OR sub.name LIKE ? OR st.topic_name LIKE ? OR EXISTS (SELECT 1 FROM learner_support_case_members search_member JOIN students search_student ON search_student.school_id=search_member.school_id AND search_student.id=search_member.learner_id WHERE search_member.school_id=c.school_id AND search_member.case_id=c.id AND CONCAT(search_student.first_name,' ',search_student.last_name,' ',search_student.admission_no) LIKE ?))")
+    const pattern = `%${search}%`; params.push(pattern, pattern, pattern, pattern, pattern, pattern, pattern, pattern)
+  }
+  const scope = learnerSupportScopeSql(actor, "c", capabilities); where.push(`1=1${scope.sql}`); params.push(...scope.params)
   const base = `FROM learner_support_cases c LEFT JOIN students s ON s.school_id=c.school_id AND s.id=c.learner_id LEFT JOIN subjects sub ON sub.school_id=c.school_id AND sub.id=c.subject_id LEFT JOIN syllabus_topics st ON st.school_id=c.school_id AND st.id=c.primary_topic_id LEFT JOIN classes cl ON cl.school_id=c.school_id AND cl.id=c.class_id WHERE ${where.join(" AND ")}`
   const [[count]] = await pool.query(`SELECT COUNT(*) total ${base}`, params)
-  const [rows] = await pool.query(`SELECT c.public_ref,c.scope_type,c.case_type,c.severity,c.status,c.escalation_level,c.current_summary,c.evidence_confidence,c.comparable_failure_count,c.intervention_cycle_count,c.next_review_at,c.version_number,c.updated_at,CONCAT(s.first_name,' ',s.last_name) learner_name,sub.name subject_name,st.topic_name,cl.name class_name ${base} ORDER BY FIELD(c.severity,'urgent','high','medium','low'),c.next_review_at IS NULL,c.next_review_at,c.updated_at DESC LIMIT ? OFFSET ?`, [...params, limit, offset])
-  return { cases: rows, pagination: { page, limit, total: number(count.total), pages: Math.ceil(number(count.total) / limit) } }
+  const [rows] = await pool.query(`SELECT c.public_ref,c.scope_type,c.case_type,c.severity,c.status,c.escalation_level,c.current_summary,c.evidence_confidence,c.comparable_failure_count,c.intervention_cycle_count,c.next_review_at,c.version_number,c.updated_at,CONCAT(s.first_name,' ',s.last_name) learner_name,s.admission_no,sub.name subject_name,st.topic_name,cl.name class_name,
+    (SELECT COUNT(*) FROM learner_support_case_members member_count WHERE member_count.school_id=c.school_id AND member_count.case_id=c.id AND member_count.membership_status='active') member_count,
+    (SELECT COUNT(*) FROM intervention_sessions session_count JOIN intervention_cycles session_cycle ON session_cycle.school_id=session_count.school_id AND session_cycle.id=session_count.cycle_id WHERE session_count.school_id=c.school_id AND session_cycle.case_id=c.id AND session_count.status='completed') completed_sessions,
+    (SELECT SUM(cycle_count.planned_session_count) FROM intervention_cycles cycle_count WHERE cycle_count.school_id=c.school_id AND cycle_count.case_id=c.id) planned_sessions,
+    (SELECT MIN(due_session.scheduled_at) FROM intervention_sessions due_session JOIN intervention_cycles due_cycle ON due_cycle.school_id=due_session.school_id AND due_cycle.id=due_session.cycle_id WHERE due_session.school_id=c.school_id AND due_cycle.case_id=c.id AND due_session.status='planned') next_session_at,
+    ${capabilities.assignments ? "EXISTS (SELECT 1 FROM learner_support_case_assignments own_assignment WHERE own_assignment.school_id=c.school_id AND own_assignment.case_id=c.id AND own_assignment.assigned_user_id=? AND own_assignment.assignment_status='assigned')" : "0"} awaiting_acknowledgement
+    ${base} ORDER BY FIELD(c.severity,'urgent','high','medium','low'),c.next_review_at IS NULL,c.next_review_at,c.updated_at DESC LIMIT ? OFFSET ?`, [...(capabilities.assignments ? [actor.id] : []), ...params, limit, offset])
+  return { cases: rows, pagination: { page, limit, total: number(count.total), pages: Math.ceil(number(count.total) / limit) }, schema_status: capabilities.assignments && capabilities.notes && capabilities.sessionDetails && capabilities.reassessmentDueAt ? "current" : "compatibility_read_only" }
 }
 
 export async function getSupportCase(schoolId, caseId, actor) {
-  const scope = teacherScopeSql(actor)
-  const [[record]] = await pool.query(`SELECT c.*,CONCAT(s.first_name,' ',s.last_name) learner_name,sub.name subject_name,st.topic_name,cl.name class_name,CONCAT(u.first_name,' ',u.last_name) owner_name FROM learner_support_cases c LEFT JOIN students s ON s.school_id=c.school_id AND s.id=c.learner_id LEFT JOIN subjects sub ON sub.school_id=c.school_id AND sub.id=c.subject_id LEFT JOIN syllabus_topics st ON st.school_id=c.school_id AND st.id=c.primary_topic_id LEFT JOIN classes cl ON cl.school_id=c.school_id AND cl.id=c.class_id LEFT JOIN users u ON u.school_id=c.school_id AND u.id=c.owner_user_id WHERE c.school_id=? AND (c.public_ref=? OR c.id=?)${scope.sql} LIMIT 1`, [schoolId, String(caseId), number(caseId), ...scope.params])
-  if (!record) throw new HttpError(404, "Learner support case was not found or is outside your assignment.")
-  const [members, topics, cycles] = await Promise.all([
-    pool.query("SELECT cm.public_ref,cm.membership_status,cm.baseline_summary_json,cm.outcome_summary_json,s.public_ref learner_ref,CONCAT(s.first_name,' ',s.last_name) learner_name FROM learner_support_case_members cm JOIN students s ON s.school_id=cm.school_id AND s.id=cm.learner_id WHERE cm.school_id=? AND cm.case_id=? ORDER BY s.last_name,s.first_name", [schoolId, record.id]).then(([rows]) => rows),
+  const access = await canAccessLearnerSupportCase({ userId: actor?.id, schoolId, caseId, requestedAction: SUPPORT_ACTIONS.view, actorRole: actor?.role })
+  if (!access.allowed || !access.case) throw new HttpError(404, "Learner support case was not found or is outside your assignment.")
+  const capabilities = await supportSchemaCapabilities()
+  const [[record]] = await pool.query(`SELECT c.*,CONCAT(s.first_name,' ',s.last_name) learner_name,s.public_ref learner_ref,s.admission_no,sub.public_ref subject_ref,sub.name subject_name,st.public_ref topic_ref,st.topic_name,lo.public_ref objective_ref,lo.objective_text,cl.public_ref class_ref,cl.name class_name,CONCAT(u.first_name,' ',u.last_name) owner_name FROM learner_support_cases c LEFT JOIN students s ON s.school_id=c.school_id AND s.id=c.learner_id LEFT JOIN subjects sub ON sub.school_id=c.school_id AND sub.id=c.subject_id LEFT JOIN syllabus_topics st ON st.school_id=c.school_id AND st.id=c.primary_topic_id LEFT JOIN learning_objectives lo ON lo.school_id=c.school_id AND lo.id=c.primary_objective_id LEFT JOIN classes cl ON cl.school_id=c.school_id AND cl.id=c.class_id LEFT JOIN users u ON u.school_id=c.school_id AND u.id=c.owner_user_id WHERE c.school_id=? AND c.id=? LIMIT 1`, [schoolId, access.case.id])
+  const noteVisibility = access.isHeadteacher ? ["teacher_academic", "support_team", "coordinator_only", "headteacher_only", "guardian_meeting", "administrative_restricted"] : access.isCoordinator ? ["teacher_academic", "support_team", "coordinator_only", "guardian_meeting"] : access.relationships.includes("support_teacher") || access.relationships.includes("owner") ? ["teacher_academic", "support_team"] : ["teacher_academic"]
+  const sessionSql = capabilities.sessionDetails
+    ? `SELECT sess.public_ref,sess.session_number,sess.scheduled_at,sess.completed_at,sess.duration_minutes,sess.delivery_method,sess.status,sess.resources_json,sess.activities_json,sess.teacher_notes,sess.teacher_observation,sess.practice_assigned,sess.next_action,sess.review_status,cycle.public_ref cycle_ref,topic.topic_name target_topic,objective.objective_text target_objective,NULL attendance
+      FROM intervention_sessions sess JOIN intervention_cycles cycle ON cycle.school_id=sess.school_id AND cycle.id=sess.cycle_id LEFT JOIN syllabus_topics topic ON topic.school_id=sess.school_id AND topic.id=sess.target_topic_id LEFT JOIN learning_objectives objective ON objective.school_id=sess.school_id AND objective.id=sess.target_objective_id WHERE sess.school_id=? AND cycle.case_id=? ORDER BY sess.scheduled_at DESC,sess.session_number DESC`
+    : `SELECT sess.public_ref,sess.session_number,sess.scheduled_at,sess.completed_at,NULL duration_minutes,NULL delivery_method,sess.status,sess.resources_json,sess.activities_json,sess.teacher_notes,NULL teacher_observation,sess.practice_assigned,NULL next_action,sess.review_status,cycle.public_ref cycle_ref,NULL target_topic,NULL target_objective,NULL attendance
+      FROM intervention_sessions sess JOIN intervention_cycles cycle ON cycle.school_id=sess.school_id AND cycle.id=sess.cycle_id WHERE sess.school_id=? AND cycle.case_id=? ORDER BY sess.scheduled_at DESC,sess.session_number DESC`
+  const reassessmentSql = `SELECT reassessment.public_ref,reassessment.outcome,reassessment.success_criterion_json,reassessment.comparability_json,reassessment.outcome_summary_json,${capabilities.reassessmentDueAt ? "reassessment.due_at" : "NULL"} due_at,reassessment.evaluated_at,generated.public_ref assessment_ref,generated.title assessment_title,generated.status assessment_status,generated.assessment_id FROM academic_intervention_reassessments reassessment LEFT JOIN generated_assessments generated ON generated.school_id=reassessment.school_id AND generated.id=reassessment.generated_assessment_id WHERE reassessment.school_id=? AND reassessment.support_case_id=? ORDER BY reassessment.created_at DESC`
+  const [members, topics, cycles, sessions, notes, reassessments, assignments] = await Promise.all([
+    pool.query("SELECT cm.public_ref,cm.membership_status,cm.baseline_summary_json,cm.outcome_summary_json,s.public_ref learner_ref,s.admission_no,CONCAT(s.first_name,' ',s.last_name) learner_name FROM learner_support_case_members cm JOIN students s ON s.school_id=cm.school_id AND s.id=cm.learner_id WHERE cm.school_id=? AND cm.case_id=? ORDER BY s.last_name,s.first_name", [schoolId, record.id]).then(([rows]) => rows),
     pool.query("SELECT ct.public_ref,ct.topic_role,ct.current_mastery,ct.previous_mastery,ct.status,sub.name subject_name,st.topic_name,lo.objective_text FROM learner_support_case_topics ct JOIN subjects sub ON sub.school_id=ct.school_id AND sub.id=ct.subject_id JOIN syllabus_topics st ON st.school_id=ct.school_id AND st.id=ct.topic_id LEFT JOIN learning_objectives lo ON lo.school_id=ct.school_id AND lo.id=ct.objective_id WHERE ct.school_id=? AND ct.case_id=?", [schoolId, record.id]).then(([rows]) => rows),
-    pool.query("SELECT ic.public_ref,ic.cycle_number,ist.strategy_code,ist.label strategy_label,ic.planned_session_count,ic.status,ic.outcome,ic.start_date,ic.review_date,ic.diagnostic_json,ic.version_number FROM intervention_cycles ic JOIN intervention_strategy_types ist ON ist.school_id=ic.school_id AND ist.id=ic.strategy_type_id WHERE ic.school_id=? AND ic.case_id=? ORDER BY ic.cycle_number DESC", [schoolId, record.id]).then(([rows]) => rows),
+    pool.query("SELECT ic.public_ref,ic.cycle_number,ist.strategy_code,ist.label strategy_label,ic.planned_session_count,ic.status,ic.outcome,ic.start_date,ic.review_date,ic.success_criterion_json,ic.diagnostic_json,ic.version_number FROM intervention_cycles ic JOIN intervention_strategy_types ist ON ist.school_id=ic.school_id AND ist.id=ic.strategy_type_id WHERE ic.school_id=? AND ic.case_id=? ORDER BY ic.cycle_number DESC", [schoolId, record.id]).then(([rows]) => rows),
+    pool.query(sessionSql, [schoolId, record.id]).then(([rows]) => rows),
+    capabilities.notes ? optionalRows(pool, `SELECT note.public_ref,note.visibility,note.note_text,note.created_at,CONCAT(author.first_name,' ',author.last_name) author_name FROM learner_support_case_notes note JOIN users author ON author.school_id=note.school_id AND author.id=note.author_user_id WHERE note.school_id=? AND note.case_id=? AND note.status='active' AND note.visibility IN (${noteVisibility.map(() => "?").join(",")}) ORDER BY note.created_at DESC`, [schoolId, record.id, ...noteVisibility]) : Promise.resolve([]),
+    pool.query(reassessmentSql, [schoolId, record.id]).then(([rows]) => rows),
+    capabilities.assignments ? optionalRows(pool, "SELECT assignment.public_ref,assignment.assignment_type,assignment.assignment_status,assignment.action_label,assignment.due_at,assignment.acknowledged_at,assignment.completed_at,user.public_ref user_ref,CONCAT(user.first_name,' ',user.last_name) user_name FROM learner_support_case_assignments assignment JOIN users user ON user.school_id=assignment.school_id AND user.id=assignment.assigned_user_id WHERE assignment.school_id=? AND assignment.case_id=? AND assignment.assignment_status<>'removed' ORDER BY assignment.created_at", [schoolId, record.id]) : Promise.resolve([]),
   ])
+  const attendanceRows = await optionalRows(pool, `SELECT session.public_ref session_ref,student.public_ref learner_ref,CONCAT(student.first_name,' ',student.last_name) learner_name,attendance.attendance_status status,attendance.note
+    FROM intervention_session_attendance attendance
+    JOIN intervention_sessions session ON session.school_id=attendance.school_id AND session.id=attendance.session_id
+    JOIN intervention_cycles cycle ON cycle.school_id=session.school_id AND cycle.id=session.cycle_id
+    JOIN students student ON student.school_id=attendance.school_id AND student.id=attendance.learner_id
+    WHERE attendance.school_id=? AND cycle.case_id=? ORDER BY session.session_number,student.last_name,student.first_name`, [schoolId, record.id])
+  const attendanceBySession = new Map()
+  for (const attendance of attendanceRows) {
+    const current = attendanceBySession.get(attendance.session_ref) || []
+    current.push({ learner_ref: attendance.learner_ref, learner_name: attendance.learner_name, status: attendance.status, note: attendance.note })
+    attendanceBySession.set(attendance.session_ref, current)
+  }
+  for (const session of sessions) session.attendance = attendanceBySession.get(session.public_ref) || []
+  const assignmentActions = new Set([SUPPORT_ACTIONS.assign, SUPPORT_ACTIONS.acknowledge, SUPPORT_ACTIONS.completeAssignment, SUPPORT_ACTIONS.acceptOwnership, SUPPORT_ACTIONS.requestReassignment])
+  const actions = Object.values(SUPPORT_ACTIONS).filter((action) => {
+    if (!learnerSupportActionAllowed(access, action, access.case)) return false
+    if (!capabilities.assignments && assignmentActions.has(action)) return false
+    if (!capabilities.notes && action === SUPPORT_ACTIONS.addNote) return false
+    if (!capabilities.sessionDetails && action === SUPPORT_ACTIONS.recordSession) return false
+    if (!capabilities.reassessmentDueAt && action === SUPPORT_ACTIONS.scheduleReassessment) return false
+    return true
+  })
   delete record.id
-  return { case: record, members, topics, intervention_cycles: cycles }
+  return { case: record, members, topics, intervention_cycles: cycles, sessions, notes, reassessments, assignments, schema_status: capabilities.assignments && capabilities.notes && capabilities.sessionDetails && capabilities.reassessmentDueAt ? "current" : "compatibility_read_only", access: { relationships: access.relationships, is_coordinator: access.isCoordinator, is_headteacher: access.isHeadteacher, actions } }
 }
 
 export async function getLearnerSupport(schoolId, learnerId, actor) {
   const [[learner]] = await pool.query("SELECT id,public_ref,CONCAT(first_name,' ',last_name) learner_name FROM students WHERE school_id=? AND (public_ref=? OR id=?) LIMIT 1", [schoolId, String(learnerId), number(learnerId)])
   if (!learner) throw new HttpError(404, "Learner was not found.")
-  const result = await listSupportCases(schoolId, actor, { learner_id: learner.id, limit: 100 })
+  const result = await listSupportCases(schoolId, actor, { learner_id: learner.id, term_scope: "all", limit: 100 })
   return { learner: { public_ref: learner.public_ref, learner_name: learner.learner_name }, ...result }
 }
 
 async function caseChildRows(schoolId, caseId, actor, selectSql, params = []) {
-  const record = await getSupportCase(schoolId, caseId, actor)
-  const [rows] = await pool.query(selectSql, [schoolId, record.case.public_ref, ...params])
+  const access = await canAccessLearnerSupportCase({ userId: actor?.id, schoolId, caseId, requestedAction: SUPPORT_ACTIONS.view, actorRole: actor?.role })
+  if (!access.allowed || !access.case) throw new HttpError(404, "Learner support case was not found or is outside your assignment.")
+  const [rows] = await pool.query(selectSql, [schoolId, access.case.public_ref, ...params])
   return rows
 }
 
@@ -261,17 +450,20 @@ export async function getSupportEvidence(schoolId, caseId, actor) {
   )
   SELECT ce.public_ref,ce.evidence_role,ce.evidence_precision,ce.score_percentage,ce.marks_awarded,ce.marks_available,
     ce.confidence_score,ce.comparable,ce.comparability_json,ce.evidence_status,ce.observed_at,a.name assessment_name,
-    st.topic_name,lo.objective_text,NULL event_type,NULL summary,'assessment' evidence_kind
+    st.topic_name,lo.objective_text,question.display_number question_number,question.question_text,question.difficulty,
+    CASE WHEN ce.evidence_status='valid' THEN 'official_published' WHEN ce.evidence_status='incomplete' THEN 'draft_or_incomplete' ELSE ce.evidence_status END evidence_state,
+    NULL event_type,NULL summary,'assessment' evidence_kind
   FROM learner_support_case_evidence ce
   JOIN target_case tc ON tc.school_id=ce.school_id AND tc.id=ce.case_id
   LEFT JOIN assessments a ON a.school_id=ce.school_id AND a.id=ce.assessment_id
   LEFT JOIN syllabus_topics st ON st.school_id=ce.school_id AND st.id=ce.topic_id
   LEFT JOIN learning_objectives lo ON lo.school_id=ce.school_id AND lo.id=ce.objective_id
+  LEFT JOIN assessment_questions question ON question.school_id=ce.school_id AND question.id=ce.question_id
   UNION ALL
   SELECT e.public_ref,'detection' evidence_role,'limited' evidence_precision,NULL score_percentage,NULL marks_awarded,NULL marks_available,
     tc.evidence_confidence confidence_score,0 comparable,e.evidence_json comparability_json,'valid' evidence_status,e.occurred_at observed_at,
     CASE WHEN e.event_type='multi_subject_review_detected' THEN ca.assessment_names ELSE COALESCE(a.name,ca.assessment_names) END assessment_name,
-    NULL topic_name,NULL objective_text,e.event_type,e.summary,'case_event' evidence_kind
+    NULL topic_name,NULL objective_text,NULL question_number,NULL question_text,NULL difficulty,'historical_detection' evidence_state,e.event_type,e.summary,'case_event' evidence_kind
   FROM learner_support_case_events e
   JOIN target_case tc ON tc.school_id=e.school_id AND tc.id=e.case_id
   LEFT JOIN assessments a ON a.school_id=e.school_id AND e.linked_entity_type='assessment' AND a.id=CAST(e.linked_entity_ref AS UNSIGNED)
@@ -286,16 +478,169 @@ export async function getSupportInterventions(schoolId, caseId, actor) {
   return { intervention_cycles: rows }
 }
 
+export async function getTeacherSupportSummary(schoolId, actor) {
+  const capabilities = await supportSchemaCapabilities()
+  const scope = learnerSupportScopeSql(actor, "c", capabilities)
+  const activeTerm = "(c.current_term_id IS NULL OR EXISTS (SELECT 1 FROM terms summary_term WHERE summary_term.school_id=c.school_id AND summary_term.id=c.current_term_id AND summary_term.status IN ('open','marking')))"
+  const accessibleWhere = `c.school_id=? AND ${activeTerm}${scope.sql}`
+  const params = [schoolId, ...scope.params]
+  const [counts, todayWork, improved] = await Promise.all([
+    pool.query(`SELECT
+      SUM(c.status NOT IN ('resolved','closed_inconclusive','transferred') AND (c.next_review_at IS NULL OR c.next_review_at<=DATE_ADD(CURRENT_TIMESTAMP,INTERVAL 2 DAY))) needs_attention,
+      SUM(EXISTS (SELECT 1 FROM intervention_sessions sess JOIN intervention_cycles cycle ON cycle.school_id=sess.school_id AND cycle.id=sess.cycle_id WHERE sess.school_id=c.school_id AND cycle.case_id=c.id AND sess.status='planned' AND sess.scheduled_at BETWEEN CURRENT_DATE AND DATE_ADD(CURRENT_DATE,INTERVAL 7 DAY))) sessions_due_week,
+      SUM(c.status='reassessment_pending' OR EXISTS (SELECT 1 FROM academic_intervention_reassessments reassessment WHERE reassessment.school_id=c.school_id AND reassessment.support_case_id=c.id AND reassessment.outcome='pending'${capabilities.reassessmentDueAt ? " AND reassessment.due_at<=DATE_ADD(CURRENT_DATE,INTERVAL 7 DAY)" : ""})) reassessments_due,
+      ${capabilities.assignments ? "SUM(EXISTS (SELECT 1 FROM learner_support_case_assignments assignment WHERE assignment.school_id=c.school_id AND assignment.case_id=c.id AND assignment.assigned_user_id=? AND assignment.assignment_status='assigned'))" : "0"} unacknowledged_assignments,
+      SUM(c.successful_cycle_count>0 AND c.updated_at>=DATE_SUB(CURRENT_TIMESTAMP,INTERVAL 30 DAY)) recently_improved,
+      SUM(c.status IN ('resolved','closed_inconclusive')) completed_support,
+      SUM(c.status NOT IN ('resolved','closed_inconclusive','transferred')) active_cases
+      FROM learner_support_cases c WHERE ${accessibleWhere}`, [...(capabilities.assignments ? [actor.id] : []), ...params]).then(([rows]) => rows[0] || {}),
+    pool.query(`SELECT c.public_ref,c.scope_type,c.status,c.severity,c.next_review_at,CONCAT(student.first_name,' ',student.last_name) learner_name,class.name class_name,subject.name subject_name,topic.topic_name,
+      session.public_ref session_ref,session.scheduled_at,session.status session_status,
+      CASE WHEN session.public_ref IS NOT NULL THEN 'record_session' WHEN c.status='reassessment_pending' THEN 'open_reassessment' ELSE 'review_case' END primary_action
+      FROM learner_support_cases c
+      LEFT JOIN students student ON student.school_id=c.school_id AND student.id=c.learner_id
+      LEFT JOIN classes class ON class.school_id=c.school_id AND class.id=c.class_id
+      LEFT JOIN subjects subject ON subject.school_id=c.school_id AND subject.id=c.subject_id
+      LEFT JOIN syllabus_topics topic ON topic.school_id=c.school_id AND topic.id=c.primary_topic_id
+      LEFT JOIN intervention_sessions session ON session.id=(SELECT next_session.id FROM intervention_sessions next_session JOIN intervention_cycles next_cycle ON next_cycle.school_id=next_session.school_id AND next_cycle.id=next_session.cycle_id WHERE next_session.school_id=c.school_id AND next_cycle.case_id=c.id AND next_session.status='planned' ORDER BY next_session.scheduled_at,next_session.id LIMIT 1)
+      WHERE ${accessibleWhere} AND c.status NOT IN ('resolved','closed_inconclusive','transferred') AND (DATE(session.scheduled_at)=CURRENT_DATE OR c.next_review_at<=DATE_ADD(CURRENT_TIMESTAMP,INTERVAL 2 DAY))
+      ORDER BY session.scheduled_at IS NULL,session.scheduled_at,c.next_review_at LIMIT 12`, params).then(([rows]) => rows),
+    pool.query(`SELECT c.public_ref,c.scope_type,c.status,c.current_summary,c.successful_cycle_count,CONCAT(student.first_name,' ',student.last_name) learner_name,class.name class_name,subject.name subject_name,topic.topic_name,c.updated_at
+      FROM learner_support_cases c
+      LEFT JOIN students student ON student.school_id=c.school_id AND student.id=c.learner_id
+      LEFT JOIN classes class ON class.school_id=c.school_id AND class.id=c.class_id
+      LEFT JOIN subjects subject ON subject.school_id=c.school_id AND subject.id=c.subject_id
+      LEFT JOIN syllabus_topics topic ON topic.school_id=c.school_id AND topic.id=c.primary_topic_id
+      WHERE ${accessibleWhere} AND c.successful_cycle_count>0 AND c.updated_at>=DATE_SUB(CURRENT_TIMESTAMP,INTERVAL 30 DAY)
+      ORDER BY c.updated_at DESC LIMIT 8`, params).then(([rows]) => rows),
+  ])
+  return {
+    counts: Object.fromEntries(Object.entries(counts).map(([key, value]) => [key, number(value)])),
+    today_work: todayWork,
+    recently_improved: improved,
+    schema_status: capabilities.assignments && capabilities.notes && capabilities.sessionDetails && capabilities.reassessmentDueAt ? "current" : "compatibility_read_only",
+  }
+}
+
+export async function listLearnerSupportIndicators(schoolId, actor, classId) {
+  const capabilities = await supportSchemaCapabilities()
+  const scope = learnerSupportScopeSql(actor, "c", capabilities)
+  const [rows] = await pool.query(`SELECT DISTINCT c.public_ref case_ref,learner.public_ref learner_ref,c.status,c.severity,c.updated_at,
+    CASE WHEN c.status='reassessment_pending' THEN 'reassessment_due' WHEN c.status='strategy_review' THEN 'review_required' WHEN c.successful_cycle_count>0 THEN 'improving' ELSE 'support_active' END support_state
+    FROM learner_support_cases c
+    JOIN students learner ON learner.school_id=c.school_id AND learner.id=c.learner_id
+    WHERE c.school_id=? AND c.class_id=? AND c.status NOT IN ('resolved','closed_inconclusive','transferred')${scope.sql}
+    UNION ALL
+    SELECT DISTINCT c.public_ref case_ref,learner.public_ref learner_ref,c.status,c.severity,c.updated_at,
+    CASE WHEN c.status='reassessment_pending' THEN 'reassessment_due' WHEN c.status='strategy_review' THEN 'review_required' WHEN c.successful_cycle_count>0 THEN 'improving' ELSE 'support_active' END support_state
+    FROM learner_support_cases c
+    JOIN learner_support_case_members member ON member.school_id=c.school_id AND member.case_id=c.id AND member.membership_status='active'
+    JOIN students learner ON learner.school_id=member.school_id AND learner.id=member.learner_id
+    WHERE c.school_id=? AND c.class_id=? AND c.status NOT IN ('resolved','closed_inconclusive','transferred')${scope.sql}
+    ORDER BY FIELD(severity,'urgent','high','medium','low'),updated_at DESC`, [schoolId, classId, ...scope.params, schoolId, classId, ...scope.params])
+  const byLearner = new Map()
+  for (const row of rows) if (!byLearner.has(row.learner_ref)) byLearner.set(row.learner_ref, row)
+  return [...byLearner.values()]
+}
+
+export async function acknowledgeSupportCase(schoolId, caseId, actor, body = {}) {
+  return inTransaction(async (db) => {
+    const { record, access } = await lockedCase(db, schoolId, caseId, actor, SUPPORT_ACTIONS.acknowledge)
+    await db.query(`INSERT INTO learner_support_case_assignments (public_ref,school_id,case_id,assigned_user_id,assignment_type,assignment_status,action_label,due_at,acknowledged_at,assigned_by) VALUES (UUID(),?,?,?,?,'acknowledged',?,?,CURRENT_TIMESTAMP,?) ON DUPLICATE KEY UPDATE assignment_status='acknowledged',acknowledged_at=CURRENT_TIMESTAMP`, [schoolId, record.id, actor.id, access.relationships.includes("owner") ? "owner" : access.relationships.includes("support_teacher") ? "support_teacher" : "action", body.action_label || "Learner-support follow-up", body.due_at || record.next_review_at, record.created_by || actor.id])
+    await event(db, schoolId, record, actor, "case_assignment_acknowledged", "The assigned teacher acknowledged the learner-support case.", { idempotencyKey: body.idempotency_key || `acknowledge:${record.id}:${actor.id}` })
+    return { case_ref: record.public_ref, acknowledged: true }
+  })
+}
+
+export async function completeSupportAssignment(schoolId, caseId, actor, body = {}) {
+  return inTransaction(async (db) => {
+    const { record } = await lockedCase(db, schoolId, caseId, actor, SUPPORT_ACTIONS.completeAssignment)
+    const duplicate = await duplicateMutation(db, schoolId, record, body.idempotency_key); if (duplicate) return duplicate
+    const [result] = await db.query("UPDATE learner_support_case_assignments SET assignment_status='completed',completed_at=CURRENT_TIMESTAMP WHERE school_id=? AND case_id=? AND assigned_user_id=? AND assignment_status IN ('assigned','acknowledged','reassignment_requested')", [schoolId, record.id, actor.id])
+    if (!result.affectedRows) throw new HttpError(409, "There is no open learner-support assignment to complete.")
+    await event(db, schoolId, record, actor, "case_assignment_completed", "The assigned teacher marked their learner-support action complete.", { idempotencyKey: body.idempotency_key || `assignment-complete:${record.id}:${actor.id}:${record.version_number}` })
+    return { case_ref: record.public_ref, assignment_status: "completed" }
+  })
+}
+
+export async function acceptSupportOwnership(schoolId, caseId, actor, body = {}) {
+  return inTransaction(async (db) => {
+    const { record } = await lockedCase(db, schoolId, caseId, actor, SUPPORT_ACTIONS.acceptOwnership)
+    assertVersion(record, body)
+    await db.query("UPDATE learner_support_cases SET owner_user_id=?,owner_role=?,status=IF(status='detected','teacher_follow_up',status),version_number=version_number+1,updated_by=? WHERE school_id=? AND id=?", [actor.id, actor.role, actor.id, schoolId, record.id])
+    await db.query(`INSERT INTO learner_support_case_assignments (public_ref,school_id,case_id,assigned_user_id,assignment_type,assignment_status,action_label,due_at,acknowledged_at,assigned_by) VALUES (UUID(),?,?,?,'owner','acknowledged','Own and coordinate learner support',?,CURRENT_TIMESTAMP,?) ON DUPLICATE KEY UPDATE assignment_status='acknowledged',acknowledged_at=CURRENT_TIMESTAMP`, [schoolId, record.id, actor.id, record.next_review_at, actor.id])
+    await event(db, schoolId, record, actor, "case_ownership_accepted", "An authorised teacher accepted ownership of the learner-support case.", { idempotencyKey: body.idempotency_key || `accept-owner:${record.id}:${actor.id}:${record.version_number}` })
+    return { case_ref: record.public_ref, owner_user_id: actor.id, version_number: number(record.version_number) + 1 }
+  })
+}
+
+export async function requestSupportReassignment(schoolId, caseId, actor, body = {}) {
+  const result = await inTransaction(async (db) => {
+    const { record } = await lockedCase(db, schoolId, caseId, actor, SUPPORT_ACTIONS.requestReassignment)
+    const explanation = String(body.explanation || body.reason || "").trim()
+    if (!explanation) throw new HttpError(400, "Explain why reassignment is needed.")
+    await db.query("UPDATE learner_support_case_assignments SET assignment_status='reassignment_requested' WHERE school_id=? AND case_id=? AND assigned_user_id=? AND assignment_status<>'removed'", [schoolId, record.id, actor.id])
+    await event(db, schoolId, record, actor, "case_reassignment_requested", `The assigned teacher requested reassignment: ${explanation.slice(0, 360)}`, { idempotencyKey: body.idempotency_key || `reassign-request:${record.id}:${actor.id}:${record.version_number}`, evidence: { requested_owner_user_id: body.requested_owner_user_id || null } })
+    return { record, response: { case_ref: record.public_ref, status: "reassignment_requested" } }
+  })
+  const [reviewers] = await pool.query("SELECT id FROM users WHERE school_id=? AND is_active=1 AND (role='headteacher' OR (role='teacher' AND role_type IN ('deputy_headteacher','admin_teacher'))) ORDER BY id", [schoolId])
+  for (const reviewer of reviewers) await createInAppNotification({ schoolId, recipientUserId: reviewer.id, title: "Learner-support reassignment requested", message: "A teacher requested reassignment of a learner-support case.", category: "academics", priority: "high", linkedEntityType: "learner_support_case", linkedEntityId: result.record.id, createdBy: actor.id, ruleKey: `support_reassignment:${result.record.id}:${reviewer.id}`, dedupeWindow: String(result.record.version_number) })
+  return result.response
+}
+
+export async function addSupportNote(schoolId, caseId, actor, body = {}) {
+  return inTransaction(async (db) => {
+    const { record, access } = await lockedCase(db, schoolId, caseId, actor, SUPPORT_ACTIONS.addNote)
+    const noteText = String(body.note_text || body.note || "").trim()
+    if (!noteText) throw new HttpError(400, "Academic note text is required.")
+    let visibility = String(body.visibility || "teacher_academic")
+    const allowed = access.isHeadteacher ? ["teacher_academic", "support_team", "coordinator_only", "headteacher_only", "guardian_meeting", "administrative_restricted"] : access.isCoordinator ? ["teacher_academic", "support_team", "coordinator_only", "guardian_meeting"] : access.relationships.includes("support_teacher") || access.relationships.includes("owner") ? ["teacher_academic", "support_team"] : ["teacher_academic"]
+    if (!allowed.includes(visibility)) throw new HttpError(403, "You cannot create a note with that visibility.")
+    const ref = randomUUID()
+    await db.query("INSERT INTO learner_support_case_notes (public_ref,school_id,case_id,term_id,author_user_id,visibility,note_text) VALUES (?,?,?,?,?,?,?)", [ref, schoolId, record.id, record.current_term_id, actor.id, visibility, noteText])
+    await event(db, schoolId, record, actor, "academic_note_added", "An authorised academic note was added to the support case.", { idempotencyKey: body.idempotency_key || `note:${ref}`, linkedType: "learner_support_case_note", linkedRef: ref, evidence: { visibility } })
+    return { public_ref: ref, visibility, created: true }
+  })
+}
+
+export async function createCaseTargetedAssessment(schoolId, caseId, actor, body = {}) {
+  const access = await canAccessLearnerSupportCase({ userId: actor?.id, schoolId, caseId, requestedAction: SUPPORT_ACTIONS.createAssessment, actorRole: actor?.role })
+  if (!access.allowed || !access.case) throw new HttpError(403, "You are not authorised to create an assessment for this case.")
+  const record = access.case
+  const [memberRows, [cycleRows]] = await Promise.all([
+    pool.query("SELECT student.public_ref student_ref FROM learner_support_case_members member JOIN students student ON student.school_id=member.school_id AND student.id=member.learner_id WHERE member.school_id=? AND member.case_id=? AND member.membership_status='active'", [schoolId, record.id]).then(([rows]) => rows),
+    pool.query("SELECT legacy_intervention_id,success_criterion_json FROM intervention_cycles WHERE school_id=? AND case_id=? ORDER BY cycle_number DESC LIMIT 1", [schoolId, record.id]),
+  ])
+  const learnerRefs = [...new Set([...(record.learner_id ? (await pool.query("SELECT public_ref FROM students WHERE school_id=? AND id=?", [schoolId, record.learner_id]))[0].map((row) => row.public_ref) : []), ...memberRows.map((row) => row.student_ref)])]
+  const latestCycle = cycleRows[0]
+  return createTargetedAssessmentDraft(schoolId, actor, {
+    ...body,
+    class_id: record.class_id,
+    subject_id: record.subject_id,
+    topic_id: record.primary_topic_id,
+    academic_year_id: record.academic_year_id,
+    term_id: record.current_term_id,
+    intervention_id: latestCycle?.legacy_intervention_id || null,
+    purpose: body.purpose || (latestCycle ? "intervention_reassessment" : "intervention_baseline"),
+    title: body.title || `${body.topic_name || "Learner support"} targeted assessment`,
+    target_objectives: record.primary_objective_id ? [record.primary_objective_id] : [],
+    previous_evidence: { support_case_ref: record.public_ref, evidence_confidence: record.evidence_confidence, current_summary: record.current_summary },
+    learners: learnerRefs.map((student_ref) => ({ student_ref, reason: "Included in the authorised learner-support case", evidence: { support_case_ref: record.public_ref }, confidence: record.evidence_confidence })),
+  })
+}
+
 export async function assignSupportCase(schoolId, caseId, actor, body = {}) {
   return inTransaction(async (db) => {
-    const record = await lockedCase(db, schoolId, caseId, actor)
+    const { record } = await lockedCase(db, schoolId, caseId, actor, SUPPORT_ACTIONS.assign)
     const duplicate = await duplicateMutation(db, schoolId, record, body.idempotency_key); if (duplicate) return duplicate
     assertVersion(record, body)
     const ownerId = number(body.owner_user_id)
     const [[owner]] = await db.query("SELECT id,role FROM users WHERE school_id=? AND id=? AND employment_status='active' AND is_active=1 LIMIT 1", [schoolId, ownerId])
     if (!owner) throw new HttpError(400, "The selected case owner is not an active user in this school.")
     await db.query("UPDATE learner_support_cases SET owner_user_id=?,owner_role=?,status=IF(status='detected','teacher_follow_up',status),version_number=version_number+1,updated_by=? WHERE school_id=? AND id=?", [owner.id, owner.role, actor.id, schoolId, record.id])
+    await db.query(`INSERT INTO learner_support_case_assignments (public_ref,school_id,case_id,assigned_user_id,assignment_type,assignment_status,action_label,due_at,assigned_by) VALUES (UUID(),?,?,?,'owner','assigned',?,?,?) ON DUPLICATE KEY UPDATE assignment_status='assigned',action_label=VALUES(action_label),due_at=VALUES(due_at),acknowledged_at=NULL,completed_at=NULL,assigned_by=VALUES(assigned_by)`, [schoolId, record.id, owner.id, body.action_label || "Own and coordinate learner support", body.due_at || record.next_review_at, actor.id])
     await event(db, schoolId, record, actor, "case_assigned", "The learner support case was assigned for follow-up.", { idempotencyKey: body.idempotency_key || `assign:${record.id}:${owner.id}:${record.version_number}`, evidence: { owner_user_id: owner.id, owner_role: owner.role } })
+    await createInAppNotification({ schoolId, recipientUserId: owner.id, title: "New learner-support case assigned", message: body.notification_message || "A learner-support case now requires your acknowledgement and follow-up.", category: "academics", priority: record.severity === "urgent" ? "urgent" : "high", linkedEntityType: "learner_support_case", linkedEntityId: record.id, createdBy: actor.id, ruleKey: `support_case_assignment:${record.id}:${owner.id}`, dedupeWindow: String(record.version_number) })
     return { public_ref: record.public_ref, owner_user_id: owner.id, status: record.status === "detected" ? "teacher_follow_up" : record.status, version_number: number(record.version_number) + 1 }
   })
 }
@@ -310,7 +655,7 @@ async function strategyByCode(db, schoolId, requested, prior = []) {
 
 export async function createSupportIntervention(schoolId, caseId, actor, body = {}) {
   return inTransaction(async (db) => {
-    const record = await lockedCase(db, schoolId, caseId, actor)
+    const { record } = await lockedCase(db, schoolId, caseId, actor, SUPPORT_ACTIONS.createIntervention)
     const duplicate = await duplicateMutation(db, schoolId, record, body.idempotency_key); if (duplicate) return duplicate
     assertVersion(record, body)
     if (!ACTIVE_CASE_STATUSES.has(record.status)) throw new HttpError(409, "A closed case cannot start another intervention cycle.")
@@ -338,7 +683,7 @@ export async function createSupportIntervention(schoolId, caseId, actor, body = 
 
 export async function recordSupportSession(schoolId, caseId, actor, body = {}) {
   return inTransaction(async (db) => {
-    const record = await lockedCase(db, schoolId, caseId, actor)
+    const { record } = await lockedCase(db, schoolId, caseId, actor, SUPPORT_ACTIONS.recordSession)
     const duplicate = await duplicateMutation(db, schoolId, record, body.idempotency_key); if (duplicate) return duplicate
     assertVersion(record, body)
     const [[cycle]] = await db.query("SELECT * FROM intervention_cycles WHERE school_id=? AND case_id=? AND (public_ref=? OR id=?) ORDER BY cycle_number DESC LIMIT 1 FOR UPDATE", [schoolId, record.id, String(body.cycle_ref || ""), number(body.cycle_id)])
@@ -360,13 +705,21 @@ export async function recordSupportSession(schoolId, caseId, actor, body = {}) {
       }
     }
     const status = String(body.status || "completed")
-    if (!["completed", "cancelled", "missed", "rescheduled", "planned"].includes(status)) throw new HttpError(400, "Session status is invalid.")
-    await db.query(`UPDATE intervention_sessions SET status=?,scheduled_at=COALESCE(?,scheduled_at),completed_at=IF(?='completed',COALESCE(?,CURRENT_TIMESTAMP),NULL),teacher_attended=?,target_taught=?,prerequisite_addressed=?,resources_json=?,activities_json=?,teacher_notes=?,practice_assigned=?,review_status=?,updated_by=? WHERE school_id=? AND id=?`, [status, body.scheduled_at || null, status, body.completed_at || null, body.teacher_attended === undefined ? null : Boolean(body.teacher_attended), body.target_taught === undefined ? null : Boolean(body.target_taught), body.prerequisite_addressed === undefined ? null : Boolean(body.prerequisite_addressed), JSON.stringify(body.resources || []), JSON.stringify(body.activities || []), body.teacher_notes || null, body.practice_assigned || null, body.review_status || "pending", actor.id, schoolId, session.id])
+    if (!["completed", "partially_completed", "cancelled", "learner_absent", "teacher_absent", "rescheduled", "planned", "missed"].includes(status)) throw new HttpError(400, "Session status is invalid.")
+    const delivered = ["completed", "partially_completed"].includes(status)
+    await db.query(`UPDATE intervention_sessions SET status=?,scheduled_at=COALESCE(?,scheduled_at),completed_at=IF(?,COALESCE(?,CURRENT_TIMESTAMP),NULL),duration_minutes=?,delivery_method=?,target_topic_id=COALESCE(?,target_topic_id),target_objective_id=COALESCE(?,target_objective_id),teacher_attended=?,target_taught=?,prerequisite_addressed=?,resources_json=?,activities_json=?,teacher_notes=?,teacher_observation=?,practice_assigned=?,next_action=?,review_status=?,updated_by=? WHERE school_id=? AND id=?`, [status, body.scheduled_at || null, delivered, body.completed_at || null, body.duration_minutes || null, body.delivery_method || null, body.target_topic_id || record.primary_topic_id || null, body.target_objective_id || record.primary_objective_id || null, status === "teacher_absent" ? false : body.teacher_attended === undefined ? null : Boolean(body.teacher_attended), body.target_taught === undefined ? null : Boolean(body.target_taught), body.prerequisite_addressed === undefined ? null : Boolean(body.prerequisite_addressed), JSON.stringify(body.resources || []), JSON.stringify(body.activities || []), body.teacher_notes || null, body.teacher_observation || null, body.practice_assigned || null, body.next_action || null, body.review_status || "pending", actor.id, schoolId, session.id])
     for (const attendance of Array.isArray(body.attendance) ? body.attendance : []) {
-      const learnerId = number(attendance.learner_id)
+      let learnerId = number(attendance.learner_id)
+      if (!learnerId && attendance.learner_ref) {
+        const [[learner]] = await db.query("SELECT id FROM students WHERE school_id=? AND public_ref=? LIMIT 1", [schoolId, String(attendance.learner_ref)])
+        learnerId = number(learner?.id)
+      }
+      if (!learnerId) throw new HttpError(400, "Every support-attendance record must identify a learner in this case.")
+      const attendanceStatus = String(attendance.status || "not_recorded")
+      if (!["present", "absent", "late", "excused", "not_recorded"].includes(attendanceStatus)) throw new HttpError(400, "Support attendance status is invalid.")
       const [[member]] = await db.query("SELECT id FROM learner_support_case_members WHERE school_id=? AND case_id=? AND learner_id=? AND membership_status='active' LIMIT 1", [schoolId, record.id, learnerId])
       if (!member && number(record.learner_id) !== learnerId) throw new HttpError(400, "Session attendance contains a learner outside this support case.")
-      await db.query(`INSERT INTO intervention_session_attendance (public_ref,school_id,session_id,learner_id,attendance_status,note,created_by,updated_by) VALUES (?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE attendance_status=VALUES(attendance_status),note=VALUES(note),updated_by=VALUES(updated_by)`, [randomUUID(), schoolId, session.id, learnerId, attendance.status || "not_recorded", attendance.note || null, actor.id, actor.id])
+      await db.query(`INSERT INTO intervention_session_attendance (public_ref,school_id,session_id,learner_id,attendance_status,note,created_by,updated_by) VALUES (?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE attendance_status=VALUES(attendance_status),note=VALUES(note),updated_by=VALUES(updated_by)`, [randomUUID(), schoolId, session.id, learnerId, attendanceStatus, attendance.note || null, actor.id, actor.id])
     }
     await event(db, schoolId, record, actor, "support_session_recorded", `Support session ${session.session_number} was recorded as ${status}.`, { idempotencyKey: body.idempotency_key || `session:${session.id}:${status}:${body.completed_at || dateOnly()}`, linkedType: "intervention_session", linkedRef: session.public_ref, evidence: { target_taught: body.target_taught, prerequisite_addressed: body.prerequisite_addressed } })
     return { public_ref: session.public_ref, status, cycle_ref: cycle.public_ref }
@@ -375,15 +728,15 @@ export async function recordSupportSession(schoolId, caseId, actor, body = {}) {
 
 export async function scheduleSupportReassessment(schoolId, caseId, actor, body = {}) {
   return inTransaction(async (db) => {
-    const record = await lockedCase(db, schoolId, caseId, actor)
+    const { record } = await lockedCase(db, schoolId, caseId, actor, SUPPORT_ACTIONS.scheduleReassessment)
     const duplicate = await duplicateMutation(db, schoolId, record, body.idempotency_key); if (duplicate) return duplicate
     assertVersion(record, body)
     const [[cycle]] = await db.query("SELECT * FROM intervention_cycles WHERE school_id=? AND case_id=? AND (public_ref=? OR id=? OR ?='') ORDER BY cycle_number DESC LIMIT 1 FOR UPDATE", [schoolId, record.id, String(body.cycle_ref || ""), number(body.cycle_id), String(body.cycle_ref || "")])
     if (!cycle) throw new HttpError(409, "Create an intervention cycle before scheduling reassessment.")
-    if (!body.generated_assessment_id) throw new HttpError(400, "An approved targeted assessment id is required.")
-    const [[generated]] = await db.query("SELECT id,status FROM generated_assessments WHERE school_id=? AND id=? AND status IN ('approved','published') LIMIT 1", [schoolId, number(body.generated_assessment_id)])
+    if (!body.generated_assessment_id && !body.generated_assessment_ref) throw new HttpError(400, "An approved targeted assessment is required.")
+    const [[generated]] = await db.query("SELECT id,status FROM generated_assessments WHERE school_id=? AND (id=? OR public_ref=?) AND status IN ('approved','published') LIMIT 1", [schoolId, number(body.generated_assessment_id), String(body.generated_assessment_ref || "")])
     if (!generated) throw new HttpError(400, "The targeted assessment must belong to this school and be approved or published.")
-    await db.query(`INSERT INTO academic_intervention_reassessments (public_ref,school_id,support_case_id,intervention_id,intervention_cycle_id,generated_assessment_id,baseline_mark_sheet_id,success_criterion_json,comparability_json,outcome) VALUES (?,?,?,?,?,?,?,?,?,'pending') ON DUPLICATE KEY UPDATE support_case_id=VALUES(support_case_id),intervention_cycle_id=VALUES(intervention_cycle_id),success_criterion_json=VALUES(success_criterion_json),comparability_json=VALUES(comparability_json)`, [randomUUID(), schoolId, record.id, cycle.legacy_intervention_id, cycle.id, generated.id, body.baseline_mark_sheet_id || null, JSON.stringify(body.success_criterion || json(cycle.success_criterion_json)), JSON.stringify(body.comparability || {})])
+    await db.query(`INSERT INTO academic_intervention_reassessments (public_ref,school_id,support_case_id,intervention_id,intervention_cycle_id,generated_assessment_id,baseline_mark_sheet_id,success_criterion_json,comparability_json,due_at,outcome) VALUES (?,?,?,?,?,?,?,?,?,?,'pending') ON DUPLICATE KEY UPDATE support_case_id=VALUES(support_case_id),intervention_cycle_id=VALUES(intervention_cycle_id),success_criterion_json=VALUES(success_criterion_json),comparability_json=VALUES(comparability_json),due_at=VALUES(due_at)`, [randomUUID(), schoolId, record.id, cycle.legacy_intervention_id, cycle.id, generated.id, body.baseline_mark_sheet_id || null, JSON.stringify(body.success_criterion || json(cycle.success_criterion_json)), JSON.stringify(body.comparability || {}), body.due_date || addDays(5)])
     await db.query("UPDATE intervention_cycles SET status='awaiting_reassessment',version_number=version_number+1,updated_by=? WHERE school_id=? AND id=?", [actor.id, schoolId, cycle.id])
     await db.query("UPDATE learner_support_cases SET status='reassessment_pending',next_review_at=?,version_number=version_number+1,updated_by=? WHERE school_id=? AND id=?", [body.due_date || addDays(5), actor.id, schoolId, record.id])
     await event(db, schoolId, record, actor, "reassessment_scheduled", "A targeted reassessment was linked to this support cycle.", { idempotencyKey: body.idempotency_key || `reassessment:${record.id}:${body.generated_assessment_id}`, linkedType: "generated_assessment", linkedRef: String(body.generated_assessment_id) })
@@ -393,15 +746,14 @@ export async function scheduleSupportReassessment(schoolId, caseId, actor, body 
 
 export async function reviewSupportOutcome(schoolId, caseId, actor, body = {}) {
   return inTransaction(async (db) => {
-    const record = await lockedCase(db, schoolId, caseId, actor)
+    const { record } = await lockedCase(db, schoolId, caseId, actor, SUPPORT_ACTIONS.reviewOutcome)
     const duplicate = await duplicateMutation(db, schoolId, record, body.idempotency_key); if (duplicate) return duplicate
     assertVersion(record, body)
     const { row: policyRow, policy } = await activePolicy(schoolId, db)
     const [[cycle]] = await db.query("SELECT ic.*,ist.strategy_code FROM intervention_cycles ic JOIN intervention_strategy_types ist ON ist.id=ic.strategy_type_id AND ist.school_id=ic.school_id WHERE ic.school_id=? AND ic.case_id=? AND (ic.public_ref=? OR ic.id=? OR ?='') ORDER BY ic.cycle_number DESC LIMIT 1 FOR UPDATE", [schoolId, record.id, String(body.cycle_ref || ""), number(body.cycle_id), String(body.cycle_ref || "")])
     if (!cycle) throw new HttpError(404, "Intervention cycle was not found.")
-    const [[delivery]] = await db.query("SELECT COUNT(*) recorded,SUM(status='completed') completed FROM intervention_sessions WHERE school_id=? AND cycle_id=?", [schoolId, cycle.id])
-    const [[attendance]] = await db.query("SELECT COUNT(*) eligible,SUM(attendance_status IN ('present','late')) attended FROM intervention_session_attendance isa JOIN intervention_sessions sess ON sess.id=isa.session_id AND sess.school_id=isa.school_id WHERE isa.school_id=? AND sess.cycle_id=? AND sess.status='completed'", [schoolId, cycle.id])
-    const diagnostic = evaluateInterventionDelivery({ plannedSessions: cycle.planned_session_count, completedSessions: delivery.completed, attendanceEligible: attendance.eligible, attendedSessions: attendance.attended, reassessmentPublished: body.reassessment_published, reassessmentComparable: body.reassessment_comparable, baselineScore: body.baseline_score, reassessmentScore: body.reassessment_score, successCriterion: body.success_criterion || json(cycle.success_criterion_json).mastery_threshold, minimumMeaningfulChange: body.minimum_meaningful_change || json(cycle.success_criterion_json).minimum_meaningful_change, improvedComponents: body.improved_components, unchangedComponents: body.unchanged_components, strategyRepeated: body.strategy_repeated }, policy)
+    const delivery = await getInterventionDeliveryMetrics(db, schoolId, cycle.id)
+    const diagnostic = evaluateInterventionDelivery({ plannedSessions: cycle.planned_session_count, completedSessions: delivery.deliveredSessions, attendanceEligible: delivery.attendanceEligible, attendedSessions: delivery.attendedSessions, reassessmentPublished: body.reassessment_published, reassessmentComparable: body.reassessment_comparable, baselineScore: body.baseline_score, reassessmentScore: body.reassessment_score, successCriterion: body.success_criterion || json(cycle.success_criterion_json).mastery_threshold, minimumMeaningfulChange: body.minimum_meaningful_change || json(cycle.success_criterion_json).minimum_meaningful_change, improvedComponents: body.improved_components, unchangedComponents: body.unchanged_components, strategyRepeated: body.strategy_repeated }, policy)
     let cycleStatus = "completed"; let cycleOutcome = diagnostic.outcome
     if (["incomplete_delivery", "insufficient_participation", "inconclusive"].includes(diagnostic.outcome)) { cycleStatus = diagnostic.outcome; cycleOutcome = diagnostic.outcome === "inconclusive" ? "inconclusive" : "not_classified" }
     if (diagnostic.outcome === "awaiting_reassessment") { cycleStatus = "awaiting_reassessment"; cycleOutcome = "pending" }
@@ -420,7 +772,7 @@ export async function reviewSupportOutcome(schoolId, caseId, actor, body = {}) {
 
 async function simpleCaseTransition(schoolId, caseId, actor, body, options) {
   return inTransaction(async (db) => {
-    const record = await lockedCase(db, schoolId, caseId, actor)
+    const { record } = await lockedCase(db, schoolId, caseId, actor, options.requestedAction)
     const duplicate = await duplicateMutation(db, schoolId, record, body.idempotency_key); if (duplicate) return duplicate
     assertVersion(record, body)
     if (options.allowed && !options.allowed.includes(record.status)) throw new HttpError(409, options.invalidMessage || "This case cannot make that transition.")
@@ -431,9 +783,9 @@ async function simpleCaseTransition(schoolId, caseId, actor, body, options) {
   })
 }
 
-export const escalateSupportCase = (schoolId, caseId, actor, body = {}) => simpleCaseTransition(schoolId, caseId, actor, body, { next: (record) => ({ status: number(record.escalation_level) >= 4 ? "guardian_review" : number(record.escalation_level) >= 3 ? "academic_team_review" : "strategy_review", level: Math.min(6, number(record.escalation_level) + 1), nextReview: addDays(5) }), eventType: "case_escalated", summary: (_record, input) => `The case was escalated after authorised review${input.reason ? `: ${input.reason}` : "."}` })
+export const escalateSupportCase = (schoolId, caseId, actor, body = {}) => simpleCaseTransition(schoolId, caseId, actor, body, { requestedAction: SUPPORT_ACTIONS.escalate, next: (record) => ({ status: number(record.escalation_level) >= 4 ? "guardian_review" : number(record.escalation_level) >= 3 ? "academic_team_review" : "strategy_review", level: Math.min(6, number(record.escalation_level) + 1), nextReview: addDays(5) }), eventType: "case_escalated", summary: (_record, input) => `The case was escalated after authorised review${input.reason ? `: ${input.reason}` : "."}` })
 
-export const resolveSupportCase = (schoolId, caseId, actor, body = {}) => simpleCaseTransition(schoolId, caseId, actor, body, { allowed: ["continued_support", "teacher_follow_up", "strategy_review"], next: async (record, input, db) => {
+export const resolveSupportCase = (schoolId, caseId, actor, body = {}) => simpleCaseTransition(schoolId, caseId, actor, body, { requestedAction: SUPPORT_ACTIONS.resolve, allowed: ["continued_support", "teacher_follow_up", "strategy_review"], next: async (record, input, db) => {
   const { policy } = await activePolicy(schoolId, db)
   if (!input.reassessment_published || number(input.comparable_success_count) < policy.resolutionComparableEvidenceCount || !input.teacher_review_completed) throw new HttpError(409, "Resolution requires a published reassessment, sufficient comparable successful evidence and completed teacher review.")
   return { status: "resolved", level: 0, closed: true }
@@ -441,7 +793,7 @@ export const resolveSupportCase = (schoolId, caseId, actor, body = {}) => simple
 
 export async function carryForwardSupportCase(schoolId, caseId, actor, body = {}) {
   return inTransaction(async (db) => {
-    const record = await lockedCase(db, schoolId, caseId, actor)
+    const { record } = await lockedCase(db, schoolId, caseId, actor, SUPPORT_ACTIONS.carryForward)
     const duplicate = await duplicateMutation(db, schoolId, record, body.idempotency_key); if (duplicate) return duplicate
     assertVersion(record, body)
     if (!body.to_term_id) throw new HttpError(400, "Destination term is required.")
@@ -455,12 +807,14 @@ export async function carryForwardSupportCase(schoolId, caseId, actor, body = {}
 
 export async function requestAcademicReview(schoolId, caseId, actor, body = {}) {
   return inTransaction(async (db) => {
-    const record = await lockedCase(db, schoolId, caseId, actor)
+    const { record, access } = await lockedCase(db, schoolId, caseId, actor, SUPPORT_ACTIONS.requestReview)
     const duplicate = await duplicateMutation(db, schoolId, record, body.idempotency_key); if (duplicate) return duplicate
     assertVersion(record, body)
-    const ref = randomUUID(); const type = body.meeting_type || "academic_team_review"
+    const ref = randomUUID(); const type = access.isCoordinator || access.isHeadteacher ? body.meeting_type || "academic_team_review" : "strategy_review"
     await db.query("INSERT INTO academic_review_meetings (public_ref,school_id,term_id,case_id,scheduled_at,meeting_type,attendee_user_ids_json,evidence_summary_json,status,created_by,updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?)", [ref, schoolId, record.current_term_id, record.id, body.scheduled_at || new Date(Date.now() + 5 * 86_400_000), type, JSON.stringify(body.attendee_user_ids || []), JSON.stringify(body.evidence_summary || { case_summary: record.current_summary }), body.scheduled_at ? "scheduled" : "requested", actor.id, actor.id])
-    await db.query("UPDATE learner_support_cases SET status='academic_team_review',escalation_level=GREATEST(escalation_level,4),version_number=version_number+1,updated_by=? WHERE school_id=? AND id=?", [actor.id, schoolId, record.id])
+    const nextStatus = type === "strategy_review" ? "strategy_review" : "academic_team_review"
+    const nextLevel = type === "strategy_review" ? 3 : 4
+    await db.query("UPDATE learner_support_cases SET status=?,escalation_level=GREATEST(escalation_level,?),version_number=version_number+1,updated_by=? WHERE school_id=? AND id=?", [nextStatus, nextLevel, actor.id, schoolId, record.id])
     await event(db, schoolId, record, actor, "academic_review_requested", "An academic team review was requested with an evidence summary.", { idempotencyKey: body.idempotency_key || `academic-review:${record.id}:${record.version_number}`, linkedType: "academic_review_meeting", linkedRef: ref })
     return { public_ref: ref, status: body.scheduled_at ? "scheduled" : "requested" }
   })
@@ -468,7 +822,7 @@ export async function requestAcademicReview(schoolId, caseId, actor, body = {}) 
 
 export async function draftGuardianSummary(schoolId, caseId, actor, body = {}) {
   return inTransaction(async (db) => {
-    const record = await lockedCase(db, schoolId, caseId, actor)
+    const { record } = await lockedCase(db, schoolId, caseId, actor, SUPPORT_ACTIONS.guardianSummary)
     const duplicate = await duplicateMutation(db, schoolId, record, body.idempotency_key); if (duplicate) return duplicate
     assertVersion(record, body)
     const [[topic]] = await db.query("SELECT topic_name FROM syllabus_topics WHERE school_id=? AND id=?", [schoolId, record.primary_topic_id])

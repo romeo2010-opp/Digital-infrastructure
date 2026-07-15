@@ -1,4 +1,20 @@
 const storageKey = 'smartlink.schools.session'
+let activeRequestCount = 0
+const requestActivityListeners = new Set<(count: number) => void>()
+const inFlightGetRequests = new Map<string, Promise<any>>()
+
+function updateRequestActivity(delta: number) {
+  activeRequestCount = Math.max(0, activeRequestCount + delta)
+  requestActivityListeners.forEach((listener) => listener(activeRequestCount))
+}
+
+export function subscribePortalRequestActivity(listener: (count: number) => void) {
+  requestActivityListeners.add(listener)
+  listener(activeRequestCount)
+  return () => {
+    requestActivityListeners.delete(listener)
+  }
+}
 function configuredApiBaseUrl() {
   const runtimeConfig = typeof window !== 'undefined' ? (window as any).__SMARTLINK_CONFIG__ : null
   return runtimeConfig?.apiBaseUrl || import.meta.env.VITE_SCHOOLS_API_BASE_URL || import.meta.env.VITE_API_BASE_URL || ''
@@ -62,38 +78,65 @@ export function clearSession() {
 }
 
 async function request(pathname: string, { method = 'GET', body, token, isForm = false, signal }: any = {}) {
-  const response = await fetch(`${resolveApiOrigin()}${pathname}`, {
-    method,
-    signal,
-    credentials: 'include',
-    headers: {
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(body && !isForm ? { 'Content-Type': 'application/json' } : {}),
-    },
-    body: body ? (isForm ? body : JSON.stringify(body)) : undefined,
-  })
+  const normalizedMethod = String(method || 'GET').toUpperCase()
+  const dedupeKey = normalizedMethod === 'GET' && !body && !signal
+    ? `${String(token || 'anonymous')}::${pathname}`
+    : ''
+  if (dedupeKey && inFlightGetRequests.has(dedupeKey)) {
+    return inFlightGetRequests.get(dedupeKey)
+  }
+  const operation = (async () => {
+    updateRequestActivity(1)
+    try {
+      const response = await fetch(`${resolveApiOrigin()}${pathname}`, {
+        method: normalizedMethod,
+        signal,
+        credentials: 'include',
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...(body && !isForm ? { 'Content-Type': 'application/json' } : {}),
+        },
+        body: body ? (isForm ? body : JSON.stringify(body)) : undefined,
+      })
 
-  const payload = await response.json().catch(() => ({}))
-  return parseResponse(response, payload)
+      const payload = await response.json().catch(() => ({}))
+      return parseResponse(response, payload)
+    } finally {
+      updateRequestActivity(-1)
+    }
+  })()
+  if (dedupeKey) inFlightGetRequests.set(dedupeKey, operation)
+  try {
+    return await operation
+  } finally {
+    if (dedupeKey && inFlightGetRequests.get(dedupeKey) === operation) {
+      inFlightGetRequests.delete(dedupeKey)
+    }
+  }
 }
 
 async function requestBlob(pathname: string, { method = 'GET', body, token, isForm = false, signal }: any = {}) {
-  const response = await fetch(`${resolveApiOrigin()}${pathname}`, {
-    method,
-    signal,
-    credentials: 'include',
-    headers: {
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(body && !isForm ? { 'Content-Type': 'application/json' } : {}),
-    },
-    body: body ? (isForm ? body : JSON.stringify(body)) : undefined,
-  })
+  updateRequestActivity(1)
+  try {
+    const response = await fetch(`${resolveApiOrigin()}${pathname}`, {
+      method,
+      signal,
+      credentials: 'include',
+      headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(body && !isForm ? { 'Content-Type': 'application/json' } : {}),
+      },
+      body: body ? (isForm ? body : JSON.stringify(body)) : undefined,
+    })
 
-  if (!response.ok) {
-    const payload = await response.json().catch(() => ({}))
-    throw new Error(payload?.error || payload?.message || `Request failed (${response.status})`)
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}))
+      throw new Error(payload?.error || payload?.message || `Request failed (${response.status})`)
+    }
+    return response.blob()
+  } finally {
+    updateRequestActivity(-1)
   }
-  return response.blob()
 }
 
 function queryString(filters: Record<string, any> = {}) {
@@ -206,8 +249,8 @@ export const portalApi = {
     return request('/api/dashboard', { token })
   },
 
-  getStudentPortal(token: string) {
-    return request('/api/student-portal', { token })
+  getStudentPortal(token: string, studentRef?: string) {
+    return request(`/api/student-portal${queryString(studentRef ? { student_ref: studentRef } : {})}`, { token })
   },
 
   listTimetables(token: string, filters: Record<string, any> = {}) {
@@ -1660,7 +1703,7 @@ export const portalApi = {
   createAcademicIntervention(token: string, payload: any) { return request('/api/academic-intelligence/interventions', { method: 'POST', token, body: payload }) },
   createParentAcademicInsight(token: string, payload: any) { return request('/api/academic-intelligence/parent-insights', { method: 'POST', token, body: payload }) },
   updateParentAcademicInsight(token: string, insightRef: string, payload: any) { return request(`/api/academic-intelligence/parent-insights/${encodeURIComponent(insightRef)}`, { method: 'PATCH', token, body: payload }) },
-  getParentAcademicInsights(token: string) { return request('/api/parent-portal/academic-insights', { token }) },
+  getParentAcademicInsights(token: string, filters: Record<string, any> = {}) { return request(`/api/parent-portal/academic-insights${queryString(filters)}`, { token }) },
   updateAcademicIntervention(token: string, interventionRef: string, payload: any) { return request(`/api/academic-intelligence/interventions/${encodeURIComponent(interventionRef)}`, { method: 'PATCH', token, body: payload }) },
   listAssessmentBlueprints(token: string, filters: Record<string, any> = {}) { return request(`/api/academic-intelligence/assessment-blueprints${queryString(filters)}`, { token }) },
   createAssessmentBlueprint(token: string, payload: any) { return request('/api/academic-intelligence/assessment-blueprints', { method: 'POST', token, body: payload }) },
@@ -1686,6 +1729,7 @@ export const portalApi = {
   approveTargetedAssessment(token: string, generatedRef: string) { return request(`/api/academic-intelligence/targeted-assessments/${encodeURIComponent(generatedRef)}/approve`, { method: 'POST', token }) },
   publishTargetedAssessment(token: string, generatedRef: string) { return request(`/api/academic-intelligence/targeted-assessments/${encodeURIComponent(generatedRef)}/publish`, { method: 'POST', token }) },
   listSupportCases(token: string, filters: Record<string, any> = {}) { return request(`/api/academic-support/cases${queryString(filters)}`, { token }) },
+  getTeacherSupportSummary(token: string) { return request('/api/academic-support/summary', { token }) },
   getSupportCase(token: string, caseRef: string) { return request(`/api/academic-support/cases/${encodeURIComponent(caseRef)}`, { token }) },
   getLearnerSupport(token: string, learnerRef: string) { return request(`/api/academic-support/learners/${encodeURIComponent(learnerRef)}`, { token }) },
   getSupportTimeline(token: string, caseRef: string, filters: Record<string, any> = {}) { return request(`/api/academic-support/cases/${encodeURIComponent(caseRef)}/timeline${queryString(filters)}`, { token }) },
@@ -1693,6 +1737,12 @@ export const portalApi = {
   getSupportInterventions(token: string, caseRef: string) { return request(`/api/academic-support/cases/${encodeURIComponent(caseRef)}/interventions`, { token }) },
   getEscalationPolicy(token: string) { return request('/api/academic-support/escalation-policy', { token }) },
   assignSupportCase(token: string, caseRef: string, payload: any) { return request(`/api/academic-support/cases/${encodeURIComponent(caseRef)}/assign`, { method: 'POST', token, body: payload }) },
+  acknowledgeSupportCase(token: string, caseRef: string, payload: any = {}) { return request(`/api/academic-support/cases/${encodeURIComponent(caseRef)}/acknowledge`, { method: 'POST', token, body: payload }) },
+  completeSupportAssignment(token: string, caseRef: string, payload: any = {}) { return request(`/api/academic-support/cases/${encodeURIComponent(caseRef)}/complete-assignment`, { method: 'POST', token, body: payload }) },
+  acceptSupportOwnership(token: string, caseRef: string, payload: any = {}) { return request(`/api/academic-support/cases/${encodeURIComponent(caseRef)}/accept-ownership`, { method: 'POST', token, body: payload }) },
+  requestSupportReassignment(token: string, caseRef: string, payload: any) { return request(`/api/academic-support/cases/${encodeURIComponent(caseRef)}/request-reassignment`, { method: 'POST', token, body: payload }) },
+  addSupportNote(token: string, caseRef: string, payload: any) { return request(`/api/academic-support/cases/${encodeURIComponent(caseRef)}/add-note`, { method: 'POST', token, body: payload }) },
+  createCaseTargetedAssessment(token: string, caseRef: string, payload: any = {}) { return request(`/api/academic-support/cases/${encodeURIComponent(caseRef)}/create-targeted-assessment`, { method: 'POST', token, body: payload }) },
   createSupportIntervention(token: string, caseRef: string, payload: any) { return request(`/api/academic-support/cases/${encodeURIComponent(caseRef)}/create-intervention`, { method: 'POST', token, body: payload }) },
   recordSupportSession(token: string, caseRef: string, payload: any) { return request(`/api/academic-support/cases/${encodeURIComponent(caseRef)}/record-session`, { method: 'POST', token, body: payload }) },
   scheduleSupportReassessment(token: string, caseRef: string, payload: any) { return request(`/api/academic-support/cases/${encodeURIComponent(caseRef)}/schedule-reassessment`, { method: 'POST', token, body: payload }) },
@@ -1701,6 +1751,7 @@ export const portalApi = {
   resolveSupportCase(token: string, caseRef: string, payload: any) { return request(`/api/academic-support/cases/${encodeURIComponent(caseRef)}/resolve`, { method: 'POST', token, body: payload }) },
   carryForwardSupportCase(token: string, caseRef: string, payload: any) { return request(`/api/academic-support/cases/${encodeURIComponent(caseRef)}/carry-forward`, { method: 'POST', token, body: payload }) },
   requestAcademicSupportReview(token: string, caseRef: string, payload: any) { return request(`/api/academic-support/cases/${encodeURIComponent(caseRef)}/request-academic-review`, { method: 'POST', token, body: payload }) },
+  recommendSupportEscalation(token: string, caseRef: string, payload: any) { return request(`/api/academic-support/cases/${encodeURIComponent(caseRef)}/recommend-escalation`, { method: 'POST', token, body: payload }) },
   draftGuardianSupportSummary(token: string, caseRef: string, payload: any) { return request(`/api/academic-support/cases/${encodeURIComponent(caseRef)}/draft-guardian-summary`, { method: 'POST', token, body: payload }) },
   getLibrarianDashboard(token: string) { return request('/api/library/dashboard', { token }) },
   listLibraryResources(token: string, filters: Record<string, any> = {}) { return request(`/api/library/catalogue${queryString(filters)}`, { token }) },

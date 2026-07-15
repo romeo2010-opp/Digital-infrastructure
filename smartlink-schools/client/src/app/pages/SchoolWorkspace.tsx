@@ -80,6 +80,7 @@ function name(row: any) {
 function actionForPage(pageKey: SchoolPageKey): SchoolActionKind {
   if (pageKey === "classes") return "class";
   if (pageKey === "students") return "student";
+  if (pageKey === "parents") return "parent";
   if (pageKey === "fees") return "payment";
   if (pageKey === "attendance") return "attendance";
   if (pageKey === "homework") return "homework";
@@ -370,12 +371,13 @@ function mapRows(pageKey: SchoolPageKey, payload: any) {
   }
   if (pageKey === "parents") {
     return (payload?.parents || []).map((row: any) => ({
-      id: row.id,
+      id: row.guardian_ref || row.id,
       parent: row.parent_name,
       student: [row.first_name, row.last_name].filter(Boolean).join(" "),
       className: row.class_name,
       phone: row.phone || row.email,
       relationship: row.relationship,
+      accountStatus: statusLabel(row.account_status),
     }));
   }
   if (pageKey === "results" || pageKey === "examBuilder") {
@@ -721,10 +723,12 @@ export function SchoolWorkspace({
 
   const pageAction = actionForPage(pageKey as SchoolPageKey);
   const canUsePrimaryAction =
-    pageKey !== "classes" ||
-    ["school_owner", "headteacher"].includes(
-      String(user?.role || "").toLowerCase(),
-    );
+    pageKey === "parents"
+      ? ["school_owner", "headteacher"].includes(String(user?.role || "").toLowerCase())
+      : pageKey !== "classes" ||
+        ["school_owner", "headteacher"].includes(
+          String(user?.role || "").toLowerCase(),
+        );
 
   return (
     <div className="grid gap-3 p-4">

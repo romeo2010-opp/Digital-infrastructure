@@ -79,14 +79,63 @@ function engagementPayload(scope, studentId) {
   }
 }
 
+async function guardianStudentsForPortal(req, schoolId, session) {
+  const sessionClause = session.setupRequired
+    ? "AND se2.enrollment_status = 'active'"
+    : "AND se2.academic_year_id = ? AND se2.term_id = ? AND se2.enrollment_status = 'active'"
+  const sessionParams = session.setupRequired ? [] : [session.academicYearId, session.termId]
+  const [rows] = await pool.query(
+    `SELECT DISTINCT s.id, s.public_ref, s.first_name, s.last_name, s.profile_photo_url,
+      COALESCE(se.class_id, s.class_id) AS class_id,
+      COALESCE(se.stream_section, s.stream_section) AS stream_section,
+      c.name AS class_name
+     FROM student_guardians sg
+     JOIN students s ON s.id = sg.student_id AND s.school_id = sg.school_id
+     LEFT JOIN student_enrollments se ON se.id = (
+       SELECT se2.id
+       FROM student_enrollments se2
+       WHERE se2.school_id = s.school_id AND se2.student_id = s.id ${sessionClause}
+       ORDER BY se2.created_at DESC, se2.id DESC
+       LIMIT 1
+     )
+     LEFT JOIN classes c ON c.id = COALESCE(se.class_id, s.class_id) AND c.school_id = s.school_id
+     WHERE sg.school_id = ? AND sg.user_id = ? AND s.status = 'active'
+     ORDER BY s.first_name, s.last_name, s.id`,
+    [...sessionParams, schoolId, Number(req.user?.id || 0)],
+  )
+  return rows.map((row) => ({
+    id: Number(row.id),
+    public_ref: row.public_ref,
+    full_name: [row.first_name, row.last_name].filter(Boolean).join(" "),
+    class_id: row.class_id ? Number(row.class_id) : null,
+    class_name: row.class_name || null,
+    stream_section: row.stream_section || null,
+    profile_photo_url: row.profile_photo_url || null,
+  }))
+}
+
 async function resolveStudent(req, schoolId, session) {
-  const studentId = Number(req.user?.studentId || req.user?.id || 0)
+  const isParent = String(req.user?.role || "").toLowerCase() === "parent"
+  let linkedStudents = []
+  let studentId = Number(req.user?.studentId || req.user?.id || 0)
+  if (isParent) {
+    linkedStudents = await guardianStudentsForPortal(req, schoolId, session)
+    if (!linkedStudents.length) {
+      throw new HttpError(404, "No active learner is linked to this parent account")
+    }
+    const requestedRef = String(req.query?.student_ref || req.query?.studentRef || "").trim()
+    const selected = requestedRef
+      ? linkedStudents.find((row) => String(row.public_ref) === requestedRef)
+      : linkedStudents[0]
+    if (!selected) throw new HttpError(404, "The linked learner was not found")
+    studentId = selected.id
+  }
   const sessionJoin = session.setupRequired
     ? "AND se.enrollment_status = 'active'"
     : "AND se.academic_year_id = ? AND se.term_id = ? AND se.enrollment_status = 'active'"
   const sessionParams = session.setupRequired ? [] : [session.academicYearId, session.termId]
   const [rows] = await pool.query(
-    `SELECT s.id, s.school_id, s.class_id AS fallback_class_id,
+    `SELECT s.id, s.public_ref, s.school_id, s.class_id AS fallback_class_id,
       COALESCE(s.student_id, s.admission_no) AS student_code, s.admission_no,
       s.first_name, s.last_name, s.date_of_birth, s.gender, s.profile_photo_url,
       s.stream_section, s.enrollment_date, s.student_type, s.status,
@@ -107,11 +156,25 @@ async function resolveStudent(req, schoolId, session) {
   )
   const student = rows[0]
   if (!student) throw new HttpError(404, "No active student profile was found")
-  return {
+  const resolvedStudent = {
     ...student,
     id: Number(student.id),
     current_enrollment_id: student.current_enrollment_id ? Number(student.current_enrollment_id) : null,
     current_class_id: student.current_class_id ? Number(student.current_class_id) : null,
+  }
+  return {
+    student: resolvedStudent,
+    guardianContext: isParent
+      ? {
+          is_parent: true,
+          selected_student_ref: resolvedStudent.public_ref,
+          available_students: linkedStudents.map(({ id: _id, class_id: _classId, ...student }) => student),
+        }
+      : {
+          is_parent: false,
+          selected_student_ref: resolvedStudent.public_ref,
+          available_students: [],
+        },
   }
 }
 
@@ -832,7 +895,7 @@ function buildUrgent({ fees, results, homework, attendance }) {
 export async function getStudentPortal(req, res) {
   const schoolId = getScopedSchoolId(req)
   const session = await getActiveAcademicSession(schoolId)
-  const student = await resolveStudent(req, schoolId, session)
+  const { student, guardianContext } = await resolveStudent(req, schoolId, session)
   const [guardians] = await pool.query(
     `SELECT guardian_number, full_name, relationship, primary_phone, secondary_phone, email
      FROM student_guardians
@@ -853,6 +916,10 @@ export async function getStudentPortal(req, res) {
 
   const payload = {
     generated_at: new Date().toISOString(),
+    viewer: {
+      role: guardianContext.is_parent ? "parent" : "student",
+      guardian_context: guardianContext,
+    },
     setup_required: Boolean(session.setupRequired),
     session: sessionPayload(session),
     profile: {

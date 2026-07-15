@@ -126,6 +126,15 @@ function DirectorChart({ chart }: { chart: any }) {
   const series = chart?.series || [{ key: 'value', label: 'Value' }]
   const xKey = chart?.xKey || 'name'
   const ready = hasChartData(chart)
+  const [chartPage, setChartPage] = useState(0)
+  const shouldPaginateBars = chart?.type !== 'line' && chart?.type !== 'pie' && data.length > 14
+  const pageSize = Number(chart?.page_size || chart?.pageSize || 12)
+  const totalPages = shouldPaginateBars ? Math.max(1, Math.ceil(data.length / pageSize)) : 1
+  const pagedData = shouldPaginateBars ? data.slice(chartPage * pageSize, chartPage * pageSize + pageSize) : data
+
+  useEffect(() => {
+    setChartPage(0)
+  }, [chart?.title, data.length])
 
   if (!ready) {
     return (
@@ -197,21 +206,33 @@ function DirectorChart({ chart }: { chart: any }) {
   }
 
   return (
-    <div className="h-[300px] px-3 pb-3 pt-5">
-      <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={data} margin={{ top: 12, right: 18, left: 0, bottom: 12 }}>
+    <div className="grid gap-2 px-3 pb-3 pt-5">
+      {shouldPaginateBars ? (
+        <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-[11px] text-[#64748b]">
+          <span className="font-semibold">Showing {chartPage * pageSize + 1}-{Math.min(data.length, chartPage * pageSize + pageSize)} of {data.length}</span>
+          <div className="flex items-center gap-1.5">
+            <button type="button" disabled={chartPage <= 0} onClick={() => setChartPage((page) => Math.max(0, page - 1))} className="h-7 rounded-[5px] border border-[#d9dce3] px-2 font-semibold text-[#334155] disabled:opacity-40">Prev</button>
+            <span className="px-1 font-semibold">{chartPage + 1}/{totalPages}</span>
+            <button type="button" disabled={chartPage >= totalPages - 1} onClick={() => setChartPage((page) => Math.min(totalPages - 1, page + 1))} className="h-7 rounded-[5px] border border-[#d9dce3] px-2 font-semibold text-[#334155] disabled:opacity-40">Next</button>
+          </div>
+        </div>
+      ) : null}
+      <div className="h-[300px]">
+        <ResponsiveContainer width="100%" height="100%">
+        <BarChart data={pagedData} margin={{ top: 12, right: 18, left: 0, bottom: 12 }}>
           <CartesianGrid vertical={false} stroke="#E7E5EB" strokeDasharray="3 5" />
-          <XAxis dataKey={xKey} axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#64748b' }} interval={0} angle={data.length > 7 ? -20 : 0} textAnchor={data.length > 7 ? 'end' : 'middle'} height={data.length > 7 ? 58 : 34} />
+          <XAxis dataKey={xKey} axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#64748b' }} interval={0} angle={pagedData.length > 7 ? -18 : 0} textAnchor={pagedData.length > 7 ? 'end' : 'middle'} height={pagedData.length > 7 ? 58 : 34} />
           <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#64748b' }} width={44} />
           <Tooltip cursor={{ fill: '#F8F6FB' }} contentStyle={{ borderRadius: 12, borderColor: '#E5E1EA', boxShadow: '0 14px 34px rgba(55,30,90,.14)', fontSize: 12 }} formatter={(value: any) => formatCell(value)} labelFormatter={(label) => formatCell(label)} />
           {series.length>1?<Legend wrapperStyle={{ fontSize: 11, paddingTop: 8 }} />:null}
           {series.map((item: any, index: number) => (
             <Bar key={item.key} dataKey={item.key} name={item.label || valueLabel(item.key)} fill={chartColors[index % chartColors.length]} radius={[9, 9, 3, 3]} maxBarSize={34} background={{ fill: chartSoftColors[index % chartSoftColors.length], opacity: .28, radius: 9 }}>
-              {series.length === 1 ? data.map((_: any, dataIndex: number) => <Cell key={`bar-${dataIndex}`} fill={chartColors[dataIndex % 2]} />) : null}
+              {series.length === 1 ? pagedData.map((_: any, dataIndex: number) => <Cell key={`bar-${dataIndex}`} fill={chartColors[dataIndex % 2]} />) : null}
             </Bar>
           ))}
         </BarChart>
       </ResponsiveContainer>
+      </div>
     </div>
   )
 }

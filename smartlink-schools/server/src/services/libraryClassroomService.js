@@ -56,6 +56,12 @@ function schoolClock() {
   return `${values.hour}:${values.minute}:${values.second}`
 }
 
+function schoolDate() {
+  const parts = new Intl.DateTimeFormat('en-CA',{timeZone:process.env.SCHOOL_TIMEZONE||'Africa/Blantyre',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date())
+  const values=Object.fromEntries(parts.filter((part)=>part.type!=='literal').map((part)=>[part.type,part.value]))
+  return `${values.year}-${values.month}-${values.day}`
+}
+
 function decodeDataUrl(value) {
   const match = String(value || '').match(/^data:([^;,]+);base64,([A-Za-z0-9+/=\s]+)$/)
   if (!match) throw new HttpError(400, 'Attach a valid base64 file data URL.')
@@ -455,6 +461,26 @@ export async function browseArchive(schoolId,actor,query={}) {
 }
 
 export async function getClassroomSetup(schoolId,actor) {
+  const today=schoolDate()
+  const now=schoolClock()
+  let currentPeriod=null
+  try {
+    const [[period]]=await pool.query(`SELECT e.id timetable_entry_id,e.class_id,e.subject_id,c.public_ref class_ref,c.name class_name,subj.public_ref subject_ref,subj.name subject_name,ss.start_time,se.end_time
+      FROM timetables tt
+      JOIN timetable_versions tv ON tv.id=tt.current_published_version_id AND tv.timetable_id=tt.id
+      JOIN timetable_entries e ON e.timetable_version_id=tv.id AND e.teacher_id=?
+      LEFT JOIN timetable_cycle_days cd ON cd.id=e.cycle_day_id
+      JOIN bell_schedule_slots ss ON ss.id=e.slot_start_id
+      JOIN bell_schedule_slots se ON se.id=e.slot_end_id
+      JOIN classes c ON c.id=e.class_id AND c.school_id=tt.school_id
+      JOIN subjects subj ON subj.id=e.subject_id AND subj.school_id=tt.school_id
+      WHERE tt.school_id=? AND tt.timetable_type='SCHOOL_TIMETABLE'
+        AND (e.calendar_date=? OR (e.calendar_date IS NULL AND cd.weekday=DAYOFWEEK(?)-1))
+        AND ? BETWEEN ss.start_time AND se.end_time
+      ORDER BY ss.start_time LIMIT 1`,[actor.id,schoolId,today,today,now])
+    currentPeriod=period||null
+  } catch(error) { if(!['ER_NO_SUCH_TABLE','ER_BAD_FIELD_ERROR'].includes(error?.code)) throw error }
+  const [[activeLesson]]=await pool.query("SELECT public_ref,class_id,subject_id,timetable_entry_id,started_at FROM classroom_sessions WHERE school_id=? AND teacher_id=? AND status='active' ORDER BY started_at DESC LIMIT 1",[schoolId,actor.id])
   const [rows]=await pool.query(`SELECT c.public_ref class_ref,c.name class_name,c.grade_level,
     subj.id subject_id,subj.public_ref subject_ref,subj.name subject_name,subj.code subject_code
     FROM teacher_class_subject_assignments a
@@ -474,7 +500,18 @@ export async function getClassroomSetup(schoolId,actor) {
     ORDER BY COALESCE(st.order_number,999999),st.topic_name`,[schoolId,...subjectIds]);for(const topic of topics){const key=`${Number(topic.subject_id)}:${topic.grade_name||'*'}`;const list=topicsBySubject.get(key)||[];list.push({public_ref:topic.public_ref,name:topic.topic_name,code:topic.topic_code,is_mandatory:Boolean(topic.is_mandatory)});topicsBySubject.set(key,list)}}
   const grouped=new Map()
   for(const row of rows){const current=grouped.get(row.class_ref)||{public_ref:row.class_ref,name:row.class_name,grade_level:row.grade_level,subjects:[]};const exact=topicsBySubject.get(`${Number(row.subject_id)}:${row.grade_level}`)||[];const generic=topicsBySubject.get(`${Number(row.subject_id)}:*`)||[];current.subjects.push({public_ref:row.subject_ref,name:row.subject_name,code:row.subject_code,topics:[...exact,...generic]});grouped.set(row.class_ref,current)}
-  return {classes:[...grouped.values()]}
+  const activeMatchesPeriod=Boolean(activeLesson&&currentPeriod&&(
+    Number(activeLesson.timetable_entry_id)===Number(currentPeriod.timetable_entry_id)
+    || (Number(activeLesson.class_id)===Number(currentPeriod.class_id)
+      && Number(activeLesson.subject_id)===Number(currentPeriod.subject_id))
+  ))
+  return {
+    classes:[...grouped.values()],
+    active_lesson_ref:activeMatchesPeriod?activeLesson.public_ref:null,
+    unfinished_lesson:activeLesson&&!activeMatchesPeriod?{public_ref:activeLesson.public_ref,started_at:activeLesson.started_at}:null,
+    current_period:currentPeriod,
+    server_time:now,
+  }
 }
 
 export async function startClassroomSession(schoolId,actor,body={}) {
@@ -487,7 +524,8 @@ export async function startClassroomSession(schoolId,actor,body={}) {
   if(!topicId&&body.topic_ref){const [[row]]=await pool.query("SELECT id FROM syllabus_topics WHERE school_id=? AND subject_id=? AND public_ref=? LIMIT 1",[schoolId,subjectId,clean(body.topic_ref,80)]);topicId=row?.id||null}
   if(body.topic_ref&&!topicId)throw new HttpError(400,'The selected topic does not belong to this assigned subject.')
   const offlineId=clean(body.offline_client_id,120)||null
-  const lessonDate=body.lesson_date||new Date().toISOString().slice(0,10)
+  const lessonDate=body.lesson_date||schoolDate()
+  const now=schoolClock()
   const connection=await pool.getConnection()
   try{
     await connection.beginTransaction()
@@ -495,15 +533,24 @@ export async function startClassroomSession(schoolId,actor,body={}) {
       const [[existing]]=await connection.query("SELECT public_ref FROM classroom_sessions WHERE school_id=? AND teacher_id=? AND offline_client_id=? LIMIT 1",[schoolId,actor.id,offlineId])
       if(existing){await connection.commit();return getClassroomSession(schoolId,existing.public_ref,actor)}
     }
-    const [[active]]=await connection.query("SELECT public_ref FROM classroom_sessions WHERE school_id=? AND teacher_id=? AND status='active' ORDER BY started_at DESC LIMIT 1",[schoolId,actor.id])
-    if(active){await connection.commit();return getClassroomSession(schoolId,active.public_ref,actor)}
+    const [[active]]=await connection.query("SELECT public_ref,class_id,subject_id FROM classroom_sessions WHERE school_id=? AND teacher_id=? AND status='active' ORDER BY started_at DESC LIMIT 1",[schoolId,actor.id])
+    if(active){
+      if(Number(active.class_id)===Number(classId)&&Number(active.subject_id)===Number(subjectId)){
+        await connection.commit()
+        return getClassroomSession(schoolId,active.public_ref,actor)
+      }
+      throw new HttpError(409,'Complete or end the unfinished Classroom Mode lesson before starting the class that is active now.')
+    }
     const [[assignment]]=await connection.query("SELECT id FROM teacher_class_subject_assignments WHERE school_id=? AND teacher_id=? AND class_id=? AND subject_id=? AND is_active=1 LIMIT 1",[schoolId,actor.id,classId,subjectId])
     if(!assignment)throw new HttpError(403,'Classroom Mode can only open an assigned class and subject.')
     const [[academicSession]]=await connection.query("SELECT ay.id academic_year_id,t.id term_id FROM academic_years ay JOIN terms t ON t.academic_year_id=ay.id AND t.school_id=ay.school_id WHERE ay.school_id=? AND ay.status='active' AND t.status IN ('open','marking') ORDER BY t.start_date DESC LIMIT 1",[schoolId])
     if(!academicSession)throw new HttpError(409,'Open an academic term before starting Classroom Mode.')
-    let timetableEntryId=numberOrNull(body.timetable_entry_id)
-    if(!timetableEntryId){
-      try{
+    const requestedTimetableEntryId=numberOrNull(body.timetable_entry_id)
+    let timetableEntryId=null
+    try{
+        const timetableIdClause=requestedTimetableEntryId?' AND e.id=?':''
+        const timetableParams=[schoolId,actor.id,classId,subjectId,lessonDate,lessonDate,now]
+        if(requestedTimetableEntryId)timetableParams.push(requestedTimetableEntryId)
         const [[scheduled]]=await connection.query(`SELECT e.id FROM timetables tt
           JOIN timetable_versions tv ON tv.id=tt.current_published_version_id AND tv.timetable_id=tt.id
           JOIN timetable_entries e ON e.timetable_version_id=tv.id
@@ -512,11 +559,11 @@ export async function startClassroomSession(schoolId,actor,body={}) {
           JOIN bell_schedule_slots se ON se.id=e.slot_end_id
           WHERE tt.school_id=? AND tt.timetable_type='SCHOOL_TIMETABLE' AND e.teacher_id=? AND e.class_id=? AND e.subject_id=?
             AND (e.calendar_date=? OR (e.calendar_date IS NULL AND cd.weekday=DAYOFWEEK(?)-1))
-            AND CURTIME() BETWEEN ss.start_time AND se.end_time
-          ORDER BY ss.start_time LIMIT 1`,[schoolId,actor.id,classId,subjectId,lessonDate,lessonDate])
+            AND ? BETWEEN ss.start_time AND se.end_time${timetableIdClause}
+          ORDER BY ss.start_time LIMIT 1`,timetableParams)
         timetableEntryId=scheduled?.id||null
-      }catch(error){if(!['ER_NO_SUCH_TABLE','ER_BAD_FIELD_ERROR'].includes(error?.code))throw error}
-    }
+        if(requestedTimetableEntryId&&!timetableEntryId)throw new HttpError(400,'The selected timetable period is not active for this class and subject.')
+    }catch(error){if(!['ER_NO_SUCH_TABLE','ER_BAD_FIELD_ERROR'].includes(error?.code))throw error}
     const [lesson]=await connection.query(`INSERT INTO teacher_lesson_logs (
       school_id,academic_year_id,term_id,teacher_id,class_id,subject_id,timetable_entry_id,lesson_date,started_at,status,
       main_topic_id,coverage_status,coverage_percentage,lesson_outcome,difficulty_observed

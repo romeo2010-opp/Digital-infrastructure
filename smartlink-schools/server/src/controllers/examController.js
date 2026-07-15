@@ -978,10 +978,23 @@ async function loadReportCardPayload(schoolId, cardId) {
 }
 
 async function assertReportCardVisibleToUser(report, user) {
-  if (user?.role !== "student") return
-  const studentId = Number(user.studentId || user.id || 0)
-  if (!studentId || Number(report.student_id) !== studentId) {
-    throw new HttpError(404, "Report card was not found")
+  const role = String(user?.role || "").toLowerCase()
+  if (role === "student") {
+    const studentId = Number(user.studentId || user.id || 0)
+    if (!studentId || Number(report.student_id) !== studentId) {
+      throw new HttpError(404, "Report card was not found")
+    }
+    return
+  }
+  if (role === "parent") {
+    const [[guardianLink]] = await pool.query(
+      `SELECT sg.id
+       FROM student_guardians sg
+       WHERE sg.school_id = ? AND sg.student_id = ? AND sg.user_id = ?
+       LIMIT 1`,
+      [Number(report.school_id), Number(report.student_id), Number(user?.id || 0)],
+    )
+    if (!guardianLink) throw new HttpError(404, "Report card was not found")
   }
 }
 

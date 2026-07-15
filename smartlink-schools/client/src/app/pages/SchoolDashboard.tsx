@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router'
-import { Activity, AlertTriangle, ArrowRight, BookOpen, BookOpenCheck, CalendarCheck, Clock3, FlaskConical, GraduationCap, MessageSquare, ReceiptText, School, Sparkles, UsersRound } from 'lucide-react'
+import { Activity, AlertTriangle, ArrowRight, BookOpen, BookOpenCheck, CalendarCheck, Clock3, FlaskConical, GraduationCap, HeartHandshake, MessageSquare, ReceiptText, School, Sparkles, UsersRound } from 'lucide-react'
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from 'recharts'
 import { PortalTable } from '../components/PortalTable'
 import { SchoolActionModal, type SchoolActionKind } from '../components/SchoolActionModal'
@@ -912,6 +912,17 @@ async function safeLoad(fn: () => Promise<any>, fallback: any) {
   }
 }
 
+function TeacherLearnerSupportCard({ payload, onOpen }: { payload: any; onOpen: (caseRef?: string) => void }) {
+  const counts = payload?.counts || {}
+  const work = (payload?.today_work || []).slice(0, 4)
+  return <SectionCard title="Learner Support" subtitle="Today’s sessions, reassessments and actions within your teaching scope" actions={<button type="button" onClick={() => onOpen()} className="text-[10px] font-semibold text-emerald-700">Open support centre →</button>}>
+    <div className="grid gap-2 border-b border-[#e2e8f0] bg-[#f8fafc] p-3 sm:grid-cols-4">{[
+      ['Sessions today', work.filter((item: any) => item.session_ref).length], ['Reassessments due', counts.reassessments_due || 0], ['Needs acknowledgement', counts.unacknowledged_assignments || 0], ['Overdue actions', counts.needs_attention || 0],
+    ].map(([name, value]) => <div key={String(name)} className="rounded-[6px] border border-[#dbe3ee] bg-white p-2"><div className="text-[9px] font-semibold text-[#64748b]">{name}</div><div className="mt-1 text-[18px] font-bold text-[#111827]">{value}</div></div>)}</div>
+    <div className="divide-y divide-[#edf0f4]">{work.map((item: any) => <button type="button" key={`${item.public_ref}-${item.session_ref || 'case'}`} onClick={() => onOpen(item.public_ref)} className="flex w-full items-center justify-between gap-3 p-3 text-left hover:bg-[#f8fafc]"><span className="min-w-0"><strong className="block truncate text-[11px] text-[#111827]">{item.learner_name || item.class_name || 'Support group'} · {item.subject_name || 'Cross-subject'}</strong><span className="mt-1 block truncate text-[9px] text-[#64748b]">{item.topic_name || 'Multiple learning areas'} · {item.scheduled_at ? new Date(item.scheduled_at).toLocaleString() : 'Review due'}</span></span><ArrowRight className="size-3.5 shrink-0 text-emerald-700"/></button>)}{!work.length ? <div className="flex items-center gap-2 p-4 text-[10px] text-[#64748b]"><HeartHandshake className="size-4 text-emerald-700"/>No learner-support action is due today.</div> : null}</div>
+  </SectionCard>
+}
+
 export function SchoolDashboard() {
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
@@ -928,6 +939,7 @@ export function SchoolDashboard() {
     results: { results: [] },
     forecasts: { forecasts: [] },
     today: { today: {} },
+    learnerSupport: { counts: {}, today_work: [], recently_improved: [] },
   })
   const [error, setError] = useState('')
   const [action, setAction] = useState<SchoolActionKind>('insights')
@@ -936,7 +948,7 @@ export function SchoolDashboard() {
   const refresh = async () => {
     if (!token) return
     setError('')
-    const [dashboard, students, fees, attendance, homework, insights, results, forecasts, today] = await Promise.all([
+    const [dashboard, students, fees, attendance, homework, insights, results, forecasts, today, learnerSupport] = await Promise.all([
       safeLoad(() => api.getSchoolDashboard(token), {}),
       safeLoad(() => api.listStudents(token), { students: [] }),
       safeLoad(() => api.listFeeAccounts(token), { feeAccounts: [] }),
@@ -946,8 +958,9 @@ export function SchoolDashboard() {
       safeLoad(() => api.listResults(token), { results: [] }),
       safeLoad(() => api.listForecasts(token), { forecasts: [] }),
       safeLoad(() => api.getSchoolToday(token), { today: {} }),
+      user?.role === 'teacher' ? safeLoad(() => api.getTeacherSupportSummary(token), { counts: {}, today_work: [], recently_improved: [] }) : Promise.resolve({ counts: {}, today_work: [], recently_improved: [] }),
     ])
-    setPayloads({ dashboard, students, fees, attendance, homework, insights, results, forecasts, today })
+    setPayloads({ dashboard, students, fees, attendance, homework, insights, results, forecasts, today, learnerSupport })
   }
 
   useEffect(() => {
@@ -1057,6 +1070,7 @@ export function SchoolDashboard() {
       {view === 'my-view' ? (
         <>
           <TodayIntelligenceCard todayPayload={payloads.today} user={user} />
+          {role === 'teacher' ? <TeacherLearnerSupportCard payload={payloads.learnerSupport} onOpen={(caseRef) => navigate(caseRef ? `/learner-support/${caseRef}` : '/learner-support')}/> : null}
           <SectionKpiStrip items={kpis} />
           <div className="grid gap-3 xl:grid-cols-[1.15fr_0.85fr]">
             {showFees ? <FeeSnapshotCard dashboard={dashboard} /> : <RecentStudentsCard rows={rows.students} />}

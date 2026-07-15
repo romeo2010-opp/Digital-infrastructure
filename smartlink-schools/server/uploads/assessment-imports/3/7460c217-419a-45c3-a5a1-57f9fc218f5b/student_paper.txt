@@ -1,0 +1,362 @@
+    NAME OF STUDENT________________________________SCHOOL_________
+
+           MWANZA DISTRICT EXAMINATIONS BOARD
+        2024 MALAWI SCHOOL CERTIFICATE OF EDUCATION MOCK EXAMINATIONS
+
+                                          PHYSICS
+                                                                       Subject Number: M164/I
+Friday, 22 March                                                    Time Allowed: 2 Hours
+                                                                         08:00 – 10:00 am
+
+                                            PAPER I
+                                              Theory
+                                            (100 marks)
+
+Instructions                                     Question Tick if     Do not write in   Marker’s
+                                                 Number    answered these columns       name
+  1. This paper contains 12 pages.
+     Please check.                               1
+  2. Fill in your Name at the top of
+                                                 2
+     each page.
+  3. This paper contains two sections,           3
+     A and B. In Section A there are ten         4
+      short answer questions while in
+     Section B there are three restricted        5
+      essay questions.                           6
+  4. Answer all the thirteen questions in the
+                                                 7
+     spaces provided.
+  5. Use of electronic calculators is            8
+     allowed.                                    9
+  6. The maximum number of marks for
+      each question is indicated against         10
+      each question.                             11
+  7. In the table provided on this page, tick
+     against the number of the question you      12
+     have answered.                              13
+
+
+
+
+                          © 2024MNCLUSTER                                   Turn over
+    NAME OF STUDENT________________________________SCHOOL_________
+
+2024                                  Page 2 of 12                                  M164/I
+                                   SECTION A (70 marks)
+1a. Mention any two factors that affect torque acting on a body
+_____________________________________________________________________________
+_____________________________________________________________________________
+                                                                                   (2 marks)
+ b. What type of waves are electromagnetic waves?
+_____________________________________________________________________________
+                                                                                    (1 mark)
+c. Give any two applications of infrared waves.
+_____________________________________________________________________________
+_____________________________________________________________________________
+                                                                                   (2 marks)
+d. A convex lens forms an image whose magnification is −𝟐. Describe the nature of this
+image.
+_____________________________________________________________________________
+_____________________________________________________________________________
+                                                                                   (2 marks)
+2a. Why is the focal length in a camera fixed?
+_____________________________________________________________________________
+                                                                                    (1 mark)
+b. Give the two conditions for the occurrence of total destructive interference in transverse
+waves.
+_____________________________________________________________________________
+_____________________________________________________________________________
+                                                                                   (2 marks)
+c. State how the amplitude of an incident sound wave front is determined.
+
+
+                                                                                    (1 mark)
+      NAME OF STUDENT________________________________SCHOOL_________
+
+2024                                      Page 3 of 12                                 M164/I
+d. Figure 1 shows two identical bottles containing water as shown.
+
+
+
+
+                                                               Figure 1
+(i)    In which bottle will the sound have a greatest pitch?
+                                                                                      (1 mark)
+(ii) Explain the answer to 2d (i) above
+
+
+                                                                                     (2 marks)
+3a. Name the type of thermometer that is used as a flame sensor in safety devises.
+
+
+                                                                                      (1 mark)
+b. 4m3 of a fixed mass of argon gas initially at 770mmHg is compressed to half its original
+volume at constant temperature. Calculate the final pressure of the gas.
+
+
+
+
+                                                                                     (4 marks)
+c. Differentiate absolute error from relative error
+_____________________________________________________________________________
+_____________________________________________________________________________
+                                                                                      (1 mark)
+     NAME OF STUDENT________________________________SCHOOL_________
+
+2024                                     Page 4 of 12                                      M164/I
+4a. The half-life of a certain radioisotope is 28 days.
+(i) What does this mean?
+_____________________________________________________________________________
+                                                                                          (1 mark)
+(ii) What will happen to the value of this half-life if the radioisotope of this type was allowed to
+decay in an environment of a higher temperature?
+_____________________________________________________________________________
+                                                                                          (1 mark)
+(iii) Give your answer to 4(ii) above.
+_____________________________________________________________________________
+_____________________________________________________________________________
+                                                                                          (1 mark)
+b. Figure 2 shows radiation passing through an electric field between two plates R and S.
+
+
+
+
+(i) Identify the charge in plate S in the Figure 2.
+_____________________________________________________________________________
+                                                                                          (1 mark)
+(ii) Explain the answer to 4b (i) above.
+_____________________________________________________________________________
+_____________________________________________________________________________
+                                                                                         (2 marks)
+c. State how controlled chain reaction can be achieved in a nuclear reactor?
+_____________________________________________________________________________
+                                                                      (1 mark)
+    NAME OF STUDENT________________________________SCHOOL_________
+
+2024                                   Page 5 of 12                                          M164/I
+5a. Figure 3 shows a circuit diagram with the three light bulbs as shown.
+
+
+
+
+(i) What does the rating of 4W mean?
+_____________________________________________________________________________
+                                                                                         (1 mark)
+(ii) What would be the effect on the power dissipated by the 10W bulb if the 6W bulb burns
+out?
+_____________________________________________________________________________
+                                                                                         (1 mark)
+(iii) Give two reasons for the answer to 5a(ii) above.
+_____________________________________________________________________________
+_____________________________________________________________________________
+                                                                                        (2 marks)
+b. Mention the two semiconductor electronic components that store energy.
+_____________________________________________________________________________
+_____________________________________________________________________________
+                                                                                        (2 marks)
+c. State the functional difference between a light emitting diode and a photovoltaic cell.
+_____________________________________________________________________________
+_____________________________________________________________________________
+                                                                                         (1 mark)
+6.a Name the law that is used to determine the direction of induced emf when a bar magnet is
+  moved into a fixed conductor.
+  ___________________________________________________________________________
+                                                                                         (1 mark)
+    NAME OF STUDENT________________________________SCHOOL_________
+
+2024                                   Page 6 of 12                                     M164/I
+b. State the advantage of using a zener diode as a safety devise over using a fuse in an electric
+circuit.
+   ___________________________________________________________________________
+                                                                                       (1 mark)
+c. Construct a truth table for the operation of a NOR logic gate.
+
+
+
+
+                                                                                      (4 marks)
+d. How does the magnitude of coefficient of static friction compare with that of a dynamic
+   friction?
+   ___________________________________________________________________________
+                                                                                       (1 mark)
+7a. How much effort is required to lift a 200N load using a pulley system with four pulleys?
+
+
+
+
+                                                                                      (2 marks)
+    NAME OF STUDENT________________________________SCHOOL_________
+
+2024                                   Page 7 of 12                                   M164/I
+b. Describe how clothes dry up in an electric drier.
+_____________________________________________________________________________
+_____________________________________________________________________________
+_____________________________________________________________________________
+                                                                                    (3 marks)
+c. Figure 4 shows two bodies, A and B revolving around a fixed force, Q, along their own
+orbits.
+
+
+
+
+ (i) How does the tangential velocity of body A compare with that of body B if they both take
+same time to complete a revolution?
+_____________________________________________________________________________
+                                                                                    (1 marks)
+(ii) Give a reason for the answer to 6c (i) above.
+_____________________________________________________________________________
+                                                                                     (1 mark)
+8a. Calculate mass, in Kg, that can produce an extension of 5cm when two identical springs of
+   spring constant 50N/cm each are arranged in parallel.
+
+
+
+
+                                                                                    (3 marks)
+     NAME OF STUDENT________________________________SCHOOL_________
+
+2024                                     Page 8 of 12                                    M164/I
+b. Give two differences between elastic collision and inelastic collision
+_____________________________________________________________________________
+_____________________________________________________________________________
+                                                                                       (2 marks)
+c. Why is a body moving in a uniform circular motion said to accelerate despite moving at a
+constant speed?
+_____________________________________________________________________________
+                                                                                        (1 mark)
+9a. Describe how a crumple zone of a car provides safety to passengers in a car.
+_____________________________________________________________________________
+_____________________________________________________________________________
+_____________________________________________________________________________
+                                                                                       (2 marks)
+b. Figure 5 shows a 10 kg block lying on a flat, rough horizontal surface of a table. The block is
+   connected to a 2 kg block hanging over the side of the table. The string runs over a light
+   frictionless pulley. The blocks are stationary at the point when they are just about to move.
+
+
+
+
+(i) Calculate coefficient of static friction force for the 10kg block.
+
+
+
+
+                                                                                       (3 marks)
+    NAME OF STUDENT________________________________SCHOOL_________
+
+2024                                   Page 9 of 12                                     M164/I
+(ii). What would happen to the value obtained in 9b (i)above if the mass of the 10kg block was
+increased?
+_____________________________________________________________________________
+                                                                                       (1 mark)
+(iii). Give a reason for the answer in 9b(ii) above.
+_____________________________________________________________________________
+                                                                                       (1 mark)
+10a. Construct a fixed resistor using resistor color codes with the value of 25 kΩ ± 10%
+
+
+
+
+                                                                                       (3 mark)
+b. State the energy-work theorem
+_____________________________________________________________________________
+_____________________________________________________________________________
+                                                                                       (1 mark)
+c. Give two factors that affect power loss in cables during transmission of electrical power.
+_____________________________________________________________________________
+_____________________________________________________________________________
+                                                                                      (2 marks)
+d. State the meaning of phase of a wave
+_____________________________________________________________________________
+                                                                                       (1 mark)
+    NAME OF STUDENT________________________________SCHOOL_________
+
+2024                                 Page 10 of 12                         M164/I
+                                  SECTION B (30 marks)
+11a. Describe how a U – tube manometer works to measure gas pressure
+_____________________________________________________________________________
+_____________________________________________________________________________
+_____________________________________________________________________________
+_____________________________________________________________________________
+_____________________________________________________________________________
+_____________________________________________________________________________
+_____________________________________________________________________________
+_____________________________________________________________________________
+_____________________________________________________________________________
+_____________________________________________________________________________
+                                                                          (5 marks)
+ b. Describe how fish survive in a freezing water body in cold regions.
+_____________________________________________________________________________
+_____________________________________________________________________________
+_____________________________________________________________________________
+_____________________________________________________________________________
+_____________________________________________________________________________
+_____________________________________________________________________________
+_____________________________________________________________________________
+_____________________________________________________________________________
+_____________________________________________________________________________
+_____________________________________________________________________________
+_____________________________________________________________________________
+_____________________________________________________________________________
+                                                                          (5 marks)
+    NAME OF STUDENT________________________________SCHOOL_________
+
+2024                                  Page 11 of 12                                    M164/I
+12a. Briefly describe how p-type semiconductors are produced.
+_____________________________________________________________________________
+_____________________________________________________________________________
+_____________________________________________________________________________
+_____________________________________________________________________________
+_____________________________________________________________________________
+_____________________________________________________________________________
+_____________________________________________________________________________
+_____________________________________________________________________________
+_____________________________________________________________________________
+_____________________________________________________________________________
+_____________________________________________________________________________
+_____________________________________________________________________________
+_____________________________________________________________________________
+                                                                                     (5 marks)
+12b. With the aid of a well labeled diagram, describe the nature of reflected waves when
+straight wave fronts are allowed to strike a convex reflecting surface.
+
+
+
+
+_____________________________________________________________________________
+_____________________________________________________________________________
+_____________________________________________________________________________
+_____________________________________________________________________________
+_____________________________________________________________________________
+_____________________________________________________________________________
+____________________________________________________________________(5 marks)
+    NAME OF STUDENT________________________________SCHOOL_________
+
+2024                                   Page 12 of 12                                      M164/I
+13. With the aid of a well labeled graph, describe the motion of a body as it falls through a
+liquid.
+
+
+
+
+_____________________________________________________________________________
+_____________________________________________________________________________
+_____________________________________________________________________________
+_____________________________________________________________________________
+_____________________________________________________________________________
+_____________________________________________________________________________
+_____________________________________________________________________________
+_____________________________________________________________________________
+_____________________________________________________________________________
+_____________________________________________________________________________
+_____________________________________________________________________________
+_____________________________________________________________________________
+_____________________________________________________________________________
+_____________________________________________________________________________
+_____________________________________________________________________________
+_____________________________________________________________________________
+                                                                                       (10 marks)
+                                 END OF QUESTION PAPER
+NB: This paper contains 12 printed pages.
+

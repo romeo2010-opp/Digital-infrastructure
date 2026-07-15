@@ -2,6 +2,7 @@ import { pool } from "../config/db.js"
 import { getScopedSchoolId, getTeacherClassIds, scopedInClause } from "../utils/tenantScope.js"
 import { HttpError } from "../utils/http.js"
 import { getActiveAcademicSession, sessionPayload } from "../services/academicSessionService.js"
+import { listLearnerSupportIndicators } from "../services/academicSupportService.js"
 import { studentCodeSortSql } from "../utils/studentSort.js"
 import { randomUUID } from "crypto"
 import bcrypt from "bcryptjs"
@@ -145,6 +146,8 @@ export async function getClass(req, res) {
      ORDER BY ${studentCodeSortSql("s")}, s.last_name, s.first_name`,
     [schoolId, session.academicYearId, session.termId, classId],
   )
+  const supportIndicators = await listLearnerSupportIndicators(schoolId, req.user, classId)
+  const supportByLearner = new Map(supportIndicators.map((item) => [item.learner_ref, item]))
   const assignmentSessionClause = session.setupRequired
     ? ""
     : " AND (a.academic_year_id = ? OR a.academic_year_id IS NULL) AND (a.term_id = ? OR a.term_id IS NULL)"
@@ -162,7 +165,7 @@ export async function getClass(req, res) {
      ORDER BY a.is_active DESC, a.role, subj.name`,
     [schoolId, classId, ...assignmentSessionParams],
   )
-  res.json({ class: { ...classRow, students, assignments }, session: sessionPayload(session), setup_required: session.setupRequired })
+  res.json({ class: { ...classRow, students: students.map((student) => ({ ...student, learner_support: supportByLearner.get(student.public_ref) || null })), assignments }, session: sessionPayload(session), setup_required: session.setupRequired })
 }
 
 export async function createClass(req, res) {
@@ -275,19 +278,35 @@ export async function listParents(req, res) {
   const teacherClassIds = await getTeacherClassIds(req, schoolId)
   const classScope = scopedInClause(teacherClassIds, "se.class_id")
   const [rows] = await pool.query(
-    `SELECT l.id, u.full_name AS parent_name, u.email, u.phone, l.relationship,
-      s.first_name, s.last_name, c.name AS class_name
-     FROM parent_student_links l
-     JOIN users u ON u.id = l.parent_user_id AND u.school_id = l.school_id
-     JOIN students s ON s.id = l.student_id AND s.school_id = l.school_id
+    `SELECT sg.id, sg.public_ref AS guardian_ref, COALESCE(sg.guardian_number,1) guardian_number,
+      COALESCE(sg.full_name,'Guardian not recorded') AS parent_name,
+      sg.full_name AS guardian_name, sg.relationship,
+      COALESCE(sg.primary_phone, u.phone) AS phone,
+      COALESCE(sg.email, u.email) AS email,
+      sg.primary_phone AS guardian_phone, sg.email AS guardian_email,
+      u.public_ref AS parent_ref, u.full_name AS login_name, u.email AS login_email, u.is_active AS account_active,
+      s.public_ref AS student_ref, s.admission_no, s.first_name, s.last_name,
+      c.name AS class_name
+     FROM students s
      JOIN student_enrollments se ON se.student_id = s.id AND se.school_id = s.school_id
       AND se.academic_year_id = ? AND se.term_id = ? AND se.enrollment_status = 'active'
      JOIN classes c ON c.id = se.class_id AND c.school_id = se.school_id
-     WHERE l.school_id = ? AND s.status = 'active'${classScope.clause}
-     ORDER BY u.full_name, ${studentCodeSortSql("s")}, s.last_name`,
+     LEFT JOIN student_guardians sg ON sg.student_id = s.id AND sg.school_id = s.school_id
+     LEFT JOIN users u ON u.id = sg.user_id AND u.school_id = sg.school_id AND u.role = 'parent'
+     WHERE s.school_id = ? AND s.status = 'active'${classScope.clause}
+     ORDER BY sg.full_name IS NULL,sg.full_name,${studentCodeSortSql("s")},s.last_name,sg.guardian_number`,
     [session.academicYearId, session.termId, schoolId, ...classScope.params],
   )
-  res.json({ parents: rows, session: sessionPayload(session), setup_required: false })
+  res.json({
+    parents: rows.map((row) => ({
+      ...row,
+      account_active: row.parent_ref ? Boolean(row.account_active) : false,
+      account_status: !row.guardian_ref ? "guardian_missing" : row.parent_ref ? (row.account_active ? "linked" : "disabled") : "not_linked",
+      guardian_missing: !row.guardian_ref,
+    })),
+    session: sessionPayload(session),
+    setup_required: false,
+  })
 }
 
 export async function listResults(req, res) {
@@ -421,12 +440,22 @@ export async function createSchoolUser(req, res) {
   const schoolId = getScopedSchoolId(req)
   const role = String(req.body?.role || "").trim().toLowerCase()
   const email = String(req.body?.email || "").trim().toLowerCase()
-  const phone = String(req.body?.phone || "").trim() || null
-  const name = splitStaffName(req.body?.full_name)
+  let phone = String(req.body?.phone || "").trim() || null
+  let name = splitStaffName(req.body?.full_name)
 
-  if (!name.fullName || name.fullName.length < 2) throw new HttpError(400, "Enter the staff member's full name")
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new HttpError(400, "Enter a valid staff email address")
   if (!STAFF_INVITE_ROLES.has(role)) throw new HttpError(400, "Select a supported school staff role")
+  if (role === "parent" && !req.body?.student_ref) throw new HttpError(400, "Select the learner and guardian record for this parent login")
+  if (role === "parent") {
+    const guardianNumber = Math.max(1, Math.min(2, Number(req.body.guardian_number || 1)))
+    const [[guardianIdentity]] = await pool.query(`SELECT sg.full_name,sg.primary_phone
+      FROM students s LEFT JOIN student_guardians sg ON sg.school_id=s.school_id AND sg.student_id=s.id AND sg.guardian_number=?
+      WHERE s.school_id=? AND s.public_ref=? LIMIT 1`, [guardianNumber, schoolId, String(req.body.student_ref)])
+    if (!guardianIdentity) throw new HttpError(400, "The selected learner was not found")
+    if (guardianIdentity.full_name) name = splitStaffName(guardianIdentity.full_name)
+    phone = phone || guardianIdentity.primary_phone || null
+  }
+  if (!name.fullName || name.fullName.length < 2) throw new HttpError(400, role === "parent" ? "The recorded guardian must have a full name" : "Enter the staff member's full name")
 
   const temporaryPassword = temporaryStaffPassword(name.firstName)
   const passwordHash = await bcrypt.hash(temporaryPassword, 10)
@@ -446,8 +475,11 @@ export async function createSchoolUser(req, res) {
       const [[student]]=await connection.query("SELECT id FROM students WHERE school_id=? AND public_ref=? LIMIT 1",[schoolId,String(req.body.student_ref)])
       if(!student)throw new HttpError(400,'The student selected for this guardian account was not found.')
       const guardianNumber=Math.max(1,Math.min(2,Number(req.body.guardian_number||1)))
-      const [link]=await connection.query("UPDATE student_guardians SET user_id=? WHERE school_id=? AND student_id=? AND guardian_number=?",[insert.insertId,schoolId,student.id,guardianNumber])
-      if(!link.affectedRows)throw new HttpError(400,'That guardian position is not available on the student profile.')
+      const [[guardian]]=await connection.query("SELECT id,user_id FROM student_guardians WHERE school_id=? AND student_id=? AND guardian_number=? LIMIT 1 FOR UPDATE",[schoolId,student.id,guardianNumber])
+      if(guardian?.user_id)throw new HttpError(409,'That guardian already has a parent login. Link another guardian record or use the existing account.')
+      if(guardian)await connection.query("UPDATE student_guardians SET user_id=? WHERE id=? AND school_id=? AND user_id IS NULL",[insert.insertId,guardian.id,schoolId])
+      else await connection.query(`INSERT INTO student_guardians (public_ref,school_id,student_id,user_id,guardian_number,full_name,relationship,primary_phone,email)
+        VALUES (?,?,?,?,?,?,?,?,?)`,[randomUUID(),schoolId,student.id,insert.insertId,guardianNumber,name.fullName,String(req.body.relationship||'guardian').trim().slice(0,60)||'guardian',phone,email])
     }
     await connection.query(
       `INSERT INTO audit_logs (school_id,actor_user_id,actor_role,action,entity_type,entity_id,after_value)
@@ -475,13 +507,28 @@ export async function linkParentGuardian(req,res) {
   const userRef=String(req.params.userRef||'')
   const studentRef=String(req.body?.student_ref||'')
   const guardianNumber=Math.max(1,Math.min(2,Number(req.body?.guardian_number||1)))
-  const [[parent]]=await pool.query("SELECT id,role FROM users WHERE school_id=? AND public_ref=? LIMIT 1",[schoolId,userRef])
-  if(!parent||parent.role!=='parent')throw new HttpError(400,'Select a parent or guardian user account.')
-  const [[student]]=await pool.query("SELECT id FROM students WHERE school_id=? AND public_ref=? LIMIT 1",[schoolId,studentRef])
-  if(!student)throw new HttpError(404,'Student was not found.')
-  const [result]=await pool.query("UPDATE student_guardians SET user_id=? WHERE school_id=? AND student_id=? AND guardian_number=?",[parent.id,schoolId,student.id,guardianNumber])
-  if(!result.affectedRows)throw new HttpError(404,'That guardian record is not available on the student profile.')
-  await pool.query("INSERT INTO audit_logs (school_id,actor_user_id,actor_role,action,entity_type,entity_id,after_value) VALUES (?,?,?,'PARENT_GUARDIAN_LINKED','student',?,?)",[schoolId,req.user.id,req.user.role,student.id,JSON.stringify({parent_ref:userRef,student_ref:studentRef,guardian_number:guardianNumber})]).catch((error)=>{if(!['ER_NO_SUCH_TABLE','ER_BAD_FIELD_ERROR'].includes(error?.code))throw error})
+  const connection=await pool.getConnection()
+  try {
+    await connection.beginTransaction()
+    const [[parent]]=await connection.query("SELECT id,role,full_name,email FROM users WHERE school_id=? AND public_ref=? LIMIT 1",[schoolId,userRef])
+    if(!parent||parent.role!=='parent')throw new HttpError(400,'Select a parent or guardian user account.')
+    const [[student]]=await connection.query("SELECT id FROM students WHERE school_id=? AND public_ref=? LIMIT 1",[schoolId,studentRef])
+    if(!student)throw new HttpError(404,'Student was not found.')
+    const [[guardian]]=await connection.query("SELECT id,user_id,full_name,email FROM student_guardians WHERE school_id=? AND student_id=? AND guardian_number=? LIMIT 1 FOR UPDATE",[schoolId,student.id,guardianNumber])
+    if(!guardian)throw new HttpError(404,'That guardian record is not available on the student profile.')
+    const sameName=String(parent.full_name||'').trim().toLowerCase()===String(guardian.full_name||'').trim().toLowerCase()
+    const sameEmail=guardian.email&&String(parent.email||'').trim().toLowerCase()===String(guardian.email).trim().toLowerCase()
+    if(!sameName&&!sameEmail)throw new HttpError(409,'The selected login does not match this learner’s recorded guardian name or email.')
+    if(guardian.user_id&&Number(guardian.user_id)!==Number(parent.id))throw new HttpError(409,'That guardian is already linked to a different parent login.')
+    if(!guardian.user_id)await connection.query("UPDATE student_guardians SET user_id=? WHERE id=? AND school_id=? AND user_id IS NULL",[parent.id,guardian.id,schoolId])
+    await connection.query("INSERT INTO audit_logs (school_id,actor_user_id,actor_role,action,entity_type,entity_id,after_value) VALUES (?,?,?,'PARENT_GUARDIAN_LINKED','student',?,?)",[schoolId,req.user.id,req.user.role,student.id,JSON.stringify({parent_ref:userRef,student_ref:studentRef,guardian_number:guardianNumber})]).catch((error)=>{if(!['ER_NO_SUCH_TABLE','ER_BAD_FIELD_ERROR'].includes(error?.code))throw error})
+    await connection.commit()
+  } catch(error) {
+    await connection.rollback()
+    throw error
+  } finally {
+    connection.release()
+  }
   res.json({linked:true,parent_ref:userRef,student_ref:studentRef,guardian_number:guardianNumber})
 }
 

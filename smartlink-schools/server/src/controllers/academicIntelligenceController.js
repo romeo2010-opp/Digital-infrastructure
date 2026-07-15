@@ -166,7 +166,7 @@ export async function patchCurriculumLifecycle(req,res){res.json({record:await u
 export async function postIntervention(req,res){res.status(201).json({intervention:await createIntervention(getScopedSchoolId(req),req.user,req.body||{})})}
 export async function postParentAcademicInsight(req,res){res.status(201).json({insight:await createParentAcademicInsight(getScopedSchoolId(req),req.user,req.body||{})})}
 export async function patchParentAcademicInsight(req,res){res.json({insight:await updateParentAcademicInsight(getScopedSchoolId(req),String(req.params.insightRef||''),req.user,req.body||{})})}
-export async function parentPortalAcademicInsights(req,res){res.json(await getParentPortalAcademicInsights(getScopedSchoolId(req),req.user))}
+export async function parentPortalAcademicInsights(req,res){res.json(await getParentPortalAcademicInsights(getScopedSchoolId(req),req.user,req.query||{}))}
 export async function updateIntervention(req,res){res.json({intervention:await patchIntervention(getScopedSchoolId(req),String(req.params.interventionRef||''),req.user,req.body||{})})}
 export async function assessmentBlueprints(req,res){res.json(await listAssessmentBlueprints(getScopedSchoolId(req),req.query))}
 export async function postAssessmentBlueprint(req,res){res.status(201).json({blueprint:await createAssessmentBlueprint(getScopedSchoolId(req),req.user,req.body||{})})}

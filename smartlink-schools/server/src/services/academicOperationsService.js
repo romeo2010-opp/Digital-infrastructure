@@ -8,7 +8,12 @@ import {
   recalculateStudentMastery,
   recordAcademicIntelligenceSnapshot,
 } from "./academicIntelligenceEngine.js"
-import { syncSupportCasesFromPublishedAssessment } from "./academicSupportService.js"
+import {
+  evaluateInterventionDelivery,
+  getInterventionDeliveryMetrics,
+  recordSupportCaseEvent,
+  syncSupportCasesFromPublishedAssessment,
+} from "./academicSupportService.js"
 import { generateDraftQuestions } from "./questions/questionDraftingService.js"
 
 const EPSILON = 0.01
@@ -526,7 +531,39 @@ async function evaluateLinkedReassessment(connection, schoolId, sheet, actor) {
   const outcome = result.outcome === "EFFECTIVE" ? "effective" : result.outcome === "PARTIALLY_EFFECTIVE" ? "partially_effective" : result.outcome === "INEFFECTIVE" ? "ineffective" : "inconclusive"
   await connection.query("UPDATE academic_intervention_reassessments SET reassessment_mark_sheet_id=?,outcome=?,outcome_summary_json=?,evaluated_at=CURRENT_TIMESTAMP,evaluated_by=? WHERE id=? AND school_id=?", [sheet.id, outcome, JSON.stringify(outcomeSummary), actor.id, link.id, schoolId])
   await connection.query("UPDATE academic_interventions SET outcome=?,status=?,reassessment_summary_json=?,completed_by=CASE WHEN ?='completed' THEN ? ELSE completed_by END,completed_at=CASE WHEN ?='completed' THEN CURRENT_TIMESTAMP ELSE completed_at END WHERE id=? AND school_id=?", [outcome === "effective" || outcome === "partially_effective" ? "improved" : outcome === "ineffective" ? "unchanged" : "inconclusive", outcome === "effective" ? "completed" : "review_due", JSON.stringify(outcomeSummary), outcome === "effective" ? "completed" : "review_due", actor.id, outcome === "effective" ? "completed" : "review_due", link.intervention_id, schoolId])
-  return { intervention_ref: link.intervention_ref, ...outcomeSummary }
+  let canonicalOutcome = null
+  if (link.support_case_id && link.intervention_cycle_id) {
+    const [[supportCase], [cycleRows]] = await Promise.all([
+      connection.query("SELECT * FROM learner_support_cases WHERE school_id=? AND id=? LIMIT 1 FOR UPDATE", [schoolId, link.support_case_id]).then(([rows]) => rows),
+      connection.query("SELECT * FROM intervention_cycles WHERE school_id=? AND id=? LIMIT 1 FOR UPDATE", [schoolId, link.intervention_cycle_id]),
+    ])
+    const cycle = cycleRows[0]
+    if (supportCase && cycle) {
+      const delivery = await getInterventionDeliveryMetrics(connection, schoolId, cycle.id)
+      const comparable = result.baseline_score !== null && result.reassessment_score !== null
+      canonicalOutcome = evaluateInterventionDelivery({
+        plannedSessions: cycle.planned_session_count,
+        completedSessions: delivery.deliveredSessions,
+        attendanceEligible: delivery.attendanceEligible,
+        attendedSessions: delivery.attendedSessions,
+        reassessmentPublished: true,
+        reassessmentComparable: comparable,
+        baselineScore: result.baseline_score,
+        reassessmentScore: result.reassessment_score,
+        successCriterion: Number(criterion.mastery_threshold || criterion.success_threshold || 60),
+        minimumMeaningfulChange: Number(criterion.minimum_meaningful_change || criterion.minimum_change || 5),
+      }, { minimumSupportDeliveryRate: cycle.delivery_threshold, minimumSupportAttendanceRate: cycle.attendance_threshold })
+      const cycleStatus = canonicalOutcome.outcome === "awaiting_reassessment" ? "awaiting_reassessment" : ["incomplete_delivery", "insufficient_participation", "inconclusive"].includes(canonicalOutcome.outcome) ? canonicalOutcome.outcome : "completed"
+      const cycleOutcome = ["effective", "partially_effective", "ineffective", "inconclusive"].includes(canonicalOutcome.outcome) ? canonicalOutcome.outcome : "not_classified"
+      const improved = canonicalOutcome.outcome === "effective"
+      const unsuccessful = ["partially_effective", "ineffective"].includes(canonicalOutcome.outcome)
+      const caseStatus = improved ? "continued_support" : unsuccessful ? "strategy_review" : canonicalOutcome.outcome === "awaiting_reassessment" ? "reassessment_pending" : "intervention_active"
+      await connection.query("UPDATE intervention_cycles SET status=?,outcome=?,diagnostic_json=?,version_number=version_number+1,updated_by=? WHERE school_id=? AND id=?", [cycleStatus, cycleOutcome, JSON.stringify({ ...canonicalOutcome, ...learnerOutcome }), actor.id, schoolId, cycle.id])
+      await connection.query("UPDATE learner_support_cases SET status=?,successful_cycle_count=successful_cycle_count+?,unsuccessful_cycle_count=unsuccessful_cycle_count+?,last_reviewed_at=CURRENT_TIMESTAMP,next_review_at=DATE_ADD(CURRENT_DATE,INTERVAL 5 DAY),current_summary=CONCAT(current_summary,' Published reassessment outcome: ',?),version_number=version_number+1,updated_by=? WHERE school_id=? AND id=?", [caseStatus, improved ? 1 : 0, unsuccessful ? 1 : 0, canonicalOutcome.outcome.replaceAll("_", " "), actor.id, schoolId, supportCase.id])
+      await recordSupportCaseEvent(connection, schoolId, supportCase, actor, "reassessment_outcome_evaluated", `Published reassessment evidence classified the intervention outcome as ${canonicalOutcome.outcome.replaceAll("_", " ")}.`, { idempotencyKey: `published-reassessment:${link.id}:${sheet.id}`, linkedType: "academic_mark_sheet", linkedRef: sheet.public_ref, status: caseStatus, evidence: { ...canonicalOutcome, ...learnerOutcome } })
+    }
+  }
+  return { intervention_ref: link.intervention_ref, support_case_ref: canonicalOutcome ? link.support_case_id : null, canonical_outcome: canonicalOutcome, ...outcomeSummary }
 }
 
 export async function publishAcademicMarkSheet(schoolId, assessmentId, actor, body = {}) {

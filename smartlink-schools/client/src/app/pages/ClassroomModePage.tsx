@@ -39,10 +39,10 @@ function LessonCountdown({ session }: { session: any }) {
   const minutes = Math.floor(remaining / 60000)
   const seconds = Math.floor((remaining % 60000) / 1000)
   return (
-    <div className="min-w-[210px] rounded-[12px] border border-white/20 bg-white/10 px-4 py-3 backdrop-blur">
-      <div className="flex items-center justify-between gap-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-indigo-100"><span>Time remaining</span><Clock3 className="size-3.5" /></div>
-      <div className="mt-1 font-mono text-[28px] font-semibold tracking-[-0.04em] text-white">{minutes}:{String(seconds).padStart(2, '0')}</div>
-      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/20"><div className="h-full rounded-full bg-[#fbbf24] transition-[width]" style={{ width: `${progress}%` }} /></div>
+    <div className="min-w-[210px] rounded-[8px] border border-[#d9dee7] bg-white px-4 py-3">
+      <div className="flex items-center justify-between gap-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-[#64748b]"><span>Time remaining</span><Clock3 className="size-3.5" /></div>
+      <div className="mt-1 font-mono text-[28px] font-semibold text-[#111827]">{minutes}:{String(seconds).padStart(2, '0')}</div>
+      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-[#e2e8f0]"><div className="h-full rounded-full bg-[#16a34a] transition-[width]" style={{ width: `${progress}%` }} /></div>
     </div>
   )
 }
@@ -58,7 +58,22 @@ function Launcher() {
   const [starting, setStarting] = useState(false)
   useEffect(() => {
     Promise.all([api.getClassroomSetup(token), api.listClassroomHistory(token)])
-      .then(([payload, recent]: any[]) => { setSetup({ classes: payload.classes || [] }); setHistory(recent.sessions || []) })
+      .then(([payload, recent]: any[]) => {
+        const classes = payload.classes || []
+        setSetup({ classes, current_period: payload.current_period || null, active_lesson_ref: payload.active_lesson_ref || null, unfinished_lesson: payload.unfinished_lesson || null })
+        setHistory(recent.sessions || [])
+        if (payload.active_lesson_ref) {
+          navigate(`/classroom/${payload.active_lesson_ref}`)
+          return
+        }
+        const current = payload.current_period
+        if (current?.class_ref) {
+          const currentClass = classes.find((row: any) => row.public_ref === current.class_ref)
+          const currentSubject = currentClass?.subjects?.find((row: any) => row.public_ref === current.subject_ref)
+          if (currentClass) setClassRef(currentClass.public_ref)
+          if (currentSubject) setSubjectRef(currentSubject.public_ref)
+        }
+      })
       .catch((error: any) => toast.error(error.message))
   }, [api, token])
   const selectedClass = setup.classes.find((row: any) => row.public_ref === classRef)
@@ -67,7 +82,8 @@ function Launcher() {
     if (!classRef || !subjectRef) return
     setStarting(true)
     try {
-      const response = await api.startClassroomSession(token, { class_ref: classRef, subject_ref: subjectRef, topic_ref: topicRef || undefined, offline_client_id: crypto.randomUUID() })
+      const selectedIsCurrent = setup.current_period?.class_ref === classRef && setup.current_period?.subject_ref === subjectRef
+      const response = await api.startClassroomSession(token, { class_ref: classRef, subject_ref: subjectRef, topic_ref: topicRef || undefined, timetable_entry_id: selectedIsCurrent ? setup.current_period.timetable_entry_id : undefined, offline_client_id: crypto.randomUUID() })
       navigate(`/classroom/${response.session.public_ref}`)
     } catch (error: any) {
       toast.error(error.message)
@@ -75,16 +91,19 @@ function Launcher() {
       setStarting(false)
     }
   }
+  const currentPeriod = setup.current_period
   return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,#c4b5fd_0,transparent_34%),radial-gradient(circle_at_bottom_right,#67e8f9_0,transparent_32%),linear-gradient(135deg,#eef2ff,#f8fafc_48%,#ecfeff)] p-4 md:p-8">
-      <button onClick={() => navigate('/dashboard')} className="mb-4 rounded-full border border-white/70 bg-white/75 px-4 py-2 text-[12px] font-semibold text-[#4338ca] shadow-sm backdrop-blur hover:bg-white">← Return to dashboard</button>
+    <div className="min-h-screen bg-[#f4f6f8] p-4 md:p-8">
+      <button onClick={() => navigate('/dashboard')} className="mb-4 rounded-[6px] border border-[#d9dee7] bg-white px-4 py-2 text-[12px] font-semibold text-[#334155] shadow-sm hover:bg-[#f8fafc]">← Return to dashboard</button>
       <div className="mx-auto grid max-w-6xl gap-4">
-        <section className="overflow-hidden rounded-[20px] border border-white/60 bg-white/85 shadow-[0_28px_80px_rgba(79,70,229,.18)] backdrop-blur">
-          <div className="bg-gradient-to-r from-[#4338ca] via-[#6d28d9] to-[#0e7490] p-7 text-white">
-            <span className="grid size-11 place-items-center rounded-[12px] bg-white/15"><Play className="size-5" /></span>
-            <div className="mt-5 text-[10px] font-semibold uppercase tracking-[0.16em] text-indigo-100">Teacher-operated Classroom Mode</div>
-            <h1 className="mt-2 max-w-3xl text-[32px] font-semibold tracking-[-0.05em]">A clean teaching canvas for the lesson in front of you</h1>
-            <p className="mt-3 max-w-3xl text-[13px] leading-6 text-indigo-100">Students keep using books, paper and verbal responses. SmartLink stays focused on attendance, lesson delivery, classroom judgement and the next academic action.</p>
+        <section className="overflow-hidden rounded-[10px] border border-[#d9dee7] bg-white shadow-sm">
+          <div className="border-b border-[#e2e8f0] p-6">
+            <span className="grid size-10 place-items-center rounded-[8px] bg-[#0f172a] text-white"><Play className="size-5" /></span>
+            <div className="mt-5 text-[10px] font-semibold uppercase tracking-[0.16em] text-[#64748b]">Teacher-operated Classroom Mode</div>
+            <h1 className="mt-2 max-w-3xl text-[28px] font-semibold text-[#111827]">Start the class that is active now</h1>
+            <p className="mt-3 max-w-3xl text-[13px] leading-6 text-[#64748b]">SmartLink keeps the live class focused on attendance and approved resources. Reflection and lesson evidence can wait until teaching has ended.</p>
+            {currentPeriod ? <div className="mt-4 rounded-[8px] border border-[#bbf7d0] bg-[#f0fdf4] px-4 py-3 text-[12px] font-semibold text-[#166534]">Active now: {currentPeriod.class_name} · {currentPeriod.subject_name} · {periodTime(currentPeriod.start_time)}-{periodTime(currentPeriod.end_time)}</div> : null}
+            {setup.unfinished_lesson ? <button type="button" onClick={() => navigate(`/classroom/${setup.unfinished_lesson.public_ref}`)} className="mt-3 w-full rounded-[8px] border border-[#fde68a] bg-[#fffbeb] px-4 py-3 text-left text-[12px] font-semibold text-[#92400e]">An earlier lesson is still open. Review and complete it before starting the active timetable subject.</button> : null}
           </div>
           <div className="grid gap-3 p-5 md:grid-cols-[1fr_1fr_1fr_auto]">
             <Select value={classRef} onChange={(value) => { setClassRef(value); setSubjectRef(''); setTopicRef('') }}><option value="">Select assigned class</option>{setup.classes.map((row: any) => <option key={row.public_ref} value={row.public_ref}>{row.name}</option>)}</Select>
@@ -95,10 +114,10 @@ function Launcher() {
         </section>
         <section className="grid gap-3 sm:grid-cols-3">
           {[['Attendance', 'Mark all present, then edit only the exceptions.'], ['Paper activities', 'Use worksheets, oral questions, exit tickets and exercise books.'], ['Safe progress', 'Taught and observed never silently become mastered.']].map(([title, detail], index) => (
-            <article key={title} className={`rounded-[14px] border border-white/70 p-4 shadow-sm backdrop-blur ${index === 0 ? 'bg-amber-50/90' : index === 1 ? 'bg-cyan-50/90' : 'bg-violet-50/90'}`}><div className="text-[13px] font-semibold text-[#111827]">{title}</div><div className="mt-1 text-[11px] leading-5 text-[#64748b]">{detail}</div></article>
+            <article key={title} className={`rounded-[8px] border p-4 shadow-sm ${index === 0 ? 'border-[#bbf7d0] bg-[#f0fdf4]' : index === 1 ? 'border-[#bfdbfe] bg-[#eff6ff]' : 'border-[#e2e8f0] bg-white'}`}><div className="text-[13px] font-semibold text-[#111827]">{title}</div><div className="mt-1 text-[11px] leading-5 text-[#64748b]">{detail}</div></article>
           ))}
         </section>
-        <section className="overflow-hidden rounded-[16px] border border-white/70 bg-white/80 shadow-sm backdrop-blur">
+        <section className="overflow-hidden rounded-[10px] border border-[#d9dee7] bg-white shadow-sm">
           <div className="border-b border-[#e2e8f0] px-5 py-4"><h2 className="text-[14px] font-semibold text-[#111827]">Recent lessons</h2><p className="mt-1 text-[11px] text-[#64748b]">Resume an active lesson or review what was recorded previously.</p></div>
           <div className="divide-y divide-[#e2e8f0]">{history.slice(0, 6).map((row: any) => <button type="button" key={row.public_ref} onClick={() => navigate(`/classroom/${row.public_ref}`)} className="grid w-full gap-2 px-5 py-3 text-left hover:bg-white sm:grid-cols-[1fr_1fr_auto]"><span className="text-[12px] font-semibold text-[#111827]">{row.class_name} · {row.subject_name}</span><span className="text-[11px] text-[#64748b]">{row.topic_name || 'Topic not recorded'} · {String(row.lesson_date || '').slice(0, 10)}</span><span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#6366f1]">{String(row.status || '').replaceAll('_', ' ')}</span></button>)}{!history.length ? <div className="p-6 text-center text-[12px] text-[#64748b]">No Classroom Mode lessons have been recorded yet.</div> : null}</div>
         </section>
@@ -116,6 +135,7 @@ export function ClassroomModePage() {
   const [sync, setSync] = useState<'saved' | 'saving' | 'offline'>('saved')
   const [attendance, setAttendance] = useState<any[]>([])
   const [resourceNeed, setResourceNeed] = useState('')
+  const [lessonEnded, setLessonEnded] = useState(false)
   const saveTimer = useRef<any>(null)
   const ref = String(sessionRef || '')
 
@@ -191,30 +211,50 @@ export function ClassroomModePage() {
   }
   const statusIcon = sync === 'saved' ? <Cloud className="size-3.5" /> : sync === 'saving' ? <RefreshCw className="size-3.5 animate-spin" /> : <CloudOff className="size-3.5" />
   const next = data.schedule?.next_period
+  const sessionCompleted = data.session.status === 'completed'
+  const showReflection = sessionCompleted || lessonEnded
 
   return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,#ddd6fe_0,transparent_30%),radial-gradient(circle_at_bottom_right,#a5f3fc_0,transparent_28%),linear-gradient(135deg,#eef2ff,#f8fafc_48%,#ecfeff)] p-3 md:p-5">
+    <div className="min-h-screen bg-[#f4f6f8] p-3 md:p-5">
       <div className="mx-auto grid max-w-[1500px] gap-3">
-        <header className="sticky top-3 z-20 overflow-hidden rounded-[16px] bg-gradient-to-r from-[#3730a3] via-[#6d28d9] to-[#0e7490] p-4 text-white shadow-[0_18px_50px_rgba(67,56,202,.25)]">
+        <header className="sticky top-3 z-20 overflow-hidden rounded-[10px] border border-[#d9dee7] bg-white p-4 text-[#111827] shadow-sm">
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div className="flex min-w-0 flex-wrap items-center gap-3">
-              <button onClick={() => navigate('/dashboard')} className="rounded-full border border-white/25 bg-white/10 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-white/20">← Return to dashboard</button>
-              <div className="h-7 w-px bg-white/20" />
-              <div><div className="text-[18px] font-semibold tracking-[-0.035em]">{data.session.class_name} · {data.session.subject_name}</div><div className="mt-0.5 text-[11px] text-indigo-100">{data.session.topic_name || 'Select the lesson topic'} · started {periodTime(data.session.lesson_started_at)}</div></div>
+              <button onClick={() => navigate('/dashboard')} className="rounded-[6px] border border-[#d9dee7] bg-white px-3 py-1.5 text-[11px] font-semibold text-[#334155] hover:bg-[#f8fafc]">← Return to dashboard</button>
+              <div className="h-7 w-px bg-[#e2e8f0]" />
+              <div><div className="text-[18px] font-semibold">{data.session.class_name} · {data.session.subject_name}</div><div className="mt-0.5 text-[11px] text-[#64748b]">{data.session.topic_name || 'Topic can be confirmed after class'} · started {periodTime(data.session.lesson_started_at)}</div></div>
             </div>
             <div className="flex flex-wrap items-stretch gap-2">
-              <div className="min-w-[190px] rounded-[12px] border border-white/20 bg-white/10 px-4 py-3 backdrop-blur"><div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-cyan-100">Next period</div><div className="mt-1 truncate text-[13px] font-semibold">{next ? (next.subject_name || next.title || next.entry_type) : 'No later period'}</div><div className="mt-1 text-[11px] text-cyan-100">{next ? `${periodTime(next.start_time)} · ${next.class_name || 'School activity'}` : 'Today’s schedule is clear'}</div></div>
+              <div className="min-w-[190px] rounded-[8px] border border-[#d9dee7] bg-[#f8fafc] px-4 py-3"><div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[#64748b]">Next period</div><div className="mt-1 truncate text-[13px] font-semibold">{next ? (next.subject_name || next.title || next.entry_type) : 'No later period'}</div><div className="mt-1 text-[11px] text-[#64748b]">{next ? `${periodTime(next.start_time)} · ${next.class_name || 'School activity'}` : 'Today’s schedule is clear'}</div></div>
               <LessonCountdown session={data.session} />
-              <div className={`flex items-center gap-1.5 rounded-[12px] border border-white/20 bg-white/10 px-3 text-[11px] font-medium ${sync === 'offline' ? 'text-amber-200' : 'text-indigo-100'}`}>{statusIcon}{sync === 'saved' ? 'Synced' : sync === 'saving' ? 'Saving' : 'Saved locally'}</div>
+              <div className={`flex items-center gap-1.5 rounded-[8px] border border-[#d9dee7] bg-white px-3 text-[11px] font-medium ${sync === 'offline' ? 'text-[#b45309]' : 'text-[#475569]'}`}>{statusIcon}{sync === 'saved' ? 'Synced' : sync === 'saving' ? 'Saving' : 'Saved locally'}</div>
             </div>
           </div>
         </header>
 
-        <div className="grid gap-3 xl:grid-cols-[1.15fr_0.85fr]">
+        {!showReflection ? (
+          <div className="rounded-[8px] border border-[#bfdbfe] bg-[#eff6ff] px-4 py-3 text-[12px] font-semibold text-[#1d4ed8]">
+            Live class mode is intentionally limited to attendance and approved resources. End the live phase when teaching is done to record notes, outcomes and follow-up.
+          </div>
+        ) : null}
+
+        <div className={`grid gap-3 ${showReflection ? 'xl:grid-cols-[1.15fr_0.85fr]' : ''}`}>
           <div className="grid gap-3">
             <SectionCard title="1. Fast attendance" subtitle="Mark all present, then edit exceptions in the existing attendance register." actions={<div className="flex gap-2"><Button size="sm" variant="outline" onClick={() => setAttendance(attendance.map((row) => ({ ...row, status: 'present' }))) }><Users className="size-4" />All present</Button><Button size="sm" onClick={saveAttendance}><Check className="size-4" />Save</Button></div>}>
               <div className="max-h-[320px] divide-y overflow-y-auto">{attendance.map((row, index) => <div key={row.student_ref} className="grid grid-cols-[1fr_130px] items-center gap-3 px-4 py-2"><span className="text-[12px] font-medium text-[#111827]">{row.first_name} {row.last_name}</span><Select value={row.status} onChange={(status) => setAttendance((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, status } : item))}>{['present', 'absent', 'late', 'sick', 'excused', 'left_early'].map((value) => <option key={value}>{value}</option>)}</Select></div>)}</div>
             </SectionCard>
+            {!showReflection ? (
+              <SectionCard title="2. Approved teaching resources" subtitle="Only school-approved resources are visible while class is active.">
+                <div className="divide-y divide-[#e2e8f0]">{(data.recommended_resources || []).map((row: any) => <div key={row.public_ref} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3"><div><div className="text-[12px] font-semibold text-[#111827]">{row.title}</div><div className="mt-1 text-[11px] text-[#64748b]">{row.resource_type} · {row.topic_name || 'School approved'}</div></div><div className="flex gap-2"><Button size="sm" variant="outline" onClick={() => requestPrint(row.public_ref)}>Print request</Button><Button size="sm" variant="outline" onClick={() => attach(row.public_ref)}><BookOpenCheck className="size-4" />Attach</Button></div></div>)}{!(data.recommended_resources || []).length ? <div className="p-6 text-center text-[12px] text-[#64748b]">No approved resource matches this lesson yet.</div> : null}<div className="grid gap-2 bg-[#f8fafc] p-4 sm:grid-cols-[1fr_auto]"><Input value={resourceNeed} onChange={(event) => setResourceNeed(event.target.value)} placeholder="Ask the librarian for a resource you cannot find" /><Button variant="outline" disabled={!resourceNeed.trim()} onClick={requestResource}>Send resource request</Button></div></div>
+              </SectionCard>
+            ) : null}
+            {!showReflection ? (
+              <div className="flex justify-end">
+                <Button type="button" onClick={() => setLessonEnded(true)}><CheckCircle2 className="size-4" />End live class and record lesson notes</Button>
+              </div>
+            ) : null}
+            {showReflection ? (
+              <>
             <SectionCard title="2. Topic and delivery" subtitle="Delivery status is separate from demonstrated mastery.">
               <div className="grid gap-3 p-4 sm:grid-cols-2"><label className="grid gap-1 text-[11px] font-semibold text-[#475569]">Coverage status<Select value={draft.coverage_status || 'introduced'} onChange={(coverage_status) => setDraft({ ...draft, coverage_status })}>{['introduced', 'partially_taught', 'fully_taught', 'revised', 'assessed', 'postponed'].map((value) => <option key={value}>{value.replaceAll('_', ' ')}</option>)}</Select></label><label className="grid gap-1 text-[11px] font-semibold text-[#475569]">Coverage estimate<Input type="number" min={0} max={100} value={draft.coverage_percentage || 0} onChange={(event) => setDraft({ ...draft, coverage_percentage: event.target.value })} /></label><label className="grid gap-1 text-[11px] font-semibold text-[#475569] sm:col-span-2">Lesson notes<textarea className="min-h-20 rounded-[6px] border border-[#d9dee7] bg-white p-3 text-[12px]" value={draft.lesson_notes || ''} onChange={(event) => setDraft({ ...draft, lesson_notes: event.target.value })} placeholder="Optional short teaching note" /></label></div>
             </SectionCard>
@@ -224,12 +264,14 @@ export function ClassroomModePage() {
             <SectionCard title="4. Approved teaching resources" subtitle="Restricted assessment files are not surfaced automatically.">
               <div className="divide-y divide-[#e2e8f0]">{(data.recommended_resources || []).map((row: any) => <div key={row.public_ref} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3"><div><div className="text-[12px] font-semibold text-[#111827]">{row.title}</div><div className="mt-1 text-[11px] text-[#64748b]">{row.resource_type} · {row.topic_name || 'School approved'}</div></div><div className="flex gap-2"><Button size="sm" variant="outline" onClick={() => requestPrint(row.public_ref)}>Print request</Button><Button size="sm" variant="outline" onClick={() => attach(row.public_ref)}><BookOpenCheck className="size-4" />Attach</Button></div></div>)}{!(data.recommended_resources || []).length ? <div className="p-6 text-center text-[12px] text-[#64748b]">No approved resource matches this lesson yet.</div> : null}<div className="grid gap-2 bg-[#f8fafc] p-4 sm:grid-cols-[1fr_auto]"><Input value={resourceNeed} onChange={(event) => setResourceNeed(event.target.value)} placeholder="Ask the librarian for a resource you cannot find" /><Button variant="outline" disabled={!resourceNeed.trim()} onClick={requestResource}>Send resource request</Button></div></div>
             </SectionCard>
+              </>
+            ) : null}
           </div>
-          <div className="grid content-start gap-3">
+          {showReflection ? <div className="grid content-start gap-3">
             <SectionCard title="5. Teacher observation" subtitle="A low-weight observational signal, not proof of mastery."><div className="grid gap-3 p-4"><label className="grid gap-1 text-[11px] font-semibold text-[#475569]">How well did the class appear to understand?<Select value={draft.understanding_estimate || 'NOT_ASSESSED'} onChange={(understanding_estimate) => setDraft({ ...draft, understanding_estimate })}>{['STRONG', 'SATISFACTORY', 'MIXED', 'WEAK', 'NOT_ASSESSED'].map((value) => <option key={value}>{value.replaceAll('_', ' ')}</option>)}</Select></label><label className="grid gap-1 text-[11px] font-semibold text-[#475569]">Observation<textarea className="min-h-20 rounded-[6px] border border-[#d9dee7] bg-white p-3 text-[12px]" value={draft.observation_note || ''} onChange={(event) => setDraft({ ...draft, observation_note: event.target.value })} placeholder="Optional supporting note" /></label></div></SectionCard>
             <SectionCard title="6. Paper-based formative activity" subtitle="Students respond verbally, in exercise books or on paper."><div className="grid gap-3 p-4"><Select value={draft.formative_activity_type || 'none'} onChange={(formative_activity_type) => setDraft({ ...draft, formative_activity_type })}>{['none', 'oral_questions', 'written_class_exercise', 'exercise_book', 'printed_worksheet', 'exit_ticket', 'homework', 'board_work', 'paper_quiz'].map((value) => <option key={value}>{value.replaceAll('_', ' ')}</option>)}</Select>{draft.formative_activity_type === 'exit_ticket' ? <div className="grid gap-2 rounded-[8px] border border-cyan-200 bg-cyan-50 p-3"><Input value={draft.formative_summary?.exit_ticket_prompt || ''} onChange={(event) => setDraft({ ...draft, formative_summary: { ...(draft.formative_summary || {}), exit_ticket_prompt: event.target.value } })} placeholder="One short question students answer on paper" /><Input value={draft.formative_summary?.success_criteria || ''} onChange={(event) => setDraft({ ...draft, formative_summary: { ...(draft.formative_summary || {}), success_criteria: event.target.value } })} placeholder="What would show understanding?" /></div> : null}<label className="flex items-center gap-2 text-[12px] text-[#475569]"><input type="checkbox" checked={Boolean(draft.formal_check_used)} onChange={(event) => setDraft({ ...draft, formal_check_used: event.target.checked })} />A formal check was used</label></div></SectionCard>
             <SectionCard title="7. End lesson" subtitle="Closing updates delivery but never marks a topic mastered automatically."><div className="grid gap-3 p-4"><Input value={draft.homework_assigned || ''} onChange={(event) => setDraft({ ...draft, homework_assigned: event.target.value })} placeholder="Homework assigned (optional)" /><Input value={draft.next_lesson_action || ''} onChange={(event) => setDraft({ ...draft, next_lesson_action: event.target.value })} placeholder="Next lesson recommendation" /><Button disabled={data.session.status === 'completed'} onClick={close}><CheckCircle2 className="size-4" />{data.session.status === 'completed' ? 'Lesson completed' : 'Close lesson safely'}</Button></div></SectionCard>
-          </div>
+          </div> : null}
         </div>
       </div>
     </div>

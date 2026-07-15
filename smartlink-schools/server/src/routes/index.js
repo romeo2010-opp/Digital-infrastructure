@@ -430,13 +430,20 @@ import {
   escalationPolicy,
   learnerSupport,
   postAcademicReviewRequest,
+  postCaseTargetedAssessment,
   postGuardianSummaryDraft,
+  postSupportAcknowledgement,
+  postSupportAssignmentCompletion,
   postSupportAssignment,
   postSupportCarryForward,
   postSupportEscalation,
+  postSupportEscalationRecommendation,
   postSupportIntervention,
+  postSupportNote,
   postSupportOutcome,
+  postSupportOwnershipAcceptance,
   postSupportReassessment,
+  postSupportReassignmentRequest,
   postSupportResolution,
   postSupportSession,
   supportCase,
@@ -444,6 +451,7 @@ import {
   supportEvidence,
   supportInterventions,
   supportTimeline,
+  teacherSupportSummary,
 } from "../controllers/academicSupportController.js"
 import {
   archiveBrowser,
@@ -645,6 +653,7 @@ router.post("/academic-intelligence/targeted-assessments/:generatedRef/publish",
 // Persistent learner-support lifecycle. Read access follows the academic
 // intelligence permission and teacher assignment scope inside the service.
 router.get("/academic-support/cases", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_VIEW), asyncHandler(supportCases))
+router.get("/academic-support/summary", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_VIEW), asyncHandler(teacherSupportSummary))
 router.get("/academic-support/learners/:learnerId", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_VIEW), asyncHandler(learnerSupport))
 router.get("/academic-support/escalation-policy", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_VIEW), asyncHandler(escalationPolicy))
 router.get("/academic-support/cases/:caseId", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_VIEW), asyncHandler(supportCase))
@@ -652,6 +661,12 @@ router.get("/academic-support/cases/:caseId/timeline", requireSchoolPermission(S
 router.get("/academic-support/cases/:caseId/evidence", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_VIEW), asyncHandler(supportEvidence))
 router.get("/academic-support/cases/:caseId/interventions", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_VIEW), asyncHandler(supportInterventions))
 router.post("/academic-support/cases/:caseId/assign", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTERVENTION_MANAGE), asyncHandler(postSupportAssignment))
+router.post("/academic-support/cases/:caseId/acknowledge", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTERVENTION_MANAGE), asyncHandler(postSupportAcknowledgement))
+router.post("/academic-support/cases/:caseId/complete-assignment", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTERVENTION_MANAGE), asyncHandler(postSupportAssignmentCompletion))
+router.post("/academic-support/cases/:caseId/accept-ownership", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTERVENTION_MANAGE), asyncHandler(postSupportOwnershipAcceptance))
+router.post("/academic-support/cases/:caseId/request-reassignment", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTERVENTION_MANAGE), asyncHandler(postSupportReassignmentRequest))
+router.post("/academic-support/cases/:caseId/add-note", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTERVENTION_MANAGE), asyncHandler(postSupportNote))
+router.post("/academic-support/cases/:caseId/create-targeted-assessment", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTERVENTION_MANAGE), asyncHandler(postCaseTargetedAssessment))
 router.post("/academic-support/cases/:caseId/create-intervention", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTERVENTION_MANAGE), asyncHandler(postSupportIntervention))
 router.post("/academic-support/cases/:caseId/record-session", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTERVENTION_MANAGE), asyncHandler(postSupportSession))
 router.post("/academic-support/cases/:caseId/schedule-reassessment", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTERVENTION_MANAGE), asyncHandler(postSupportReassessment))
@@ -659,7 +674,8 @@ router.post("/academic-support/cases/:caseId/review-outcome", requireSchoolPermi
 router.post("/academic-support/cases/:caseId/escalate", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_MANAGE), asyncHandler(postSupportEscalation))
 router.post("/academic-support/cases/:caseId/resolve", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTERVENTION_MANAGE), asyncHandler(postSupportResolution))
 router.post("/academic-support/cases/:caseId/carry-forward", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_MANAGE), asyncHandler(postSupportCarryForward))
-router.post("/academic-support/cases/:caseId/request-academic-review", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_MANAGE), asyncHandler(postAcademicReviewRequest))
+router.post("/academic-support/cases/:caseId/request-academic-review", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTERVENTION_MANAGE), asyncHandler(postAcademicReviewRequest))
+router.post("/academic-support/cases/:caseId/recommend-escalation", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTERVENTION_MANAGE), asyncHandler(postSupportEscalationRecommendation))
 router.post("/academic-support/cases/:caseId/draft-guardian-summary", requireSchoolPermission(SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_MANAGE), asyncHandler(postGuardianSummaryDraft))
 
 router.get("/library/dashboard", requireSchoolPermission(SCHOOL_PERMISSIONS.LIBRARY_DASHBOARD_VIEW), asyncHandler(librarianDashboard))
@@ -705,7 +721,7 @@ router.get("/director/settings/whatsapp", requireDirectorAccess, asyncHandler(wh
 router.patch("/director/settings/whatsapp", requireDirectorAccess, asyncHandler(patchWhatsappSettings))
 router.post("/system/run-reminder-engine", requireDirectorAccess, asyncHandler(executeReminderEngine))
 router.get("/director/withdrawals", requireDirectorAccess, asyncHandler(listDirectorWithdrawals))
-router.get("/student-portal", requireRole("student"), asyncHandler(getStudentPortal))
+router.get("/student-portal", requireRole("student", "parent"), asyncHandler(getStudentPortal))
 router.post("/student-portal/announcements/:id/reaction", requireRole("student"), asyncHandler(reactToAnnouncement))
 router.post("/student-portal/announcements/:id/vote", requireRole("student"), asyncHandler(voteAnnouncementPoll))
 router.get("/timetables", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(listTimetablesController))
@@ -853,8 +869,8 @@ router.post("/exam-sessions/:id/papers/bulk", requireRole("school_owner", "headt
 router.post("/exam-sessions/:id/papers/:paperId/status", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(transitionExamPaper))
 router.post("/exam-sessions/:id/timetable", requireRole("school_owner", "headteacher"), asyncHandler(createTimetableEntry))
 router.delete("/exam-sessions/:id/timetable/:entryId", requireRole("school_owner", "headteacher"), asyncHandler(deleteTimetableEntry))
-router.get("/report-cards/:id/pdf", requireRole("school_owner", "headteacher", "teacher", "student"), asyncHandler(getReportCardPdf))
-router.get("/report-cards/:id", requireRole("school_owner", "headteacher", "teacher", "student"), asyncHandler(getReportCard))
+router.get("/report-cards/:id/pdf", requireRole("school_owner", "headteacher", "teacher", "student", "parent"), asyncHandler(getReportCardPdf))
+router.get("/report-cards/:id", requireRole("school_owner", "headteacher", "teacher", "student", "parent"), asyncHandler(getReportCard))
 router.get("/subjects", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(listSubjects))
 router.post("/subjects", requireRole("school_owner", "headteacher"), asyncHandler(createSubject))
 router.patch("/subjects/:id", requireRole("school_owner", "headteacher"), asyncHandler(updateSubject))
@@ -871,8 +887,8 @@ router.post("/results/batches/:id/approve", requireRole("school_owner", "headtea
 router.post("/results/batches/:id/return", requireRole("school_owner", "headteacher"), asyncHandler(returnResultBatch))
 router.get("/reports", requireRole("school_owner", "headteacher", "teacher"), asyncHandler(listReports))
 router.get("/users", requireRole("school_owner", "headteacher"), asyncHandler(listUsers))
-router.post("/users", requireRole("school_owner"), requireSchoolPermission(SCHOOL_PERMISSIONS.USERS_MANAGE), asyncHandler(createSchoolUser))
-router.post("/users/:userRef/guardian-links", requireRole("school_owner"), requireSchoolPermission(SCHOOL_PERMISSIONS.USERS_MANAGE), asyncHandler(linkParentGuardian))
+router.post("/users", requireRole("school_owner", "headteacher"), requireSchoolPermission(SCHOOL_PERMISSIONS.USERS_MANAGE), asyncHandler(createSchoolUser))
+router.post("/users/:userRef/guardian-links", requireRole("school_owner", "headteacher"), requireSchoolPermission(SCHOOL_PERMISSIONS.USERS_MANAGE), asyncHandler(linkParentGuardian))
 router.get("/users/:userRef/permissions", requireRole("school_owner"), asyncHandler(getUserPermissions))
 router.put("/users/:userRef/permissions", requireRole("school_owner"), asyncHandler(updateUserPermissions))
 router.get("/teachers", requireRole("school_owner", "headteacher"), asyncHandler(listTeachers))

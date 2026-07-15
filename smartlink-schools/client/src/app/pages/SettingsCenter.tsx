@@ -1651,7 +1651,7 @@ export function SettingsCenter({ section }: { section: SettingsSection }) {
         open={Boolean(settingsModal)}
         onOpenChange={(open) => !open && setSettingsModal(null)}
         title={settingsModal === 'invite' ? 'Invite School User' : settingsModal === 'password' ? 'Update Password' : 'Prepare School Export'}
-        description={settingsModal === 'invite' ? 'Add a staff account for this school workspace.' : settingsModal === 'password' ? 'Update the password for the signed-in school account.' : 'Prepare a school-only data export request.'}
+        description={settingsModal === 'invite' ? 'Add a staff, parent or guardian account for this school workspace.' : settingsModal === 'password' ? 'Update the password for the signed-in school account.' : 'Prepare a school-only data export request.'}
         footer={(
           <>
             <Button type="button" variant="outline" className="h-8 rounded-[5px] text-[12px]" onClick={() => setSettingsModal(null)}>Cancel</Button>

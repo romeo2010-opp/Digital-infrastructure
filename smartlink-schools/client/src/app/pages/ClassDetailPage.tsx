@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router'
-import { Users } from 'lucide-react'
+import { HeartHandshake, Users } from 'lucide-react'
 import { PortalTable } from '../components/PortalTable'
 import { SectionCard } from '../components/SectionCard'
 import { SectionKpiStrip } from '../components/SectionKpiStrip'
@@ -91,6 +91,7 @@ export function ClassDetailPage() {
               { key: 'student', label: 'Student', render: (row) => `${row.first_name} ${row.last_name}` },
               { key: 'gender', label: 'Gender' },
               { key: 'stream_section', label: 'Stream / Section' },
+              { key: 'learner_support', label: 'Learning support', render: (row: any) => row.learner_support ? <button type="button" onClick={(event) => { event.stopPropagation(); navigate(`/learner-support/${row.learner_support.case_ref}`) }} className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-[9px] font-semibold text-emerald-700"><HeartHandshake className="size-3"/>{valueLabel(row.learner_support.support_state)}</button> : <span className="text-[10px] text-[#94a3b8]">No active support</span> },
               { key: 'status', label: 'Status' },
             ]}
             rows={students}

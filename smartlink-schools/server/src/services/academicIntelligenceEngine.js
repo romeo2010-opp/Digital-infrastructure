@@ -1227,23 +1227,64 @@ export async function updateParentAcademicInsight(schoolId,ref,actor,body={}) {
   if(!validateParentInsightTransition(before.status,status))throw new HttpError(409,`A ${before.status} parent update cannot move to ${status}.`)
   await pool.query(`UPDATE parent_academic_insights SET headline=COALESCE(?,headline),summary_text=COALESCE(?,summary_text),strengths_json=COALESCE(?,strengths_json),focus_areas_json=COALESCE(?,focus_areas_json),attendance_effect_text=COALESCE(?,attendance_effect_text),home_support_json=COALESCE(?,home_support_json),status=?,approved_by=CASE WHEN ?='approved' THEN ? ELSE approved_by END,approved_at=CASE WHEN ?='approved' THEN CURRENT_TIMESTAMP ELSE approved_at END,published_by=CASE WHEN ?='published' THEN ? ELSE published_by END,published_at=CASE WHEN ?='published' THEN CURRENT_TIMESTAMP ELSE published_at END WHERE school_id=? AND public_ref=?`,[body.headline||null,body.summary_text||null,body.strengths?JSON.stringify(body.strengths):null,body.focus_areas?JSON.stringify(body.focus_areas):null,body.attendance_effect_text||null,body.home_support?JSON.stringify(body.home_support):null,status,status,actor.id,status,status,actor.id,status,schoolId,ref])
   await audit(pool,schoolId,actor,'PARENT_ACADEMIC_INSIGHT_UPDATED','parent_academic_insight',before.id,{status:before.status},{status})
-  if(status==='published'&&before.status!=='published'){
+  const becameParentVisible=['approved','published'].includes(status)&&!['approved','published'].includes(before.status)
+  if(becameParentVisible){
     const [guardians]=await pool.query("SELECT DISTINCT user_id FROM student_guardians WHERE school_id=? AND student_id=? AND user_id IS NOT NULL",[schoolId,before.student_id])
     for(const guardian of guardians)await createInAppNotification({schoolId,recipientUserId:guardian.user_id,title:'New academic progress update',message:body.summary_text||before.summary_text,category:'academics',priority:'medium',linkedEntityType:'parent_academic_insight',linkedEntityId:before.id,createdBy:actor.id})
   }
   return {public_ref:ref,status}
 }
 
-export async function getParentPortalAcademicInsights(schoolId,actor) {
+export async function getParentPortalAcademicInsights(schoolId,actor,filters={}) {
+  const requestedStudentRef=String(filters.student_ref||filters.studentRef||'').trim()
+  const linkParams=[schoolId,actor.id]
+  const requestedClause=requestedStudentRef?' AND s.public_ref=?':''
+  if(requestedStudentRef)linkParams.push(requestedStudentRef)
   const [links]=await pool.query(`SELECT DISTINCT s.id,s.public_ref,s.first_name,s.last_name,c.name class_name
     FROM student_guardians sg JOIN students s ON s.id=sg.student_id AND s.school_id=sg.school_id
     LEFT JOIN classes c ON c.id=s.class_id AND c.school_id=s.school_id
-    WHERE sg.school_id=? AND sg.user_id=? AND s.status='active' ORDER BY s.first_name,s.last_name`,[schoolId,actor.id])
-  const students=[]
-  for(const student of links){const [insights]=await pool.query(`SELECT pai.public_ref,pai.reporting_period,pai.headline,pai.summary_text,pai.strengths_json,pai.focus_areas_json,pai.attendance_effect_text,pai.home_support_json,pai.completed_interventions_json,pai.published_at,subj.name subject_name
-      FROM parent_academic_insights pai LEFT JOIN subjects subj ON subj.id=pai.subject_id AND subj.school_id=pai.school_id
-      WHERE pai.school_id=? AND pai.student_id=? AND pai.status='published' ORDER BY pai.published_at DESC LIMIT 20`,[schoolId,student.id]);for(const insight of insights)await audit(pool,schoolId,actor,'PARENT_ACADEMIC_INSIGHT_VIEWED','parent_academic_insight',null,null,{public_ref:insight.public_ref,student_ref:student.public_ref});students.push({student:{public_ref:student.public_ref,name:`${student.first_name} ${student.last_name}`,class_name:student.class_name},insights:insights.map((row)=>({public_ref:row.public_ref,reporting_period:row.reporting_period,headline:row.headline,summary_text:row.summary_text,strengths:jsonValue(row.strengths_json,[]),focus_areas:jsonValue(row.focus_areas_json,[]),attendance_effect_text:row.attendance_effect_text,home_support:jsonValue(row.home_support_json,[]),completed_interventions:jsonValue(row.completed_interventions_json,[]),subject_name:row.subject_name,published_at:row.published_at}))})}
-  return {students}
+    WHERE sg.school_id=? AND sg.user_id=? AND s.status='active'${requestedClause}
+    ORDER BY s.first_name,s.last_name`,linkParams)
+  if(!links.length)return {students:[]}
+
+  const placeholders=links.map(()=>'?').join(',')
+  const [insights]=await pool.query(`SELECT pai.student_id,pai.public_ref,pai.reporting_period,pai.headline,pai.summary_text,
+      pai.strengths_json,pai.focus_areas_json,pai.attendance_effect_text,pai.home_support_json,
+      pai.completed_interventions_json,pai.status,pai.approved_at,pai.published_at,subj.name subject_name
+    FROM parent_academic_insights pai
+    LEFT JOIN subjects subj ON subj.id=pai.subject_id AND subj.school_id=pai.school_id
+    WHERE pai.school_id=? AND pai.student_id IN (${placeholders}) AND pai.status IN ('approved','published')
+    ORDER BY COALESCE(pai.published_at,pai.approved_at) DESC,pai.id DESC
+    LIMIT 200`,[schoolId,...links.map((student)=>student.id)])
+
+  const linkById=new Map(links.map((student)=>[Number(student.id),student]))
+  const insightsByStudent=new Map(links.map((student)=>[Number(student.id),[]]))
+  for(const row of insights){
+    const student=linkById.get(Number(row.student_id))
+    if(!student)continue
+    insightsByStudent.get(Number(row.student_id)).push({
+      public_ref:row.public_ref,
+      reporting_period:row.reporting_period,
+      headline:row.headline,
+      summary_text:row.summary_text,
+      strengths:jsonValue(row.strengths_json,[]),
+      focus_areas:jsonValue(row.focus_areas_json,[]),
+      attendance_effect_text:row.attendance_effect_text,
+      home_support:jsonValue(row.home_support_json,[]),
+      completed_interventions:jsonValue(row.completed_interventions_json,[]),
+      subject_name:row.subject_name,
+      status:row.status,
+      published_at:row.published_at||row.approved_at,
+    })
+  }
+  await Promise.all(insights.map((insight)=>{
+    const student=linkById.get(Number(insight.student_id))
+    return audit(pool,schoolId,actor,'PARENT_ACADEMIC_INSIGHT_VIEWED','parent_academic_insight',null,null,{public_ref:insight.public_ref,student_ref:student?.public_ref||null})
+  }))
+  return {students:links.map((student)=>({
+    student:{public_ref:student.public_ref,name:`${student.first_name} ${student.last_name}`,class_name:student.class_name},
+    insights:(insightsByStudent.get(Number(student.id))||[]).slice(0,20),
+  }))}
 }
 
 export async function getAcademicCommandCentre(schoolId, filters = {}, actor = null) {

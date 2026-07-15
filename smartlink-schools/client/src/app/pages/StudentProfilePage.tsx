@@ -1,6 +1,6 @@
 import { type ChangeEvent, useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router'
-import { FileText, ImagePlus, PencilLine, Printer, Save, UserX } from 'lucide-react'
+import { FileText, HeartHandshake, ImagePlus, PencilLine, Printer, Save, UserX } from 'lucide-react'
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { Button } from '../components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/dialog'
@@ -370,6 +370,7 @@ export function StudentProfilePage() {
   const [cancellingWithdrawalId, setCancellingWithdrawalId] = useState<any>(null)
   const [trendSelection, setTrendSelection] = useState('exam_sessions')
   const [academicIntelligence, setAcademicIntelligence] = useState<any>(null)
+  const [learnerSupport, setLearnerSupport] = useState<any>(null)
   const [parentInsightBusy, setParentInsightBusy] = useState('')
 
   useEffect(() => {
@@ -384,6 +385,13 @@ export function StudentProfilePage() {
     api.getStudentAcademicIntelligence(token, studentId)
       .then((payload: any) => setAcademicIntelligence(payload))
       .catch(() => setAcademicIntelligence(null))
+  }, [api, studentId, token, user?.permissions])
+
+  useEffect(() => {
+    if (!token || !studentId || !(user?.permissions || []).includes('ACADEMIC_INTELLIGENCE_VIEW')) return
+    api.getLearnerSupport(token, studentId)
+      .then((payload: any) => setLearnerSupport(payload))
+      .catch(() => setLearnerSupport(null))
   }, [api, studentId, token, user?.permissions])
 
   const refreshAcademicIntelligence = async () => {
@@ -695,6 +703,10 @@ export function StudentProfilePage() {
         { label: 'Fees', value: student?.fees?.length || 0, helper: 'fee records', delta: valueLabel(student?.fee_category) },
       ]} />
 
+      {learnerSupport?.cases?.length ? <SectionCard title="Learner Support" subtitle="Academic support visible within your teaching, class or assigned-support relationship.">
+        <div className="divide-y divide-[#e2e8f0]">{learnerSupport.cases.map((supportCase: any) => <button type="button" key={supportCase.public_ref} onClick={() => navigate(`/learner-support/${supportCase.public_ref}`)} className="grid w-full gap-3 p-4 text-left hover:bg-[#f8fafc] md:grid-cols-[1fr_160px_180px]"><div><div className="flex items-center gap-2"><HeartHandshake className="size-4 text-emerald-700"/><strong className="text-[12px] text-[#111827]">{supportCase.subject_name || 'Cross-subject'} · {supportCase.topic_name || 'Multiple learning areas'}</strong></div><p className="mt-1 line-clamp-2 text-[10px] leading-4 text-[#64748b]">{supportCase.current_summary}</p></div><div className="text-[10px] text-[#64748b]"><strong className="block text-[#111827]">Support stage</strong>{valueLabel(supportCase.status)}</div><div className="text-[10px] text-[#64748b]"><strong className="block text-[#111827]">Next review</strong>{supportCase.next_review_at ? new Date(supportCase.next_review_at).toLocaleDateString() : 'Not scheduled'}</div></button>)}</div>
+      </SectionCard> : null}
+
       {academicIntelligence ? (
         <div className="order-[99] grid gap-3 xl:grid-cols-[1.15fr_0.85fr]">
           <SectionCard title="Academic Intelligence" subtitle="Mastery is confidence-aware and distinguishes missing evidence from low performance.">
@@ -771,7 +783,7 @@ export function StudentProfilePage() {
             <SectionCard
               className="xl:col-span-2"
               title="Parent-safe academic updates"
-              subtitle="Prepare a plain-language summary from school evidence. Parents only see it after academic approval and publication."
+              subtitle="Prepare a plain-language summary from school evidence. Approval makes the update visible in the linked parent portal."
               actions={(user?.permissions || []).includes('ACADEMIC_INTERVENTION_MANAGE') ? (
                 <Button type="button" onClick={prepareParentInsight} disabled={Boolean(parentInsightBusy)} className="h-8 rounded-[6px] text-[11px]">
                   {parentInsightBusy === 'create' ? 'Preparing...' : 'Prepare update'}
@@ -791,8 +803,8 @@ export function StudentProfilePage() {
                     </div>
                     {(user?.permissions || []).includes('ACADEMIC_INTELLIGENCE_MANAGE') ? (
                       <div className="flex flex-wrap gap-2">
-                        {insight.status === 'draft' ? <Button type="button" variant="outline" onClick={() => changeParentInsightStatus(insight.public_ref, 'approved')} disabled={Boolean(parentInsightBusy)} className="h-8 rounded-[6px] text-[11px]">{parentInsightBusy === `${insight.public_ref}:approved` ? 'Approving...' : 'Approve'}</Button> : null}
-                        {insight.status === 'approved' ? <Button type="button" onClick={() => changeParentInsightStatus(insight.public_ref, 'published')} disabled={Boolean(parentInsightBusy)} className="h-8 rounded-[6px] text-[11px]">{parentInsightBusy === `${insight.public_ref}:published` ? 'Publishing...' : 'Publish to parent'}</Button> : null}
+                        {insight.status === 'draft' ? <Button type="button" variant="outline" onClick={() => changeParentInsightStatus(insight.public_ref, 'approved')} disabled={Boolean(parentInsightBusy)} className="h-8 rounded-[6px] text-[11px]">{parentInsightBusy === `${insight.public_ref}:approved` ? 'Approving & sharing...' : 'Approve & share'}</Button> : null}
+                        {insight.status === 'approved' ? <Button type="button" onClick={() => changeParentInsightStatus(insight.public_ref, 'published')} disabled={Boolean(parentInsightBusy)} className="h-8 rounded-[6px] text-[11px]">{parentInsightBusy === `${insight.public_ref}:published` ? 'Finalizing...' : 'Mark as published'}</Button> : null}
                         {insight.status === 'published' ? <Button type="button" variant="outline" onClick={() => changeParentInsightStatus(insight.public_ref, 'withdrawn')} disabled={Boolean(parentInsightBusy)} className="h-8 rounded-[6px] text-[11px]">Withdraw</Button> : null}
                       </div>
                     ) : null}

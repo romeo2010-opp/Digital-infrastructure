@@ -20,6 +20,7 @@ import {
   Flame,
   HelpCircle,
   Heart,
+  HeartHandshake,
   Home,
   Lightbulb,
   Lock,
@@ -54,6 +55,7 @@ type PortalView =
   | "ranking"
   | "notices"
   | "profile"
+  | "insights"
   | "plus";
 type PayFlowStep = "none" | "select" | "confirm" | "success";
 
@@ -164,6 +166,7 @@ const viewTitles: Record<PortalView, string> = {
   ranking: "Class ranking",
   notices: "Notices",
   profile: "Personal profile",
+  insights: "Family insights",
   plus: "SmartLink Plus",
 };
 
@@ -606,10 +609,12 @@ function AnnouncementCard({
   announcement,
   api,
   token,
+  canRespond = true,
 }: {
   announcement: any;
   api: any;
   token: string;
+  canRespond?: boolean;
 }) {
   const pollOptions = Array.isArray(announcement.poll?.options)
     ? announcement.poll.options
@@ -718,7 +723,7 @@ function AnnouncementCard({
           </div>
         </div>
 
-        <div className="flex flex-wrap gap-1.5">
+        {canRespond ? <div className="flex flex-wrap gap-1.5">
           {reactions.map((item: string) => {
             const Icon = reactionIcons[item] || ThumbsUp;
             const active = reaction === item;
@@ -741,7 +746,7 @@ function AnnouncementCard({
               </button>
             );
           })}
-        </div>
+        </div> : null}
 
         {announcement.poll?.question && pollOptions.length ? (
           <div className="rounded-[8px] border border-[#DFDDD5] bg-[#F8F7F2] p-2.5">
@@ -756,7 +761,8 @@ function AnnouncementCard({
                   <button
                     key={optionId}
                     type="button"
-                    onClick={() => choosePoll(optionId)}
+                    onClick={() => canRespond && choosePoll(optionId)}
+                    disabled={!canRespond}
                     className={`flex items-center justify-between rounded-[7px] border px-2.5 py-2 text-left text-[11px] font-medium ${
                       selected
                         ? "border-[#185FA5] bg-white text-[#0C447C]"
@@ -776,7 +782,7 @@ function AnnouncementCard({
                 );
               })}
             </div>
-            {!pollVote ? (
+            {!pollVote && canRespond ? (
               <div className="mt-2 text-[10px] font-medium text-[#8c8982]">
                 Vote to see the results.
               </div>
@@ -1045,7 +1051,9 @@ function AiExplanationResponse({
 
 export function StudentPortalPage() {
   const { api, token, user, logout, data } = usePortal();
+  const isParent = String(user?.role || "").toLowerCase() === "parent";
   const [payload, setPayload] = useState<any>(null);
+  const [selectedStudentRef, setSelectedStudentRef] = useState("");
   const [activeView, setActiveView] = useState<PortalView>("home");
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -1075,8 +1083,9 @@ export function StudentPortalPage() {
 
   const cacheKey = useMemo(() => {
     const id = user?.studentId || user?.studentCode || user?.id || "student";
-    return `smartlink.schools.studentPortal.${id}`;
-  }, [user?.id, user?.studentCode, user?.studentId]);
+    const learner = isParent ? selectedStudentRef || "linked" : "self";
+    return `smartlink.schools.studentPortal.${id}.${learner}`;
+  }, [isParent, selectedStudentRef, user?.id, user?.studentCode, user?.studentId]);
 
   const drillCacheKey = useMemo(() => {
     const id = user?.studentId || user?.studentCode || user?.id || "student";
@@ -1089,8 +1098,25 @@ export function StudentPortalPage() {
     else setRefreshing(true);
     setError("");
     try {
-      const response = await api.getStudentPortal(token);
+      const [response, insightResponse] = await Promise.all([
+        api.getStudentPortal(token, isParent ? selectedStudentRef || undefined : undefined),
+        isParent
+          ? api.getParentAcademicInsights(token, selectedStudentRef ? { student_ref: selectedStudentRef } : {}).catch(() => ({ students: [] }))
+          : Promise.resolve({ students: [] }),
+      ]);
       const nextPayload = response?.student_portal || response;
+      const resolvedStudentRef = String(
+        nextPayload?.viewer?.guardian_context?.selected_student_ref || "",
+      );
+      if (isParent) {
+        const familyEntry = (insightResponse?.students || []).find(
+          (entry: any) => String(entry?.student?.public_ref || "") === resolvedStudentRef,
+        );
+        nextPayload.family_insights = familyEntry?.insights || [];
+        if (resolvedStudentRef && resolvedStudentRef !== selectedStudentRef) {
+          setSelectedStudentRef(resolvedStudentRef);
+        }
+      }
       setPayload(nextPayload);
       setOffline(false);
       try {
@@ -1170,7 +1196,7 @@ export function StudentPortalPage() {
   }, [cacheKey, token]);
 
   useEffect(() => {
-    if (!data?.studentPortal) return;
+    if (!data?.studentPortal || isParent) return;
     setPayload(data.studentPortal);
     setOffline(false);
     try {
@@ -1178,9 +1204,14 @@ export function StudentPortalPage() {
     } catch {
       // Local storage can be unavailable in private browsing.
     }
-  }, [cacheKey, data?.studentPortal]);
+  }, [cacheKey, data?.studentPortal, isParent]);
 
   useEffect(() => {
+    if (isParent) {
+      setDrillPayload(null);
+      setDrillHistory([]);
+      return;
+    }
     try {
       const cached = window.localStorage.getItem(drillCacheKey);
       if (cached) {
@@ -1193,7 +1224,7 @@ export function StudentPortalPage() {
     }
     loadTodayDrill({ silent: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [drillCacheKey, token]);
+  }, [drillCacheKey, isParent, token]);
 
   const profile = payload?.profile || {};
   const results = payload?.results || {
@@ -1218,6 +1249,47 @@ export function StudentPortalPage() {
     awards: [],
     summary: {},
   };
+  const guardianContext = payload?.viewer?.guardian_context || {};
+  const availableStudents = Array.isArray(guardianContext.available_students)
+    ? guardianContext.available_students
+    : [];
+  const activeStudentRef = selectedStudentRef || String(guardianContext.selected_student_ref || "");
+  const familyInsights = Array.isArray(payload?.family_insights)
+    ? payload.family_insights
+    : [];
+  const visibleSecondaryNav = isParent
+    ? [
+        { id: "insights" as PortalView, label: "Insights", icon: HeartHandshake },
+        { id: "timetable" as PortalView, label: "Schedule", icon: CalendarDays },
+        { id: "notices" as PortalView, label: "Notices", icon: Bell },
+        { id: "profile" as PortalView, label: "Profile", icon: UserCircle2 },
+        { action: "download" as const, label: "Report PDF", icon: FileText },
+        { action: "refresh" as const, label: "Sync", icon: RefreshCcw },
+      ]
+    : secondaryNav;
+  const visibleDesktopNavGroups = isParent
+    ? [
+        { label: "Overview", items: [{ id: "home" as PortalView, label: "Home", icon: Home }] },
+        {
+          label: "Learning",
+          items: [
+            { id: "results" as PortalView, label: "Results", icon: BarChart3 },
+            { id: "homework" as PortalView, label: "Homework", icon: NotebookTabs },
+            { id: "attendance" as PortalView, label: "Attendance", icon: CalendarCheck },
+            { id: "timetable" as PortalView, label: "Timetable", icon: Clock },
+            { id: "insights" as PortalView, label: "Family insights", icon: HeartHandshake },
+          ],
+        },
+        { label: "Finance", items: [{ id: "fees" as PortalView, label: "Fees & payments", icon: Wallet }] },
+        {
+          label: "Updates",
+          items: [
+            { id: "notices" as PortalView, label: "Notices", icon: Bell },
+            { id: "profile" as PortalView, label: "Learner profile", icon: UserCircle2 },
+          ],
+        },
+      ]
+    : desktopNavGroups;
   const currentRankingRow =
     (ranking.leaderboard || []).find((row: any) => row.is_current_student) ||
     null;
@@ -1232,7 +1304,7 @@ export function StudentPortalPage() {
     .join("|");
 
   useEffect(() => {
-    if (!rankingCelebrations.length || typeof window === "undefined") return;
+    if (isParent || !rankingCelebrations.length || typeof window === "undefined") return;
     const unseenEvents = rankingCelebrations.filter((event: any) => {
       const key = String(event?.key || "");
       if (!key || queuedCelebrationKeysRef.current.has(key)) return false;
@@ -1250,7 +1322,7 @@ export function StudentPortalPage() {
     if (unseenEvents.length) {
       setCelebrationQueue((currentQueue) => [...currentQueue, ...unseenEvents]);
     }
-  }, [rankingCelebrationKeys]);
+  }, [isParent, rankingCelebrationKeys]);
 
   useEffect(() => {
     if (celebrationOverlay || !celebrationQueue.length) return;
@@ -1357,6 +1429,12 @@ export function StudentPortalPage() {
       return;
     }
     if (item.id) setActiveView(item.id);
+  };
+
+  const switchStudent = (studentRef: string) => {
+    if (!studentRef || studentRef === selectedStudentRef) return;
+    setActiveView("home");
+    setSelectedStudentRef(studentRef);
   };
 
   const showPayFlow = () => {
@@ -1530,8 +1608,40 @@ export function StudentPortalPage() {
         <div className="grid justify-items-center gap-3 rounded-[18px] border border-[#DFDDD5] bg-white px-8 py-7">
           <span className="size-8 animate-spin rounded-full border-2 border-[#D4D1C7] border-t-[#042C53]" />
           <span className="text-[13px] font-medium text-[#20201d]">
-            Loading student portal...
+            Loading {isParent ? "family" : "student"} portal...
           </span>
+        </div>
+      </div>
+    );
+  }
+
+  if (error && !payload) {
+    return (
+      <div className="grid min-h-screen place-items-center bg-[#F4F5F2] p-4 text-[#20201d]">
+        <div className="w-full max-w-[430px] rounded-[18px] border border-[#DFDDD5] bg-white p-6 text-center shadow-sm">
+          <div className="mx-auto grid size-10 place-items-center rounded-full bg-[#FCEBEB] text-[#A32D2D]">
+            <AlertCircle className="size-5" />
+          </div>
+          <h1 className="mt-3 text-[16px] font-medium">
+            {isParent ? "This parent account needs a learner link" : "Student portal unavailable"}
+          </h1>
+          <p className="mt-2 text-[12px] leading-5 text-[#6f6d67]">{error}</p>
+          <div className="mt-4 grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => loadPortal()}
+              className="h-9 rounded-[8px] bg-[#042C53] text-[12px] font-medium text-[#B5D4F4]"
+            >
+              Try again
+            </button>
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="h-9 rounded-[8px] border border-[#DFDDD5] text-[12px] font-medium text-[#6f6d67]"
+            >
+              Log out
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -1617,7 +1727,7 @@ export function StudentPortalPage() {
         )}
       </Card>
 
-      <Card
+      {!isParent ? <Card
         title="Today's drill"
         action="Open"
         onAction={() => setActiveView("drills")}
@@ -1676,7 +1786,39 @@ export function StudentPortalPage() {
             />
           </div>
         )}
-      </Card>
+      </Card> : (
+        <Card
+          title="Family learning insights"
+          action="Open"
+          onAction={() => setActiveView("insights")}
+        >
+          {familyInsights.length ? (
+            <button
+              type="button"
+              onClick={() => setActiveView("insights")}
+              className="flex w-full items-start gap-2.5 text-left"
+            >
+              <div className="grid size-8 shrink-0 place-items-center rounded-[8px] bg-[#EEEDFE] text-[#534AB7]">
+                <HeartHandshake className="size-4" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="line-clamp-1 text-[12px] font-medium text-[#20201d]">
+                  {familyInsights[0].headline}
+                </div>
+                <div className="mt-0.5 line-clamp-2 text-[11px] leading-4 text-[#6f6d67]">
+                  {familyInsights[0].summary_text}
+                </div>
+                <div className="mt-1 text-[10px] font-medium text-[#534AB7]">
+                  {familyInsights.length} school-approved {familyInsights.length === 1 ? "update" : "updates"}
+                </div>
+              </div>
+              <ChevronRight className="mt-1 size-4 shrink-0 text-[#534AB7]" />
+            </button>
+          ) : (
+            <EmptyState label="The school has not published a family learning insight yet." />
+          )}
+        </Card>
+      )}
 
       <Card title="Announcements">
         {announcements.length ? (
@@ -1687,6 +1829,7 @@ export function StudentPortalPage() {
                 announcement={announcement}
                 api={api}
                 token={token}
+                canRespond={!isParent}
               />
             ))}
           </div>
@@ -1713,11 +1856,13 @@ export function StudentPortalPage() {
 
       <button
         type="button"
-        onClick={() => setActiveView("plus")}
+        onClick={() => setActiveView(isParent ? "insights" : "plus")}
         className="mb-2.5 flex w-full items-center gap-2 rounded-[12px] border border-[#AFA9EC] bg-white px-3.5 py-3 text-left"
       >
         <div className="grid size-8 shrink-0 place-items-center rounded-[8px] bg-[#EEEDFE] text-[#534AB7]">
-          {plusActive ? (
+          {isParent ? (
+            <HeartHandshake className="size-4" />
+          ) : plusActive ? (
             <Check className="size-4" />
           ) : (
             <Bell className="size-4" />
@@ -1725,12 +1870,16 @@ export function StudentPortalPage() {
         </div>
         <div className="min-w-0 flex-1">
           <div className="text-[12px] font-medium text-[#3C3489]">
-            {plusActive
+            {isParent
+              ? "School-approved family updates"
+              : plusActive
               ? "SmartLink Plus active"
               : "Get absence alerts instantly"}
           </div>
           <div className="mt-0.5 truncate text-[10px] text-[#534AB7]">
-            {plusActive
+            {isParent
+              ? `${familyInsights.length} ${familyInsights.length === 1 ? "insight" : "insights"} available for ${profile.first_name || "this learner"}`
+              : plusActive
               ? "Alerts, reminders and trend insights are unlocked"
               : "Know when your child misses class - SmartLink Plus"}
           </div>
@@ -2769,6 +2918,59 @@ export function StudentPortalPage() {
     </>
   );
 
+  const renderFamilyInsights = () => (
+    <>
+      <div className="mb-3 rounded-[12px] border border-[#D8D4F0] bg-[#F7F6FF] p-3.5">
+        <div className="flex items-start gap-2.5">
+          <div className="grid size-8 shrink-0 place-items-center rounded-[8px] bg-[#EEEDFE] text-[#534AB7]">
+            <HeartHandshake className="size-4" />
+          </div>
+          <div>
+            <div className="text-[13px] font-medium text-[#20201d]">Family learning updates</div>
+            <div className="mt-0.5 text-[11px] leading-4 text-[#6f6d67]">
+              These insights have been reviewed and published by the school for {profile.first_name || "your learner"}.
+            </div>
+          </div>
+        </div>
+      </div>
+      {familyInsights.length ? familyInsights.map((insight: any) => (
+        <Card key={insight.public_ref} title={insight.subject_name || "Overall learning"}>
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <div className="min-w-0">
+              <div className="text-[13px] font-medium text-[#20201d]">{insight.headline}</div>
+              <div className="mt-0.5 text-[10px] text-[#8c8982]">{insight.reporting_period || "Current period"}{insight.published_at ? ` - ${dateLabel(insight.published_at)}` : ""}</div>
+            </div>
+            <span className="rounded-full bg-[#E1F5EE] px-2 py-0.5 text-[9px] font-medium text-[#085041]">School approved</span>
+          </div>
+          <p className="mt-3 text-[12px] leading-5 text-[#4f4d48]">{insight.summary_text}</p>
+          <div className="mt-3 grid gap-2 lg:grid-cols-3">
+            {[
+              ["Going well", insight.strengths, "border-[#BDE5D5] bg-[#F2FBF7] text-[#085041]"],
+              ["Current focus", insight.focus_areas, "border-[#F3D7A5] bg-[#FFF9EE] text-[#854F0B]"],
+              ["Support at home", insight.home_support, "border-[#D8D4F0] bg-[#F7F6FF] text-[#3C3489]"],
+            ].map(([label, items, tone]: any) => (
+              <div key={label} className={`rounded-[8px] border p-2.5 ${tone}`}>
+                <div className="text-[10px] font-semibold uppercase">{label}</div>
+                {Array.isArray(items) && items.length ? (
+                  <ul className="mt-1.5 grid gap-1 text-[11px] leading-4">
+                    {items.map((item: string, index: number) => <li key={`${label}-${index}`}>• {item}</li>)}
+                  </ul>
+                ) : <div className="mt-1.5 text-[11px] opacity-70">No published detail.</div>}
+              </div>
+            ))}
+          </div>
+          {insight.attendance_effect_text ? (
+            <div className="mt-3 rounded-[8px] border border-[#E7E5DE] bg-[#F8F7F2] px-3 py-2 text-[11px] leading-4 text-[#6f6d67]">
+              <span className="font-medium text-[#20201d]">Attendance and learning: </span>{insight.attendance_effect_text}
+            </div>
+          ) : null}
+        </Card>
+      )) : (
+        <EmptyState label="No family learning insight has been published for this learner yet. Results, attendance and homework remain available in the portal." />
+      )}
+    </>
+  );
+
   const renderPlus = () => (
     <>
       <div className="mb-2.5">
@@ -2873,6 +3075,7 @@ export function StudentPortalPage() {
     if (activeView === "ranking") return renderRanking();
     if (activeView === "notices") return renderNotices();
     if (activeView === "profile") return renderProfile();
+    if (activeView === "insights") return renderFamilyInsights();
     if (activeView === "plus") return renderPlus();
     return renderHome();
   };
@@ -3089,7 +3292,7 @@ export function StudentPortalPage() {
   );
 
   const renderCelebrationOverlay = () => {
-    if (!celebrationOverlay) return null;
+    if (isParent || !celebrationOverlay) return null;
     const style =
       celebrationStyles[String(celebrationOverlay.type || "")] ||
       celebrationStyles.default;
@@ -3193,11 +3396,11 @@ export function StudentPortalPage() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setActiveView("plus")}
+                  onClick={() => setActiveView(isParent ? "insights" : "plus")}
                   className="grid size-[30px] place-items-center rounded-[8px] border border-[#DFDDD5] bg-white text-[#534AB7]"
-                  aria-label="Open SmartLink Plus"
+                  aria-label={isParent ? "Open family insights" : "Open SmartLink Plus"}
                 >
-                  <Crown className="size-4" />
+                  {isParent ? <HeartHandshake className="size-4" /> : <Crown className="size-4" />}
                 </button>
                 <button
                   type="button"
@@ -3210,7 +3413,40 @@ export function StudentPortalPage() {
               </div>
             </div>
 
-            {plusActive ? (
+            {isParent && availableStudents.length > 1 ? (
+              <label className="mb-3 block">
+                <span className="sr-only">Choose learner</span>
+                <select
+                  value={activeStudentRef}
+                  onChange={(event) => switchStudent(event.target.value)}
+                  className="h-9 w-full rounded-[8px] border border-[#DFDDD5] bg-[#F8F7F2] px-2.5 text-[11px] font-medium text-[#20201d] outline-none focus:border-[#185FA5]"
+                >
+                  {availableStudents.map((student: any) => (
+                    <option key={student.public_ref} value={student.public_ref}>
+                      {student.full_name}{student.class_name ? ` - ${student.class_name}` : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+
+            {isParent ? (
+              <button
+                type="button"
+                onClick={() => setActiveView("insights")}
+                className="flex w-full items-center gap-2 rounded-[8px] bg-[#EEEDFE] px-2.5 py-2 text-left"
+              >
+                <HeartHandshake className="size-3.5 shrink-0 text-[#534AB7]" />
+                <span className="min-w-0 flex-1 truncate text-[11px] text-[#3C3489]">
+                  {familyInsights.length
+                    ? `${familyInsights.length} school-approved learning ${familyInsights.length === 1 ? "update" : "updates"}`
+                    : "Family learning updates will appear after school review"}
+                </span>
+                <span className="rounded-full bg-[#CECBF6] px-2 py-0.5 text-[10px] font-medium text-[#3C3489]">
+                  View
+                </span>
+              </button>
+            ) : plusActive ? (
               <button
                 type="button"
                 onClick={() => setActiveView("plus")}
@@ -3263,7 +3499,7 @@ export function StudentPortalPage() {
           ) : (
             <>
               <nav className="flex overflow-x-auto border-b border-[#DFDDD5] bg-white [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                {secondaryNav.map((item) => {
+                {visibleSecondaryNav.map((item) => {
                   const Icon = item.icon;
                   const active = item.id ? activeView === item.id : false;
                   return (
@@ -3324,7 +3560,7 @@ export function StudentPortalPage() {
                 SmartLink Schools
               </div>
               <div className="mt-0.5 text-[10px] text-[#B5D4F4]/50">
-                Student portal
+                {isParent ? "Family portal" : "Student portal"}
               </div>
             </div>
             <div className="flex items-center gap-2.5 border-b border-white/10 px-4 py-3.5">
@@ -3344,8 +3580,24 @@ export function StudentPortalPage() {
                 </div>
               </div>
             </div>
+            {isParent && availableStudents.length > 1 ? (
+              <div className="border-b border-white/10 px-3 py-2.5">
+                <label className="block text-[9px] font-medium uppercase text-[#B5D4F4]/45">
+                  Viewing learner
+                  <select
+                    value={activeStudentRef}
+                    onChange={(event) => switchStudent(event.target.value)}
+                    className="mt-1.5 h-8 w-full rounded-[7px] border border-white/15 bg-[#0C447C] px-2 text-[10px] normal-case text-[#E6F1FB] outline-none"
+                  >
+                    {availableStudents.map((student: any) => (
+                      <option key={student.public_ref} value={student.public_ref}>{student.full_name}{student.class_name ? ` - ${student.class_name}` : ""}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            ) : null}
             <nav className="min-h-0 flex-1 overflow-y-auto py-2">
-              {desktopNavGroups.map((group) => (
+              {visibleDesktopNavGroups.map((group) => (
                 <div key={group.label}>
                   <div className="px-4 pb-1.5 pt-2.5 text-[9px] font-medium uppercase text-[#B5D4F4]/35">
                     {group.label}
@@ -3373,23 +3625,23 @@ export function StudentPortalPage() {
               ))}
               <button
                 type="button"
-                onClick={() => setActiveView("plus")}
+                onClick={() => setActiveView(isParent ? "insights" : "plus")}
                 className={`mx-3 mt-3 rounded-[8px] border px-3 py-2.5 text-left ${
-                  activeView === "plus" || plusActive
+                  (isParent && activeView === "insights") || (!isParent && (activeView === "plus" || plusActive))
                     ? "border-[#5DCAA5]/30 bg-[#1D9E75]/20"
                     : "border-[#AFA9EC]/30 bg-[#534AB7]/25"
                 }`}
               >
                 <div
-                  className={`mb-0.5 flex items-center gap-1.5 text-[10px] font-medium ${activeView === "plus" || plusActive ? "text-[#9FE1CB]" : "text-[#CECBF6]"}`}
+                  className={`mb-0.5 flex items-center gap-1.5 text-[10px] font-medium ${(isParent && activeView === "insights") || (!isParent && (activeView === "plus" || plusActive)) ? "text-[#9FE1CB]" : "text-[#CECBF6]"}`}
                 >
-                  <Crown className="size-3" />
-                  {plusActive ? "Plus active" : "Upgrade to Plus"}
+                  {isParent ? <HeartHandshake className="size-3" /> : <Crown className="size-3" />}
+                  {isParent ? "Family insights" : plusActive ? "Plus active" : "Upgrade to Plus"}
                 </div>
                 <div
-                  className={`text-[9px] ${activeView === "plus" || plusActive ? "text-[#9FE1CB]/65" : "text-[#CECBF6]/60"}`}
+                  className={`text-[9px] ${(isParent && activeView === "insights") || (!isParent && (activeView === "plus" || plusActive)) ? "text-[#9FE1CB]/65" : "text-[#CECBF6]/60"}`}
                 >
-                  Absence alerts, trends and reminders
+                  {isParent ? `${familyInsights.length} school-approved ${familyInsights.length === 1 ? "update" : "updates"}` : "Absence alerts, trends and reminders"}
                 </div>
               </button>
             </nav>
