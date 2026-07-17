@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Award, BookOpenText, Check, FileText, Loader2, Play, Plus, RotateCcw, Save, Search, Sparkles, Trash2, Upload, X } from 'lucide-react'
+import { Award, BookOpenText, Check, ClipboardCheck, FileText, Loader2, Plus, RotateCcw, Save, Search, ShieldCheck, Sparkles, Trash2, Upload, UserRound, Users, X } from 'lucide-react'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import { Button } from '../components/ui/button'
@@ -1076,117 +1076,133 @@ export function SyllabusIntelligencePage() {
       String(student.class_id || '') === String(selectedClass.id)
       || String(student.class_name || '') === String(selectedClass.name || selectedClass.class_name || '')
     )).length : 0
-    const modalSelectClass = 'h-10 w-full rounded-[7px] border border-[#d7deea] bg-white px-3 text-[13px] font-medium text-[#111827] outline-none transition focus:border-[#2563eb]'
-    const submitLabel = targetType === 'class' ? 'Generate Class Drills' : 'Generate Drill'
+    const modalSelectClass = 'h-10 w-full rounded-[6px] border border-[#d9dce3] bg-white px-3 text-[13px] font-medium text-[#111827] outline-none transition focus:border-[#111827] focus:ring-2 focus:ring-[#111827]/5'
+    const submitLabel = targetType === 'class' ? 'Create class drills' : 'Create student drill'
+    const targetReady = targetType === 'class' ? Boolean(drillForm.class_id) : Boolean(drillForm.student_id)
+    const targetLabel = targetType === 'class'
+      ? selectedClass?.name || selectedClass?.class_name || 'No class selected'
+      : selectedStudent ? `${selectedStudent.first_name || ''} ${selectedStudent.last_name || ''}`.trim() : 'No student selected'
+    const targetContext = targetType === 'class'
+      ? selectedClass ? `${selectedClassStudentCount || 'All active'} learner${selectedClassStudentCount === 1 ? '' : 's'}` : 'Select a class to continue'
+      : selectedStudent?.class_name || 'Select a student to continue'
 
     return (
-      <div className="fixed inset-0 z-50 grid place-items-center bg-[#0f172a]/45 px-4 py-5 backdrop-blur-sm">
-        <section role="dialog" aria-modal="true" aria-label="Generate daily drill" className="flex max-h-[calc(100vh-40px)] w-full max-w-[760px] flex-col overflow-hidden rounded-[10px] border border-[#d7deea] bg-white shadow-[0_28px_80px_-38px_rgba(15,23,42,0.9)]">
-          <div className="flex shrink-0 items-center justify-between gap-4 border-b border-[#e2e8f0] px-6 py-4">
-            <div className="min-w-0">
-              <div className="flex items-center gap-2 text-[18px] font-bold text-[#0f172a]">
-                <Play className="size-4 text-[#2563eb]" />
-                Generate Daily Drill
+      <div className="fixed inset-0 z-50 grid place-items-center bg-[#111827]/55 px-4 py-5">
+        <section role="dialog" aria-modal="true" aria-labelledby="daily-drill-dialog-title" aria-describedby="daily-drill-dialog-description" className="flex max-h-[calc(100vh-40px)] w-full max-w-[800px] flex-col overflow-hidden rounded-[8px] border border-[#d9dce3] bg-white shadow-[0_30px_90px_-38px_rgba(15,23,42,0.85)]">
+          <div className="flex shrink-0 items-start justify-between gap-4 border-b border-[#e5e7eb] px-6 py-5">
+            <div className="flex min-w-0 items-start gap-3">
+              <span className="mt-0.5 grid size-9 shrink-0 place-items-center rounded-[7px] border border-[#d9dce3] bg-[#f8fafc] text-[#334155]">
+                <ClipboardCheck className="size-4" />
+              </span>
+              <div className="min-w-0">
+                <div className="text-[10px] font-bold uppercase tracking-[0.13em] text-[#64748b]">Assessment workflow</div>
+                <h2 id="daily-drill-dialog-title" className="mt-1 text-[20px] font-semibold tracking-[-0.025em] text-[#111827]">Create daily drill</h2>
+                <p id="daily-drill-dialog-description" className="mt-1 text-[12px] leading-5 text-[#64748b]">Define the audience and curriculum scope. Only approved question-bank items will be used.</p>
               </div>
-              <div className="mt-1 text-[12px] font-medium text-[#64748b]">Build a drill from approved question bank items.</div>
             </div>
-            <button type="button" className="grid size-9 place-items-center rounded-[7px] border border-[#d7deea] bg-white text-[#475569] transition hover:border-[#2563eb] hover:text-[#2563eb]" onClick={() => setDrillModalOpen(false)} aria-label="Close drill generator">
+            <button type="button" className="grid size-8 shrink-0 place-items-center rounded-[6px] text-[#64748b] transition hover:bg-[#f3f4f6] hover:text-[#111827]" onClick={() => setDrillModalOpen(false)} aria-label="Close drill setup">
               <X className="size-4" />
             </button>
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
-            <div className="grid gap-5">
-              <div className="grid gap-2">
-                <div className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#64748b]">Give Drill To</div>
-                <div className="grid gap-2 rounded-[8px] border border-[#d7deea] bg-[#f8fafc] p-1 sm:grid-cols-2">
+            <div className="grid gap-6 md:grid-cols-[minmax(0,1fr)_250px]">
+              <div className="grid content-start gap-6">
+                <section className="grid gap-3">
+                  <div>
+                    <div className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#64748b]">01 · Audience</div>
+                    <p className="mt-1 text-[12px] text-[#64748b]">Choose who will receive this drill.</p>
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Drill audience">
                   {[
-                    { id: 'student', label: 'One student', detail: 'Create a drill for a selected learner.' },
-                    { id: 'class', label: 'Whole class', detail: 'Create drills for every active learner in the class.' },
+                    { id: 'student', label: 'Individual student', detail: 'One drill assigned to a selected learner.', icon: UserRound },
+                    { id: 'class', label: 'Entire class', detail: 'A drill for every active learner in a class.', icon: Users },
                   ].map((option) => (
                     <button
                       key={option.id}
                       type="button"
-                      className={`rounded-[7px] border px-3 py-2 text-left transition ${targetType === option.id ? 'border-[#bfdbfe] bg-white text-[#1d4ed8] shadow-sm' : 'border-transparent text-[#475569] hover:bg-white'}`}
+                      role="radio"
+                      aria-checked={targetType === option.id}
+                      className={`flex min-h-[86px] items-start gap-3 rounded-[7px] border p-3 text-left transition ${targetType === option.id ? 'border-[#111827] bg-white shadow-[0_1px_3px_rgba(15,23,42,0.08)]' : 'border-[#d9dce3] bg-[#fafafa] hover:border-[#aeb4be] hover:bg-white'}`}
                       onClick={() => setDrillForm({ ...drillForm, target_type: option.id })}
                     >
-                      <span className="block text-[13px] font-bold">{option.label}</span>
-                      <span className="mt-0.5 block text-[11px] font-medium leading-4 text-[#64748b]">{option.detail}</span>
+                      <span className={`grid size-8 shrink-0 place-items-center rounded-[6px] border ${targetType === option.id ? 'border-[#111827] bg-[#111827] text-white' : 'border-[#d9dce3] bg-white text-[#64748b]'}`}><option.icon className="size-4" /></span>
+                      <span className="min-w-0 flex-1"><span className="flex items-center justify-between gap-2 text-[13px] font-semibold text-[#111827]">{option.label}<span className={`grid size-4 place-items-center rounded-full border ${targetType === option.id ? 'border-[#111827]' : 'border-[#cbd5e1]'}`}>{targetType === option.id ? <span className="size-2 rounded-full bg-[#111827]" /> : null}</span></span><span className="mt-1 block text-[11px] leading-4 text-[#64748b]">{option.detail}</span></span>
                     </button>
                   ))}
-                </div>
-              </div>
+                  </div>
 
-              {targetType === 'class' ? (
-                <label className="grid gap-1.5 text-[11px] font-bold uppercase tracking-[0.08em] text-[#64748b]">
-                  Class
-                  <select className={modalSelectClass} value={drillForm.class_id} onChange={(event) => setDrillForm({ ...drillForm, class_id: event.target.value })}>
-                    <option value="">Select class</option>
-                    {classes.map((row: any) => <option key={row.id} value={row.id}>{row.name || row.class_name || `Class ${row.id}`}</option>)}
-                  </select>
-                </label>
-              ) : (
-                <label className="grid gap-1.5 text-[11px] font-bold uppercase tracking-[0.08em] text-[#64748b]">
-                  Student
-                  <select className={modalSelectClass} value={drillForm.student_id} onChange={(event) => setDrillForm({ ...drillForm, student_id: event.target.value })}>
-                    <option value="">Select student</option>
-                    {students.map((row: any) => (
-                      <option key={row.id} value={row.id}>
-                        {`${row.first_name || ''} ${row.last_name || ''}`.trim() || 'Student'}{row.class_name ? ` - ${row.class_name}` : ''}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              )}
-
-              <div className="grid gap-4 md:grid-cols-2">
-                <label className="grid gap-1.5 text-[11px] font-bold uppercase tracking-[0.08em] text-[#64748b]">
-                  Subject
-                  <select className={modalSelectClass} value={drillForm.subject_id} onChange={(event) => setDrillForm({ ...drillForm, subject_id: event.target.value, topic_id: '' })}>
-                    <option value="">Auto subject</option>
-                    {setup.subjects?.map((row: any) => <option key={row.id} value={row.id}>{row.name}</option>)}
-                  </select>
-                </label>
-                <label className="grid gap-1.5 text-[11px] font-bold uppercase tracking-[0.08em] text-[#64748b]">
-                  Topic
-                  <select className={modalSelectClass} value={drillForm.topic_id} onChange={(event) => setDrillForm({ ...drillForm, topic_id: event.target.value })}>
-                    <option value="">Auto topic</option>
-                    {drillTopics.map((row: any) => <option key={row.id} value={row.id}>{row.topic_name}</option>)}
-                  </select>
-                </label>
-              </div>
-
-              <div className="grid gap-2 border-t border-[#e2e8f0] pt-4 text-[12px] font-medium text-[#64748b]">
-                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                  <span className="font-bold text-[#0f172a]">Target:</span>
                   {targetType === 'class' ? (
-                    <>
-                      <span>{selectedClass?.name || selectedClass?.class_name || 'Not selected'}</span>
-                      {selectedClass ? <span className="text-[#94a3b8]">/ {selectedClassStudentCount || 'all active'} learner{selectedClassStudentCount === 1 ? '' : 's'}</span> : null}
-                    </>
+                    <label className="grid gap-1.5 text-[12px] font-semibold text-[#334155]">
+                      Class
+                      <select className={modalSelectClass} value={drillForm.class_id} onChange={(event) => setDrillForm({ ...drillForm, class_id: event.target.value })}>
+                        <option value="">Select class</option>
+                        {classes.map((row: any) => <option key={row.id} value={row.id}>{row.name || row.class_name || `Class ${row.id}`}</option>)}
+                      </select>
+                    </label>
                   ) : (
-                    <>
-                      <span>{selectedStudent ? `${selectedStudent.first_name || ''} ${selectedStudent.last_name || ''}`.trim() : 'Not selected'}</span>
-                      {selectedStudent?.class_name ? <span className="text-[#94a3b8]">/ {selectedStudent.class_name}</span> : null}
-                    </>
+                    <label className="grid gap-1.5 text-[12px] font-semibold text-[#334155]">
+                      Student
+                      <select className={modalSelectClass} value={drillForm.student_id} onChange={(event) => setDrillForm({ ...drillForm, student_id: event.target.value })}>
+                        <option value="">Select student</option>
+                        {students.map((row: any) => (
+                          <option key={row.id} value={row.id}>
+                            {`${row.first_name || ''} ${row.last_name || ''}`.trim() || 'Student'}{row.class_name ? ` - ${row.class_name}` : ''}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
                   )}
-                </div>
-                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                  <span className="font-bold text-[#0f172a]">Scope:</span>
-                  <span>{selectedSubject?.name || 'Auto subject'}</span>
-                  <span className="text-[#94a3b8]">/</span>
-                  <span>{selectedTopic?.topic_name || 'Auto topic'}</span>
-                </div>
+                </section>
+
+                <section className="grid gap-3 border-t border-[#e5e7eb] pt-5">
+                  <div>
+                    <div className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#64748b]">02 · Curriculum scope</div>
+                    <p className="mt-1 text-[12px] text-[#64748b]">Leave either field on automatic to use current learning evidence.</p>
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <label className="grid gap-1.5 text-[12px] font-semibold text-[#334155]">
+                      Subject
+                      <select className={modalSelectClass} value={drillForm.subject_id} onChange={(event) => setDrillForm({ ...drillForm, subject_id: event.target.value, topic_id: '' })}>
+                        <option value="">Automatic selection</option>
+                        {setup.subjects?.map((row: any) => <option key={row.id} value={row.id}>{row.name}</option>)}
+                      </select>
+                    </label>
+                    <label className="grid gap-1.5 text-[12px] font-semibold text-[#334155]">
+                      Topic
+                      <select className={modalSelectClass} value={drillForm.topic_id} onChange={(event) => setDrillForm({ ...drillForm, topic_id: event.target.value })}>
+                        <option value="">Automatic selection</option>
+                        {drillTopics.map((row: any) => <option key={row.id} value={row.id}>{row.topic_name}</option>)}
+                      </select>
+                    </label>
+                  </div>
+                </section>
               </div>
+
+              <aside className="self-start overflow-hidden rounded-[7px] border border-[#d9dce3] bg-[#fafafa]">
+                <div className="border-b border-[#e5e7eb] bg-white px-4 py-3">
+                  <div className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#64748b]">Drill brief</div>
+                  <p className="mt-1 text-[12px] leading-5 text-[#64748b]">Review the assignment before creating it.</p>
+                </div>
+                <dl className="grid gap-0 px-4 py-1 text-[12px]">
+                  <div className="border-b border-[#e5e7eb] py-3"><dt className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#94a3b8]">Audience</dt><dd className="mt-1 font-semibold text-[#111827]">{targetType === 'class' ? 'Entire class' : 'Individual student'}</dd><dd className="mt-0.5 leading-4 text-[#64748b]">{targetLabel} · {targetContext}</dd></div>
+                  <div className="border-b border-[#e5e7eb] py-3"><dt className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#94a3b8]">Subject</dt><dd className="mt-1 font-semibold text-[#111827]">{selectedSubject?.name || 'Selected automatically'}</dd></div>
+                  <div className="border-b border-[#e5e7eb] py-3"><dt className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#94a3b8]">Topic</dt><dd className="mt-1 font-semibold text-[#111827]">{selectedTopic?.topic_name || 'Selected automatically'}</dd></div>
+                  <div className="py-3"><dt className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#94a3b8]">Question source</dt><dd className="mt-1 flex items-center gap-1.5 font-semibold text-[#166534]"><ShieldCheck className="size-3.5" />Approved bank only</dd></div>
+                </dl>
+              </aside>
             </div>
           </div>
 
-          <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t border-[#e2e8f0] bg-[#f8fafc] px-6 py-4">
-            <Button type="button" variant="outline" className="h-9 rounded-[7px] text-[12px]" disabled={busy} onClick={() => setDrillModalOpen(false)}>Cancel</Button>
-            <Button type="button" className="h-9 rounded-[7px] text-[12px]" disabled={busy} onClick={generateDrill}>
-              {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Play className="size-3.5" />}
-              {submitLabel}
-            </Button>
+          <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t border-[#e5e7eb] bg-[#fafafa] px-6 py-4">
+            <div className="flex items-center gap-2 text-[11px] text-[#64748b]"><ShieldCheck className="size-3.5 text-[#475569]" />Draft and unapproved questions are excluded.</div>
+            <div className="flex items-center gap-2">
+              <Button type="button" variant="outline" className="h-9 rounded-[6px] px-4 text-[12px]" disabled={busy} onClick={() => setDrillModalOpen(false)}>Cancel</Button>
+              <Button type="button" className="h-9 rounded-[6px] border-[#111827] bg-[#111827] px-4 text-[12px] text-white hover:border-[#1f2937] hover:bg-[#1f2937]" disabled={busy || !targetReady} onClick={generateDrill}>
+                {busy ? <Loader2 className="size-3.5 animate-spin" /> : <ClipboardCheck className="size-3.5" />}
+                {busy ? 'Creating drill…' : submitLabel}
+              </Button>
+            </div>
           </div>
         </section>
       </div>
@@ -1197,12 +1213,12 @@ export function SyllabusIntelligencePage() {
     <div className="grid gap-3">
       <section className="flex flex-wrap items-center justify-between gap-4 rounded-[8px] border border-[#dbe1ea] bg-white p-4 shadow-[0_16px_34px_-28px_rgba(15,23,42,0.6)]">
         <div className="min-w-0">
-          <div className="text-[15px] font-bold text-[#111827]">Daily Drill Generator</div>
+          <div className="text-[15px] font-bold text-[#111827]">Daily Drill Planning</div>
           <div className="mt-1 text-[12px] font-medium text-[#64748b]">{students.length} student{students.length === 1 ? '' : 's'} available / {questions.filter((row) => row.approval_status === 'approved').length} approved question{questions.filter((row) => row.approval_status === 'approved').length === 1 ? '' : 's'}</div>
         </div>
         <Button type="button" className="h-9 rounded-[7px] text-[12px]" disabled={busy} onClick={() => setDrillModalOpen(true)}>
-          <Play className="size-3.5" />
-          Generate Drill
+          <ClipboardCheck className="size-3.5" />
+          Create Drill
         </Button>
       </section>
 
