@@ -2,6 +2,7 @@ import { Bell, RefreshCcw, Settings } from 'lucide-react'
 import { useState } from 'react'
 import { useNavigate } from 'react-router'
 import { usePortal } from '../lib/portalContext'
+import { roleLabelFor } from '../lib/roleLabels'
 import { GlobalSearch } from './search/GlobalSearch'
 import { NotificationDrawer } from './NotificationDrawer'
 
@@ -26,14 +27,7 @@ export function PageHeader({
   const { data } = usePortal()
   const [notificationsOpen, setNotificationsOpen] = useState(false)
   const name = user?.fullName || user?.full_name || user?.email || 'Mr. Banda'
-  const role =
-    user?.roleDisplayName ||
-    user?.role_display_name ||
-    user?.roleName ||
-    user?.role_name ||
-    user?.role ||
-    user?.role_code ||
-    'School Administrator'
+  const role = roleLabelFor(user)
   const initials = String(name)
     .split(' ')
     .filter(Boolean)

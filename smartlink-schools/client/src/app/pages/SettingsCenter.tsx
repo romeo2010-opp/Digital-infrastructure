@@ -32,6 +32,7 @@ import { Switch } from '../components/ui/switch'
 import { Toolbar } from '../components/Toolbar'
 import { DEFAULT_SCHOOL_FEATURES, schoolFeatureDefinitions, type SchoolFeatureKey } from '../lib/access'
 import { usePortal } from '../lib/portalContext'
+import { formatRoleLabel, roleLabelFor } from '../lib/roleLabels'
 
 export type SettingsSection = 'preferences' | 'personalized' | 'notifications' | 'security' | 'profile' | 'users' | 'audit' | 'organization' | 'features' | 'integrations' | 'data'
 
@@ -368,7 +369,7 @@ export function SettingsCenter({ section }: { section: SettingsSection }) {
       public_ref: row.public_ref,
       name: row.full_name || row.name || '-',
       email: row.email || '-',
-      role: String(row.role || '').replaceAll('_', ' '),
+      role: formatRoleLabel(row.role, '-'),
       scope: row.role === 'teacher' ? 'Assigned classes' : row.role === 'bursar' ? 'Fees' : row.role === 'headteacher' ? 'Academics' : 'Whole school',
       status: row.is_active ? 'Active' : 'Disabled',
       permissions: row.permissions || [],
@@ -1116,7 +1117,7 @@ export function SettingsCenter({ section }: { section: SettingsSection }) {
     if (section === 'profile') {
       const name = user?.fullName || user?.full_name || user?.name || 'Mr. Banda'
       const email = user?.email || 'admin@greenhill.mw'
-      const role = user?.roleDisplayName || user?.role_display_name || user?.role || 'School Administrator'
+      const role = roleLabelFor(user)
       const schoolName = user?.schoolName || user?.school_name || 'SmartLink School'
       const schoolLocation = [user?.schoolCity || user?.school_city, user?.schoolCountry || user?.school_country].filter(Boolean).join(', ') || 'Malawi'
       return (
@@ -1663,7 +1664,7 @@ export function SettingsCenter({ section }: { section: SettingsSection }) {
           {settingsModal === 'invite' ? (
             inviteResult ? (
               <div className="grid gap-3 rounded-[7px] border border-emerald-200 bg-emerald-50 p-4 text-[12px] text-emerald-900">
-                <div className="font-semibold">{inviteResult.user?.full_name} can now sign in as {String(inviteResult.user?.role || '').replaceAll('_', ' ')}.</div>
+                <div className="font-semibold">{inviteResult.user?.full_name} can now sign in as {formatRoleLabel(inviteResult.user?.role)}.</div>
                 <div>Temporary password</div>
                 <code className="select-all rounded-[5px] border border-emerald-200 bg-white px-3 py-2 font-mono text-[14px] font-semibold text-[#111827]">{inviteResult.temporary_password}</code>
                 <p className="text-[11px] leading-5 text-emerald-800">{inviteResult.temporary_password_notice}</p>

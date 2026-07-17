@@ -10,6 +10,30 @@ import { getLoginAppearanceForUser } from "./preferencesController.js"
 
 const LAST_USER_COOKIE = "smartlink_schools_last_user"
 
+const roleLabels = Object.freeze({
+  super_admin: "Super Admin",
+  school_owner: "School Owner",
+  director: "Director",
+  owner: "School Owner",
+  headteacher: "Headteacher",
+  deputy_headteacher: "Deputy Headteacher",
+  admin_teacher: "Admin Teacher",
+  academic_coordinator: "Academic Coordinator",
+  exams_officer: "Exams Officer",
+  bursar: "Bursar",
+  librarian: "Librarian",
+  teacher: "Teacher",
+  parent: "Parent",
+  student: "Student",
+})
+
+function roleDisplayName(role) {
+  const normalized = String(role || "").trim().toLowerCase().replace(/[\s-]+/g, "_")
+  if (!normalized) return "School Administrator"
+  if (roleLabels[normalized]) return roleLabels[normalized]
+  return normalized.split("_").filter(Boolean).map((word) => `${word[0].toUpperCase()}${word.slice(1)}`).join(" ")
+}
+
 function cookieSecret() {
   return process.env.JWT_SECRET || "smartlink-schools-dev-secret"
 }
@@ -82,6 +106,7 @@ async function decorateSessionUser(user) {
     schoolCountry: school?.country || null,
     schoolFeatures,
     permissions,
+    roleDisplayName: roleDisplayName(user.role),
     academicSession: sessionPayload(session),
     mustChangePassword: Boolean(user.mustChangePassword),
   }

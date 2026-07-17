@@ -25,7 +25,6 @@ import {
   HeartHandshake,
   LayoutDashboard,
   Landmark,
-  Library,
   Lock,
   MessageSquare,
   Palette,
@@ -45,6 +44,7 @@ import {
 import { useLocation, useNavigate } from 'react-router'
 import { canAccessPath } from '../lib/access'
 import { usePortal } from '../lib/portalContext'
+import { roleLabelFor } from '../lib/roleLabels'
 
 const sidebarStorageKey = 'schoolsSidebarCollapsed'
 
@@ -82,7 +82,6 @@ const bursarGroups = [
   {
     label: 'Manage',
     items: [
-      { label: 'My Leave', path: '/my-leave', icon: CalendarRange },
       { label: 'Student Accounts', path: '/fees/accounts', icon: WalletCards },
       { label: 'Invoices', path: '/fees/invoices', icon: FileText },
       { label: 'Payments', path: '/fees/payments', icon: Banknote },
@@ -187,7 +186,6 @@ const groups = [
     label: 'School Operations',
     items: [
       { label: 'My Follow-Ups', path: '/tasks', icon: ClipboardList },
-      { label: 'My Leave', path: '/my-leave', icon: CalendarRange },
       { label: 'Classes', path: '/classes', icon: Users },
       { label: 'Students', path: '/students', icon: GraduationCap },
       { label: 'Teachers', path: '/teachers', icon: UserRound },
@@ -311,7 +309,7 @@ function displayNameFor(user: any) {
 }
 
 function roleNameFor(user: any) {
-  return user?.roleDisplayName || user?.role_display_name || user?.roleName || user?.role_name || user?.role || user?.role_code || 'School Administrator'
+  return roleLabelFor(user)
 }
 
 export function Sidebar({ user }: { user?: any; theme?: 'default' | 'light' }) {
@@ -364,8 +362,8 @@ export function Sidebar({ user }: { user?: any; theme?: 'default' | 'light' }) {
   }
 
   const allowedItems = (items: readonly any[]) => items
-    .filter((item) => userRole !== 'headteacher' || !item.path.startsWith('/library/') || ['/library/dashboard', '/library/resources', '/library/resources/review'].includes(item.path))
-    .map((item) => userRole !== 'headteacher' ? item : item.path === '/library/dashboard' ? { ...item, label: 'Resource Overview', icon: Library } : item.path === '/library/resources/review' ? { ...item, label: 'Academic Approvals' } : item.path === '/library/resources' ? { ...item, label: 'Teaching Resources' } : item)
+    .filter((item) => userRole !== 'headteacher' || (item.path !== '/assessment-insights' && (!item.path.startsWith('/library/') || ['/library/resources', '/library/resources/review'].includes(item.path))))
+    .map((item) => userRole !== 'headteacher' ? item : item.path === '/library/resources/review' ? { ...item, label: 'Academic Approvals' } : item.path === '/library/resources' ? { ...item, label: 'Teaching Resources' } : item)
     .filter((item) => canAccessPath(user, item.path))
 
   const navItemClass = (active: boolean) =>
