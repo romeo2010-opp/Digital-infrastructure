@@ -22,6 +22,24 @@ const MIME_BY_FORMAT = {
   PBM: "image/x-portable-bitmap",
   PGM: "image/x-portable-graymap",
   PPM: "image/x-portable-pixmap",
+  JP2: "image/jp2",
+  JBIG2: "image/x-jbig2",
+}
+
+const FORMAT_BY_EXTENSION = {
+  ".jpg": "JPEG",
+  ".jpeg": "JPEG",
+  ".png": "PNG",
+  ".webp": "WEBP",
+  ".tif": "TIFF",
+  ".tiff": "TIFF",
+  ".gif": "GIF",
+  ".bmp": "BMP",
+  ".pbm": "PBM",
+  ".pgm": "PGM",
+  ".ppm": "PPM",
+  ".jp2": "JP2",
+  ".jb2": "JBIG2",
 }
 
 function bounded(value, minimum, maximum, fallback) {
@@ -54,18 +72,88 @@ export function parsePdfImageList(raw = "") {
   }).filter(Boolean)
 }
 
-async function imageMetadata(filePath) {
-  const [{ stdout }, stat, bytes] = await Promise.all([
-    run("identify", ["-format", "%m|%w|%h", filePath], { timeout: 30000, maxBuffer: 1024 * 1024 }),
-    fs.stat(filePath),
-    fs.readFile(filePath),
-  ])
-  const [format, width, height] = String(stdout || "").trim().split("|")
+function jpegDimensions(bytes) {
+  if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) return null
+  const sizeMarkers = new Set([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf])
+  let offset = 2
+  while (offset + 8 < bytes.length) {
+    if (bytes[offset] !== 0xff) { offset += 1; continue }
+    const marker = bytes[offset + 1]
+    offset += 2
+    if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue
+    if (marker === 0xd9 || marker === 0xda || offset + 2 > bytes.length) break
+    const length = bytes.readUInt16BE(offset)
+    if (length < 2 || offset + length > bytes.length) break
+    if (sizeMarkers.has(marker) && length >= 7) return { width: bytes.readUInt16BE(offset + 5), height: bytes.readUInt16BE(offset + 3) }
+    offset += length
+  }
+  return null
+}
+
+export function replaceOperationalImageWarnings(existing = [], current = []) {
+  const operational=/^(?:Embedded image \d+ on page \d+ could not be validated|Embedded image extraction failed|Image limit reached|An embedded image on page|A visual for question .* could not be cropped|A visual near question .* needs a manual crop|A cropped visual on page)/i
+  const retained=(Array.isArray(existing)?existing:[]).filter((warning)=>!operational.test(String(warning||"").trim()))
+  return [...new Set([...retained,...(Array.isArray(current)?current:[])].map((warning)=>String(warning||"").trim()).filter(Boolean))]
+}
+
+function portableMapDimensions(bytes) {
+  const header=bytes.subarray(0,Math.min(bytes.length,4096)).toString("latin1").replace(/#[^\r\n]*/g," ")
+  const tokens=header.trim().split(/\s+/)
+  if (!/^P[1-6]$/.test(tokens[0] || "")) return null
+  return { format: { P1:"PBM",P4:"PBM",P2:"PGM",P5:"PGM",P3:"PPM",P6:"PPM" }[tokens[0]], width:Number(tokens[1])||null, height:Number(tokens[2])||null }
+}
+
+export function imageDetailsFromBytes(input, filePath = "", hints = {}) {
+  const bytes=Buffer.from(input||[])
+  let detected={}
+  if(bytes.length>=24&&bytes.subarray(0,8).equals(Buffer.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a]))){
+    detected={format:"PNG",width:bytes.readUInt32BE(16),height:bytes.readUInt32BE(20)}
+  }else if(bytes.length>=10&&["GIF87a","GIF89a"].includes(bytes.subarray(0,6).toString("ascii"))){
+    detected={format:"GIF",width:bytes.readUInt16LE(6),height:bytes.readUInt16LE(8)}
+  }else if(bytes.length>=26&&bytes.subarray(0,2).toString("ascii")==="BM"){
+    const coreHeader=bytes.readUInt32LE(14)===12
+    detected={format:"BMP",width:coreHeader?bytes.readUInt16LE(18):Math.abs(bytes.readInt32LE(18)),height:coreHeader?bytes.readUInt16LE(20):Math.abs(bytes.readInt32LE(22))}
+  }else if(bytes.length>=30&&bytes.subarray(0,4).toString("ascii")==="RIFF"&&bytes.subarray(8,12).toString("ascii")==="WEBP"){
+    const variant=bytes.subarray(12,16).toString("ascii")
+    if(variant==="VP8X")detected={format:"WEBP",width:1+bytes.readUIntLE(24,3),height:1+bytes.readUIntLE(27,3)}
+    else if(variant==="VP8 "&&bytes[23]===0x9d&&bytes[24]===0x01&&bytes[25]===0x2a)detected={format:"WEBP",width:bytes.readUInt16LE(26)&0x3fff,height:bytes.readUInt16LE(28)&0x3fff}
+    else if(variant==="VP8L"&&bytes[20]===0x2f){const bits=bytes.readUInt32LE(21);detected={format:"WEBP",width:1+(bits&0x3fff),height:1+((bits>>>14)&0x3fff)}}
+    else detected={format:"WEBP"}
+  }else if(bytes.length>=12&&bytes.subarray(0,12).equals(Buffer.from([0,0,0,12,0x6a,0x50,0x20,0x20,0x0d,0x0a,0x87,0x0a]))){
+    const header=bytes.indexOf(Buffer.from("ihdr"))
+    detected={format:"JP2",width:header>=0&&header+12<=bytes.length?bytes.readUInt32BE(header+8):null,height:header>=0&&header+8<=bytes.length?bytes.readUInt32BE(header+4):null}
+  }else if(bytes.length>=4&&(["II*\u0000","MM\u0000*"].includes(bytes.subarray(0,4).toString("latin1")))){
+    detected={format:"TIFF"}
+  }else{
+    const jpeg=jpegDimensions(bytes)
+    detected=jpeg?{format:"JPEG",...jpeg}:(portableMapDimensions(bytes)||{})
+  }
+  const extensionFormat=FORMAT_BY_EXTENSION[path.extname(filePath).toLowerCase()]
+  const hintedFormat=String(hints.format||hints.encoding||"").toUpperCase().replace("JPG","JPEG").replace("CCITT","TIFF")
+  const format=detected.format||extensionFormat||hintedFormat||null
+  const width=Number(detected.width)||Number(hints.width)||null
+  const height=Number(detected.height)||Number(hints.height)||null
+  return {format,width,height,mime_type:MIME_BY_FORMAT[format]||"application/octet-stream"}
+}
+
+async function imageMetadata(filePath, hints = {}) {
+  const [stat, bytes] = await Promise.all([fs.stat(filePath),fs.readFile(filePath)])
+  let details=imageDetailsFromBytes(bytes,filePath,hints)
+  if(!details.width||!details.height){
+    try{
+      const {stdout}=await run("identify",["-format","%m|%w|%h",filePath],{timeout:30000,maxBuffer:1024*1024})
+      const [format,width,height]=String(stdout||"").trim().split("|")
+      details={format:format||details.format,width:Number(width)||details.width,height:Number(height)||details.height,mime_type:MIME_BY_FORMAT[String(format||details.format||"").toUpperCase()]||details.mime_type}
+    }catch(error){
+      if(!details.width||!details.height)throw error
+    }
+  }
+  if(!details.width||!details.height)throw new Error("Image dimensions could not be read")
   const checksum = createHash("sha256").update(bytes).digest("hex")
   return {
-    mime_type: MIME_BY_FORMAT[String(format || "").toUpperCase()] || "application/octet-stream",
-    width: Number(width) || null,
-    height: Number(height) || null,
+    mime_type:details.mime_type,
+    width:details.width,
+    height:details.height,
     file_size: stat.size,
     checksum,
   }
@@ -125,7 +213,7 @@ export async function extractEmbeddedPdfImages({ pdfPath, outputDir, documentTyp
     if (!filePath) continue
     let metadata
     try {
-      metadata = await imageMetadata(filePath)
+      metadata = await imageMetadata(filePath,{width:row.width,height:row.height,encoding:row.encoding})
     } catch {
       warnings.push(`Embedded image ${row.embedded_number} on page ${row.page_number} could not be validated.`)
       continue

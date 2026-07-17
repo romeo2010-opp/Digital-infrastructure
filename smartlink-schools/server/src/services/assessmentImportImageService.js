@@ -2,7 +2,7 @@ import path from "path"
 import { randomUUID } from "crypto"
 import { pool } from "../config/db.js"
 import { HttpError } from "../utils/http.js"
-import { cropPdfVisualRegions, extractEmbeddedPdfImages } from "./pdfImageExtractionService.js"
+import { cropPdfVisualRegions, extractEmbeddedPdfImages, replaceOperationalImageWarnings } from "./pdfImageExtractionService.js"
 
 const text=(value,max=2000)=>String(value??"").trim().slice(0,max)
 const json=(value,fallback)=>{if(value===null||value===undefined)return fallback;if(typeof value==="object")return value;try{return JSON.parse(value)}catch{return fallback}}
@@ -106,7 +106,8 @@ export async function extractImportImages(schoolId,userId,ref){
       await connection.query("UPDATE assessment_import_assets SET removed_at=CURRENT_TIMESTAMP,assignment_status='rejected',row_version=row_version+1 WHERE school_id=? AND import_job_id=? AND assignment_status<>'confirmed' AND removed_at IS NULL",[schoolId,job.id])
       for(const asset of assets)await saveAsset(connection,{schoolId,jobId:job.id,userId,asset})
       const reviewCount=assets.filter((asset)=>asset.requires_review!==false).length,totalPages=studentPages.length+markingPages.length,found=studentEmbedded.images_found+markingEmbedded.images_found+crops.assets.length,status=warnings.length?"completed_with_warnings":"completed"
-      await connection.query("UPDATE assessment_import_jobs SET image_extraction_status=?,image_extraction_pages_processed=?,image_extraction_total_pages=?,image_extraction_images_found=?,image_extraction_images_saved=(SELECT COUNT(*) FROM assessment_import_assets WHERE import_job_id=? AND removed_at IS NULL),image_extraction_review_count=?,image_extraction_last_error=?,image_extraction_completed_at=CURRENT_TIMESTAMP WHERE id=?",[status,totalPages,totalPages,found,job.id,reviewCount,warnings.join(" ").slice(0,2000)||null,job.id])
+      const mergedWarnings=replaceOperationalImageWarnings(json(job.warnings_json,[]),warnings)
+      await connection.query("UPDATE assessment_import_jobs SET image_extraction_status=?,image_extraction_pages_processed=?,image_extraction_total_pages=?,image_extraction_images_found=?,image_extraction_images_saved=(SELECT COUNT(*) FROM assessment_import_assets WHERE import_job_id=? AND removed_at IS NULL),image_extraction_review_count=?,image_extraction_last_error=?,warnings_json=?,image_extraction_completed_at=CURRENT_TIMESTAMP WHERE id=?",[status,totalPages,totalPages,found,job.id,reviewCount,warnings.join(" ").slice(0,2000)||null,JSON.stringify(mergedWarnings),job.id])
       await audit(connection,{schoolId,jobId:job.id,userId,action:"extraction_completed",after:{status,pages_processed:totalPages,images_found:found,images_saved:assets.length,requires_review:reviewCount}})
       await connection.commit()
     }catch(error){await connection.rollback();throw error}finally{connection.release()}

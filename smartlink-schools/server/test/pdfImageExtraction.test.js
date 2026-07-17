@@ -7,12 +7,12 @@ import path from "path"
 import { execFile, spawnSync } from "child_process"
 import { promisify } from "util"
 import PDFDocument from "pdfkit"
-import { cropPdfVisualRegions, extractEmbeddedPdfImages, parsePdfImageList } from "../src/services/pdfImageExtractionService.js"
+import { cropPdfVisualRegions, extractEmbeddedPdfImages, imageDetailsFromBytes, parsePdfImageList, replaceOperationalImageWarnings } from "../src/services/pdfImageExtractionService.js"
 
 const run = promisify(execFile)
 const commandExists = (command) => spawnSync(process.platform === "win32" ? "where.exe" : "which", [command], { stdio: "ignore" }).status === 0
 const imageCommand = process.platform === "win32" ? "magick" : "convert"
-const pdfToolchainAvailable = commandExists("pdfimages") && commandExists("pdftoppm") && commandExists("identify") && commandExists(imageCommand)
+const pdfToolchainAvailable = commandExists("pdfimages") && commandExists("pdftoppm") && commandExists(imageCommand)
 const pdfToolchainTest = pdfToolchainAvailable ? test : test.skip
 
 async function fixtureFolder() {
@@ -39,6 +39,27 @@ test("parses Poppler embedded-image metadata", () => {
   const rows = parsePdfImageList("   4     2 image     408   276  rgb     3   8  jpeg   yes       34  0   220   220 28.4K 8.6%")
   assert.equal(rows.length, 1)
   assert.deepEqual(rows[0], { page_number: 4, embedded_number: 2, embedded_type: "image", width: 408, height: 276, encoding: "jpeg", interpolation: "yes", object_id: 34 })
+})
+
+test("reads cropped PNG metadata without requiring ImageMagick",()=>{
+  const bytes=Buffer.alloc(24)
+  Buffer.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a]).copy(bytes)
+  bytes.writeUInt32BE(1280,16)
+  bytes.writeUInt32BE(720,20)
+  assert.deepEqual(imageDetailsFromBytes(bytes,"question-crop.png"),{format:"PNG",width:1280,height:720,mime_type:"image/png"})
+})
+
+test("uses trusted Poppler dimensions for less common embedded image formats",()=>{
+  assert.deepEqual(imageDetailsFromBytes(Buffer.from([0x49,0x49,0x2a,0]),"embedded-0.tif",{width:640,height:480}),{format:"TIFF",width:640,height:480,mime_type:"image/tiff"})
+})
+
+test("a successful retry clears stale dependency warnings without hiding review findings",()=>{
+  const existing=[
+    "Embedded image 0 on page 1 could not be validated.",
+    "A visual for question 4. a. (i) on page 3 could not be cropped: spawn identify ENOENT",
+    "Question 7 has no confidently matched marking-scheme answer.",
+  ]
+  assert.deepEqual(replaceOperationalImageWarnings(existing,[]),["Question 7 has no confidently matched marking-scheme answer."])
 })
 
 pdfToolchainTest("extracts original embedded images with dimensions, MIME type and checksum", async (t) => {
