@@ -25,6 +25,7 @@ import {
   HeartHandshake,
   LayoutDashboard,
   Landmark,
+  Library,
   Lock,
   MessageSquare,
   Palette,
@@ -326,6 +327,7 @@ export function Sidebar({ user }: { user?: any; theme?: 'default' | 'light' }) {
   const displayName = displayNameFor(user)
   const roleName = roleNameFor(user)
   const isParent = String(user?.role || '').toLowerCase() === 'parent'
+  const userRole = String(user?.role || '').toLowerCase()
   const primaryItem = canAccessPath(user, dashboardItem.path)
     ? dashboardItem
     : isParent && canAccessPath(user, parentProgressItem.path)
@@ -340,6 +342,7 @@ export function Sidebar({ user }: { user?: any; theme?: 'default' | 'light' }) {
 
   const isActive = (path: string) => {
     if (path === '/dashboard') return location.pathname === '/dashboard'
+    if (path === '/library/resources') return location.pathname === path || (location.pathname.startsWith(`${path}/`) && location.pathname !== '/library/resources/review')
     return location.pathname.startsWith(path)
   }
 
@@ -360,7 +363,10 @@ export function Sidebar({ user }: { user?: any; theme?: 'default' | 'light' }) {
     navigate(path)
   }
 
-  const allowedItems = (items: readonly any[]) => items.filter((item) => canAccessPath(user, item.path))
+  const allowedItems = (items: readonly any[]) => items
+    .filter((item) => userRole !== 'headteacher' || !item.path.startsWith('/library/') || ['/library/dashboard', '/library/resources', '/library/resources/review'].includes(item.path))
+    .map((item) => userRole !== 'headteacher' ? item : item.path === '/library/dashboard' ? { ...item, label: 'Resource Overview', icon: Library } : item.path === '/library/resources/review' ? { ...item, label: 'Academic Approvals' } : item.path === '/library/resources' ? { ...item, label: 'Teaching Resources' } : item)
+    .filter((item) => canAccessPath(user, item.path))
 
   const navItemClass = (active: boolean) =>
     `relative flex h-8 w-full items-center gap-2 rounded-[5px] text-left text-[12px] font-medium tracking-[-0.012em] transition ${
@@ -370,7 +376,6 @@ export function Sidebar({ user }: { user?: any; theme?: 'default' | 'light' }) {
     }`
   const labelClass = `${collapsed ? 'hidden' : 'block'} min-w-0 truncate max-md:hidden`
   const isBursarPortal = String(user?.role || '').toLowerCase() === 'bursar' && !settingsMode
-  const userRole = String(user?.role || '').toLowerCase()
   const isDirectorPortal = ['school_owner', 'director', 'owner'].includes(userRole) && !settingsMode
 
   useEffect(() => {
@@ -685,10 +690,11 @@ export function Sidebar({ user }: { user?: any; theme?: 'default' | 'light' }) {
               {groups.map((group) => {
                 const items = allowedItems(group.items)
                 if (!items.length) return null
+                const groupLabel = userRole === 'headteacher' && group.label === 'Library & Resources' ? 'Academic Resources' : group.label
                 return (
-                <section key={group.label} className="min-w-0">
+                <section key={groupLabel} className="min-w-0">
                   <div className={`${collapsed ? 'mx-auto h-px w-7 bg-[#e2e8f0]' : 'px-2.5 pb-0.5 text-[9px] font-bold uppercase tracking-[0.12em] text-[#9ca3af]'} max-md:mx-auto max-md:h-px max-md:w-7 max-md:bg-[#e2e8f0] max-md:px-0 max-md:pb-0`}>
-                    <span className={`${collapsed ? 'hidden' : ''} max-md:hidden`}>{group.label}</span>
+                    <span className={`${collapsed ? 'hidden' : ''} max-md:hidden`}>{groupLabel}</span>
                   </div>
                   <div className="grid gap-0.5">
                     {items.map((item) => {

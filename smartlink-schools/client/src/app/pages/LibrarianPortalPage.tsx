@@ -1,11 +1,13 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router'
-import { BookOpen, CheckCircle2, Download, FileCheck2, RefreshCw, Search, Upload } from 'lucide-react'
+import { AlertTriangle, ArrowRight, BookOpen, CheckCircle2, Download, FileCheck2, Library, RefreshCw, Search, ShieldCheck, Upload } from 'lucide-react'
 import { toast } from 'sonner'
 import { usePortal } from '../lib/portalContext'
 import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
 import { SectionCard } from '../components/SectionCard'
+import { SectionKpiStrip } from '../components/SectionKpiStrip'
+import { SmartLinkLoadingState } from '../components/SmartLinkLoadingState'
 import { PortalTable } from '../components/PortalTable'
 
 const inputClassName = 'h-9 rounded-[5px] border border-[#d9dee7] bg-white px-3 text-[12px] text-[#111827]'
@@ -17,26 +19,61 @@ function Pill({ value }: { value: any }) {
   return <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.05em] ${risk ? 'border-red-200 bg-red-50 text-red-700' : good ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-slate-200 bg-slate-50 text-slate-600'}`}>{text}</span>
 }
 
-function Metric({ label, value, detail }: { label: string; value: any; detail: string }) {
-  return <article className="rounded-[8px] border border-[#e2e8f0] bg-white p-4"><div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#64748b]">{label}</div><div className="mt-2 text-[26px] font-semibold tracking-[-0.04em] text-[#111827]">{Number(value || 0).toLocaleString()}</div><p className="mt-1 text-[11px] leading-5 text-[#64748b]">{detail}</p></article>
+function LibraryPageHeader({ eyebrow, title, description, actions }: { eyebrow: string; title: string; description: string; actions?: ReactNode }) {
+  return <section className="rounded-[8px] border border-[var(--mera-panel-border)] bg-[var(--mera-panel)] p-4 shadow-[var(--mera-shadow-card)]"><div className="flex flex-wrap items-center justify-between gap-4"><div className="min-w-0"><div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.14em] text-[#64748b]"><span className="grid size-7 place-items-center rounded-[6px] bg-[#ecfdf5] text-[#047857]"><Library className="size-3.5" /></span>{eyebrow}</div><h1 className="mt-2 text-[22px] font-semibold tracking-[-0.035em] text-[var(--mera-panel-text)]">{title}</h1><p className="mt-1 max-w-3xl text-[13px] leading-5 text-[var(--mera-panel-text-muted)]">{description}</p></div>{actions ? <div className="flex flex-wrap gap-2">{actions}</div> : null}</div></section>
 }
 
-function Dashboard({ data, onOpen }: { data: any; onOpen: (path: string) => void }) {
+function EmptyList({ icon: Icon = BookOpen, title, detail }: { icon?: any; title: string; detail: string }) {
+  return <div className="grid min-h-[190px] place-items-center px-6 py-10 text-center"><div><span className="mx-auto grid size-10 place-items-center rounded-full border border-[#e2e8f0] bg-[#f8fafc] text-[#64748b]"><Icon className="size-4.5" /></span><p className="mt-3 text-[13px] font-semibold text-[#111827]">{title}</p><p className="mx-auto mt-1 max-w-xs text-[12px] leading-5 text-[#64748b]">{detail}</p></div></div>
+}
+
+function Dashboard({ data, onOpen, leadership = false }: { data: any; onOpen: (path: string) => void; leadership?: boolean }) {
   const dashboard = data?.dashboard || {}
-  const actions = [
+  const operationalActions = [
     ['Overdue loans', dashboard.loans?.overdue, 'Contact borrowers or record returns.', '/library/loans'],
     ['Teaching resources awaiting review', dashboard.reviews?.awaiting_review, 'Check file quality and archive metadata.', '/library/resources/review'],
     ['Teacher resource requests', dashboard.resource_requests?.open_requests, 'Locate or prepare material requested for lessons.', '/library/resource-requests'],
     ['Print requests awaiting processing', dashboard.printing?.pending, 'Approve, queue and complete paper materials.', '/library/print-requests'],
     ['Archive metadata warnings', dashboard.archive?.metadata_warnings, 'Classify historical records without changing official data.', '/library/archive'],
   ]
-  return <div className="grid gap-3">
-    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4"><Metric label="Borrowed" value={dashboard.loans?.borrowed} detail={`${dashboard.loans?.overdue || 0} overdue for action`} /><Metric label="Resource review" value={dashboard.reviews?.awaiting_review} detail={`${dashboard.reviews?.metadata_issues || 0} need changes`} /><Metric label="Print queue" value={dashboard.printing?.pending} detail={`${dashboard.printing?.confidential || 0} confidential jobs`} /><Metric label="Archive warnings" value={(dashboard.archive?.missing || 0) + (dashboard.archive?.metadata_warnings || 0)} detail={`${dashboard.archive?.archived_terms || 0} archived terms available`} /></div>
-    <div className="grid gap-3 lg:grid-cols-[1.2fr_0.8fr]">
-      <SectionCard title="Librarian action queue" subtitle="The work requiring attention now, ordered by operational urgency."><div className="divide-y divide-[#e2e8f0]">{actions.map(([title, value, detail, path]) => <button key={String(title)} type="button" onClick={() => onOpen(String(path))} className="grid w-full grid-cols-[1fr_auto] gap-4 px-4 py-3 text-left hover:bg-[#f8fafc]"><span><span className="block text-[13px] font-semibold text-[#111827]">{title}</span><span className="mt-1 block text-[11px] text-[#64748b]">{detail}</span></span><span className="font-mono text-[13px] font-semibold text-[#111827]">{Number(value || 0)}</span></button>)}</div></SectionCard>
-      <SectionCard title="Recently added" subtitle="Latest institutional teaching materials."><div className="divide-y divide-[#e2e8f0]">{(dashboard.recent_resources || []).map((row: any) => <button key={row.public_ref} type="button" onClick={() => onOpen(`/library/resources/${row.public_ref}`)} className="block w-full px-4 py-3 text-left hover:bg-[#f8fafc]"><div className="flex items-center justify-between gap-2"><span className="truncate text-[12px] font-semibold text-[#111827]">{row.title}</span><Pill value={row.approval_status} /></div><div className="mt-1 text-[11px] text-[#64748b]">{row.resource_type} · used {row.usage_count || 0} times</div></button>)}</div></SectionCard>
+  const leadershipSignals = [
+    { title: 'Academic resources awaiting approval', value: dashboard.reviews?.awaiting_review, detail: 'Review teaching suitability and make the final academic decision.', owner: 'Headteacher', path: '/library/resources/review', actionable: true },
+    { title: 'Overdue physical materials', value: dashboard.loans?.overdue, detail: 'Library staff are responsible for borrower follow-up and returns.', owner: 'Library team' },
+    { title: 'Priority teacher requests', value: dashboard.resource_requests?.priority_requests, detail: 'High-priority teaching materials requested for upcoming lessons.', owner: 'Library team' },
+    { title: 'Resource records needing correction', value: dashboard.reviews?.metadata_issues, detail: 'File or classification issues are with the resource team.', owner: 'Resource team' },
+  ]
+  const recentResources = dashboard.recent_resources || []
+
+  if (leadership) return <main className="grid gap-3 p-4">
+    <LibraryPageHeader eyebrow="Academic resources" title="Resource oversight" description="Academic approvals, teaching-resource coverage and the few library risks that need leadership awareness." actions={<><Button variant="outline" onClick={() => onOpen('/library/resources')}>Browse resources</Button><Button onClick={() => onOpen('/library/resources/review')}><ShieldCheck className="size-4" />Review approvals</Button></>} />
+    <SectionKpiStrip items={[
+      { label: 'Academic approvals', value: dashboard.reviews?.awaiting_review || 0, helper: 'teaching resources', delta: dashboard.reviews?.awaiting_review ? 'Review needed' : 'Up to date', tone: dashboard.reviews?.awaiting_review ? 'warn' : 'good' },
+      { label: 'Approved resources', value: dashboard.resources?.approved || 0, helper: 'available to staff', delta: `${dashboard.resources?.used || 0} used`, tone: 'good' },
+      { label: 'Priority requests', value: dashboard.resource_requests?.priority_requests || 0, helper: 'reported by library team', delta: dashboard.resource_requests?.priority_requests ? 'Monitor' : 'No urgent gaps', tone: dashboard.resource_requests?.priority_requests ? 'warn' : 'good' },
+      { label: 'Overdue materials', value: dashboard.loans?.overdue || 0, helper: 'library follow-up', delta: dashboard.loans?.overdue ? 'Monitor' : 'On track', tone: dashboard.loans?.overdue ? 'warn' : 'good' },
+    ]} />
+    <div className="grid gap-3 xl:grid-cols-[minmax(0,1.15fr)_minmax(340px,0.85fr)]">
+      <SectionCard title="Leadership attention" subtitle="Only decisions and exceptions relevant to the headteacher are shown here."><div className="divide-y divide-[var(--mera-panel-border-soft)]">{leadershipSignals.map((item) => {
+        const content = <><span className={`mt-0.5 grid size-8 shrink-0 place-items-center rounded-full ${Number(item.value || 0) ? 'bg-[#fff7ed] text-[#c2410c]' : 'bg-[#ecfdf5] text-[#047857]'}`}>{Number(item.value || 0) ? <AlertTriangle className="size-3.5" /> : <CheckCircle2 className="size-3.5" />}</span><span className="min-w-0 flex-1"><span className="flex flex-wrap items-center gap-2"><span className="text-[13px] font-semibold text-[#111827]">{item.title}</span><span className="rounded-full bg-[#f1f5f9] px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.07em] text-[#64748b]">{item.owner}</span></span><span className="mt-1 block text-[12px] leading-5 text-[#64748b]">{item.detail}</span></span><span className="flex shrink-0 items-center gap-2 text-[14px] font-semibold text-[#111827]"><span>{Number(item.value || 0)}</span>{item.actionable ? <ArrowRight className="size-4 text-[#94a3b8]" /> : null}</span></>
+        return item.actionable ? <button key={item.title} type="button" onClick={() => onOpen(String(item.path))} className="flex w-full items-start gap-3 px-4 py-3.5 text-left transition hover:bg-[#fafafa]">{content}</button> : <div key={item.title} className="flex items-start gap-3 px-4 py-3.5">{content}</div>
+      })}</div></SectionCard>
+      <SectionCard title="Recently updated" subtitle="Latest teaching resources across the school.">{recentResources.length ? <div className="divide-y divide-[var(--mera-panel-border-soft)]">{recentResources.slice(0, 5).map((row: any) => <button key={row.public_ref} type="button" onClick={() => onOpen(`/library/resources/${row.public_ref}`)} className="block w-full px-4 py-3.5 text-left transition hover:bg-[#fafafa]"><div className="flex items-center justify-between gap-3"><span className="truncate text-[13px] font-semibold text-[#111827]">{row.title}</span><Pill value={row.approval_status} /></div><div className="mt-1 text-[11px] capitalize text-[#64748b]">{String(row.resource_type || 'resource').replaceAll('_', ' ')} · used {row.usage_count || 0} times</div></button>)}</div> : <EmptyList title="No teaching resources yet" detail="Approved and submitted teaching resources will appear here." />}</SectionCard>
     </div>
-  </div>
+  </main>
+
+  return <main className="grid gap-3 p-4">
+    <LibraryPageHeader eyebrow="Library operations" title="Library workspace" description="Manage circulation, resource requests, printing and records from one focused operational queue." actions={<><Button variant="outline" onClick={() => onOpen('/library/catalogue')}>Open catalogue</Button><Button onClick={() => onOpen('/library/loans')}><BookOpen className="size-4" />Loans & returns</Button></>} />
+    <SectionKpiStrip items={[
+      { label: 'Items on loan', value: dashboard.loans?.borrowed || 0, helper: 'current borrowers', delta: `${dashboard.loans?.overdue || 0} overdue`, tone: dashboard.loans?.overdue ? 'warn' : 'good' },
+      { label: 'Resource review', value: dashboard.reviews?.awaiting_review || 0, helper: 'awaiting checks', delta: `${dashboard.reviews?.metadata_issues || 0} need changes`, tone: dashboard.reviews?.awaiting_review ? 'warn' : 'good' },
+      { label: 'Print queue', value: dashboard.printing?.pending || 0, helper: 'active jobs', delta: `${dashboard.printing?.confidential || 0} restricted`, tone: dashboard.printing?.overdue ? 'bad' : dashboard.printing?.pending ? 'warn' : 'good' },
+      { label: 'Open requests', value: dashboard.resource_requests?.open_requests || 0, helper: 'from teachers', delta: `${dashboard.resource_requests?.priority_requests || 0} priority`, tone: dashboard.resource_requests?.priority_requests ? 'warn' : 'good' },
+    ]} />
+    <div className="grid gap-3 xl:grid-cols-[minmax(0,1.15fr)_minmax(340px,0.85fr)]">
+      <SectionCard title="Operational queue" subtitle="Work requiring library-team attention, ordered by workflow."><div className="divide-y divide-[var(--mera-panel-border-soft)]">{operationalActions.map(([title, value, detail, path]) => <button key={String(title)} type="button" onClick={() => onOpen(String(path))} className="flex w-full items-center gap-3 px-4 py-3.5 text-left transition hover:bg-[#fafafa]"><span className={`size-2 shrink-0 rounded-full ${Number(value || 0) ? 'bg-[#f59e0b]' : 'bg-[#10b981]'}`} /><span className="min-w-0 flex-1"><span className="block text-[13px] font-semibold text-[#111827]">{title}</span><span className="mt-1 block text-[12px] text-[#64748b]">{detail}</span></span><span className="text-[14px] font-semibold text-[#111827]">{Number(value || 0)}</span><ArrowRight className="size-4 shrink-0 text-[#94a3b8]" /></button>)}</div></SectionCard>
+      <SectionCard title="Recently updated" subtitle="Latest institutional teaching materials.">{recentResources.length ? <div className="divide-y divide-[var(--mera-panel-border-soft)]">{recentResources.slice(0, 5).map((row: any) => <button key={row.public_ref} type="button" onClick={() => onOpen(`/library/resources/${row.public_ref}`)} className="block w-full px-4 py-3.5 text-left transition hover:bg-[#fafafa]"><div className="flex items-center justify-between gap-3"><span className="truncate text-[13px] font-semibold text-[#111827]">{row.title}</span><Pill value={row.approval_status} /></div><div className="mt-1 text-[11px] capitalize text-[#64748b]">{String(row.resource_type || 'resource').replaceAll('_', ' ')} · used {row.usage_count || 0} times</div></button>)}</div> : <EmptyList title="No resources added" detail="New teaching materials will appear here after they are submitted." />}</SectionCard>
+    </div>
+  </main>
 }
 
 async function fileDataUrl(file: File) {
@@ -113,6 +150,7 @@ export function LibrarianPortalPage() {
   const [loading, setLoading] = useState(true)
   const [query, setQuery] = useState('')
   const section = location.pathname.split('/')[2] || 'dashboard'
+  const isHeadteacher = String(user?.role || '').toLowerCase() === 'headteacher'
   const hasPermission = (code: string) => (user?.permissions || []).includes(code)
   const load = async () => {
     setLoading(true)
@@ -141,10 +179,12 @@ export function LibrarianPortalPage() {
   const updateResourceRequest = async (row: any, status: string) => {
     try { await api.updateTeachingResourceRequest(token, row.public_ref, { status }); toast.success(`Resource request moved to ${status.replaceAll('_', ' ')}.`); await load() } catch (error: any) { toast.error(error.message) }
   }
-  if (loading) return <div className="grid min-h-[360px] place-items-center text-[13px] text-[#64748b]"><span><RefreshCw className="mx-auto mb-2 size-5 animate-spin" />Loading librarian workspace…</span></div>
-  if (section === 'dashboard') return <Dashboard data={data} onOpen={navigate} />
+  if (loading) return <main className="p-4"><SmartLinkLoadingState label={isHeadteacher ? 'Loading resource oversight' : 'Loading library workspace'} detail={isHeadteacher ? 'Preparing academic approvals and leadership signals.' : 'Preparing circulation, requests and resource records.'} /></main>
+  if (section === 'dashboard') return <Dashboard data={data} onOpen={navigate} leadership={isHeadteacher} />
 
-  const title = section === 'catalogue' ? 'Physical library catalogue' : section === 'loans' ? 'Loans and returns' : section === 'computers' ? 'Library computers' : section === 'resource-requests' ? 'Teacher resource requests' : section === 'print-requests' ? 'Print requests' : section === 'archive' ? 'Institutional archive' : location.pathname.endsWith('/review') ? 'Resource review queue' : 'Teaching resources'
+  const reviewMode = location.pathname.endsWith('/review')
+  const title = section === 'catalogue' ? 'Physical library catalogue' : section === 'loans' ? 'Loans and returns' : section === 'computers' ? 'Library computers' : section === 'resource-requests' ? 'Teacher resource requests' : section === 'print-requests' ? 'Print requests' : section === 'archive' ? 'Institutional archive' : reviewMode ? (isHeadteacher ? 'Academic resource approvals' : 'Resource review queue') : 'Teaching resources'
+  const description = section === 'catalogue' ? 'Search physical materials, copy availability and shelf locations.' : section === 'loans' ? 'Issue, receive and trace borrowed materials.' : section === 'computers' ? 'Track library devices, connectivity and maintenance status.' : section === 'resource-requests' ? 'Fulfil teaching-material requests from classroom staff.' : section === 'print-requests' ? 'Process controlled print jobs and collection states.' : section === 'archive' ? 'Browse immutable institutional records by academic period.' : reviewMode ? (isHeadteacher ? 'Make the final academic suitability decision after resource-team checks.' : 'Check file quality, classification and archive metadata before academic approval.') : 'Browse approved materials and resources currently moving through review.'
   const columns = section === 'catalogue' ? [
     { key: 'title', label: 'Title' }, { key: 'author', label: 'Author' }, { key: 'category', label: 'Category' }, { key: 'subject_name', label: 'Subject' }, { key: 'copies', label: 'Copies' }, { key: 'available_copies', label: 'Available' }, { key: 'status', label: 'Status', render: (row: any) => <Pill value={row.status} /> },
   ] : section === 'loans' ? [
@@ -161,13 +201,15 @@ export function LibrarianPortalPage() {
     { key: 'title', label: 'Resource' }, { key: 'resource_type', label: 'Type' }, { key: 'subject_name', label: 'Subject' }, { key: 'class_name', label: 'Class' }, { key: 'topic_name', label: 'Topic' }, { key: 'version_number', label: 'Version' }, { key: 'approval_status', label: 'Status', render: (row: any) => <Pill value={row.approval_status} /> },
   ]
 
-  return <div className="grid gap-3 p-4">
-    <div className="flex flex-wrap items-center justify-between gap-3 rounded-[8px] border border-[#e2e8f0] bg-white p-4"><div><h1 className="text-[22px] font-semibold tracking-[-0.04em] text-[#111827]">{title}</h1><p className="mt-1 text-[12px] text-[#64748b]">School-scoped, permission-aware institutional records.</p></div><div className="flex gap-2"><div className="relative"><Search className="absolute left-2.5 top-2.5 size-4 text-[#94a3b8]" /><Input className="w-64 pl-8" value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => event.key === 'Enter' && load()} placeholder="Search records" /></div><Button variant="outline" onClick={load}><RefreshCw className="size-4" />Refresh</Button></div></div>
+  const emptyMessage = section === 'catalogue' ? 'No physical resources match this search.' : section === 'loans' ? 'There are no loan records in the current school scope.' : section === 'computers' ? 'No library computers have been registered.' : section === 'resource-requests' ? 'No teacher resource requests require attention.' : section === 'print-requests' ? 'There are no print requests in this queue.' : section === 'archive' ? 'No archive records match this search.' : reviewMode ? 'No teaching resources are waiting for approval.' : 'No teaching resources match this search.'
+
+  return <main className="grid gap-3 p-4">
+    <LibraryPageHeader eyebrow={isHeadteacher ? 'Academic resources' : 'Library operations'} title={title} description={description} actions={<><div className="relative"><Search className="absolute left-2.5 top-2.5 size-4 text-[#94a3b8]" /><Input className="w-64 pl-8" value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => event.key === 'Enter' && load()} placeholder="Search records" /></div><Button variant="outline" onClick={load}><RefreshCw className="size-4" />Refresh</Button></>} />
     {section === 'catalogue' && hasPermission('LIBRARY_BOOK_CREATE') ? <CatalogueCreate onSaved={load} /> : null}
     {section === 'computers' && hasPermission('LIBRARY_COMPUTER_MANAGE') ? <ComputerCreate onSaved={load} /> : null}
-    {section === 'resources' && !location.pathname.endsWith('/review') && hasPermission('TEACHING_RESOURCE_CREATE') ? <ResourceUpload onSaved={load} /> : null}
-    <SectionCard title={title} subtitle={`${rows.length} records in the current school scope.`}><PortalTable rows={rows} columns={columns as any} onRowClick={section === 'resources' ? (row) => navigate(`/library/resources/${row.public_ref}`) : undefined} /></SectionCard>
-  </div>
+    {section === 'resources' && !reviewMode && !isHeadteacher && hasPermission('TEACHING_RESOURCE_CREATE') ? <ResourceUpload onSaved={load} /> : null}
+    <SectionCard title={reviewMode ? 'Awaiting decision' : title} subtitle={`${rows.length} record${rows.length === 1 ? '' : 's'} in the current school scope.`}><PortalTable rows={rows} columns={columns as any} onRowClick={section === 'resources' ? (row) => navigate(`/library/resources/${row.public_ref}`) : undefined} emptyMessage={emptyMessage} /></SectionCard>
+  </main>
 }
 
 function VersionUpload({ resourceRef, onSaved }: { resourceRef: string; onSaved: () => void }) {
@@ -198,7 +240,11 @@ export function TeachingResourceDetailPage() {
   useEffect(() => { void load() }, [resourceRef])
   if (!data) return <div className="grid min-h-[360px] place-items-center text-[13px] text-[#64748b]">Loading resource…</div>
   const resource = data.resource
-  const permission = (code: string) => (user?.permissions || []).includes(code)
+  const isHeadteacher = String(user?.role || '').toLowerCase() === 'headteacher'
+  const permission = (code: string) => {
+    if (isHeadteacher && !['TEACHING_RESOURCE_APPROVE', 'TEACHING_RESOURCE_DOWNLOAD'].includes(code)) return false
+    return (user?.permissions || []).includes(code)
+  }
   const action = async (status: string) => { try { await api.transitionTeachingResource(token, resourceRef, { status }); toast.success(`Resource moved to ${status.toLowerCase().replaceAll('_', ' ')}.`); await load() } catch (error: any) { toast.error(error.message) } }
   const review = async (type: string, decision = 'approved') => { try { await api.reviewTeachingResource(token, resourceRef, { review_type: type, decision, quality_flags: [], notes: `${type.replace('_', ' ')} reviewed in SmartLink.` }); toast.success('Review recorded.'); await load() } catch (error: any) { toast.error(error.message) } }
   const download = async () => { try { const blob = await api.downloadTeachingResource(token, resourceRef); const url = URL.createObjectURL(blob); const anchor = document.createElement('a'); anchor.href = url; anchor.download = data.versions?.[0]?.original_filename || resource.title; anchor.click(); URL.revokeObjectURL(url) } catch (error: any) { toast.error(error.message) } }

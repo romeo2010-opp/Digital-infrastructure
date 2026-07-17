@@ -272,6 +272,11 @@ export function canAccessPath(user: any, pathname = '/') {
   if (pathname === '/internal' || pathname.startsWith('/internal/')) {
     return internalRouteRoles.has(role)
   }
+  if (role === 'headteacher' && (pathname === '/library' || pathname.startsWith('/library/'))) {
+    const leadershipLibraryPaths = ['/library/dashboard', '/library/resources']
+    const leadershipAllowed = leadershipLibraryPaths.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`))
+    if (!leadershipAllowed) return false
+  }
   const prefixes = roleRoutePrefixes[role] || roleRoutePrefixes.teacher
   const roleAllowed = prefixes.includes('/') || prefixes.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`))
   const permissionRule = routePermissions.find((item) => pathname === item.path || pathname.startsWith(`${item.path}/`))
