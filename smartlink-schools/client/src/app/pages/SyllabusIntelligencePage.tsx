@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Award, BookOpenText, Check, ClipboardCheck, FileText, Loader2, Plus, RotateCcw, Save, Search, ShieldCheck, Sparkles, Trash2, Upload, UserRound, Users, X } from 'lucide-react'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
@@ -1086,8 +1087,8 @@ export function SyllabusIntelligencePage() {
       ? selectedClass ? `${selectedClassStudentCount || 'All active'} learner${selectedClassStudentCount === 1 ? '' : 's'}` : 'Select a class to continue'
       : selectedStudent?.class_name || 'Select a student to continue'
 
-    return (
-      <div className="fixed inset-0 z-50 grid place-items-center bg-[#111827]/55 px-4 py-5">
+    return createPortal(
+      <div className="fixed inset-0 z-[100] grid place-items-center bg-[#111827]/55 px-4 py-5 backdrop-blur-[3px]">
         <section role="dialog" aria-modal="true" aria-labelledby="daily-drill-dialog-title" aria-describedby="daily-drill-dialog-description" className="flex max-h-[calc(100vh-40px)] w-full max-w-[800px] flex-col overflow-hidden rounded-[8px] border border-[#d9dce3] bg-white shadow-[0_30px_90px_-38px_rgba(15,23,42,0.85)]">
           <div className="flex shrink-0 items-start justify-between gap-4 border-b border-[#e5e7eb] px-6 py-5">
             <div className="flex min-w-0 items-start gap-3">
@@ -1205,7 +1206,8 @@ export function SyllabusIntelligencePage() {
             </div>
           </div>
         </section>
-      </div>
+      </div>,
+      document.body,
     )
   }
 
