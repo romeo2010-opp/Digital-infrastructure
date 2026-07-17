@@ -126,6 +126,16 @@ test("support evidence history includes detection events and their assessment na
   assert.match(seed, /crossSubjectEvidence/)
 })
 
+test("support case reassessment query avoids MySQL reserved aliases", () => {
+  const support = read(root, "src/services/academicSupportService.js")
+  const start = support.indexOf("const reassessmentSql")
+  const end = support.indexOf("const [members", start)
+  const reassessmentQuery = support.slice(start, end)
+  assert.ok(start >= 0 && end > start)
+  assert.doesNotMatch(reassessmentQuery, /generated_assessments\s+generated\b/i)
+  assert.match(reassessmentQuery, /generated_assessments\s+generated_assessment\b/i)
+})
+
 test("teacher learner-support extension reuses canonical support structures", () => {
   const migration = read(root, "database/062_teacher_learner_support_access.sql")
   const support = read(root, "src/services/academicSupportService.js")
