@@ -1,9 +1,23 @@
 import { markAnswer } from "./answerMarker.js"
 
-const GENERATOR_VERSION = "lesson-log-v1"
+const GENERATOR_VERSION = "bank-rotation-v2"
 
 function todayIso() {
   return new Date().toISOString().slice(0, 10)
+}
+
+function dateOrdinal(value) {
+  const timestamp = new Date(`${String(value || todayIso()).slice(0, 10)}T00:00:00Z`).getTime()
+  return Number.isFinite(timestamp) ? Math.floor(timestamp / 86400000) : 0
+}
+
+function stableRotationHash(value) {
+  let hash = 2166136261
+  for (const character of String(value || "")) {
+    hash ^= character.charCodeAt(0)
+    hash = Math.imul(hash, 16777619)
+  }
+  return hash >>> 0
 }
 
 function gradeNameCandidates(classRow = {}) {
@@ -46,7 +60,7 @@ async function resolveStudentProfile(connection, schoolId, studentId) {
   return { ...profile, grade: grades[0] || null }
 }
 
-async function chooseSubject(connection, schoolId, gradeId, studentId = null, classId = null, scheduledDate = todayIso()) {
+async function chooseSubject(connection, schoolId, gradeId, studentId = null, classId = null, scheduledDate = todayIso(), subjectMode = "smart_rotation") {
   const [subjects] = await connection.query(
     `SELECT subj.id, subj.name,
       COUNT(DISTINCT q.id) AS approved_question_count,
@@ -98,7 +112,54 @@ async function chooseSubject(connection, schoolId, gradeId, studentId = null, cl
       },
     })
   }
-  return scored.sort((a, b) => b.subject_priority - a.subject_priority || a.name.localeCompare(b.name))[0] || null
+  if (subjectMode === "fixed_rotation") {
+    const rotation = [...scored].sort((a, b) => a.id - b.id || a.name.localeCompare(b.name))
+    const index = Math.abs(dateOrdinal(scheduledDate) + Number(studentId || 0)) % rotation.length
+    return { ...rotation[index], selection_mode: "fixed_rotation" }
+  }
+
+  if (subjectMode === "timetable" && classId) {
+    try {
+      const [scheduledSubjects] = await connection.query(
+        `SELECT DISTINCT e.subject_id
+         FROM timetable_publications pub
+         JOIN timetables tt ON tt.id = pub.timetable_id AND tt.school_id = pub.school_id
+          AND tt.timetable_type = 'SCHOOL_TIMETABLE'
+         JOIN timetable_entries e ON e.timetable_version_id = pub.timetable_version_id
+         LEFT JOIN timetable_cycle_days cd ON cd.id = e.cycle_day_id
+         WHERE pub.school_id = ? AND pub.publication_status = 'ACTIVE'
+           AND e.class_id = ? AND e.subject_id IS NOT NULL
+           AND (
+             e.calendar_date = ?
+             OR (
+               e.calendar_date IS NULL
+               AND cd.weekday = DAYOFWEEK(?) - 1
+               AND COALESCE(e.cycle_week, 1) = MOD(
+                 TIMESTAMPDIFF(WEEK, tt.effective_from, ?),
+                 GREATEST(COALESCE(tt.timetable_cycle_weeks, 1), 1)
+               ) + 1
+             )
+           )
+         ORDER BY e.subject_id`,
+        [schoolId, classId, scheduledDate, scheduledDate, scheduledDate],
+      )
+      const scheduledIds = new Set(scheduledSubjects.map((row) => Number(row.subject_id)))
+      const timetableChoices = scored.filter((subject) => scheduledIds.has(Number(subject.id)))
+      if (timetableChoices.length) {
+        return {
+          ...timetableChoices.sort((a, b) => b.subject_priority - a.subject_priority || a.name.localeCompare(b.name))[0],
+          selection_mode: "timetable",
+        }
+      }
+    } catch (error) {
+      if (!["ER_NO_SUCH_TABLE", "ER_BAD_FIELD_ERROR"].includes(error?.code)) throw error
+    }
+  }
+
+  return {
+    ...scored.sort((a, b) => b.subject_priority - a.subject_priority || a.name.localeCompare(b.name))[0],
+    selection_mode: subjectMode === "timetable" ? "smart_rotation_fallback" : "smart_rotation",
+  }
 }
 
 async function loadDrillSettings(connection, schoolId) {
@@ -234,11 +295,14 @@ function questionQualityScore(question) {
 
 function topicPriority(candidate, scheduledDate, assessmentScore) {
   const mastery = candidate.mastery_score === null || candidate.mastery_score === undefined ? null : Number(candidate.mastery_score)
+  const evidenceConfidence = mastery === null ? 0 : clamp(Number(candidate.attempts || 0) / 5, 0.25, 1)
+  const rawWeakness = mastery === null ? null : clamp(100 - mastery)
   const weaknessScore = mastery === null
     ? candidate.bucket === "recently_taught" ? 45 : 55
-    : clamp(100 - mastery)
+    : clamp(50 + (rawWeakness - 50) * evidenceConfidence)
   const components = {
     weakness_score: weaknessScore,
+    evidence_confidence: Number((evidenceConfidence * 100).toFixed(1)),
     review_urgency: reviewUrgencyScore(candidate.next_review_at, scheduledDate),
     lesson_relevance: lessonRelevanceScore(candidate, scheduledDate),
     assessment_relevance: assessmentScore,
@@ -487,7 +551,7 @@ async function loadTopicCandidates(connection, schoolId, studentId, subjectId, g
   }))
 }
 
-async function questionsForTopic(connection, schoolId, studentId, gradeId, subjectId, candidate, scheduledDate, limit = 20) {
+async function questionsForTopic(connection, schoolId, studentId, gradeId, subjectId, candidate, scheduledDate) {
   const scopeIds = await topicScopeIds(connection, schoolId, subjectId, candidate.topic_id)
   const placeholders = scopeIds.map(() => "?").join(",")
   const coverageStatus = String(candidate.coverage_status || "")
@@ -519,8 +583,11 @@ async function questionsForTopic(connection, schoolId, studentId, gradeId, subje
        AND q.approval_status = 'approved' AND COALESCE(q.is_daily_drill_eligible,1)=1
        AND q.correct_answer IS NOT NULL
        AND q.explanation IS NOT NULL${difficultyClause}
-     LIMIT ?`,
-    [schoolId, studentId, schoolId, gradeId || null, subjectId, ...scopeIds, ...scopeIds, limit],
+     ORDER BY question_usage.last_attempted_at IS NULL DESC,
+       question_usage.last_attempted_at ASC,
+       COALESCE(question_usage.attempt_count, 0) ASC,
+       q.id`,
+    [schoolId, studentId, schoolId, gradeId || null, subjectId, ...scopeIds, ...scopeIds],
   )
   return rows.map((question) => {
     const difficultyMatch = difficultyMatchScore(question.difficulty, candidate.mastery_score, candidate.coverage_status)
@@ -540,57 +607,113 @@ async function questionsForTopic(connection, schoolId, studentId, gradeId, subje
       topic_priority: candidate.topic_priority,
       topic_score_components: candidate.score_components,
       question_score: Number(score.toFixed(2)),
+      rotation_key: stableRotationHash(`${studentId}:${scheduledDate}:${question.id}`),
     }
   })
 }
 
-function selectQuestions(scoredQuestions, bucketCounts, minimumQuestions) {
+function questionWasSeen(question) {
+  return Number(question?.attempt_count || 0) > 0 || Boolean(question?.last_attempted_at)
+}
+
+function rotationQuestionComparator(a, b) {
+  const aSeen = questionWasSeen(a)
+  const bSeen = questionWasSeen(b)
+  if (aSeen !== bSeen) return aSeen ? 1 : -1
+  if (aSeen && bSeen) {
+    const aLastSeen = new Date(a.last_attempted_at || 0).getTime()
+    const bLastSeen = new Date(b.last_attempted_at || 0).getTime()
+    if (aLastSeen !== bLastSeen) return aLastSeen - bLastSeen
+    const attemptDifference = Number(a.attempt_count || 0) - Number(b.attempt_count || 0)
+    if (attemptDifference) return attemptDifference
+  }
+  const scoreDifference = Number(b.question_score || 0) - Number(a.question_score || 0)
+  if (scoreDifference) return scoreDifference
+  return Number(a.rotation_key || 0) - Number(b.rotation_key || 0) || Number(a.id || 0) - Number(b.id || 0)
+}
+
+function adaptiveDrillLength(scoredQuestions, requestedLength = 5) {
+  const distinct = new Map()
+  for (const question of scoredQuestions) {
+    const id = Number(question.id)
+    if (id && !distinct.has(id)) distinct.set(id, question)
+  }
+  const available = distinct.size
+  if (!available) return 0
+  const requested = Math.min(Math.max(1, Number(requestedLength || 5)), available)
+  const rows = [...distinct.values()]
+  const unseen = rows.filter((question) => !questionWasSeen(question)).length
+  if (unseen >= requested) return requested
+  if (unseen > 0) return Math.min(requested, unseen + (rows.some(questionWasSeen) ? 1 : 0))
+  return 1
+}
+
+function selectQuestions(scoredQuestions, bucketCounts, options = {}) {
+  const targetCount = Math.max(0, Number(options.targetCount || 0))
+  if (!targetCount) return []
   const selected = []
   const selectedIds = new Set()
   const selectedSkills = new Set()
   const selectedSubtopics = new Set()
-  const byBucket = new Map()
-  scoredQuestions.forEach((question) => {
-    const rows = byBucket.get(question.bucket) || []
-    rows.push(question)
-    byBucket.set(question.bucket, rows)
-  })
-  byBucket.forEach((rows, bucket) => {
-    byBucket.set(bucket, rows.sort((a, b) => Number(b.question_score || 0) - Number(a.question_score || 0)))
-  })
+  const selectedByBucket = new Map()
 
-  const pick = (bucket, count) => {
-    const rows = byBucket.get(bucket) || []
+  const addQuestion = (question) => {
+    if (!question || selected.length >= targetCount || selectedIds.has(Number(question.id))) return false
+    selected.push(question)
+    selectedIds.add(Number(question.id))
+    const skillKey = String(question.skill_type || question.question_type || "")
+    const subtopicKey = String(question.subtopic_id || question.topic_id || "")
+    if (skillKey) selectedSkills.add(skillKey)
+    if (subtopicKey) selectedSubtopics.add(subtopicKey)
+    selectedByBucket.set(question.bucket, Number(selectedByBucket.get(question.bucket) || 0) + 1)
+    return true
+  }
+
+  const pick = (rows, count, { enforceDiversity = true } = {}) => {
+    const ranked = [...rows].sort(rotationQuestionComparator)
     let picked = 0
-    for (const question of rows) {
+    const deferred = []
+    for (const question of ranked) {
       if (picked >= count) break
       if (selectedIds.has(Number(question.id))) continue
       const skillKey = String(question.skill_type || question.question_type || "")
       const subtopicKey = String(question.subtopic_id || question.topic_id || "")
       const diversityPenalty = (skillKey && selectedSkills.has(skillKey) ? 8 : 0) + (subtopicKey && selectedSubtopics.has(subtopicKey) ? 5 : 0)
-      if (diversityPenalty >= 13 && rows.length > count + 2) continue
-      selected.push(question)
-      selectedIds.add(Number(question.id))
-      if (skillKey) selectedSkills.add(skillKey)
-      if (subtopicKey) selectedSubtopics.add(subtopicKey)
-      picked += 1
+      if (enforceDiversity && diversityPenalty >= 13 && ranked.length > count + 2) {
+        deferred.push(question)
+        continue
+      }
+      if (addQuestion(question)) picked += 1
+    }
+    for (const question of deferred) {
+      if (picked >= count) break
+      if (addQuestion(question)) picked += 1
     }
     return picked
   }
 
-  Object.entries(bucketCounts).forEach(([bucket, count]) => pick(bucket, Number(count || 0)))
-  const needed = Math.max(Number(minimumQuestions || 1), Object.values(bucketCounts).reduce((sum, count) => sum + Number(count || 0), 0))
-  if (selected.length < needed) {
-    const pool = [...scoredQuestions].sort((a, b) => Number(b.question_score || 0) - Number(a.question_score || 0))
-    for (const question of pool) {
-      if (selected.length >= needed) break
-      if (selectedIds.has(Number(question.id))) continue
-      selected.push(question)
-      selectedIds.add(Number(question.id))
+  const pickPhase = (rows) => {
+    for (const [bucket, count] of Object.entries(bucketCounts)) {
+      if (selected.length >= targetCount) break
+      const deficit = Math.max(0, Number(count || 0) - Number(selectedByBucket.get(bucket) || 0))
+      if (!deficit) continue
+      pick(rows.filter((question) => question.bucket === bucket), deficit)
     }
+    if (selected.length < targetCount) pick(rows, targetCount - selected.length)
   }
 
-  const orderBuckets = ["recently_taught", "weak_topic", "recently_taught", "spaced_review", "weak_topic", "prerequisite", "spaced_review", "exam_challenge"]
+  const unseen = scoredQuestions.filter((question) => !questionWasSeen(question))
+  const resurfacing = scoredQuestions.filter(questionWasSeen)
+  pickPhase(unseen)
+  if (selected.length < targetCount) pick(resurfacing, targetCount - selected.length, { enforceDiversity: false })
+
+  const bucketPatterns = [
+    ["recently_taught", "weak_topic", "spaced_review", "prerequisite", "exam_challenge"],
+    ["weak_topic", "recently_taught", "prerequisite", "spaced_review", "exam_challenge"],
+    ["spaced_review", "recently_taught", "weak_topic", "exam_challenge", "prerequisite"],
+  ]
+  const patternIndex = stableRotationHash(`${options.studentId || 0}:${options.scheduledDate || todayIso()}:pattern`) % bucketPatterns.length
+  const orderBuckets = bucketPatterns[patternIndex]
   return selected
     .map((question, index) => ({
       question,
@@ -603,8 +726,8 @@ function selectQuestions(scoredQuestions, bucketCounts, minimumQuestions) {
 
 async function buildScoredDrillPlan(connection, schoolId, profile, subjectId, options = {}) {
   const scheduledDate = options.scheduledDate || todayIso()
-  const limit = Number(options.limit || 5)
-  const minimumQuestions = Number(options.minimumQuestions || 1)
+  const limit = Math.min(20, Math.max(1, Number(options.limit || 5)))
+  const minimumQuestions = Math.min(limit, Math.max(1, Number(options.minimumQuestions || 1)))
   const gradeId = profile.grade?.id || null
   const selectedTopicId = Number(options.topicId || 0)
   let candidates = selectedTopicId
@@ -636,8 +759,19 @@ async function buildScoredDrillPlan(connection, schoolId, profile, subjectId, op
     return { ok: false, reason: "No eligible taught, weak, review, or approved syllabus topics were found for this drill." }
   }
 
+  if (profile.grade?.is_candidate) {
+    const examCandidates = candidates
+      .filter((candidate) => candidate.bucket !== "prerequisite" && Number(candidate.score_components?.assessment_relevance || 0) > 0)
+      .map((candidate) => ({
+        ...candidate,
+        bucket: "exam_challenge",
+        reason: "upcoming_assessment",
+        topic_priority: clamp(Number(candidate.topic_priority || 0) + 5),
+      }))
+    candidates = dedupeCandidates([...candidates, ...examCandidates])
+  }
+
   const hasPrerequisites = candidates.some((candidate) => candidate.bucket === "prerequisite")
-  const bucketCounts = targetBucketCounts(limit, Boolean(profile.grade?.is_candidate), hasPrerequisites)
   const warnings = []
   if (!candidates.some((candidate) => candidate.bucket === "recently_taught")) {
     warnings.push("No finalized recent lesson log with approved questions was available, so SmartLink used weak/review fallback topics.")
@@ -647,28 +781,54 @@ async function buildScoredDrillPlan(connection, schoolId, profile, subjectId, op
   }
 
   const scoredQuestionGroups = await Promise.all(
-    candidates.slice(0, 16).map((candidate) => questionsForTopic(connection, schoolId, profile.student_id, gradeId, subjectId, candidate, scheduledDate, 20)),
+    candidates.map((candidate) => questionsForTopic(connection, schoolId, profile.student_id, gradeId, subjectId, candidate, scheduledDate)),
   )
   const scoredQuestions = scoredQuestionGroups.flat()
-  if (scoredQuestions.length < minimumQuestions) {
+  const targetCount = adaptiveDrillLength(scoredQuestions, limit)
+  if (!targetCount) {
     return {
       ok: false,
-      reason: "Not enough approved questions for the scored topic buckets. Generate AI drafts or approve more questions.",
+      reason: "No approved Daily Drill questions are available for the eligible topics. Generate AI drafts or approve questions first.",
       warnings,
       candidates,
       scoredQuestions,
     }
   }
 
-  const questions = selectQuestions(scoredQuestions, bucketCounts, minimumQuestions).slice(0, limit)
-  if (questions.length < minimumQuestions) {
+  const bucketCounts = targetBucketCounts(targetCount, Boolean(profile.grade?.is_candidate), hasPrerequisites)
+  const distinctQuestions = new Map()
+  for (const question of scoredQuestions) {
+    const existing = distinctQuestions.get(Number(question.id))
+    if (!existing || rotationQuestionComparator(question, existing) < 0) distinctQuestions.set(Number(question.id), question)
+  }
+  const unseenBeforeGeneration = [...distinctQuestions.values()].filter((question) => !questionWasSeen(question)).length
+  if (distinctQuestions.size < limit) {
+    warnings.push(`The approved question bank currently has ${distinctQuestions.size} distinct eligible question${distinctQuestions.size === 1 ? "" : "s"}; SmartLink adjusted the maximum drill length from ${limit} to ${distinctQuestions.size}.`)
+  }
+  if (unseenBeforeGeneration === 0) {
+    warnings.push("The learner completed the available rotation cycle, so today's drill contains one least-recently-seen question before the next question resurfaces tomorrow.")
+  } else if (targetCount < Math.min(limit, distinctQuestions.size)) {
+    warnings.push(`SmartLink is finishing the current rotation with ${unseenBeforeGeneration} unseen question${unseenBeforeGeneration === 1 ? "" : "s"} and at most one least-recently-seen review question.`)
+  }
+
+  const questions = selectQuestions(scoredQuestions, bucketCounts, {
+    targetCount,
+    studentId: profile.student_id,
+    scheduledDate,
+  })
+  const effectiveMinimum = Math.min(minimumQuestions, targetCount)
+  if (questions.length < effectiveMinimum || questions.length < targetCount) {
     return {
       ok: false,
-      reason: "Not enough approved questions after fallback allocation. Generate AI drafts or approve more questions.",
+      reason: "SmartLink could not safely allocate the available distinct questions. Review the approved question bank.",
       warnings,
       candidates,
       scoredQuestions,
     }
+  }
+  const resurfacedCount = questions.filter(questionWasSeen).length
+  if (resurfacedCount && unseenBeforeGeneration > 0) {
+    warnings.push(`The unseen rotation cycle was exhausted, so SmartLink resurfaced ${resurfacedCount} least-recently-seen question${resurfacedCount === 1 ? "" : "s"}.`)
   }
   const topTopicId = questions[0]?.topic_id || candidates[0]?.topic_id
   const topCandidate = candidates.find((candidate) => Number(candidate.topic_id) === Number(topTopicId)) || candidates[0]
@@ -687,9 +847,22 @@ async function buildScoredDrillPlan(connection, schoolId, profile, subjectId, op
     questions,
     candidates,
     scoredQuestions,
+    excludedQuestionIds: [...distinctQuestions.keys()].filter((id) => !questions.some((question) => Number(question.id) === id)),
     bucket_allocation: {
       target: bucketCounts,
       final: finalBucketCounts,
+      rotation: {
+        requested_length: limit,
+        bank_size: distinctQuestions.size,
+        delivered_length: questions.length,
+        unseen_before_generation: unseenBeforeGeneration,
+        resurfaced_count: resurfacedCount,
+        cycle_status: unseenBeforeGeneration === 0
+          ? "resurfacing_one_by_one"
+          : resurfacedCount
+            ? "finishing_unseen_cycle"
+            : "unseen_questions",
+      },
       topic_scores: candidates.map((candidate) => ({
         topic_id: Number(candidate.topic_id),
         topic_name: candidate.topic_name || "",
@@ -928,7 +1101,7 @@ async function writeGenerationLog(connection, schoolId, studentId, session, subj
         JSON.stringify([...new Set(candidates.map((candidate) => candidate.topic_id).filter(Boolean).map(Number))]),
         JSON.stringify(plan.bucket_allocation || {}),
         JSON.stringify((plan.scoredQuestions || questions).map((question) => Number(question.id))),
-        JSON.stringify([]),
+        JSON.stringify((plan.excludedQuestionIds || []).map(Number)),
         JSON.stringify(questions.map((question) => Number(question.id))),
         JSON.stringify(plan.warnings || []),
         GENERATOR_VERSION,
@@ -946,21 +1119,34 @@ export async function generateDailyDrill(connection, schoolId, studentId, option
   const profile = await resolveStudentProfile(connection, schoolId, studentId)
   if (!profile) return { ok: false, reason: "Student profile was not found." }
   const gradeId = profile.grade?.id || null
-  const subject = options.subjectId
-    ? { id: Number(options.subjectId) }
-    : await chooseSubject(connection, schoolId, gradeId, studentId, profile.class_id, scheduledDate)
-  if (!subject?.id) return { ok: false, reason: "Not enough approved questions for this learner's grade." }
-
-  const [[existingCompleted]] = await connection.query(
-    `SELECT id, status
+  const requestedSubjectId = Number(options.subjectId || 0)
+  const [[existingDrill]] = await connection.query(
+    `SELECT id, status, subject_id, total_questions
      FROM drill_sessions
-     WHERE school_id = ? AND student_id = ? AND subject_id = ? AND scheduled_date = ? AND status = 'completed'
+     WHERE school_id = ? AND student_id = ? AND scheduled_date = ?
+       AND (? = 0 OR subject_id = ?)
+       AND status <> 'missed'
+       AND total_questions > 0
+     ORDER BY FIELD(status, 'in_progress', 'pending', 'completed', 'missed'), id DESC
      LIMIT 1`,
-    [schoolId, studentId, subject.id, scheduledDate],
+    [schoolId, studentId, scheduledDate, requestedSubjectId, requestedSubjectId],
   )
-  if (existingCompleted) {
-    return { ok: true, existing: true, session_id: Number(existingCompleted.id), question_count: 0, reason: "A completed drill already exists for this subject and date." }
+  if (existingDrill) {
+    return {
+      ok: true,
+      existing: true,
+      session_id: Number(existingDrill.id),
+      subject_id: Number(existingDrill.subject_id),
+      question_count: Number(existingDrill.total_questions || 0),
+      status: existingDrill.status,
+      reason: "Today's Daily Drill is already prepared and will remain stable for this learner.",
+    }
   }
+
+  const subject = requestedSubjectId
+    ? { id: requestedSubjectId, selection_mode: "teacher_selected" }
+    : await chooseSubject(connection, schoolId, gradeId, studentId, profile.class_id, scheduledDate, settings.daily_drill_subject_mode)
+  if (!subject?.id) return { ok: false, reason: "No approved Daily Drill questions are available for this learner's grade." }
 
   const plan = await buildScoredDrillPlan(connection, schoolId, profile, subject.id, {
     ...options,
@@ -1002,8 +1188,11 @@ export async function generateDailyDrill(connection, schoolId, studentId, option
     ok: true,
     session_id: Number(session.id || result.insertId),
     question_count: questions.length,
+    subject_id: Number(subject.id),
+    subject_selection_mode: subject.selection_mode || settings.daily_drill_subject_mode,
     focus_reason: topic.reason,
     bucket_allocation: plan.bucket_allocation?.final || {},
+    rotation: plan.bucket_allocation?.rotation || null,
     warnings: plan.warnings || [],
   }
 }
@@ -1114,4 +1303,14 @@ export async function updateMasteryFromAnswer(connection, schoolId, studentId, q
   }
 }
 
-export { markAnswer }
+export {
+  adaptiveDrillLength,
+  difficultyMatchScore,
+  markAnswer,
+  noveltyScore,
+  questionWasSeen,
+  rotationQuestionComparator,
+  selectQuestions,
+  targetBucketCounts,
+  topicPriority,
+}

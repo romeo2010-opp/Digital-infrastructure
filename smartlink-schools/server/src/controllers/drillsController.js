@@ -321,7 +321,7 @@ export async function getTodayDrill(req, res) {
   const date = req.query.date || todayIso()
   const [[existing]] = await pool.query(
     `SELECT id FROM drill_sessions
-     WHERE school_id = ? AND student_id = ? AND scheduled_date = ?
+     WHERE school_id = ? AND student_id = ? AND scheduled_date = ? AND status <> 'missed'
      ORDER BY FIELD(status, 'in_progress', 'pending', 'completed', 'missed'), id DESC
      LIMIT 1`,
     [schoolId, studentId, date],
