@@ -38,3 +38,46 @@ test("assessment export trims orphan page breaks and marks the final question", 
   assert.equal(exportedQuestions[0].metadata_json.is_last_question, false)
   assert.equal(exportedQuestions[1].metadata_json.is_last_question, true)
 })
+
+test("assessment export preserves a structured table inside a question", () => {
+  const tableOnlyAssessment = { name: "Geography Paper", total_marks: 4 }
+  const questions = [{
+    id: 8,
+    display_number: "4(a)",
+    question_text: "Use the rainfall table to answer the question.",
+    marks: 4,
+    sort_order: 10,
+  }]
+  const blocks = [{
+    id: 21,
+    block_type: "question",
+    sort_order: 10,
+    content_json: {
+      question_number: "4(a)",
+      question_text: "Use the rainfall table to answer the question.",
+      marks: 4,
+      content_parts: [
+        { type: "text", text: "Use the rainfall table to answer the question." },
+        {
+          type: "table",
+          local_id: "rainfall-table",
+          caption: "Rainfall by month",
+          header_row: true,
+          rows: 3,
+          columns: 2,
+          cells: [["Month", "mm"], ["Jan", "82"], ["Feb", "75"]],
+        },
+      ],
+    },
+    style_json: {},
+    metadata_json: {},
+  }]
+
+  assert.deepEqual(validateAssessmentExportContent({ assessment: tableOnlyAssessment, questions }), { question_count: 1, total_marks: 4 })
+  const [questionBlock] = buildExportBlocks(tableOnlyAssessment, questions, blocks)
+  const table = questionBlock.content_json.content_parts.find((part) => part.type === "table")
+  assert.ok(table)
+  assert.equal(table.rows, 3)
+  assert.equal(table.columns, 2)
+  assert.deepEqual(table.cells[2], ["Feb", "75"])
+})

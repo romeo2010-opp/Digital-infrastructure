@@ -94,6 +94,10 @@ export function QuestionBankPage() {
   const [loading, setLoading] = useState(true)
   const [savingQuestion, setSavingQuestion] = useState(false)
   const [sourcingAssessments, setSourcingAssessments] = useState(false)
+  const [sourceReview, setSourceReview] = useState<any>(null)
+  const [selectedSourceQuestionIds, setSelectedSourceQuestionIds] = useState<number[]>([])
+  const [reviewingSourceQuestionIds, setReviewingSourceQuestionIds] = useState<Record<number, boolean>>({})
+  const [bulkApprovingSource, setBulkApprovingSource] = useState(false)
   const [showAddQuestionModal, setShowAddQuestionModal] = useState(false)
   const [search, setSearch] = useState('')
   const [status, setStatus] = useState('')
@@ -230,13 +234,97 @@ export function QuestionBankPage() {
         skipped.no_marking_key ? `${skipped.no_marking_key} without marking key` : '',
         skipped.no_topic ? `${skipped.no_topic} without topic` : '',
         skipped.duplicate ? `${skipped.duplicate} duplicates` : '',
+        skipped.empty_question ? `${skipped.empty_question} empty` : '',
       ].filter(Boolean).join(', ')
+      const sourcedQuestions = Array.isArray(result?.questions) ? result.questions : []
+      setSourceReview({ ...result, questions: sourcedQuestions })
+      // Relevance is a teacher decision: start with nothing selected and let the
+      // reviewer approve one question or deliberately choose a bulk selection.
+      setSelectedSourceQuestionIds([])
       toast.success(`Sourced ${result?.imported || 0} assessment questions${details ? ` (${details} skipped)` : ''}.`)
       await load()
     } catch (err: any) {
       toast.error(err?.message || 'Unable to source assessment questions.')
     } finally {
       setSourcingAssessments(false)
+    }
+  }
+
+  const updateSourcedQuestionStatus = (questionId: number, approvalStatus: string) => {
+    setSourceReview((current: any) => current ? ({
+      ...current,
+      questions: (current.questions || []).map((question: any) => (
+        Number(question.question_id || question.id) === questionId
+          ? { ...question, approval_status: approvalStatus }
+          : question
+      )),
+    }) : current)
+  }
+
+  const reviewSourcedQuestion = async (question: any, action: 'approve' | 'reject') => {
+    const questionId = Number(question?.question_id || question?.id || 0)
+    if (!token || !questionId || reviewingSourceQuestionIds[questionId]) return
+    if (action === 'approve' && question.approval_ready === false) {
+      toast.error(`This question still needs: ${(question.missing_requirements || []).join(', ') || 'required review details'}.`)
+      return
+    }
+    setReviewingSourceQuestionIds((current) => ({ ...current, [questionId]: true }))
+    try {
+      if (action === 'approve') await api.approveQuestion(token, questionId)
+      else await api.rejectQuestion(token, questionId)
+      updateSourcedQuestionStatus(questionId, action === 'approve' ? 'approved' : 'rejected')
+      setSelectedSourceQuestionIds((current) => current.filter((id) => id !== questionId))
+      toast.success(action === 'approve' ? 'Question approved for Daily Drills.' : 'Question rejected.')
+      await load()
+    } catch (err: any) {
+      toast.error(err?.message || `Unable to ${action} this question.`)
+    } finally {
+      setReviewingSourceQuestionIds((current) => {
+        const next = { ...current }
+        delete next[questionId]
+        return next
+      })
+    }
+  }
+
+  const approveSelectedSourcedQuestions = async () => {
+    if (!token || bulkApprovingSource) return
+    const selected = (sourceReview?.questions || []).filter((question: any) => {
+      const questionId = Number(question.question_id || question.id || 0)
+      return selectedSourceQuestionIds.includes(questionId)
+        && question.approval_status === 'pending_review'
+        && question.approval_ready !== false
+    })
+    if (!selected.length) {
+      toast.error('Select at least one approval-ready question.')
+      return
+    }
+    const selectedIds = selected.map((question: any) => Number(question.question_id || question.id))
+    setBulkApprovingSource(true)
+    setReviewingSourceQuestionIds((current) => selectedIds.reduce((next, id) => ({ ...next, [id]: true }), { ...current }))
+    try {
+      const results = await Promise.allSettled(selectedIds.map((id) => api.approveQuestion(token, id)))
+      const approvedIds = selectedIds.filter((_, index) => results[index].status === 'fulfilled')
+      const failedCount = results.length - approvedIds.length
+      setSourceReview((current: any) => current ? ({
+        ...current,
+        questions: (current.questions || []).map((question: any) => (
+          approvedIds.includes(Number(question.question_id || question.id))
+            ? { ...question, approval_status: 'approved' }
+            : question
+        )),
+      }) : current)
+      setSelectedSourceQuestionIds((current) => current.filter((id) => !approvedIds.includes(id)))
+      if (approvedIds.length) toast.success(`${approvedIds.length} sourced question${approvedIds.length === 1 ? '' : 's'} approved for Daily Drills.`)
+      if (failedCount) toast.error(`${failedCount} question${failedCount === 1 ? '' : 's'} could not be approved. Review the missing requirements.`)
+      await load()
+    } finally {
+      setReviewingSourceQuestionIds((current) => {
+        const next = { ...current }
+        selectedIds.forEach((id) => delete next[id])
+        return next
+      })
+      setBulkApprovingSource(false)
     }
   }
 
@@ -364,6 +452,180 @@ export function QuestionBankPage() {
       </section>
     </div>
   ) : null
+
+  const renderSourceReviewModal = () => {
+    if (!sourceReview) return null
+    const sourcedQuestions = Array.isArray(sourceReview.questions) ? sourceReview.questions : []
+    const selectableIds = sourcedQuestions
+      .filter((question: any) => question.approval_status === 'pending_review' && question.approval_ready !== false)
+      .map((question: any) => Number(question.question_id || question.id))
+      .filter(Boolean)
+    const allSelectableAreSelected = selectableIds.length > 0 && selectableIds.every((id: number) => selectedSourceQuestionIds.includes(id))
+    const skippedRows = Object.entries(sourceReview.skipped || {}).filter(([, count]) => Number(count || 0) > 0)
+
+    const toggleAllSelectable = () => {
+      setSelectedSourceQuestionIds((current) => allSelectableAreSelected
+        ? current.filter((id) => !selectableIds.includes(id))
+        : [...new Set([...current, ...selectableIds])])
+    }
+
+    return (
+      <div className="fixed inset-0 z-[60] grid place-items-center bg-[#0f172a]/50 px-3 py-4 backdrop-blur-sm">
+        <section role="dialog" aria-modal="true" aria-label="Sourced assessment questions" className="flex max-h-[calc(100vh-32px)] w-full max-w-[1180px] flex-col overflow-hidden rounded-[10px] border border-[#d7deea] bg-white shadow-[0_30px_90px_-35px_rgba(15,23,42,0.95)]">
+          <div className="flex shrink-0 flex-wrap items-start justify-between gap-4 border-b border-[#e2e8f0] px-6 py-4">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 text-[18px] font-bold text-[#0f172a]">
+                <DatabaseZap className="size-4 text-[#2563eb]" />
+                Review Sourced Assessment Questions
+              </div>
+              <div className="mt-1 text-[12px] font-medium text-[#64748b]">
+                {Number(sourceReview.imported || sourcedQuestions.length)} imported from {Number(sourceReview.scanned || 0)} scanned. Approve only relevant questions for Daily Drills.
+              </div>
+              {skippedRows.length ? (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {skippedRows.map(([reason, count]) => (
+                    <span key={reason} className="rounded-full border border-[#fed7aa] bg-[#fff7ed] px-2.5 py-1 text-[10px] font-bold text-[#9a3412]">
+                      {Number(count)} {valueLabel(reason)}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+            <button type="button" className="grid size-9 place-items-center rounded-[7px] border border-[#d7deea] bg-white text-[#475569] transition hover:border-[#2563eb] hover:text-[#2563eb]" onClick={() => setSourceReview(null)} aria-label="Close sourced question review">
+              <X className="size-4" />
+            </button>
+          </div>
+
+          <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-[#e2e8f0] bg-[#f8fafc] px-6 py-3">
+            <label className="flex cursor-pointer items-center gap-2 text-[12px] font-bold text-[#334155]">
+              <input type="checkbox" className="size-4 rounded border-[#cbd5e1] accent-[#2563eb]" checked={allSelectableAreSelected} disabled={!selectableIds.length} onChange={toggleAllSelectable} />
+              Select all approval-ready questions
+            </label>
+            <span className="text-[11px] font-medium text-[#64748b]">{selectedSourceQuestionIds.filter((id) => selectableIds.includes(id)).length} selected</span>
+          </div>
+
+          <div className="min-h-0 flex-1 overflow-y-auto bg-[#f6f8fb] px-5 py-4">
+            {sourcedQuestions.length ? (
+              <div className="grid gap-4">
+                {sourcedQuestions.map((question: any, index: number) => {
+                  const questionId = Number(question.question_id || question.id || 0)
+                  const isPending = question.approval_status === 'pending_review'
+                  const isReady = question.approval_ready !== false
+                  const isBusy = Boolean(reviewingSourceQuestionIds[questionId])
+                  const options = listItems(question.options_json)
+                  const tables = Array.isArray(question.tables) ? question.tables : []
+                  return (
+                    <article key={questionId || index} className="overflow-hidden rounded-[9px] border border-[#d7deea] bg-white shadow-[0_16px_35px_-30px_rgba(15,23,42,0.75)]">
+                      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-[#e2e8f0] px-4 py-3">
+                        <div className="flex min-w-0 items-start gap-3">
+                          <input
+                            type="checkbox"
+                            className="mt-1 size-4 shrink-0 rounded border-[#cbd5e1] accent-[#2563eb]"
+                            checked={selectedSourceQuestionIds.includes(questionId)}
+                            disabled={!isPending || !isReady || isBusy}
+                            aria-label={`Select sourced question ${index + 1}`}
+                            onChange={(event) => setSelectedSourceQuestionIds((current) => event.target.checked
+                              ? [...new Set([...current, questionId])]
+                              : current.filter((id) => id !== questionId))}
+                          />
+                          <div className="min-w-0">
+                            <div className="truncate text-[13px] font-bold text-[#0f172a]">
+                              {question.source_assessment || 'Assessment'}{question.source_question_number ? ` · Question ${question.source_question_number}` : ''}
+                            </div>
+                            <div className="mt-0.5 text-[11px] font-medium text-[#64748b]">
+                              {[question.subject_name, question.topic_name, valueLabel(question.question_type), `${Number(question.marks || 1)} mark${Number(question.marks || 1) === 1 ? '' : 's'}`].filter(Boolean).join(' · ')}
+                            </div>
+                          </div>
+                        </div>
+                        <span className={`rounded-[4px] border px-2 py-1 text-[11px] font-bold ${statusTone(question.approval_status)}`}>{valueLabel(question.approval_status)}</span>
+                      </div>
+
+                      <div className="grid gap-3 p-4">
+                        <div className="whitespace-pre-wrap text-[13px] font-medium leading-6 text-[#111827]">{question.question_text || '-'}</div>
+                        {options.length ? (
+                          <div className="grid gap-1 rounded-[7px] border border-[#e2e8f0] bg-[#f8fafc] px-3 py-2">
+                            {options.map((option) => <div key={option} className="text-[12px] leading-5 text-[#334155]">{option}</div>)}
+                          </div>
+                        ) : null}
+
+                        {tables.map((table: any, tableIndex: number) => {
+                          const cells = Array.isArray(table.cells) ? table.cells : []
+                          if (!cells.length) return null
+                          return (
+                            <figure key={table.local_id || table.table_id || tableIndex} className="overflow-hidden rounded-[7px] border border-[#cbd5e1] bg-white">
+                              {table.caption ? <figcaption className="border-b border-[#e2e8f0] bg-[#f8fafc] px-3 py-2 text-[11px] font-bold text-[#334155]">{table.caption}</figcaption> : null}
+                              <div className="overflow-x-auto">
+                                <table className="w-full min-w-[420px] border-collapse text-left text-[12px] text-[#334155]">
+                                  <tbody>
+                                    {cells.map((row: any[], rowIndex: number) => (
+                                      <tr key={rowIndex}>
+                                        {(Array.isArray(row) ? row : []).map((cell: any, cellIndex: number) => {
+                                          const Cell = table.header_row !== false && rowIndex === 0 ? 'th' : 'td'
+                                          return <Cell key={cellIndex} className={`border border-[#d7deea] px-2.5 py-2 align-top ${Cell === 'th' ? 'bg-[#f1f5f9] font-bold text-[#0f172a]' : ''}`}>{String(cell || '')}</Cell>
+                                        })}
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </figure>
+                          )
+                        })}
+
+                        <div className="grid gap-3 lg:grid-cols-2">
+                          <div className="rounded-[7px] border border-[#bbf7d0] bg-[#f0fdf4] px-3 py-2">
+                            <div className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#166534]">Answer / Marking Key</div>
+                            <div className="mt-1 whitespace-pre-wrap text-[12px] leading-5 text-[#14532d]">{question.correct_answer || '-'}</div>
+                          </div>
+                          <div className="rounded-[7px] border border-[#e2e8f0] bg-white px-3 py-2">
+                            <div className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#64748b]">Explanation</div>
+                            <div className="mt-1 whitespace-pre-wrap text-[12px] leading-5 text-[#334155]">{question.explanation || '-'}</div>
+                          </div>
+                        </div>
+
+                        {!isReady && isPending ? (
+                          <div className="rounded-[7px] border border-[#fed7aa] bg-[#fff7ed] px-3 py-2 text-[11px] font-semibold text-[#9a3412]">
+                            Approval needs: {(question.missing_requirements || []).join(', ') || 'additional review details'}.
+                          </div>
+                        ) : null}
+                      </div>
+
+                      {isPending ? (
+                        <div className="flex flex-wrap justify-end gap-2 border-t border-[#e2e8f0] bg-[#f8fafc] px-4 py-3">
+                          <Button type="button" variant="outline" className="h-8 rounded-[6px] border-[#fecaca] text-[11px] text-[#b91c1c]" disabled={isBusy} onClick={() => reviewSourcedQuestion(question, 'reject')}>
+                            {isBusy ? <Loader2 className="size-3 animate-spin" /> : <X className="size-3" />} Reject
+                          </Button>
+                          <Button type="button" className="h-8 rounded-[6px] bg-[#16a34a] text-[11px] hover:bg-[#15803d]" disabled={isBusy || !isReady} onClick={() => reviewSourcedQuestion(question, 'approve')}>
+                            {isBusy ? <Loader2 className="size-3 animate-spin" /> : <CheckCircle2 className="size-3" />} Approve
+                          </Button>
+                        </div>
+                      ) : null}
+                    </article>
+                  )
+                })}
+              </div>
+            ) : (
+              <div className="rounded-[9px] border border-[#d7deea] bg-white p-7 text-center">
+                <div className="text-[14px] font-bold text-[#0f172a]">No new assessment questions were sourced</div>
+                <div className="mt-1 text-[12px] text-[#64748b]">The summary above shows whether questions were duplicates, missing a topic, or missing a marking key.</div>
+              </div>
+            )}
+          </div>
+
+          <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t border-[#e2e8f0] bg-white px-6 py-4">
+            <div className="text-[11px] font-medium text-[#64748b]">Approved questions become eligible for Daily Drill selection.</div>
+            <div className="flex items-center gap-2">
+              <Button type="button" variant="outline" className="h-9 rounded-[7px] text-[12px]" onClick={() => setSourceReview(null)}>Close</Button>
+              <Button type="button" className="h-9 rounded-[7px] text-[12px]" disabled={bulkApprovingSource || !selectedSourceQuestionIds.some((id) => selectableIds.includes(id))} onClick={approveSelectedSourcedQuestions}>
+                {bulkApprovingSource ? <Loader2 className="size-3.5 animate-spin" /> : <CheckCircle2 className="size-3.5" />}
+                Approve Selected
+              </Button>
+            </div>
+          </div>
+        </section>
+      </div>
+    )
+  }
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-[#f6f8fb] text-[#0f172a]">
@@ -557,6 +819,7 @@ export function QuestionBankPage() {
         </main>
       </div>
       {renderAddQuestionModal()}
+      {renderSourceReviewModal()}
     </div>
   )
 }

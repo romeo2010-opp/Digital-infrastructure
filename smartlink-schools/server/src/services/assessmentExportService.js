@@ -123,21 +123,42 @@ function parseJson(value, fallback = {}) {
 
 function normalizeParts(parts = []) {
   if (!Array.isArray(parts)) return []
-  return parts.map((part, index) => ({
-    local_id: cleanText(part.local_id || part.id || `part-${index + 1}`),
-    type: part.type === "image" ? "image" : "text",
-    text: cleanText(part.text),
-    media_id: part.media_id || part.mediaId || null,
-    url: cleanText(part.url),
-    caption: cleanText(part.caption),
-    alt_text: cleanText(part.alt_text || part.altText),
-    width: numeric(part.width, 360),
-  }))
+  return parts.map((part, index) => {
+    const type = part?.type === "image" ? "image" : part?.type === "table" ? "table" : "text"
+    if (type === "table") {
+      const rows = tableRows(part)
+      return {
+        local_id: cleanText(part.local_id || part.table_id || part.id || `table-${index + 1}`),
+        type,
+        caption: cleanText(part.caption),
+        header_row: Boolean(part.header_row ?? part.headerRow),
+        rows: rows.length,
+        columns: rows[0]?.length || 1,
+        cells: rows,
+        page_number: numeric(part.page_number || part.pageNumber, 0) || null,
+        confidence: numeric(part.confidence, 0.5),
+      }
+    }
+    return {
+      local_id: cleanText(part.local_id || part.id || `part-${index + 1}`),
+      type,
+      text: cleanText(part.text),
+      media_id: part.media_id || part.mediaId || null,
+      url: cleanText(part.url),
+      caption: cleanText(part.caption),
+      alt_text: cleanText(part.alt_text || part.altText),
+      width: numeric(part.width, 360),
+    }
+  })
 }
 
 function partsToText(parts = []) {
   return normalizeParts(parts)
-    .map((part) => part.type === "image" ? cleanText(part.caption || part.alt_text || "[Image]") : part.text)
+    .map((part) => {
+      if (part.type === "image") return cleanText(part.caption || part.alt_text || "[Image]")
+      if (part.type === "table") return [part.caption, ...tableRows(part).map((row) => row.join(" | "))].filter(Boolean).join("\n")
+      return part.text
+    })
     .filter(Boolean)
     .join("\n\n")
 }
@@ -169,7 +190,7 @@ function displayQuestionReference(value) {
 
 function questionHasPrintableContent(question = {}) {
   if (cleanText(question.question_text).trim()) return true
-  return normalizeParts(question.content_parts || question.contentParts || []).some((part) => part.type === "image" || cleanText(part.text).trim())
+  return normalizeParts(question.content_parts || question.contentParts || []).some((part) => part.type === "image" || part.type === "table" || cleanText(part.text).trim())
 }
 
 export function validateAssessmentExportContent({ assessment = {}, questions = [] } = {}) {
@@ -520,13 +541,13 @@ function tableRows(content = {}) {
   )
 }
 
-function drawTable(state, block) {
+function drawTable(state, block, bounds = {}) {
   const content = block.content_json || {}
   const rows = tableRows(content)
   const isRegister = block.metadata_json?.table_kind === "answer_register"
   const fontSize = isRegister ? 7.5 : 9
-  const width = stateInnerWidth(state)
-  const x = alignedX(state, block.style_json || {}, width)
+  const width = numeric(bounds.width, stateInnerWidth(state))
+  const x = bounds.x === undefined ? alignedX(state, block.style_json || {}, width) : numeric(bounds.x, state.margins.left)
   const colWidth = width / rows[0].length
   state.doc.font("Helvetica").fontSize(fontSize)
   rows.forEach((row, rowIndex) => {
@@ -553,7 +574,18 @@ function measureQuestion(state, block) {
   state.doc.font("Helvetica").fontSize(10.5)
   const parts = normalizeParts(content.content_parts || [])
   const textHeight = parts.length
-    ? parts.reduce((sum, part) => sum + (part.type === "image" ? Math.max(70, px(part.width, 360) * 0.58) + 16 : state.doc.heightOfString(part.text || " ", { width: bodyWidth - 76 }) + 6), 0)
+    ? parts.reduce((sum, part) => {
+      if (part.type === "image") return sum + Math.max(70, px(part.width, 360) * 0.58) + 16
+      if (part.type === "table") {
+        const rows = tableRows(part)
+        const columnWidth = Math.max(30, bodyWidth / Math.max(1, rows[0]?.length || 1))
+        return sum + rows.reduce(
+          (height, row) => height + Math.max(20, ...row.map((cell) => state.doc.heightOfString(cell || " ", { width: columnWidth - 8 }) + 8)),
+          part.caption ? 20 : 0,
+        ) + 10
+      }
+      return sum + state.doc.heightOfString(part.text || " ", { width: bodyWidth - 76 }) + 6
+    }, 0)
     : state.doc.heightOfString(content.question_text || " ", { width: bodyWidth - 76 })
   const optionsHeight = content.question_type === "multiple_choice" ? Math.max(0, (content.options || []).length) * 18 + 8 : 0
   const instructionsHeight = content.question_instructions ? state.doc.heightOfString(content.question_instructions, { width: bodyWidth }) + 6 : 0
@@ -588,6 +620,13 @@ async function drawQuestion(state, block) {
       if (part.type === "image") {
         state.y += partIndex ? 4 : 0
         await drawImageBlock(state, part, { align: "center" }, "Question image")
+      } else if (part.type === "table") {
+        if (part.caption) drawText(state, part.caption, bodyX, bodyWidth, { bold: true }, { avoid: false, after: 4 })
+        drawTable(
+          state,
+          { content_json: part, style_json: { align: "stretch" }, metadata_json: { table_kind: "question_table" } },
+          { x: bodyX, width: bodyWidth },
+        )
       } else {
         drawText(state, part.text, bodyX, partIndex === 0 ? bodyWidth - 76 : bodyWidth, {}, { avoid: false, after: 5 })
       }
@@ -970,7 +1009,10 @@ function tableHtml(block = {}) {
     const tag = content.header_row && rowIndex === 0 ? "th" : "td"
     return `<tr>${row.map((cell) => `<${tag}>${textToHtml(cell)}</${tag}>`).join("")}</tr>`
   }).join("")
-  return `<table class="paper-table ${block.metadata_json?.table_kind === "answer_register" ? "answer-register" : ""}">${body}</table>`
+  const table = `<table class="paper-table ${block.metadata_json?.table_kind === "answer_register" ? "answer-register" : ""}">${body}</table>`
+  return content.caption
+    ? `<figure class="question-part table-part"><figcaption>${textToHtml(content.caption)}</figcaption>${table}</figure>`
+    : table
 }
 
 function shapeHtml(content = {}, style = {}) {
@@ -1005,6 +1047,7 @@ async function questionContentHtml(content = {}, state) {
   const rows = []
   for (const part of parts) {
     if (part.type === "image") rows.push(await imageHtml(part, state, "Question image", "question-part image-block"))
+    else if (part.type === "table") rows.push(tableHtml({ content_json: part, metadata_json: { table_kind: "question_table" } }))
     else rows.push(`<div class="question-part">${textToHtml(part.text || "")}</div>`)
   }
   return rows.join("")

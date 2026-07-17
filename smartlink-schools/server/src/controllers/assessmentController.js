@@ -56,6 +56,14 @@ function plainTextFromContentParts(parts = []) {
   return parts
     .map((part) => {
       if (part?.type === "image") return cleanText(part.caption || part.alt_text || part.altText) ? `[Image: ${cleanText(part.caption || part.alt_text || part.altText)}]` : "[Image]"
+      if (part?.type === "table") {
+        const rows = Array.isArray(part.cells) ? part.cells : Array.isArray(part.rows) ? part.rows : []
+        const tableText = rows
+          .filter(Array.isArray)
+          .map((row) => row.map((cell) => cleanText(cell?.text ?? cell?.value ?? cell)).join(" | "))
+          .filter(Boolean)
+        return [cleanText(part.caption), ...tableText].filter(Boolean).join("\n")
+      }
       return cleanText(part?.text)
     })
     .filter(Boolean)

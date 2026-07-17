@@ -186,7 +186,31 @@ function normalizeQuestionParts(value: any[] = []) {
   if (!Array.isArray(value)) return []
   return value
     .map((part, index) => {
-      const type = part?.type === 'image' ? 'image' : 'text'
+      const type = part?.type === 'image' ? 'image' : part?.type === 'table' ? 'table' : 'text'
+      if (type === 'table') {
+        const sourceCells = Array.isArray(part?.cells)
+          ? part.cells
+          : Array.isArray(part?.rows) && part.rows.every((row: any) => Array.isArray(row))
+            ? part.rows
+            : []
+        const requestedRows = Array.isArray(part?.rows) ? sourceCells.length : numericStyle(part?.rows, sourceCells.length || 3)
+        const requestedColumns = numericStyle(part?.columns, Math.max(0, ...sourceCells.map((row: any[]) => Array.isArray(row) ? row.length : 0)) || 3)
+        const rows = Math.min(60, Math.max(1, Math.round(requestedRows || 3)))
+        const columns = Math.min(12, Math.max(1, Math.round(requestedColumns || 3)))
+        const cells = Array.from({ length: rows }).map((_, rowIndex) => Array.from({ length: columns }).map((__, columnIndex) => String(sourceCells[rowIndex]?.[columnIndex] ?? '')))
+        return {
+          local_id: String(part?.local_id || part?.table_id || part?.tableId || part?.id || `table-${index + 1}`),
+          table_id: String(part?.table_id || part?.tableId || part?.local_id || part?.id || `table-${index + 1}`),
+          type,
+          caption: String(part?.caption || ''),
+          rows,
+          columns,
+          header_row: part?.header_row !== false && part?.headerRow !== false,
+          cells,
+          page_number: numericStyle(part?.page_number ?? part?.pageNumber, 0) || undefined,
+          confidence: numericStyle(part?.confidence, 0) || undefined,
+        }
+      }
       return {
         local_id: String(part?.local_id || part?.id || `${type}-${index + 1}`),
         type,
@@ -204,6 +228,12 @@ function questionPartsToText(parts: any[] = []) {
   return normalizeQuestionParts(parts)
     .map((part) => {
       if (part.type === 'image') return part.caption || part.alt_text ? `[Image: ${part.caption || part.alt_text}]` : '[Image]'
+      if (part.type === 'table') {
+        const populatedRows = part.cells
+          .map((row: string[]) => row.map((cell) => cell.trim()).join(' | '))
+          .filter((row: string) => row.replace(/\|/g, '').trim())
+        return [part.caption || '[Table]', ...populatedRows].filter(Boolean).join('\n')
+      }
       return part.text
     })
     .filter(Boolean)
@@ -383,6 +413,7 @@ function estimateQuestionPartsHeight(content: any = {}) {
   if (!parts.length) return estimateTextHeight(content.question_text, 78, 24)
   return parts.reduce((sum, part) => {
     if (part.type === 'image') return sum + Math.max(110, Math.round(numericStyle(part.width, 360) * 0.54)) + (part.caption ? 34 : 16)
+    if (part.type === 'table') return sum + Math.max(1, numericStyle(part.rows, 3)) * 36 + (part.caption ? 32 : 16)
     return sum + estimateTextHeight(part.text, 78, 24) + 8
   }, 0)
 }
@@ -826,17 +857,23 @@ export function ExamPaperDocumentPage() {
   const addQuestionPart = (questionIndex: number, part: any) => {
     setQuestions((current) => current.map((question, index) => {
       if (index !== questionIndex) return question
+      const partType = part.type === 'image' ? 'image' : part.type === 'table' ? 'table' : 'text'
       const parts = [
         ...baseQuestionParts(question),
         {
-          local_id: uid(part.type === 'image' ? 'qimage' : 'qtext'),
-          type: part.type === 'image' ? 'image' : 'text',
+          ...part,
+          local_id: uid(partType === 'image' ? 'qimage' : partType === 'table' ? 'qtable' : 'qtext'),
+          type: partType,
           text: part.text || '',
           media_id: part.media_id || '',
           url: part.url || '',
           caption: part.caption || '',
           alt_text: part.alt_text || '',
           width: part.width || 360,
+          rows: part.rows || 3,
+          columns: part.columns || 3,
+          header_row: part.header_row !== false,
+          cells: part.cells || [['Heading 1', 'Heading 2', 'Heading 3'], ['', '', ''], ['', '', '']],
         },
       ]
       return { ...question, content_parts: normalizeQuestionParts(parts), question_text: questionPartsToText(parts) }
@@ -1784,6 +1821,14 @@ export function ExamPaperDocumentPage() {
         const width = Math.max(80, Number(part.width || 360))
         return `<figure class="question-part image-block">${url ? `<img src="${escapeAttribute(url)}" alt="${escapeAttribute(part.alt_text || part.caption || 'Question image')}" style="max-width:100%;width:${width}px" />` : '<div class="image-placeholder">Question image</div>'}${part.caption ? `<figcaption>${textToHtml(part.caption)}</figcaption>` : ''}</figure>`
       }
+      if (part.type === 'table') {
+        const rows = Array.from({ length: Number(part.rows || 3) }).map((_, rowIndex) => {
+          const tag = part.header_row && rowIndex === 0 ? 'th' : 'td'
+          const cells = Array.from({ length: Number(part.columns || 3) }).map((__, columnIndex) => `<${tag}>${textToHtml(part.cells[rowIndex]?.[columnIndex] || '')}</${tag}>`).join('')
+          return `<tr>${cells}</tr>`
+        }).join('')
+        return `<figure class="question-part table-block">${part.caption ? `<figcaption>${textToHtml(part.caption)}</figcaption>` : ''}<table class="paper-table">${rows}</table></figure>`
+      }
       return `<div class="question-part">${textToHtml(part.text || '')}</div>`
     }).join('')
   }
@@ -2269,21 +2314,37 @@ export function ExamPaperDocumentPage() {
     if (!parts.length) return <div className="min-w-0 whitespace-pre-wrap">{question.question_text || ''}</div>
     return (
       <div className="grid gap-3">
-        {parts.map((part) => part.type === 'image' ? (
-          <figure key={part.local_id} className="text-center">
-            {part.url ? (
-              <img
-                src={resolvePortalAssetUrl(part.url)}
-                alt={part.alt_text || part.caption || 'Question image'}
-                className="mx-auto block max-w-full rounded-[3px] border border-[#e5e7eb]"
-                style={{ width: numericStyle(part.width, 360), maxWidth: '100%' }}
-              />
-            ) : <div className="mx-auto flex h-28 w-56 items-center justify-center rounded-[4px] border border-dashed border-[#9ca3af] bg-[#f8fafc] text-[12px] font-semibold text-[#6b7280]">Question image</div>}
-            {part.caption ? <figcaption className="mt-1 text-[11px] font-medium text-[#6b7280]">{part.caption}</figcaption> : null}
-          </figure>
-        ) : (
-          <div key={part.local_id} className="whitespace-pre-wrap">{part.text || ''}</div>
-        ))}
+        {parts.map((part) => {
+          if (part.type === 'image') {
+            return <figure key={part.local_id} className="text-center">
+              {part.url ? (
+                <img
+                  src={resolvePortalAssetUrl(part.url)}
+                  alt={part.alt_text || part.caption || 'Question image'}
+                  className="mx-auto block max-w-full rounded-[3px] border border-[#e5e7eb]"
+                  style={{ width: numericStyle(part.width, 360), maxWidth: '100%' }}
+                />
+              ) : <div className="mx-auto flex h-28 w-56 items-center justify-center rounded-[4px] border border-dashed border-[#9ca3af] bg-[#f8fafc] text-[12px] font-semibold text-[#6b7280]">Question image</div>}
+              {part.caption ? <figcaption className="mt-1 text-[11px] font-medium text-[#6b7280]">{part.caption}</figcaption> : null}
+            </figure>
+          }
+          if (part.type === 'table') {
+            return <figure key={part.local_id} className="overflow-x-auto">
+              {part.caption ? <figcaption className="mb-1 text-[11px] font-semibold text-[#4b5563]">{part.caption}</figcaption> : null}
+              <table className="w-full border-collapse text-[12px]">
+                <tbody>
+                  {part.cells.map((row: string[], rowIndex: number) => <tr key={rowIndex}>
+                    {row.map((cell: string, columnIndex: number) => {
+                      const Cell = part.header_row && rowIndex === 0 ? 'th' : 'td'
+                      return <Cell key={columnIndex} className={`border border-[#111827] p-2 text-left align-top ${part.header_row && rowIndex === 0 ? 'bg-[#f3f4f6] font-bold' : ''}`}>{cell}</Cell>
+                    })}
+                  </tr>)}
+                </tbody>
+              </table>
+            </figure>
+          }
+          return <div key={part.local_id} className="whitespace-pre-wrap">{part.text || ''}</div>
+        })}
       </div>
     )
   }
@@ -2297,7 +2358,7 @@ export function ExamPaperDocumentPage() {
             {parts.map((part, partIndex) => (
               <div key={part.local_id} className="rounded-[4px] border border-[#e5e7eb] bg-white p-2">
                 <div className="mb-2 flex items-center justify-between gap-2">
-                  <span className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6b7280]">{part.type === 'image' ? 'Image Part' : 'Text Part'} {partIndex + 1}</span>
+                  <span className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6b7280]">{part.type === 'image' ? 'Image Part' : part.type === 'table' ? 'Table Part' : 'Text Part'} {partIndex + 1}</span>
                   <button type="button" className="grid size-6 place-items-center rounded-[4px] border border-[#fecaca] text-[#b91c1c] hover:bg-[#fef2f2]" disabled={readOnly} onClick={() => removeQuestionPart(questionIndex, part.local_id)} aria-label="Remove question part"><Trash2 className="size-3" /></button>
                 </div>
                 {part.type === 'image' ? (
@@ -2313,6 +2374,36 @@ export function ExamPaperDocumentPage() {
                     <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_90px]">
                       <Input disabled={readOnly} className="h-8 rounded-[3px] text-[12px]" value={part.caption || ''} onChange={(event) => updateQuestionPart(questionIndex, part.local_id, { caption: event.target.value })} placeholder="Caption or instruction for this image" />
                       <Input disabled={readOnly} type="number" className="h-8 rounded-[3px] text-[12px]" value={part.width || 360} onChange={(event) => updateQuestionPart(questionIndex, part.local_id, { width: event.target.value })} placeholder="Width" />
+                    </div>
+                  </div>
+                ) : part.type === 'table' ? (
+                  <div className="grid gap-2">
+                    <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_76px_76px_auto]">
+                      <Input disabled={readOnly} className="h-8 rounded-[3px] text-[12px]" value={part.caption || ''} onChange={(event) => updateQuestionPart(questionIndex, part.local_id, { caption: event.target.value })} placeholder="Table caption or instruction" />
+                      <label className="grid gap-1 text-[10px] font-semibold text-[#6b7280]">Rows<Input disabled={readOnly} type="number" min="1" max="60" className="h-8 rounded-[3px] text-[12px]" value={part.rows} onChange={(event) => updateQuestionPart(questionIndex, part.local_id, { rows: event.target.value })} /></label>
+                      <label className="grid gap-1 text-[10px] font-semibold text-[#6b7280]">Columns<Input disabled={readOnly} type="number" min="1" max="12" className="h-8 rounded-[3px] text-[12px]" value={part.columns} onChange={(event) => updateQuestionPart(questionIndex, part.local_id, { columns: event.target.value })} /></label>
+                      <label className="flex items-end gap-2 pb-2 text-[11px] font-semibold text-[#4b5563]"><input disabled={readOnly} type="checkbox" checked={Boolean(part.header_row)} onChange={(event) => updateQuestionPart(questionIndex, part.local_id, { header_row: event.target.checked })} />Header row</label>
+                    </div>
+                    <div className="overflow-x-auto rounded-[3px] border border-[#d9dce3]">
+                      <table className="w-full min-w-[360px] border-collapse text-[12px]">
+                        <tbody>
+                          {part.cells.map((row: string[], rowIndex: number) => <tr key={rowIndex}>
+                            {row.map((cell: string, columnIndex: number) => <td key={columnIndex} className={`border border-[#d9dce3] p-0 ${part.header_row && rowIndex === 0 ? 'bg-[#f3f4f6]' : 'bg-white'}`}>
+                              <Input
+                                disabled={readOnly}
+                                className={`h-9 min-w-24 rounded-none border-0 bg-transparent px-2 text-[12px] focus-visible:ring-1 ${part.header_row && rowIndex === 0 ? 'font-bold' : ''}`}
+                                value={cell}
+                                onChange={(event) => {
+                                  const cells = part.cells.map((sourceRow: string[]) => [...sourceRow])
+                                  cells[rowIndex][columnIndex] = event.target.value
+                                  updateQuestionPart(questionIndex, part.local_id, { cells })
+                                }}
+                                aria-label={`Table row ${rowIndex + 1}, column ${columnIndex + 1}`}
+                              />
+                            </td>)}
+                          </tr>)}
+                        </tbody>
+                      </table>
                     </div>
                   </div>
                 ) : (
@@ -2344,6 +2435,10 @@ export function ExamPaperDocumentPage() {
           <Button type="button" variant="outline" className="h-8 rounded-[5px] text-[12px]" disabled={readOnly} onClick={() => addQuestionPart(questionIndex, { type: 'text', text: '' })}>
             <Plus className="size-3.5" />
             Text Part
+          </Button>
+          <Button type="button" variant="outline" className="h-8 rounded-[5px] text-[12px]" disabled={readOnly} onClick={() => addQuestionPart(questionIndex, { type: 'table', caption: '', rows: 3, columns: 3, header_row: true, cells: [['Heading 1', 'Heading 2', 'Heading 3'], ['', '', ''], ['', '', '']] })}>
+            <Grid3X3 className="size-3.5" />
+            Question Table
           </Button>
           <label className={`inline-flex h-8 items-center justify-center gap-2 rounded-[5px] border border-[#d9dce3] bg-white px-3 text-[12px] font-semibold text-[#111827] shadow-sm transition ${readOnly ? 'cursor-not-allowed opacity-50' : 'cursor-pointer hover:bg-[#f8fafc]'}`}>
             <ImageIcon className="size-3.5" />

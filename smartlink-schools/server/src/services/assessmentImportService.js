@@ -14,6 +14,49 @@ function decodePdf(value,label){const match=String(value||"").match(/^data:appli
 function regexQuestions(pages){const results=[];for(const page of pages){const blocks=String(page.text_content||"").split(/\n(?=\s*\d+(?:\s*[.(]|\s+))/);for(const block of blocks){const match=block.match(/^\s*(\d+(?:\s*\([a-zivx]+\))*)[.)]?\s+([\s\S]{8,})/i);if(!match)continue;const marks=match[2].match(/(?:\[|\()\s*(\d+(?:\.\d+)?)\s*(?:marks?)?\s*(?:\]|\))/i);results.push({tempQuestionId:`Q${results.length+1}`,questionNumber:match[1].replace(/\s/g,""),questionText:match[2].trim(),marks:marks?Number(marks[1]):null,pageStart:page.page_number,pageEnd:page.page_number,formulaCandidates:/[=±√∑∫^]/.test(match[2])?[match[2].match(/[^.!?\n]*[=±√∑∫^][^.!?\n]*/)?.[0]||""]:[],assets:[],confidence:.55})}}return results}
 function regexMarking(pages){return regexQuestions(pages).map((q)=>({tempQuestionId:q.tempQuestionId,questionNumber:q.questionNumber,answerText:q.questionText,markingPoints:[],totalMarks:q.marks,pageNumber:q.pageStart,confidence:.48}))}
 function normalizeResponseLayout(value={}){const rawType=clean(value.type||value.answer_space_type,40).toLowerCase();const aliases={ruled:"ruled_lines",lines:"ruled_lines",underscore_lines:"ruled_lines",blank:"blank_space",open_space:"blank_space",box:"blank_box",grid:"graph_grid"};const type=aliases[rawType]||rawType;const supported=new Set(["ruled_lines","blank_space","blank_box","graph_grid","none"]);const answerType=supported.has(type)?type:"none";const explicitHeightPoints=Number(value.heightPoints??value.height_points);const editedHeightPx=Number(value.answer_height);const heightPoints=Math.max(0,Math.min(700,Number.isFinite(editedHeightPx)&&editedHeightPx>0?editedHeightPx*3/4:(Number.isFinite(explicitHeightPoints)?explicitHeightPoints:0)));const lineCount=Math.max(0,Math.min(40,Math.round(Number(value.lineCount??value.line_count??value.answer_lines)||0)));return {answer_space_type:answerType,answer_lines:answerType==="ruled_lines"?lineCount:0,answer_height:answerType==="none"?0:Math.max(24,Math.round(Number.isFinite(editedHeightPx)&&editedHeightPx>0?editedHeightPx:heightPoints*4/3)||120),height_points:heightPoints,line_count:lineCount,page_number:Number(value.pageNumber??value.page_number)||null,starts_after_question:value.startsAfterQuestion!==false,show_border:["blank_box","graph_grid"].includes(answerType),confidence:Math.max(.05,Math.min(.99,Number(value.confidence)||.5)),evidence:clean(value.evidence,500)||null}}
+
+function tableCell(value){
+  if(value&&typeof value==="object")return clean(value.text??value.value??value.label,1000)
+  return clean(value,1000)
+}
+
+export function normalizeStructuredTables(value=[]){
+  if(!Array.isArray(value))return []
+  return value.slice(0,12).map((table,index)=>{
+    if(!table||typeof table!=="object")return null
+    const headerSource=table.columnHeaders||table.column_headers||table.headers||(Array.isArray(table.columns)?table.columns:[])
+    const headers=Array.isArray(headerSource)?headerSource.slice(0,12).map(tableCell):[]
+    const rowSource=Array.isArray(table.cells)?table.cells:Array.isArray(table.rows)?table.rows:[]
+    let cells=rowSource.slice(0,60).map((row)=>Array.isArray(row)?row.slice(0,12).map(tableCell):[])
+    const headerRow=Boolean(table.headerRow??table.header_row??headers.some(Boolean))
+    if(headers.length&&(!cells.length||headers.some((cell,column)=>cell!==cells[0]?.[column])))cells=[headers,...cells]
+    const requestedColumns=Number(Array.isArray(table.columns)?0:table.columns||table.columnCount||table.column_count)||0
+    const columnCount=Math.min(12,Math.max(1,requestedColumns,headers.length,...cells.map((row)=>row.length)))
+    cells=cells.map((row)=>Array.from({length:columnCount},(_,column)=>tableCell(row[column])))
+    if(!cells.length)cells=[Array.from({length:columnCount},()=>"")]
+    if(!cells.some((row)=>row.some(Boolean))&&!clean(table.caption||table.title,300))return null
+    return {
+      table_id:clean(table.tableId||table.table_id||`table-${index+1}`,80),
+      type:"table",
+      caption:clean(table.caption||table.title,300),
+      page_number:Number(table.pageNumber??table.page_number)||null,
+      header_row:headerRow,
+      rows:cells.length,
+      columns:columnCount,
+      cells,
+      confidence:Math.max(.05,Math.min(.99,Number(table.confidence)||.5)),
+    }
+  }).filter(Boolean)
+}
+
+export function structuredTableParts(value=[]){return normalizeStructuredTables(value).map((table)=>({...table,local_id:table.table_id}))}
+function questionTablesFromStorage(question={}){return normalizeStructuredTables(parseDbJson(question.bbox_json,{}).structured_tables||question.tables||[])}
+function questionBankAssets(question={}){
+  const stored=parseDbJson(question.assets_json,[])
+  const assets=Array.isArray(stored)?stored:[]
+  const tables=structuredTableParts(questionTablesFromStorage(question)).map((table)=>({...table,asset_type:"structured_table"}))
+  return [...assets,...tables]
+}
 function exactQuestionNumber(value){return clean(value,80).trim()}
 function referenceKey(value){return exactQuestionNumber(value).toLowerCase().replace(/[\s.()[\]{}_-]+/g,"")}
 function textTokens(value){return new Set(clean(value,4000).toLowerCase().replace(/[^a-z0-9]+/g," ").split(/\s+/).filter((token)=>token.length>2))}
@@ -140,7 +183,7 @@ export async function processAssessmentImport(schoolId,userId,ref){
     const aiQuestions=(studentAi?.data?.sections||[]).flatMap((section)=>(section.questions||[]).map((q)=>({...q,sectionTitle:section.title})))
     const questions=reconcileQuestionNumbersWithPrintedSource(aiQuestions.length?aiQuestions:regexQuestions(studentDoc.pages),studentDoc.pages)
     const items=reconcileQuestionNumbersWithPrintedSource(markingAi?.data?.items?.length?markingAi.data.items:regexMarking(markingDoc.pages),markingDoc.pages,{textField:"answerText",pageField:"pageNumber"})
-    questions.forEach((question,index)=>{question.questionNumber=exactQuestionNumber(question.questionNumber)||"?";question.tempQuestionId=clean(question.tempQuestionId||`source-${safeAssetPart(question.questionNumber)}-${index+1}`,80)})
+    questions.forEach((question,index)=>{question.questionNumber=exactQuestionNumber(question.questionNumber)||"?";question.tempQuestionId=clean(question.tempQuestionId||`source-${safeAssetPart(question.questionNumber)}-${index+1}`,80);question.tables=normalizeStructuredTables(question.tables);if(question.tables.length)question.assets=(question.assets||[]).filter((asset)=>!["table","table_image"].includes(String(asset?.assetType||asset?.asset_type||"").toLowerCase()))})
     const detectedDiagramAssets=await cropQuestionDiagramAssets(questions,path.resolve(process.cwd(),job.student_pdf_file_path),folder,studentDoc.pages.length,studentDoc.pages)
     const diagramAssets=preferEmbeddedDiagramAssets(detectedDiagramAssets,studentDoc.assets)
     stage="saving the extracted questions and marking scheme"
@@ -169,7 +212,7 @@ export async function processAssessmentImport(schoolId,userId,ref){
         const tempQuestionId=clean(q.tempQuestionId||`source-${safeAssetPart(displayNumber)}-${index+1}`,80)
         diagramAssets.filter((asset)=>asset.source_question_index===index).forEach((asset)=>{asset.linked_question_temp_id=tempQuestionId})
         const linkedAssets=assets.filter((asset)=>asset.linked_question_temp_id===tempQuestionId||asset.source_question_index===index).map((asset)=>({public_ref:asset.public_ref,asset_type:asset.asset_type,page_number:asset.page_number,alt_text:asset.alt_text,confidence:asset.confidence,bbox:asset.bbox_json}))
-        const [saved]=await connection.query(`INSERT INTO assessment_import_questions (public_ref,school_id,import_job_id,temp_question_id,question_number,parent_question_number,section_title,question_text,raw_text,marks,difficulty,detected_topic_text,page_start,page_end,formula_json,assets_json,response_layout_json,confidence,review_status) VALUES (UUID(),?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending')`,[schoolId,job.id,tempQuestionId,displayNumber,exactQuestionNumber(q.parentQuestionNumber)||null,clean(q.sectionTitle,180)||null,clean(q.questionText,60000),clean(q.rawText||q.questionText,60000),Number(q.marks)||null,["easy","medium","hard"].includes(q.difficulty)?q.difficulty:"medium",clean(q.detectedTopicText,180)||null,Number(q.pageStart)||null,Number(q.pageEnd)||Number(q.pageStart)||null,JSON.stringify(formulas),JSON.stringify(linkedAssets),JSON.stringify(responseLayout),Math.max(.05,Math.min(.99,Number(q.confidence)||.5))])
+        const [saved]=await connection.query(`INSERT INTO assessment_import_questions (public_ref,school_id,import_job_id,temp_question_id,question_number,parent_question_number,section_title,question_text,raw_text,marks,difficulty,detected_topic_text,page_start,page_end,bbox_json,formula_json,assets_json,response_layout_json,confidence,review_status) VALUES (UUID(),?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending')`,[schoolId,job.id,tempQuestionId,displayNumber,exactQuestionNumber(q.parentQuestionNumber)||null,clean(q.sectionTitle,180)||null,clean(q.questionText,60000),clean(q.rawText||q.questionText,60000),Number(q.marks)||null,["easy","medium","hard"].includes(q.difficulty)?q.difficulty:"medium",clean(q.detectedTopicText,180)||null,Number(q.pageStart)||null,Number(q.pageEnd)||Number(q.pageStart)||null,JSON.stringify({structured_tables:q.tables}),JSON.stringify(formulas),JSON.stringify(linkedAssets),JSON.stringify(responseLayout),Math.max(.05,Math.min(.99,Number(q.confidence)||.5))])
         questionRows.push({...q,id:saved.insertId,temp_question_id:tempQuestionId,question_number:displayNumber})
       }
       const itemRows=[]
@@ -193,7 +236,7 @@ export async function processAssessmentImport(schoolId,userId,ref){
       const reviewImageCount=assets.filter((asset)=>asset.requires_review!==false).length
       const imagesFound=Number(studentDoc.imageExtraction?.images_found||0)+Number(markingDoc.imageExtraction?.images_found||0)+detectedDiagramAssets.length
       const imageStatus=imageWarnings.length?"completed_with_warnings":"completed"
-      await connection.query("UPDATE assessment_import_jobs SET status='review_required',progress_percentage=100,cover_json=?,warnings_json=?,error_message=NULL,parser_version='smartlink-pdf-vision-v5',ai_provider=?,ai_model=?,ai_prompt_version=?,ai_quality_score=?,ai_fallback_used=?,image_extraction_status=?,image_extraction_pages_processed=?,image_extraction_total_pages=?,image_extraction_images_found=?,image_extraction_images_saved=?,image_extraction_review_count=?,image_extraction_last_error=?,image_extraction_completed_at=CURRENT_TIMESTAMP,completed_at=CURRENT_TIMESTAMP WHERE id=?",[JSON.stringify(studentAi?.data?.coverPage||{title:job.title,confidence:.3,preview_path:studentDoc.coverPath}),JSON.stringify(allWarnings),provider,model,ASSESSMENT_VISION_PROMPT_VERSION,qualityScore,fallbackUsed?1:0,imageStatus,studentDoc.pages.length+markingDoc.pages.length,studentDoc.pages.length+markingDoc.pages.length,imagesFound,assets.length,reviewImageCount,imageWarnings.join(" ").slice(0,2000)||null,job.id])
+      await connection.query("UPDATE assessment_import_jobs SET status='review_required',progress_percentage=100,cover_json=?,warnings_json=?,error_message=NULL,parser_version='smartlink-pdf-vision-v6-tables',ai_provider=?,ai_model=?,ai_prompt_version=?,ai_quality_score=?,ai_fallback_used=?,image_extraction_status=?,image_extraction_pages_processed=?,image_extraction_total_pages=?,image_extraction_images_found=?,image_extraction_images_saved=?,image_extraction_review_count=?,image_extraction_last_error=?,image_extraction_completed_at=CURRENT_TIMESTAMP,completed_at=CURRENT_TIMESTAMP WHERE id=?",[JSON.stringify(studentAi?.data?.coverPage||{title:job.title,confidence:.3,preview_path:studentDoc.coverPath}),JSON.stringify(allWarnings),provider,model,ASSESSMENT_VISION_PROMPT_VERSION,qualityScore,fallbackUsed?1:0,imageStatus,studentDoc.pages.length+markingDoc.pages.length,studentDoc.pages.length+markingDoc.pages.length,imagesFound,assets.length,reviewImageCount,imageWarnings.join(" ").slice(0,2000)||null,job.id])
       await auditImportAsset(connection,{schoolId,jobId:job.id,userId,action:"extraction_completed",after:{status:imageStatus,pages_processed:studentDoc.pages.length+markingDoc.pages.length,images_found:imagesFound,images_saved:assets.length,requires_review:reviewImageCount}})
       await connection.commit()
       let coverTemplateCandidate=null
@@ -216,7 +259,7 @@ export async function processAssessmentImport(schoolId,userId,ref){
 export async function getAssessmentImportReview(schoolId,ref){
   const job=await jobByRef(pool,schoolId,ref)
   const [questions,items,links,pages,assets,templates,matches]=await Promise.all([
-    pool.query("SELECT public_ref,temp_question_id,question_number,parent_question_number,section_title,question_text,marks,difficulty,topic_id,subtopic_id,detected_topic_text,page_start,page_end,formula_json,assets_json,response_layout_json,confidence,daily_drill_eligible,review_status FROM assessment_import_questions WHERE school_id=? AND import_job_id=? ORDER BY id",[schoolId,job.id]),
+    pool.query("SELECT public_ref,temp_question_id,question_number,parent_question_number,section_title,question_text,marks,difficulty,topic_id,subtopic_id,detected_topic_text,page_start,page_end,bbox_json,formula_json,assets_json,response_layout_json,confidence,daily_drill_eligible,review_status FROM assessment_import_questions WHERE school_id=? AND import_job_id=? ORDER BY id",[schoolId,job.id]),
     pool.query("SELECT public_ref,temp_question_id,question_number,answer_text,marking_points_json,marks,page_number,confidence,review_status FROM assessment_import_marking_items WHERE school_id=? AND import_job_id=? ORDER BY id",[schoolId,job.id]),
     pool.query(`SELECT q.public_ref question_ref,m.public_ref marking_ref,l.match_method,l.confidence FROM assessment_import_question_answer_links l JOIN assessment_import_questions q ON q.id=l.import_question_id JOIN assessment_import_marking_items m ON m.id=l.marking_item_id WHERE l.school_id=? AND l.import_job_id=?`,[schoolId,job.id]),
     pool.query("SELECT public_ref,document_type,page_number,preview_image_path FROM assessment_import_pages WHERE school_id=? AND import_job_id=? ORDER BY document_type,page_number",[schoolId,job.id]),
@@ -228,7 +271,7 @@ export async function getAssessmentImportReview(schoolId,ref){
   const markMap=new Map(items[0].map((item)=>[item.public_ref,{...item,marking_points_json:parseDbJson(item.marking_points_json,[])}]))
   return {
     import_job:{public_ref:job.public_ref,title:job.title,subject_id:job.subject_id,class_id:job.class_id,term_id:job.term_id,assessment_type:job.assessment_type,status:job.status,progress_percentage:job.progress_percentage,cover:parseDbJson(job.cover_json,{}),warnings:parseDbJson(job.warnings_json,[]),assessment_id:job.assessment_id,error_message:job.error_message,parser_version:job.parser_version,ai_provider:job.ai_provider,ai_model:job.ai_model,ai_prompt_version:job.ai_prompt_version,ai_quality_score:job.ai_quality_score===null?null:Number(job.ai_quality_score),ai_fallback_used:Boolean(job.ai_fallback_used),image_extraction_status:job.image_extraction_status,image_extraction_pages_processed:Number(job.image_extraction_pages_processed||0),image_extraction_total_pages:Number(job.image_extraction_total_pages||0),image_extraction_images_found:Number(job.image_extraction_images_found||0),image_extraction_images_saved:Number(job.image_extraction_images_saved||0),image_extraction_review_count:Number(job.image_extraction_review_count||0),image_extraction_last_error:job.image_extraction_last_error,image_extraction_version:Number(job.image_extraction_version||0)},
-    questions:questions[0].map((question)=>({...question,formula_json:parseDbJson(question.formula_json,[]),assets_json:parseDbJson(question.assets_json,[]),response_layout:normalizeResponseLayout(parseDbJson(question.response_layout_json,{})),matched_link:linkMap.get(question.public_ref)||null,matched_marking_item:markMap.get(linkMap.get(question.public_ref)?.marking_ref)||null})),
+    questions:questions[0].map((question)=>({...question,bbox_json:undefined,tables:questionTablesFromStorage(question),formula_json:parseDbJson(question.formula_json,[]),assets_json:parseDbJson(question.assets_json,[]),response_layout:normalizeResponseLayout(parseDbJson(question.response_layout_json,{})),matched_link:linkMap.get(question.public_ref)||null,matched_marking_item:markMap.get(linkMap.get(question.public_ref)?.marking_ref)||null})),
     marking_items:[...markMap.values()],
     pages:pages[0].map((page)=>({...page,preview_url:page.preview_image_path?`/api/assessment-imports/${ref}/pages/${page.document_type}/${page.page_number}/preview`:null})),
     assets:assets[0].map((asset)=>({...asset,preview_url:`/api/assessment-imports/${ref}/assets/${asset.public_ref}/preview`})),
@@ -237,7 +280,7 @@ export async function getAssessmentImportReview(schoolId,ref){
   }
 }
 
-export async function patchImportQuestion(schoolId,ref,questionRef,body={}){const job=await jobByRef(pool,schoolId,ref);const responseLayout=body.response_layout===undefined?null:JSON.stringify(normalizeResponseLayout(body.response_layout));const [result]=await pool.query(`UPDATE assessment_import_questions SET question_text=COALESCE(?,question_text),marks=COALESCE(?,marks),difficulty=COALESCE(?,difficulty),topic_id=?,subtopic_id=?,response_layout_json=COALESCE(?,response_layout_json),daily_drill_eligible=COALESCE(?,daily_drill_eligible),review_status=COALESCE(?,review_status) WHERE school_id=? AND import_job_id=? AND public_ref=?`,[body.question_text||null,body.marks??null,body.difficulty||null,body.topic_id||null,body.subtopic_id||null,responseLayout,body.daily_drill_eligible===undefined?null:Boolean(body.daily_drill_eligible),body.review_status||"edited",schoolId,job.id,questionRef]);if(!result.affectedRows)throw new HttpError(404,"Imported question was not found");return {ok:true}}
+export async function patchImportQuestion(schoolId,ref,questionRef,body={}){const job=await jobByRef(pool,schoolId,ref);const responseLayout=body.response_layout===undefined?null:JSON.stringify(normalizeResponseLayout(body.response_layout));let tableStorage=null;if(body.tables!==undefined){const [[current]]=await pool.query("SELECT bbox_json FROM assessment_import_questions WHERE school_id=? AND import_job_id=? AND public_ref=? LIMIT 1",[schoolId,job.id,questionRef]);if(!current)throw new HttpError(404,"Imported question was not found");tableStorage=JSON.stringify({...parseDbJson(current.bbox_json,{}),structured_tables:normalizeStructuredTables(body.tables)})}const [result]=await pool.query(`UPDATE assessment_import_questions SET question_text=COALESCE(?,question_text),marks=COALESCE(?,marks),difficulty=COALESCE(?,difficulty),topic_id=?,subtopic_id=?,bbox_json=COALESCE(?,bbox_json),response_layout_json=COALESCE(?,response_layout_json),daily_drill_eligible=COALESCE(?,daily_drill_eligible),review_status=COALESCE(?,review_status) WHERE school_id=? AND import_job_id=? AND public_ref=?`,[body.question_text||null,body.marks??null,body.difficulty||null,body.topic_id||null,body.subtopic_id||null,tableStorage,responseLayout,body.daily_drill_eligible===undefined?null:Boolean(body.daily_drill_eligible),body.review_status||"edited",schoolId,job.id,questionRef]);if(!result.affectedRows)throw new HttpError(404,"Imported question was not found");return {ok:true}}
 export async function patchImportMarkingItem(schoolId,ref,itemRef,body={}){const job=await jobByRef(pool,schoolId,ref);const [result]=await pool.query("UPDATE assessment_import_marking_items SET answer_text=COALESCE(?,answer_text),marks=COALESCE(?,marks),marking_points_json=COALESCE(?,marking_points_json),review_status=COALESCE(?,review_status) WHERE school_id=? AND import_job_id=? AND public_ref=?",[body.answer_text||null,body.marks??null,body.marking_points?JSON.stringify(body.marking_points):null,body.review_status||"edited",schoolId,job.id,itemRef]);if(!result.affectedRows)throw new HttpError(404,"Marking item was not found");return {ok:true}}
 export async function linkImportAnswer(schoolId,ref,body={}){const job=await jobByRef(pool,schoolId,ref);const [[q]]=await pool.query("SELECT id FROM assessment_import_questions WHERE school_id=? AND import_job_id=? AND public_ref=?",[schoolId,job.id,body.question_ref]);const [[m]]=await pool.query("SELECT id FROM assessment_import_marking_items WHERE school_id=? AND import_job_id=? AND public_ref=?",[schoolId,job.id,body.marking_ref]);if(!q||!m)throw new HttpError(400,"Question or marking item was not found");await pool.query("DELETE FROM assessment_import_question_answer_links WHERE import_question_id=?",[q.id]);await pool.query("INSERT INTO assessment_import_question_answer_links (public_ref,school_id,import_job_id,import_question_id,marking_item_id,match_method,confidence) VALUES (UUID(),?,?,?,?,'manual',1)",[schoolId,job.id,q.id,m.id]);return {ok:true}}
 
@@ -291,8 +334,9 @@ async function installImportedAssessmentBlocks(connection,{schoolId,assessmentId
     const question=questions[index]
     const response=normalizeResponseLayout(parseDbJson(question.response_layout_json,{}))
     const imageParts=questionMediaMap.get(question.temp_question_id)||[]
-    const contentParts=[{type:"text",text:question.question_text},...imageParts]
-    await connection.query(`INSERT INTO assessment_blocks (school_id,assessment_id,block_type,content_json,style_json,metadata_json,sort_order,is_printable) VALUES (?,?,'question',?,?,?, ?,1)`,[schoolId,assessmentId,JSON.stringify({question_number:question.question_number,question_text:question.question_text,content_parts:contentParts,question_type:"structured",marks:Number(question.marks||1),question_instructions:"",options:[]}),JSON.stringify({spacing:"normal",z_index:0,offset_x:0,offset_y:0,answer_space_type:response.answer_space_type,answer_lines:response.answer_lines,answer_height:response.answer_height,answer_space_confidence:response.confidence,answer_space_evidence:response.evidence}),JSON.stringify({source_import_question_ref:question.public_ref,original_question_number:question.question_number,page_start:question.page_start,page_end:question.page_end,diagram_count:imageParts.length}),100+index])
+    const tableParts=structuredTableParts(questionTablesFromStorage(question))
+    const contentParts=[{type:"text",text:question.question_text},...tableParts,...imageParts]
+    await connection.query(`INSERT INTO assessment_blocks (school_id,assessment_id,block_type,content_json,style_json,metadata_json,sort_order,is_printable) VALUES (?,?,'question',?,?,?, ?,1)`,[schoolId,assessmentId,JSON.stringify({question_number:question.question_number,question_text:question.question_text,content_parts:contentParts,question_type:"structured",marks:Number(question.marks||1),question_instructions:"",options:[]}),JSON.stringify({spacing:"normal",z_index:0,offset_x:0,offset_y:0,answer_space_type:response.answer_space_type,answer_lines:response.answer_lines,answer_height:response.answer_height,answer_space_confidence:response.confidence,answer_space_evidence:response.evidence}),JSON.stringify({source_import_question_ref:question.public_ref,original_question_number:question.question_number,page_start:question.page_start,page_end:question.page_end,diagram_count:imageParts.length,table_count:tableParts.length}),100+index])
   }
 }
 
@@ -318,7 +362,7 @@ export async function approveAssessmentImport(schoolId,userId,ref){
       const firstDiagram=questionMediaMap.get(question.temp_question_id)?.[0]
       await connection.query(`INSERT INTO assessment_questions (school_id,assessment_id,question_number,display_number,source_import_question_id,question_text,question_type,marks,topic_id,subtopic_id,difficulty,attachment_url,correct_answer,marking_scheme,sort_order) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,[schoolId,assessment.insertId,index+1,question.question_number,question.id,question.question_text,"structured",Number(question.marks||1),question.topic_id||null,question.subtopic_id||null,question.difficulty||"medium",firstDiagram?.url||null,linked?.answer_text||null,linked?.marking_points_json||linked?.answer_text||null,index])
       if(question.topic_id&&question.daily_drill_eligible){
-        await connection.query(`INSERT INTO question_bank (public_ref,school_id,subject_id,topic_id,subtopic_id,question_type,question_text,correct_answer,difficulty,marks,confidence,source_type,source_import_job_id,is_daily_drill_eligible,formula_json,assets_json,approval_status,created_by,approved_by,approved_at) VALUES (UUID(),?,?,?,?,?,?,?,?,?,?,'assessment_import',?,1,?,?,'approved',?,?,CURRENT_TIMESTAMP)`,[schoolId,job.subject_id,question.topic_id,question.subtopic_id||null,"structured",question.question_text,linked?.answer_text||null,question.difficulty||"medium",Math.max(1,Math.round(Number(question.marks||1))),question.confidence,job.id,question.formula_json,question.assets_json,userId,userId])
+        await connection.query(`INSERT INTO question_bank (public_ref,school_id,subject_id,topic_id,subtopic_id,question_type,question_text,correct_answer,difficulty,marks,confidence,source_type,source_import_job_id,is_daily_drill_eligible,formula_json,assets_json,approval_status,created_by,approved_by,approved_at) VALUES (UUID(),?,?,?,?,?,?,?,?,?,?,'assessment_import',?,1,?,?,'approved',?,?,CURRENT_TIMESTAMP)`,[schoolId,job.subject_id,question.topic_id,question.subtopic_id||null,"structured",question.question_text,linked?.answer_text||null,question.difficulty||"medium",Math.max(1,Math.round(Number(question.marks||1))),question.confidence,job.id,question.formula_json,JSON.stringify(questionBankAssets(question)),userId,userId])
       }
     }
     const coverMediaId=await copyImportedCoverToAssessment(connection,{schoolId,userId,job,assessmentId:assessment.insertId})
@@ -342,8 +386,9 @@ export async function repairApprovedAssessmentImportLayout(schoolId,userId,ref){
   const studentDoc=await extractDocument(job,"student_paper",studentPath,folder)
   const metadata={title:job.title,subject_id:job.subject_id,class_id:job.class_id,term_id:job.term_id,assessment_type:job.assessment_type}
   const studentAi=await parseStudentPaper({pages:studentDoc.pages,pdfData:studentDoc.pdfData,metadata,schoolId,userId})
-  const extracted=reconcileQuestionNumbersWithPrintedSource((studentAi?.data?.sections||[]).flatMap((section)=>(section.questions||[]).map((question)=>({...question,sectionTitle:section.title}))),studentDoc.pages)
+  const extracted=reconcileQuestionNumbersWithPrintedSource((studentAi?.data?.sections||[]).flatMap((section)=>(section.questions||[]).map((question)=>({...question,sectionTitle:section.title,tables:normalizeStructuredTables(question.tables)}))),studentDoc.pages)
   if(!studentAi?.ok||!extracted.length)throw new HttpError(422,studentAi?.message||"Visual AI did not return response-space measurements for this paper")
+  extracted.forEach((question)=>{if(question.tables?.length)question.assets=(question.assets||[]).filter((asset)=>!["table","table_image"].includes(String(asset?.assetType||asset?.asset_type||"").toLowerCase()))})
   const diagramAssets=preferEmbeddedDiagramAssets(await cropQuestionDiagramAssets(extracted,studentPath,folder,studentDoc.pages.length,studentDoc.pages),studentDoc.assets)
   const connection=await pool.getConnection()
   try{
@@ -363,10 +408,12 @@ export async function repairApprovedAssessmentImportLayout(schoolId,userId,ref){
       const response=normalizeResponseLayout(source.responseSpace||{})
       const displayNumber=exactQuestionNumber(source.questionNumber)||stored.question_number
       const parentNumber=exactQuestionNumber(source.parentQuestionNumber)||null
-      await connection.query("UPDATE assessment_import_questions SET question_number=?,parent_question_number=?,response_layout_json=? WHERE id=? AND school_id=?",[displayNumber,parentNumber,JSON.stringify(response),stored.id,schoolId])
+      const tableStorage={...parseDbJson(stored.bbox_json,{}),structured_tables:normalizeStructuredTables(source.tables)}
+      await connection.query("UPDATE assessment_import_questions SET question_number=?,parent_question_number=?,bbox_json=?,response_layout_json=? WHERE id=? AND school_id=?",[displayNumber,parentNumber,JSON.stringify(tableStorage),JSON.stringify(response),stored.id,schoolId])
       stored.question_number=displayNumber
       stored.parent_question_number=parentNumber
       stored.response_layout_json=JSON.stringify(response)
+      stored.bbox_json=JSON.stringify(tableStorage)
       stored._source_temp_id=clean(source.tempQuestionId,80)
     }
     for(const asset of diagramAssets){
@@ -383,7 +430,7 @@ export async function repairApprovedAssessmentImportLayout(schoolId,userId,ref){
       stored.assets_json=JSON.stringify(linked)
     }
     await connection.query("UPDATE assessment_import_pages SET preview_image_path=? WHERE school_id=? AND import_job_id=? AND document_type='student_paper' AND page_number=1",[studentDoc.coverPath,schoolId,job.id])
-    await connection.query("UPDATE assessment_import_jobs SET cover_json=?,parser_version='smartlink-pdf-vision-diagrams-v4',error_message=NULL WHERE id=?",[JSON.stringify(studentAi.data.coverPage||parseDbJson(job.cover_json,{})),job.id])
+    await connection.query("UPDATE assessment_import_jobs SET cover_json=?,parser_version='smartlink-pdf-vision-v6-tables',ai_prompt_version=?,error_message=NULL WHERE id=?",[JSON.stringify(studentAi.data.coverPage||parseDbJson(job.cover_json,{})),ASSESSMENT_VISION_PROMPT_VERSION,job.id])
     const [[assessment]]=await connection.query("SELECT id,status FROM assessments WHERE school_id=? AND id=? FOR UPDATE",[schoolId,job.assessment_id])
     if(!assessment)throw new HttpError(404,"The assessment created by this import was not found")
     if(["locked","archived"].includes(assessment.status))throw new HttpError(409,"The assessment is locked; unlock it before refreshing imported layout")
@@ -413,8 +460,9 @@ export async function repairApprovedAssessmentImportLayout(schoolId,userId,ref){
         const style={...parseDbJson(questionBlocks[index].style_json,{}),answer_space_type:response.answer_space_type,answer_lines:response.answer_lines,answer_height:response.answer_height,answer_space_confidence:response.confidence,answer_space_evidence:response.evidence}
         const content=parseDbJson(questionBlocks[index].content_json,{})
         const imageParts=questionMediaMap.get(stored.temp_question_id)||[]
-        const nextContent={...content,question_number:stored.question_number,content_parts:[{type:"text",text:content.question_text||stored.question_text},...imageParts]}
-        const blockMetadata={...parseDbJson(questionBlocks[index].metadata_json,{}),source_import_question_ref:stored.public_ref,original_question_number:stored.question_number,diagram_count:imageParts.length}
+        const tableParts=structuredTableParts(questionTablesFromStorage(stored))
+        const nextContent={...content,question_number:stored.question_number,content_parts:[{type:"text",text:content.question_text||stored.question_text},...tableParts,...imageParts]}
+        const blockMetadata={...parseDbJson(questionBlocks[index].metadata_json,{}),source_import_question_ref:stored.public_ref,original_question_number:stored.question_number,diagram_count:imageParts.length,table_count:tableParts.length}
         await connection.query("UPDATE assessment_blocks SET content_json=?,style_json=?,metadata_json=? WHERE id=? AND school_id=?",[JSON.stringify(nextContent),JSON.stringify(style),JSON.stringify(blockMetadata),questionBlocks[index].id,schoolId])
       }
     }

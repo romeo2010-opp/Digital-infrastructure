@@ -389,6 +389,47 @@ function questionOptions(question: any) {
   return [];
 }
 
+function drillQuestionTables(question: any) {
+  const tables = Array.isArray(question?.tables) ? question.tables : [];
+  return tables.slice(0, 12).map((table: any, tableIndex: number) => {
+    const sourceCells = Array.isArray(table?.cells) ? table.cells : [];
+    const columns = Math.min(
+      12,
+      Math.max(
+        1,
+        Number(table?.columns || 0),
+        ...sourceCells.map((row: any) => (Array.isArray(row) ? row.length : 0)),
+      ),
+    );
+    const rows = Math.min(
+      60,
+      Math.max(1, Number(table?.rows || 0), sourceCells.length),
+    );
+    const cells = Array.from({ length: rows }, (_, rowIndex) =>
+      Array.from({ length: columns }, (_, columnIndex) => {
+        const value = sourceCells[rowIndex]?.[columnIndex];
+        if (value === null || value === undefined) return "";
+        if (typeof value === "object") {
+          return String(value.text ?? value.value ?? value.label ?? "");
+        }
+        return String(value);
+      }),
+    );
+    return {
+      tableId: String(table?.table_id || table?.tableId || `table-${tableIndex + 1}`),
+      caption: String(table?.caption || table?.title || "").trim(),
+      headerRow:
+        table?.header_row === true ||
+        table?.headerRow === true ||
+        table?.header_row === 1 ||
+        table?.headerRow === 1 ||
+        String(table?.header_row ?? table?.headerRow ?? "").toLowerCase() ===
+          "true",
+      cells,
+    };
+  });
+}
+
 function drillScoreTone(value: any) {
   const number = Number(value || 0);
   if (number >= 70) return "text-[#0F6E56]";
@@ -2345,6 +2386,7 @@ export function StudentPortalPage() {
                   drillQuestions.map((question: any, index: number) => {
                 const key = String(question.session_question_id);
                 const options = questionOptions(question);
+                const tables = drillQuestionTables(question);
                 const draftAnswer =
                   drillAnswers[key] ?? question.student_answer ?? "";
                 const answered = drillQuestionAnswered(question);
@@ -2390,6 +2432,70 @@ export function StudentPortalPage() {
                         </span>
                       ) : null}
                     </div>
+
+                    {tables.length ? (
+                      <div className="mb-3 grid gap-2">
+                        {tables.map((table: any) => {
+                          const bodyRows = table.headerRow
+                            ? table.cells.slice(1)
+                            : table.cells;
+                          return (
+                            <figure
+                              key={table.tableId}
+                              className="overflow-hidden rounded-[8px] border border-[#D4D1C7] bg-white"
+                            >
+                              {table.caption ? (
+                                <figcaption className="border-b border-[#D4D1C7] bg-[#F8F7F2] px-3 py-2 text-[11px] font-medium text-[#44433f]">
+                                  {table.caption}
+                                </figcaption>
+                              ) : null}
+                              <div className="overflow-x-auto">
+                                <table className="min-w-full border-collapse text-left text-[11px] text-[#20201d]">
+                                  {table.headerRow && table.cells[0] ? (
+                                    <thead className="bg-[#E6F1FB] text-[#0C447C]">
+                                      <tr>
+                                        {table.cells[0].map(
+                                          (cell: string, columnIndex: number) => (
+                                            <th
+                                              key={columnIndex}
+                                              scope="col"
+                                              className="min-w-[100px] border-b border-r border-[#B5D4F4] px-3 py-2 font-medium last:border-r-0"
+                                            >
+                                              {cell || "\u00a0"}
+                                            </th>
+                                          ),
+                                        )}
+                                      </tr>
+                                    </thead>
+                                  ) : null}
+                                  <tbody>
+                                    {bodyRows.map(
+                                      (row: string[], rowIndex: number) => (
+                                        <tr
+                                          key={rowIndex}
+                                          className="even:bg-[#F8F7F2]"
+                                        >
+                                          {row.map(
+                                            (cell: string, columnIndex: number) => (
+                                              <td
+                                                key={columnIndex}
+                                                className="min-w-[100px] whitespace-pre-wrap border-b border-r border-[#E7E5DE] px-3 py-2 align-top last:border-r-0"
+                                              >
+                                                {cell || "\u00a0"}
+                                              </td>
+                                            ),
+                                          )}
+                                        </tr>
+                                      ),
+                                    )}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </figure>
+                          );
+                        })}
+                      </div>
+                    ) : null}
 
                     {options.length ? (
                       <div className="grid gap-1.5">

@@ -95,7 +95,7 @@ function uniqueTextRows(rows = []) {
   })
 }
 
-function assessmentMarkingKey(question, options = []) {
+export function assessmentMarkingKey(question, options = []) {
   const correctOptionRows = options
     .filter((option) => option.is_correct)
     .map((option) => [cleanText(option.label), cleanMarkingText(option.text)].filter(Boolean).join(". "))
@@ -103,17 +103,100 @@ function assessmentMarkingKey(question, options = []) {
   const markingScheme = cleanMarkingText(question.marking_scheme)
   if (!correctAnswer && !markingScheme) return null
   const explanationRows = uniqueTextRows([markingScheme, question.explanation])
+  const resolvedAnswer = correctAnswer || markingScheme
   return {
-    correctAnswer: correctAnswer || markingScheme,
+    correctAnswer: resolvedAnswer,
     acceptedAnswers: uniqueTextRows([correctAnswer, ...correctOptionRows]),
-    explanation: explanationRows.join("\n\n") || null,
+    // Question approval requires an explanation. Some valid assessment papers only
+    // carry a concise answer key, so keep that evidence as a transparent fallback
+    // instead of importing a question that can never leave pending review.
+    explanation: explanationRows.join("\n\n") || (resolvedAnswer ? `Correct answer: ${resolvedAnswer}` : null),
   }
+}
+
+function questionNumberKey(value) {
+  return cleanText(value).toLowerCase().replace(/[\s.()[\]{}_-]+/g, "")
+}
+
+function sourcedStructuredTables(block, assessmentId, displayNumber) {
+  const content = parseJson(block?.content_json, {}) || {}
+  const parts = Array.isArray(content.content_parts) ? content.content_parts : []
+  return parts
+    .filter((part) => cleanText(part?.type).toLowerCase() === "table")
+    .map((part, index) => {
+      const sourceRows = Array.isArray(part.cells)
+        ? part.cells
+        : (Array.isArray(part.rows) && part.rows.every((row) => Array.isArray(row)) ? part.rows : [])
+      const sourceCells = sourceRows.filter((row) => Array.isArray(row))
+      const requestedColumns = Number(part.columns || 0)
+      const columns = Math.max(1, Math.min(12, Math.max(requestedColumns, ...sourceCells.map((row) => row.length), 1)))
+      const cells = sourceCells.slice(0, 60).map((row) => Array.from({ length: columns }, (_, cellIndex) => cleanText(row?.[cellIndex])))
+      if (!cells.length) return null
+      const tableId = cleanText(part.local_id || part.table_id || part.tableId) || `sourced-table-${assessmentId}-${block.id || index}-${index + 1}`
+      return {
+        asset_type: "structured_table",
+        type: "table",
+        local_id: tableId,
+        table_id: tableId,
+        caption: cleanText(part.caption),
+        rows: cells.length,
+        columns,
+        header_row: part.header_row !== false && part.headerRow !== false,
+        cells,
+        page_number: Number(part.page_number || part.pageNumber || 0) || null,
+        confidence: Number.isFinite(Number(part.confidence)) ? Number(part.confidence) : null,
+        source_assessment_id: Number(assessmentId),
+        source_display_number: cleanText(displayNumber) || null,
+      }
+    })
+    .filter(Boolean)
+}
+
+export function mapAssessmentQuestionTables(assessmentQuestions = [], assessmentBlocks = []) {
+  const tablesByQuestionId = new Map()
+  const questionsByAssessment = new Map()
+  const blocksByAssessment = new Map()
+  assessmentQuestions.forEach((question) => {
+    const rows = questionsByAssessment.get(Number(question.assessment_id)) || []
+    rows.push(question)
+    questionsByAssessment.set(Number(question.assessment_id), rows)
+  })
+  assessmentBlocks.forEach((block) => {
+    const content = parseJson(block.content_json, {}) || {}
+    const metadata = parseJson(block.metadata_json, {}) || {}
+    const rows = blocksByAssessment.get(Number(block.assessment_id)) || []
+    rows.push({
+      ...block,
+      display_key: questionNumberKey(content.question_number || metadata.original_question_number),
+    })
+    blocksByAssessment.set(Number(block.assessment_id), rows)
+  })
+  questionsByAssessment.forEach((questions, assessmentId) => {
+    const blocks = blocksByAssessment.get(assessmentId) || []
+    const usedBlockIds = new Set()
+    questions.forEach((question) => {
+      const displayNumber = question.display_number || question.question_number
+      const displayKey = questionNumberKey(displayNumber)
+      let match = displayKey
+        ? blocks.find((block) => !usedBlockIds.has(Number(block.id)) && block.display_key === displayKey)
+        : null
+      const ordinal = Math.round(Number(question.question_number || 0))
+      if (!match && ordinal > 0 && blocks[ordinal - 1] && !usedBlockIds.has(Number(blocks[ordinal - 1].id))) {
+        match = blocks[ordinal - 1]
+      }
+      if (!match) match = blocks.find((block) => !usedBlockIds.has(Number(block.id))) || null
+      if (!match) return
+      usedBlockIds.add(Number(match.id))
+      tablesByQuestionId.set(Number(question.id), sourcedStructuredTables(match, assessmentId, displayNumber))
+    })
+  })
+  return tablesByQuestionId
 }
 
 async function resolveQuestionBankTopic(connection, schoolId, question) {
   if (question.topic_id) {
     const [[topic]] = await connection.query(
-      `SELECT id, curriculum_id, grade_id, subject_id
+      `SELECT id, curriculum_id, grade_id, subject_id, topic_name
        FROM syllabus_topics
        WHERE school_id = ? AND id = ? AND subject_id = ? AND is_active = 1
        LIMIT 1`,
@@ -124,7 +207,7 @@ async function resolveQuestionBankTopic(connection, schoolId, question) {
   const topicText = cleanText(question.topic_text)
   if (!topicText) return null
   const [[topic]] = await connection.query(
-    `SELECT id, curriculum_id, grade_id, subject_id
+    `SELECT id, curriculum_id, grade_id, subject_id, topic_name
      FROM syllabus_topics
      WHERE school_id = ? AND subject_id = ? AND LOWER(topic_name) = LOWER(?) AND is_active = 1
      ORDER BY parent_topic_id IS NULL DESC, order_number, id
@@ -474,6 +557,18 @@ export async function sourceAssessmentQuestions(req, res) {
        LIMIT ?`,
       [...params, limit],
     )
+    const assessmentIds = [...new Set(assessmentQuestions.map((question) => Number(question.assessment_id)).filter(Boolean))]
+    const [assessmentBlocks] = assessmentIds.length
+      ? await connection.query(
+          `SELECT id, assessment_id, block_type, content_json, metadata_json, sort_order
+           FROM assessment_blocks
+           WHERE school_id = ? AND assessment_id IN (${assessmentIds.map(() => "?").join(",")})
+             AND block_type IN ('question', 'sub_question')
+           ORDER BY assessment_id, sort_order, id`,
+          [schoolId, ...assessmentIds],
+        )
+      : [[]]
+    const assessmentTableMap = mapAssessmentQuestionTables(assessmentQuestions, assessmentBlocks)
     const questionIds = assessmentQuestions.map((question) => Number(question.id)).filter(Boolean)
     const [optionRows] = questionIds.length
       ? await connection.query(
@@ -515,6 +610,7 @@ export async function sourceAssessmentQuestions(req, res) {
         continue
       }
       const subtopicId = await resolveQuestionBankSubtopic(connection, schoolId, question, Number(topic.id))
+      const tables = assessmentTableMap.get(Number(row.id)) || []
       const [[duplicate]] = await connection.query(
         `SELECT id
          FROM question_bank
@@ -531,8 +627,8 @@ export async function sourceAssessmentQuestions(req, res) {
         `INSERT INTO question_bank (
           public_ref, school_id, curriculum_id, grade_id, subject_id, topic_id, subtopic_id, question_type,
           question_text, options_json, correct_answer, accepted_answers_json, explanation,
-          difficulty, skill_type, marks, source_type, approval_status, created_by
-        ) VALUES (UUID(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'teacher_created', 'pending_review', ?)`,
+          difficulty, skill_type, marks, assets_json, source_type, approval_status, created_by
+        ) VALUES (UUID(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'assessment_import', 'pending_review', ?)`,
         [
           schoolId,
           topic.curriculum_id || null,
@@ -549,13 +645,43 @@ export async function sourceAssessmentQuestions(req, res) {
           normalizeDifficulty(row.difficulty),
           normalizeSkillType(row.cognitive_skill),
           Math.max(1, Math.round(Number(row.marks || 1))),
+          JSON.stringify(tables),
           req.user.id,
         ],
       )
       imported.push({
         question_id: Number(result.insertId),
+        id: Number(result.insertId),
+        source_assessment_id: Number(row.assessment_id || 0) || null,
         source_assessment: row.assessment_name,
-        question_text: cleanQuestion.slice(0, 160),
+        source_question_number: cleanText(row.display_number || row.question_number) || null,
+        curriculum_id: topic.curriculum_id || null,
+        grade_id: topic.grade_id || null,
+        subject_id: question.subject_id,
+        subject_name: row.subject_name || null,
+        topic_id: Number(topic.id),
+        topic_name: topic.topic_name || cleanText(row.topic_text) || null,
+        subtopic_id: subtopicId,
+        question_type: questionBankType(row.question_type),
+        question_text: cleanQuestion,
+        options_json: options.map((option) => ({ label: option.label, text: option.text })),
+        correct_answer: key.correctAnswer,
+        accepted_answers_json: key.acceptedAnswers,
+        explanation: key.explanation,
+        difficulty: normalizeDifficulty(row.difficulty),
+        skill_type: normalizeSkillType(row.cognitive_skill),
+        marks: Math.max(1, Math.round(Number(row.marks || 1))),
+        tables,
+        source_type: "assessment_import",
+        approval_status: "pending_review",
+        approval_ready: Boolean(key.correctAnswer && key.explanation && topic.id && topic.grade_id && question.subject_id),
+        missing_requirements: [
+          !key.correctAnswer ? "correct answer" : "",
+          !key.explanation ? "explanation" : "",
+          !topic.id ? "topic" : "",
+          !topic.grade_id ? "grade" : "",
+          !question.subject_id ? "subject" : "",
+        ].filter(Boolean),
       })
     }
     await connection.commit()

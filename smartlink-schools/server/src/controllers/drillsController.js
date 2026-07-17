@@ -21,6 +21,60 @@ function parseJson(value, fallback = null) {
   }
 }
 
+function structuredTableCell(value) {
+  if (value === null || value === undefined) return ""
+  if (typeof value === "object") return String(value.text ?? value.value ?? value.label ?? "").trim().slice(0, 1000)
+  return String(value).trim().slice(0, 1000)
+}
+
+function structuredTableEntries(value) {
+  const parsed = parseJson(value, [])
+  if (Array.isArray(parsed)) return parsed
+  if (!parsed || typeof parsed !== "object") return []
+  if (String(parsed.type || "").toLowerCase() === "table" || String(parsed.asset_type || "").toLowerCase() === "structured_table") {
+    return [parsed]
+  }
+  const nested = [
+    ...(Array.isArray(parsed.assets) ? parsed.assets : []),
+    ...(Array.isArray(parsed.tables) ? parsed.tables : []),
+  ]
+  if (nested.length) return nested
+  return Object.values(parsed).filter((entry) => entry && typeof entry === "object" && !Array.isArray(entry))
+}
+
+export function structuredTablesFromAssets(value) {
+  return structuredTableEntries(value)
+    .filter((entry) => {
+      const type = String(entry?.type || "").toLowerCase()
+      const assetType = String(entry?.asset_type || "").toLowerCase()
+      return type === "table" || assetType === "structured_table"
+    })
+    .slice(0, 12)
+    .map((entry, tableIndex) => {
+      const headerSource = entry.column_headers || entry.columnHeaders || entry.headers || (Array.isArray(entry.columns) ? entry.columns : [])
+      const headers = Array.isArray(headerSource) ? headerSource.slice(0, 12).map(structuredTableCell) : []
+      const cellSource = Array.isArray(entry.cells) ? entry.cells : (Array.isArray(entry.rows) ? entry.rows : [])
+      let cells = cellSource.slice(0, 60).map((row) => Array.isArray(row) ? row.slice(0, 12).map(structuredTableCell) : [])
+      const requestedColumns = Number(Array.isArray(entry.columns) ? 0 : entry.columns || entry.column_count || entry.columnCount) || 0
+      const columnCount = Math.min(12, Math.max(1, requestedColumns, headers.length, ...cells.map((row) => row.length)))
+      const requestedRows = Math.min(60, Math.max(0, Number(entry.row_count || entry.rowCount || (typeof entry.rows === "number" ? entry.rows : 0)) || 0))
+      const headerRow = entry.header_row === true || entry.headerRow === true || entry.header_row === 1 || entry.headerRow === 1 || String(entry.header_row ?? entry.headerRow ?? "").toLowerCase() === "true" || headers.some(Boolean)
+      if (headers.length && (!cells.length || headers.some((cell, column) => cell !== cells[0]?.[column]))) cells = [headers, ...cells]
+      const rowCount = Math.min(60, Math.max(1, requestedRows, cells.length))
+      cells = Array.from({ length: rowCount }, (_, row) =>
+        Array.from({ length: columnCount }, (_, column) => structuredTableCell(cells[row]?.[column])),
+      )
+      return {
+        table_id: String(entry.table_id || entry.tableId || entry.local_id || `table-${tableIndex + 1}`).slice(0, 80),
+        caption: String(entry.caption || entry.title || "").trim().slice(0, 300),
+        rows: rowCount,
+        columns: columnCount,
+        cells,
+        header_row: headerRow,
+      }
+    })
+}
+
 function studentIdForRequest(req) {
   if (req.user?.role === "student") return Number(req.user.studentId || req.user.id || 0)
   return Number(req.params.studentId || req.params.student_id || req.query.student_id || req.body.student_id || 0)
@@ -139,7 +193,7 @@ async function loadDrillSession(schoolId, sessionId, options = {}) {
     `SELECT dsq.id AS session_question_id, dsq.order_number, dsq.student_answer, dsq.is_correct,
       dsq.marks_awarded, dsq.mistake_type, dsq.ai_feedback, dsq.answered_at, dsq.reason,
       q.id AS question_id, q.question_type, q.question_text, q.options_json, q.correct_answer,
-      q.accepted_answers_json, q.explanation, q.difficulty, q.skill_type, q.marks,
+      q.accepted_answers_json, q.explanation, q.difficulty, q.skill_type, q.marks, q.assets_json,
       st.topic_name
      FROM drill_session_questions dsq
      JOIN question_bank q ON q.id = dsq.question_id
@@ -152,17 +206,21 @@ async function loadDrillSession(schoolId, sessionId, options = {}) {
   const canReviewAnswers = includeInternalAnswers || session.status === "completed"
   return {
     ...session,
-    questions: questions.map((question) => ({
-      ...question,
-      options_json: parseJson(question.options_json, []),
-      is_correct: canReviewAnswers ? question.is_correct : null,
-      marks_awarded: canReviewAnswers ? question.marks_awarded : null,
-      mistake_type: canReviewAnswers ? question.mistake_type : null,
-      ai_feedback: canReviewAnswers ? question.ai_feedback : null,
-      correct_answer: includeInternalAnswers ? question.correct_answer : null,
-      accepted_answers_json: includeInternalAnswers ? parseJson(question.accepted_answers_json, []) : [],
-      explanation: canReviewAnswers ? question.explanation : null,
-    })),
+    questions: questions.map((question) => {
+      const { assets_json: assetsJson, ...publicQuestion } = question
+      return {
+        ...publicQuestion,
+        options_json: parseJson(question.options_json, []),
+        tables: structuredTablesFromAssets(assetsJson),
+        is_correct: canReviewAnswers ? question.is_correct : null,
+        marks_awarded: canReviewAnswers ? question.marks_awarded : null,
+        mistake_type: canReviewAnswers ? question.mistake_type : null,
+        ai_feedback: canReviewAnswers ? question.ai_feedback : null,
+        correct_answer: includeInternalAnswers ? question.correct_answer : null,
+        accepted_answers_json: includeInternalAnswers ? parseJson(question.accepted_answers_json, []) : [],
+        explanation: canReviewAnswers ? question.explanation : null,
+      }
+    }),
   }
 }
 

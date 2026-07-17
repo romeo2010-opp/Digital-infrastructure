@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
-import { AlertTriangle, Check, FileUp, LayoutTemplate, Link2, Loader2, Save, ScanText, XCircle } from 'lucide-react'
+import { AlertTriangle, Check, FileUp, Grid3X3, LayoutTemplate, Link2, Loader2, Plus, Save, ScanText, Trash2, XCircle } from 'lucide-react'
 import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
 import { Textarea } from '../components/ui/textarea'
@@ -20,6 +20,64 @@ const readPdf = (file: File) => new Promise<string>((resolve, reject) => {
   reader.onerror = () => reject(new Error('Unable to read PDF.'))
   reader.readAsDataURL(file)
 })
+
+function normalizeImportTables(value: any[] = []) {
+  if (!Array.isArray(value)) return []
+  return value.map((table, tableIndex) => {
+    const sourceCells = Array.isArray(table?.cells)
+      ? table.cells
+      : Array.isArray(table?.rows) && table.rows.every((row: any) => Array.isArray(row))
+        ? table.rows
+        : []
+    const headers = Array.isArray(table?.column_headers || table?.columnHeaders)
+      ? (table.column_headers || table.columnHeaders).map((cell: any) => String(cell ?? ''))
+      : []
+    const withHeaders = headers.length && !sourceCells.length ? [headers] : sourceCells
+    const requestedRows = Array.isArray(table?.rows) ? withHeaders.length : Number(table?.rows || withHeaders.length || 3)
+    const requestedColumns = Number(table?.columns || Math.max(0, headers.length, ...withHeaders.map((row: any[]) => Array.isArray(row) ? row.length : 0)) || 3)
+    const rows = Math.min(60, Math.max(1, Math.round(Number.isFinite(requestedRows) ? requestedRows : 3)))
+    const columns = Math.min(12, Math.max(1, Math.round(Number.isFinite(requestedColumns) ? requestedColumns : 3)))
+    return {
+      table_id: String(table?.table_id || table?.tableId || `table-${tableIndex + 1}`),
+      caption: String(table?.caption || ''),
+      page_number: Number(table?.page_number || table?.pageNumber || 0) || null,
+      confidence: Number(table?.confidence || 0) || null,
+      header_row: table?.header_row !== false && table?.headerRow !== false,
+      rows,
+      columns,
+      cells: Array.from({ length: rows }).map((_, rowIndex) => Array.from({ length: columns }).map((__, columnIndex) => String(withHeaders[rowIndex]?.[columnIndex] ?? ''))),
+    }
+  })
+}
+
+function StructuredTablesEditor({ tables, onChange }: { tables: any[], onChange: (tables: any[]) => void }) {
+  const normalized = normalizeImportTables(tables)
+  const updateTable = (tableIndex: number, patch: any) => onChange(normalizeImportTables(normalized.map((table, index) => index === tableIndex ? { ...table, ...patch } : table)))
+  const removeTable = (tableIndex: number) => onChange(normalized.filter((_, index) => index !== tableIndex))
+  const addTable = () => onChange([...normalized, ...normalizeImportTables([{ table_id: `table-${Date.now()}`, caption: '', rows: 3, columns: 3, header_row: true, cells: [['Heading 1', 'Heading 2', 'Heading 3'], ['', '', ''], ['', '', '']] }])])
+
+  return <section className="mt-3 rounded-[6px] border bg-[#f8fafc] p-3">
+    <div className="flex flex-wrap items-center justify-between gap-2">
+      <div><div className="text-[10px] font-bold uppercase tracking-[.08em] text-[#64748b]">Structured tables</div><p className="mt-0.5 text-[11px] text-[#64748b]">Review extracted rows and columns. These remain editable in the assessment builder.</p></div>
+      <Button type="button" variant="outline" className="h-8 text-[11px]" onClick={addTable}><Plus className="size-3.5" />Add table</Button>
+    </div>
+    {normalized.length ? <div className="mt-3 grid gap-3">{normalized.map((table, tableIndex) => <article key={table.table_id || tableIndex} className="rounded-[6px] border bg-white p-2">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="flex flex-wrap items-end gap-2">
+          <label className={`${labelClass} min-w-52 flex-1`}>Caption<Input value={table.caption} onChange={(event) => updateTable(tableIndex, { caption: event.target.value })} placeholder="Table caption or instruction" /></label>
+          <label className={`${labelClass} w-20`}>Rows<Input type="number" min="1" max="60" value={table.rows} onChange={(event) => updateTable(tableIndex, { rows: event.target.value })} /></label>
+          <label className={`${labelClass} w-20`}>Columns<Input type="number" min="1" max="12" value={table.columns} onChange={(event) => updateTable(tableIndex, { columns: event.target.value })} /></label>
+          <label className="flex h-9 items-center gap-2 text-[11px] font-semibold"><input type="checkbox" checked={Boolean(table.header_row)} onChange={(event) => updateTable(tableIndex, { header_row: event.target.checked })} />Header row</label>
+        </div>
+        <Button type="button" variant="ghost" className="h-8 px-2 text-red-700 hover:bg-red-50 hover:text-red-800" onClick={() => removeTable(tableIndex)} aria-label="Remove table"><Trash2 className="size-4" /></Button>
+      </div>
+      <div className="mt-2 overflow-x-auto rounded-[4px] border">
+        <table className="w-full min-w-[420px] border-collapse text-[12px]"><tbody>{table.cells.map((row: string[], rowIndex: number) => <tr key={rowIndex}>{row.map((cell: string, columnIndex: number) => <td key={columnIndex} className={`border border-[#d9dce3] p-0 ${table.header_row && rowIndex === 0 ? 'bg-[#f1f5f9]' : 'bg-white'}`}><Input className={`h-9 min-w-24 rounded-none border-0 bg-transparent px-2 text-[12px] focus-visible:ring-1 ${table.header_row && rowIndex === 0 ? 'font-bold' : ''}`} value={cell} onChange={(event) => { const cells = table.cells.map((sourceRow: string[]) => [...sourceRow]); cells[rowIndex][columnIndex] = event.target.value; updateTable(tableIndex, { cells }) }} aria-label={`Table row ${rowIndex + 1}, column ${columnIndex + 1}`} /></td>)}</tr>)}</tbody></table>
+      </div>
+      <div className="mt-2 flex flex-wrap gap-2 text-[10px] text-[#64748b]">{table.page_number ? <span>Detected on page {table.page_number}</span> : null}{table.confidence ? <Confidence value={table.confidence} /> : null}</div>
+    </article>)}</div> : <div className="mt-3 flex items-center gap-2 rounded-[5px] border border-dashed bg-white p-3 text-[11px] text-[#64748b]"><Grid3X3 className="size-4" />No structured table was detected. Add one when the question requires rows and columns.</div>}
+  </section>
+}
 
 export function AssessmentImportPage() {
   const { importRef } = useParams()
@@ -185,7 +243,7 @@ function AssessmentImportReview({ importRef }: { importRef: string }) {
   const updateQuestion = (questionRef: string, patch: any) => setData((current: any) => ({ ...current, questions: current.questions.map((question: any) => question.public_ref === questionRef ? { ...question, ...patch } : question) }))
   const updateResponse = (question: any, key: string, value: any) => updateQuestion(question.public_ref, { response_layout: { ...(question.response_layout || {}), [key]: value } })
   const saveQuestion = async (question: any) => {
-    await runAction(() => api.updateAssessmentImportQuestion(token, importRef, question.public_ref, { question_text: question.question_text, marks: question.marks, difficulty: question.difficulty, topic_id: question.topic_id, subtopic_id: question.subtopic_id, response_layout: question.response_layout, daily_drill_eligible: question.daily_drill_eligible, review_status: 'edited' }), 'Saving extracted question and response layout...', { refresh: false })
+    await runAction(() => api.updateAssessmentImportQuestion(token, importRef, question.public_ref, { question_text: question.question_text, marks: question.marks, difficulty: question.difficulty, topic_id: question.topic_id, subtopic_id: question.subtopic_id, response_layout: question.response_layout, tables: normalizeImportTables(question.tables || []), daily_drill_eligible: question.daily_drill_eligible, review_status: 'edited' }), 'Saving extracted question, tables, and response layout...', { refresh: false })
     await refresh()
   }
   const approveHigh = async () => { for (const question of data.questions.filter((row: any) => Number(row.confidence) >= .8 && Number(row.response_layout?.confidence) >= .7)) await api.updateAssessmentImportQuestion(token, importRef, question.public_ref, { review_status: 'approved' }); await refresh() }
@@ -211,7 +269,7 @@ function AssessmentImportReview({ importRef }: { importRef: string }) {
       <SectionCard title="Questions, answers, and learner response layout" subtitle="Response type, line count, and physical height are editable before approval."><div className="grid gap-3 p-3">{data.questions.map((question: any) => {
         const response = question.response_layout || {}
         const questionAssets = (data.assets || []).filter((asset: any) => asset.linked_question_temp_id === question.temp_question_id && ['diagram', 'image', 'table_image'].includes(asset.asset_type))
-        return <article key={question.public_ref} className="rounded-[7px] border bg-white p-3"><div className="flex flex-wrap items-center justify-between gap-2"><div className="font-semibold">Question {question.question_number} · Page {question.page_start || '-'}</div><div className="flex gap-2"><Confidence value={question.confidence} /><Confidence value={response.confidence} />{question.matched_marking_item ? <span className="rounded-full bg-green-50 px-2 py-1 text-[10px] font-bold text-green-700"><Link2 className="mr-1 inline size-3" />Matched</span> : <span className="rounded-full bg-red-50 px-2 py-1 text-[10px] font-bold text-red-700">Unmatched</span>}</div></div>{questionAssets.length ? <div className="mt-3"><div className="mb-2 text-[10px] font-bold uppercase tracking-[.08em] text-[#64748b]">Extracted visual stimulus</div><div className="grid gap-2 md:grid-cols-2">{questionAssets.map((asset: any) => <ImportedDiagramPreview key={asset.public_ref} api={api} token={token} importRef={importRef} asset={asset} />)}</div></div> : null}<div className="mt-3 grid gap-3 lg:grid-cols-2"><label className={labelClass}>Extracted question<Textarea rows={6} value={question.question_text} onChange={(event) => updateQuestion(question.public_ref, { question_text: event.target.value })} /></label><label className={labelClass}>Matched marking scheme<Textarea rows={6} value={question.matched_marking_item?.answer_text || ''} readOnly placeholder="No answer confidently matched." /></label></div><div className="mt-3 grid gap-2 rounded-[6px] border bg-[#f8fafc] p-3 sm:grid-cols-2 lg:grid-cols-5"><label className={labelClass}>Response type<select className={selectClass} value={response.answer_space_type || 'none'} onChange={(event) => updateResponse(question, 'answer_space_type', event.target.value)}><option value="none">No answer space</option><option value="ruled_lines">Ruled lines</option><option value="blank_space">Open blank space</option><option value="blank_box">Blank bordered box</option><option value="graph_grid">Graph grid</option></select></label><label className={labelClass}>Number of lines<Input type="number" min="0" max="40" disabled={response.answer_space_type !== 'ruled_lines'} value={response.answer_lines || 0} onChange={(event) => updateResponse(question, 'answer_lines', event.target.value)} /></label><label className={labelClass}>Height (screen px)<Input type="number" min="0" max="1000" disabled={response.answer_space_type === 'none'} value={response.answer_height || 0} onChange={(event) => updateResponse(question, 'answer_height', event.target.value)} /></label><label className={labelClass}>Original height (PDF pt)<Input readOnly value={response.height_points || 0} /></label><label className={labelClass}>Layout confidence<div className="flex h-9 items-center"><Confidence value={response.confidence} /></div></label><div className="text-[11px] text-[#64748b] sm:col-span-2 lg:col-span-5">{response.evidence || 'No visual evidence note was returned; review against the page preview.'}</div></div><div className="mt-3 flex flex-wrap items-end gap-2"><label className={labelClass}>Marks<Input className="w-24" type="number" value={question.marks || ''} onChange={(event) => updateQuestion(question.public_ref, { marks: event.target.value })} /></label><label className={labelClass}>Difficulty<select className={`${selectClass} w-32`} value={question.difficulty || 'medium'} onChange={(event) => updateQuestion(question.public_ref, { difficulty: event.target.value })}>{['easy', 'medium', 'hard'].map((value) => <option key={value}>{human(value)}</option>)}</select></label><label className="flex h-9 items-center gap-2 text-[11px] font-semibold"><input type="checkbox" checked={Boolean(question.daily_drill_eligible)} onChange={(event) => updateQuestion(question.public_ref, { daily_drill_eligible: event.target.checked })} />Daily Drill eligible</label><Button variant="outline" onClick={() => saveQuestion(question)}><Save className="size-4" />Save review</Button><Button variant="destructive" onClick={async () => { await api.updateAssessmentImportQuestion(token, importRef, question.public_ref, { review_status: 'rejected' }); await refresh() }}><XCircle className="size-4" />Reject</Button></div></article>
+        return <article key={question.public_ref} className="rounded-[7px] border bg-white p-3"><div className="flex flex-wrap items-center justify-between gap-2"><div className="font-semibold">Question {question.question_number} · Page {question.page_start || '-'}</div><div className="flex gap-2"><Confidence value={question.confidence} /><Confidence value={response.confidence} />{question.matched_marking_item ? <span className="rounded-full bg-green-50 px-2 py-1 text-[10px] font-bold text-green-700"><Link2 className="mr-1 inline size-3" />Matched</span> : <span className="rounded-full bg-red-50 px-2 py-1 text-[10px] font-bold text-red-700">Unmatched</span>}</div></div>{questionAssets.length ? <div className="mt-3"><div className="mb-2 text-[10px] font-bold uppercase tracking-[.08em] text-[#64748b]">Extracted visual stimulus</div><div className="grid gap-2 md:grid-cols-2">{questionAssets.map((asset: any) => <ImportedDiagramPreview key={asset.public_ref} api={api} token={token} importRef={importRef} asset={asset} />)}</div></div> : null}<div className="mt-3 grid gap-3 lg:grid-cols-2"><label className={labelClass}>Extracted question<Textarea rows={6} value={question.question_text} onChange={(event) => updateQuestion(question.public_ref, { question_text: event.target.value })} /></label><label className={labelClass}>Matched marking scheme<Textarea rows={6} value={question.matched_marking_item?.answer_text || ''} readOnly placeholder="No answer confidently matched." /></label></div><StructuredTablesEditor tables={question.tables || []} onChange={(tables) => updateQuestion(question.public_ref, { tables })} /><div className="mt-3 grid gap-2 rounded-[6px] border bg-[#f8fafc] p-3 sm:grid-cols-2 lg:grid-cols-5"><label className={labelClass}>Response type<select className={selectClass} value={response.answer_space_type || 'none'} onChange={(event) => updateResponse(question, 'answer_space_type', event.target.value)}><option value="none">No answer space</option><option value="ruled_lines">Ruled lines</option><option value="blank_space">Open blank space</option><option value="blank_box">Blank bordered box</option><option value="graph_grid">Graph grid</option></select></label><label className={labelClass}>Number of lines<Input type="number" min="0" max="40" disabled={response.answer_space_type !== 'ruled_lines'} value={response.answer_lines || 0} onChange={(event) => updateResponse(question, 'answer_lines', event.target.value)} /></label><label className={labelClass}>Height (screen px)<Input type="number" min="0" max="1000" disabled={response.answer_space_type === 'none'} value={response.answer_height || 0} onChange={(event) => updateResponse(question, 'answer_height', event.target.value)} /></label><label className={labelClass}>Original height (PDF pt)<Input readOnly value={response.height_points || 0} /></label><label className={labelClass}>Layout confidence<div className="flex h-9 items-center"><Confidence value={response.confidence} /></div></label><div className="text-[11px] text-[#64748b] sm:col-span-2 lg:col-span-5">{response.evidence || 'No visual evidence note was returned; review against the page preview.'}</div></div><div className="mt-3 flex flex-wrap items-end gap-2"><label className={labelClass}>Marks<Input className="w-24" type="number" value={question.marks || ''} onChange={(event) => updateQuestion(question.public_ref, { marks: event.target.value })} /></label><label className={labelClass}>Difficulty<select className={`${selectClass} w-32`} value={question.difficulty || 'medium'} onChange={(event) => updateQuestion(question.public_ref, { difficulty: event.target.value })}>{['easy', 'medium', 'hard'].map((value) => <option key={value}>{human(value)}</option>)}</select></label><label className="flex h-9 items-center gap-2 text-[11px] font-semibold"><input type="checkbox" checked={Boolean(question.daily_drill_eligible)} onChange={(event) => updateQuestion(question.public_ref, { daily_drill_eligible: event.target.checked })} />Daily Drill eligible</label><Button variant="outline" onClick={() => saveQuestion(question)}><Save className="size-4" />Save review</Button><Button variant="destructive" onClick={async () => { await api.updateAssessmentImportQuestion(token, importRef, question.public_ref, { review_status: 'rejected' }); await refresh() }}><XCircle className="size-4" />Reject</Button></div></article>
       })}{!data.questions.length ? <div className="p-6 text-[12px] text-[#64748b]">No questions were confidently extracted. Review the original pages and create questions manually.</div> : null}</div></SectionCard>
     </div>
   </main>
