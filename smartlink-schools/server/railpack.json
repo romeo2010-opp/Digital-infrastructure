@@ -1,0 +1,9 @@
+{
+  "$schema": "https://schema.railpack.com",
+  "provider": "node",
+  "deploy": {
+    "aptPackages": [
+      "poppler-utils"
+    ]
+  }
+}

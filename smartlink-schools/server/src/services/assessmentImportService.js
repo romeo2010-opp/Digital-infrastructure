@@ -30,12 +30,47 @@ async function cropQuestionDiagramAssets(questions,filePath,folder,pageCount,pag
 }
 function preferEmbeddedDiagramAssets(detected=[],embedded=[]){const used=new Set();return detected.map((diagram)=>{if(diagram.bbox_json?.normalized&&["diagram","graph","chart","map","table","scientific_illustration","geometric_figure","formula_image"].includes(diagram.asset_type))return diagram;const best=embedded.filter((asset)=>!used.has(asset.public_ref)&&asset.page_number===diagram.page_number&&asset.embedded_type==="image"&&Number(asset.width||0)>=80&&Number(asset.height||0)>=60).sort((left,right)=>(right.width*right.height)-(left.width*left.height))[0];if(!best)return diagram;used.add(best.public_ref);return {...diagram,...best,asset_type:diagram.asset_type,linked_question_temp_id:diagram.linked_question_temp_id,suggested_question_number:diagram.suggested_question_number||diagram.linked_question_number,source_question_index:diagram.source_question_index,linked_question_number:diagram.linked_question_number,source_asset_key:`embedded-${best.embedded_number}`,extraction_method:"embedded",placement:"after_question_text",assignment_status:"suggested",requires_review:Number(diagram.confidence)<.8,bbox_json:{...(diagram.bbox_json||{}),embedded_width:best.width,embedded_height:best.height,extraction_method:"embedded"},alt_text:diagram.alt_text,confidence:Math.max(diagram.confidence,.85)}})}
 async function jobByRef(connection,schoolId,ref,lock=false){const [[job]]=await connection.query(`SELECT * FROM assessment_import_jobs WHERE school_id=? AND public_ref=? LIMIT 1${lock?" FOR UPDATE":""}`,[schoolId,ref]);if(!job)throw new HttpError(404,"Assessment import was not found");return job}
-async function extractDocument(job,documentType,filePath,folder){
+
+export function inspectPdfStructure(pdfBuffer){
+  const source=Buffer.from(pdfBuffer||[]).toString("latin1")
+  const header=source.slice(0,16)
+  const tail=source.slice(-8192)
+  const pageTreeCounts=[...source.matchAll(/\/Type\s*\/Pages\b[^>]*\/Count\s+(\d+)/g)].map((match)=>Number(match[1])).filter((value)=>value>0)
+  const visiblePageObjects=(source.match(/\/Type\s*\/Page\b/g)||[]).length
+  return {
+    validHeader:header.startsWith("%PDF-"),
+    // Readers tolerate harmless trailing bytes after the final EOF marker.
+    hasEof:/%%EOF/.test(tail),
+    encrypted:/\/Encrypt\b/.test(source),
+    pageCount:Math.max(1,...pageTreeCounts,visiblePageObjects),
+  }
+}
+
+export function pdfPagesFromText(text,pageCount=1){
+  const raw=String(text||"").split("\f")
+  if(raw.length>1&&!raw.at(-1)?.trim())raw.pop()
+  const total=Math.max(1,Number(pageCount)||1,raw.length)
+  return Array.from({length:total},(_,index)=>({page_number:index+1,text_content:String(raw[index]||"").trim()}))
+}
+
+function pdfCommandFailureReason(error){
+  if(error?.code==="ENOENT")return "Poppler text extraction is not installed on this server"
+  const stderr=clean(error?.stderr||error?.cause?.stderr||"",300).replace(/\s+/g," ")
+  return stderr||clean(error?.message,300)||"the embedded text layer could not be decoded"
+}
+
+export async function extractDocument(job,documentType,filePath,folder){
   const textFile=path.join(folder,`${documentType}.txt`)
-  try{await run("pdftotext",["-layout",filePath,textFile],{timeout:120000,maxBuffer:5*1024*1024})}
-  catch(error){throw new HttpError(422,`SmartLink could not read the ${documentType.replaceAll("_"," ")} PDF. Confirm that it is not password-protected or corrupted.`,{code:"ASSESSMENT_PDF_READ_FAILED",details:{document_type:documentType}})}
-  const [text,pdfBuffer]=await Promise.all([fs.readFile(textFile,"utf8"),fs.readFile(filePath)])
-  const pages=text.split("\f").filter((value,index,all)=>value.trim()||index<all.length-1).map((value,index)=>({page_number:index+1,text_content:value.trim()}))
+  const pdfBuffer=await fs.readFile(filePath)
+  const structure=inspectPdfStructure(pdfBuffer)
+  if(!structure.validHeader||!structure.hasEof){throw new HttpError(422,`SmartLink could not verify the ${documentType.replaceAll("_"," ")} PDF structure. The upload appears incomplete or corrupted.`,{code:"ASSESSMENT_PDF_INVALID_STRUCTURE",details:{document_type:documentType}})}
+  await fs.unlink(textFile).catch(()=>{})
+  let textExtractionError=null
+  try{await run("pdftotext",["-layout","-enc","UTF-8",filePath,textFile],{timeout:120000,maxBuffer:5*1024*1024})}
+  catch(error){textExtractionError=error}
+  const text=await fs.readFile(textFile,"utf8").catch(()=>"")
+  if(textExtractionError&&structure.encrypted&&!text.trim()){throw new HttpError(422,`SmartLink could not unlock the ${documentType.replaceAll("_"," ")} PDF. Remove its password and upload it again.`,{code:"ASSESSMENT_PDF_PASSWORD_PROTECTED",details:{document_type:documentType}})}
+  const pages=pdfPagesFromText(text,structure.pageCount)
   const coverPrefix=path.join(folder,`${documentType}-cover`)
   await run("pdftoppm",["-f","1","-l","1","-singlefile","-png","-r","180",filePath,coverPrefix],{timeout:120000}).catch(()=>{})
   const coverPath=`${coverPrefix}.png`
@@ -44,7 +79,9 @@ async function extractDocument(job,documentType,filePath,folder){
   try{
     imageExtraction=await extractEmbeddedPdfImages({pdfPath:filePath,outputDir:folder,documentType,pageCount:pages.length,pageTextByNumber:new Map(pages.map((page)=>[page.page_number,page.text_content]))})
   }catch(error){imageExtraction.warnings=[`Embedded image extraction failed for the ${documentType.replaceAll("_"," ")}: ${clean(error.message,240)}`]}
-  return {pages,pdfData:pdfBuffer.toString("base64"),coverPath:relativeCover,assets:imageExtraction.assets,imageExtraction}
+  if(textExtractionError){imageExtraction.warnings.unshift(`Embedded text extraction was unavailable (${pdfCommandFailureReason(textExtractionError)}). SmartLink continued with visual PDF analysis.`)}
+  else if(!text.trim()){imageExtraction.warnings.unshift("This PDF has no readable embedded text layer. SmartLink continued with visual PDF analysis.")}
+  return {pages,pdfData:pdfBuffer.toString("base64"),coverPath:relativeCover,assets:imageExtraction.assets,imageExtraction,textExtraction:{ok:!textExtractionError&&Boolean(text.trim()),fallbackUsed:Boolean(textExtractionError)||!text.trim(),reason:textExtractionError?pdfCommandFailureReason(textExtractionError):!text.trim()?"empty_text_layer":null}}
 }
 
 function assessmentImportFailure(error,stage){if(error instanceof HttpError&&Number(error.status)<500)return error;const databaseFailure=String(error?.code||"").startsWith("ER_");const message=databaseFailure?"SmartLink read the PDFs but could not save the extracted assessment. Please retry. If this continues, ask an administrator to verify assessment import migration 041.":`Assessment import stopped while ${stage}. Please retry; the uploaded PDFs have been kept.`;return new HttpError(500,message,{code:databaseFailure?"ASSESSMENT_IMPORT_SAVE_FAILED":"ASSESSMENT_IMPORT_PROCESSING_FAILED",details:{stage,retryable:true},expose:true,cause:error})}
