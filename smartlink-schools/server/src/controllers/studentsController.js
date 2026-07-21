@@ -588,10 +588,11 @@ export async function createStudent(req, res) {
     for (const guardian of [student.guardian1, student.guardian2].filter(Boolean)) {
       await connection.query(
         `INSERT INTO student_guardians (
-          school_id, student_id, guardian_number, full_name, relationship,
+          public_ref, school_id, student_id, guardian_number, full_name, relationship,
           primary_phone, secondary_phone, email, national_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
+          randomUUID(),
           schoolId,
           dbStudentId,
           guardian.guardianNumber,

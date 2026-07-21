@@ -129,11 +129,23 @@ export async function createPaymentPromise(schoolId,actorId,body={}) {
 }
 export async function updatePaymentPromise(schoolId,publicRef,body={}) { const status=["pending","fulfilled","missed","cancelled"].includes(body.status)?body.status:null; if(!status) throw new HttpError(400,"Promise status is invalid."); await pool.query("UPDATE fee_payment_promises SET status=?,note=COALESCE(?,note) WHERE school_id=? AND public_ref=?",[status,body.note||null,schoolId,publicRef]); return {ok:true,status} }
 
-export async function sendFeeReminder(schoolId,actorId,body={}) {
-  const [[row]]=await pool.query(`SELECT s.id,s.public_ref,CONCAT(s.first_name,' ',s.last_name) student_name,sg.full_name guardian_name,sg.primary_phone guardian_phone,sch.name school_name,COALESCE(SUM(GREATEST(fa.amount_due-fa.amount_paid,0)),0) balance FROM students s JOIN schools sch ON sch.id=s.school_id LEFT JOIN student_guardians sg ON sg.student_id=s.id AND sg.school_id=s.school_id AND sg.guardian_number=1 LEFT JOIN fee_accounts fa ON fa.student_id=s.id AND fa.school_id=s.school_id WHERE s.school_id=? AND s.public_ref=? GROUP BY s.id,s.public_ref,s.first_name,s.last_name,sg.full_name,sg.primary_phone,sch.name`,[schoolId,body.student_ref]); if(!row) throw new HttpError(400,"Student fee record was not found.")
+export async function sendFeeReminder(schoolId,actorId,body={},dependencies={}) {
+  const db=dependencies.db||pool
+  const notify=dependencies.createInAppNotification||createInAppNotification
+  const queueWhatsapp=dependencies.queueWhatsAppMessage||queueWhatsAppMessage
+  const createTask=dependencies.createDirectorTask||createDirectorTask
+  const audit=dependencies.safeAudit||safeAudit
+  const [[row]]=await db.query(`SELECT s.id,s.public_ref,CONCAT(s.first_name,' ',s.last_name) student_name,sg.full_name guardian_name,sg.primary_phone guardian_phone,guardian_user.id guardian_user_id,sch.name school_name,COALESCE(SUM(GREATEST(fa.amount_due-fa.amount_paid,0)),0) balance FROM students s JOIN schools sch ON sch.id=s.school_id LEFT JOIN student_guardians sg ON sg.student_id=s.id AND sg.school_id=s.school_id AND sg.guardian_number=1 LEFT JOIN users guardian_user ON guardian_user.id=sg.user_id AND guardian_user.school_id=s.school_id AND guardian_user.role='parent' AND guardian_user.is_active=1 LEFT JOIN fee_accounts fa ON fa.student_id=s.id AND fa.school_id=s.school_id WHERE s.school_id=? AND s.public_ref=? GROUP BY s.id,s.public_ref,s.first_name,s.last_name,sg.full_name,sg.primary_phone,guardian_user.id,sch.name`,[schoolId,body.student_ref])
+  if(!row) throw new HttpError(400,"Student fee record was not found.")
   const message=body.message||`Dear guardian, this is a fee reminder from ${row.school_name}. The current outstanding balance for ${row.student_name} is MWK ${Number(row.balance).toLocaleString()}. Please contact the school bursar for payment assistance.`
-  const notification=null
-  const whatsapp=body.channel==="whatsapp"?await queueWhatsAppMessage({schoolId,recipientType:"guardian",recipientName:row.guardian_name,recipientPhone:row.guardian_phone,templateKey:"guardian_fee_reminder",messageBody:message,linkedEntityType:"student",linkedEntityId:row.id,createdBy:actorId}):null
-  const task=body.create_follow_up?await createDirectorTask(schoolId,actorId,{title:`Fee recovery: ${row.student_name}`,description:message,category:"finance",priority:body.priority||"high",assigned_to_user_id:body.assigned_to_user_id||null,due_date:body.due_date||null,linked_entity_type:"student",linked_entity_id:row.id,context_snapshot:{student_name:row.student_name,balance:`MWK ${Number(row.balance).toLocaleString()}`,guardian_name:row.guardian_name}}):null
-  await safeAudit(schoolId,actorId,"FEE_REMINDER_CREATED","student",row.id,{channel:body.channel||"in_app",balance:row.balance}); return {notification,whatsapp,task,message:whatsapp?.reason||"Fee reminder recorded."}
+  const channel=body.channel==="whatsapp"?"whatsapp":"in_app"
+  const priority=priorities.has(body.priority)?body.priority:"high"
+  const notification=row.guardian_user_id?await notify({schoolId,recipientUserId:row.guardian_user_id,title:body.title||`Fee reminder for ${row.student_name}`,message,category:"finance",priority,linkedEntityType:"student",linkedEntityId:row.id,createdBy:actorId}):null
+  if(channel==="in_app"&&!notification) throw new HttpError(409,"This learner does not have a linked, active guardian login for an in-app fee reminder.")
+  const whatsapp=channel==="whatsapp"?await queueWhatsapp({schoolId,recipientType:"guardian",recipientUserId:row.guardian_user_id||null,recipientName:row.guardian_name,recipientPhone:row.guardian_phone,templateKey:"guardian_fee_reminder",messageBody:message,linkedEntityType:"student",linkedEntityId:row.id,createdBy:actorId}):null
+  if(channel==="whatsapp"&&whatsapp?.status==="skipped"&&!notification) throw new HttpError(409,`${whatsapp.reason||"WhatsApp could not be queued."} No linked guardian login is available for in-app fallback.`)
+  const task=body.create_follow_up?await createTask(schoolId,actorId,{title:`Fee recovery: ${row.student_name}`,description:message,category:"finance",priority,assigned_to_user_id:body.assigned_to_user_id||null,due_date:body.due_date||null,linked_entity_type:"student",linked_entity_id:row.id,context_snapshot:{student_name:row.student_name,balance:`MWK ${Number(row.balance).toLocaleString()}`,guardian_name:row.guardian_name}}):null
+  await audit(schoolId,actorId,"FEE_REMINDER_CREATED","student",row.id,{channel,balance:row.balance,notification_sent:Boolean(notification),whatsapp_status:whatsapp?.status||null})
+  const resultMessage=channel==="in_app"?"In-app fee reminder sent.":whatsapp?.status==="queued"?`WhatsApp fee reminder queued${notification?"; in-app copy sent.":"."}`:`${whatsapp?.reason||"WhatsApp could not be queued."} In-app reminder sent instead.`
+  return {notification,whatsapp,task,message:resultMessage}
 }

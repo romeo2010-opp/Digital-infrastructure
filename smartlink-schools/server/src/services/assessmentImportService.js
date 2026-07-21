@@ -8,6 +8,7 @@ import { HttpError } from "../utils/http.js"
 import { ASSESSMENT_VISION_PROMPT_VERSION, generateReviewWarnings, matchQuestionsToMarkingScheme, normalizeFormulaText, parseMarkingScheme, parseStudentPaper } from "./assessmentImportParserService.js"
 import { extractCoverTemplateFromImport } from "./assessmentTemplateService.js"
 import { cropPdfVisualRegions, extractEmbeddedPdfImages } from "./pdfImageExtractionService.js"
+import { validateSyllabusTopicScope } from "./curriculumScopeService.js"
 
 const run=promisify(execFile),clean=(value,max=2000)=>String(value??"").trim().slice(0,max)
 function decodePdf(value,label){const match=String(value||"").match(/^data:application\/pdf;base64,(.+)$/s);if(!match)throw new HttpError(400,`${label} must be a PDF file`);const buffer=Buffer.from(match[1],"base64");if(buffer.length<5||buffer.subarray(0,5).toString()!=="%PDF-")throw new HttpError(400,`${label} is not a valid PDF`);if(buffer.length>20*1024*1024)throw new HttpError(413,`${label} exceeds the 20MB limit`);return buffer}
@@ -73,6 +74,26 @@ async function cropQuestionDiagramAssets(questions,filePath,folder,pageCount,pag
 }
 function preferEmbeddedDiagramAssets(detected=[],embedded=[]){const used=new Set();return detected.map((diagram)=>{if(diagram.bbox_json?.normalized&&["diagram","graph","chart","map","table","scientific_illustration","geometric_figure","formula_image"].includes(diagram.asset_type))return diagram;const best=embedded.filter((asset)=>!used.has(asset.public_ref)&&asset.page_number===diagram.page_number&&asset.embedded_type==="image"&&Number(asset.width||0)>=80&&Number(asset.height||0)>=60).sort((left,right)=>(right.width*right.height)-(left.width*left.height))[0];if(!best)return diagram;used.add(best.public_ref);return {...diagram,...best,asset_type:diagram.asset_type,linked_question_temp_id:diagram.linked_question_temp_id,suggested_question_number:diagram.suggested_question_number||diagram.linked_question_number,source_question_index:diagram.source_question_index,linked_question_number:diagram.linked_question_number,source_asset_key:`embedded-${best.embedded_number}`,extraction_method:"embedded",placement:"after_question_text",assignment_status:"suggested",requires_review:Number(diagram.confidence)<.8,bbox_json:{...(diagram.bbox_json||{}),embedded_width:best.width,embedded_height:best.height,extraction_method:"embedded"},alt_text:diagram.alt_text,confidence:Math.max(diagram.confidence,.85)}})}
 async function jobByRef(connection,schoolId,ref,lock=false){const [[job]]=await connection.query(`SELECT * FROM assessment_import_jobs WHERE school_id=? AND public_ref=? LIMIT 1${lock?" FOR UPDATE":""}`,[schoolId,ref]);if(!job)throw new HttpError(404,"Assessment import was not found");return job}
+
+async function resolveImportAssessmentTeacher(connection,schoolId,userId,job,term){
+  const [[actor]]=await connection.query("SELECT id,role FROM users WHERE school_id=? AND id=? AND is_active=1 LIMIT 1",[schoolId,userId])
+  if(!actor)throw new HttpError(403,"Your active school account could not be verified")
+  const teacherClause=actor.role==="teacher"?" AND assignment.teacher_id=?":""
+  const params=[schoolId,job.class_id,job.subject_id,term.academic_year_id,job.term_id]
+  if(actor.role==="teacher")params.push(userId)
+  const [[assignment]]=await connection.query(`SELECT assignment.teacher_id
+    FROM teacher_class_subject_assignments assignment
+    JOIN users teacher ON teacher.id=assignment.teacher_id AND teacher.school_id=assignment.school_id
+    WHERE assignment.school_id=? AND assignment.class_id=? AND assignment.subject_id=?
+      AND (assignment.academic_year_id=? OR assignment.academic_year_id IS NULL)
+      AND (assignment.term_id=? OR assignment.term_id IS NULL)
+      AND assignment.role='subject_teacher' AND assignment.is_active=1
+      AND teacher.role='teacher' AND teacher.is_active=1${teacherClause}
+    ORDER BY (assignment.academic_year_id=?) DESC,(assignment.term_id=?) DESC,assignment.updated_at DESC,assignment.id DESC
+    LIMIT 1`,[...params,term.academic_year_id,job.term_id])
+  if(!assignment)throw new HttpError(actor.role==="teacher"?403:400,actor.role==="teacher"?"Teachers can only approve imports for assigned classes and subjects":"Assign an active subject teacher to this class and subject before approving the assessment")
+  return Number(assignment.teacher_id)
+}
 
 export function inspectPdfStructure(pdfBuffer){
   const source=Buffer.from(pdfBuffer||[]).toString("latin1")
@@ -155,7 +176,28 @@ async function saveImportAsset(connection,{schoolId,jobId,userId,asset}){
 }
 async function auditImportAsset(connection,{schoolId,jobId,userId,assetId=null,action,before=null,after=null}){await connection.query("INSERT INTO assessment_import_asset_audit (school_id,import_job_id,asset_id,actor_user_id,action,before_json,after_json) VALUES (?,?,?,?,?,?,?)",[schoolId,jobId,assetId,userId,action,before?JSON.stringify(before):null,after?JSON.stringify(after):null])}
 
-export async function createAssessmentImport(schoolId,userId,body={}){const classId=Number(body.class_id)||0,subjectId=Number(body.subject_id)||0,termId=Number(body.term_id)||0;const [[actor]]=await pool.query("SELECT role FROM users WHERE school_id=? AND id=? AND is_active=1",[schoolId,userId]);if(actor?.role==="teacher"){const [[assignment]]=await pool.query("SELECT id FROM teacher_class_subject_assignments WHERE school_id=? AND teacher_id=? AND class_id=? AND subject_id=? AND is_active=1 LIMIT 1",[schoolId,userId,classId,subjectId]);if(!assignment)throw new HttpError(403,"Teachers can only import assessments for assigned classes and subjects")};const student=decodePdf(body.student_pdf_data_url||body.studentPdfDataUrl,"Student question paper"),marking=decodePdf(body.marking_scheme_pdf_data_url||body.markingSchemePdfDataUrl,"Marking scheme"),ref=randomUUID(),folder=path.resolve(process.cwd(),"uploads","assessment-imports",String(schoolId),ref);await fs.mkdir(folder,{recursive:true});const studentPath=path.join(folder,"student-paper.pdf"),markingPath=path.join(folder,"marking-scheme.pdf");await Promise.all([fs.writeFile(studentPath,student),fs.writeFile(markingPath,marking)]);const title=clean(body.title,180);if(!title)throw new HttpError(400,"Assessment title is required");const [result]=await pool.query(`INSERT INTO assessment_import_jobs (public_ref,school_id,created_by,title,subject_id,class_id,term_id,assessment_type,assessment_date,duration_minutes,student_pdf_file_path,marking_scheme_pdf_file_path,parser_version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,[ref,schoolId,userId,title,subjectId||null,classId||null,termId||null,clean(body.assessment_type,40)||"exam",body.assessment_date||null,Number(body.duration_minutes)||null,path.relative(process.cwd(),studentPath),path.relative(process.cwd(),markingPath),"smartlink-pdf-import-v1"]);return {import_job:{public_ref:ref,status:"uploaded",progress_percentage:0,id:undefined}}}
+export async function createAssessmentImport(schoolId,userId,body={}){
+  const classId=Number(body.class_id)||0,subjectId=Number(body.subject_id)||0,termId=Number(body.term_id)||0
+  const title=clean(body.title,180)
+  if(!title)throw new HttpError(400,"Assessment title is required")
+  const [[scope]]=await pool.query(`SELECT actor.role,term.academic_year_id
+    FROM users actor
+    JOIN classes class_scope ON class_scope.school_id=actor.school_id AND class_scope.id=?
+    JOIN subjects subject_scope ON subject_scope.school_id=actor.school_id AND subject_scope.id=?
+    JOIN terms term ON term.school_id=actor.school_id AND term.id=?
+    WHERE actor.school_id=? AND actor.id=? AND actor.is_active=1 LIMIT 1`,[classId,subjectId,termId,schoolId,userId])
+  if(!scope)throw new HttpError(400,"Select a class, subject and term from this school")
+  if(scope.role==="teacher"){
+    const [[assignment]]=await pool.query("SELECT id FROM teacher_class_subject_assignments WHERE school_id=? AND teacher_id=? AND class_id=? AND subject_id=? AND (academic_year_id=? OR academic_year_id IS NULL) AND (term_id=? OR term_id IS NULL) AND role='subject_teacher' AND is_active=1 LIMIT 1",[schoolId,userId,classId,subjectId,scope.academic_year_id,termId])
+    if(!assignment)throw new HttpError(403,"Teachers can only import assessments for assigned classes and subjects")
+  }
+  const student=decodePdf(body.student_pdf_data_url||body.studentPdfDataUrl,"Student question paper"),marking=decodePdf(body.marking_scheme_pdf_data_url||body.markingSchemePdfDataUrl,"Marking scheme"),ref=randomUUID(),folder=path.resolve(process.cwd(),"uploads","assessment-imports",String(schoolId),ref)
+  await fs.mkdir(folder,{recursive:true})
+  const studentPath=path.join(folder,"student-paper.pdf"),markingPath=path.join(folder,"marking-scheme.pdf")
+  await Promise.all([fs.writeFile(studentPath,student),fs.writeFile(markingPath,marking)])
+  await pool.query(`INSERT INTO assessment_import_jobs (public_ref,school_id,created_by,title,subject_id,class_id,term_id,assessment_type,assessment_date,duration_minutes,student_pdf_file_path,marking_scheme_pdf_file_path,parser_version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,[ref,schoolId,userId,title,subjectId,classId,termId,clean(body.assessment_type,40)||"exam",body.assessment_date||null,Number(body.duration_minutes)||null,path.relative(process.cwd(),studentPath),path.relative(process.cwd(),markingPath),"smartlink-pdf-import-v1"])
+  return {import_job:{public_ref:ref,status:"uploaded",progress_percentage:0,id:undefined}}
+}
 
 export async function listAssessmentImports(schoolId,viewer={}){const teacher=String(viewer.role||"")==="teacher";const [rows]=await pool.query(`SELECT public_ref,title,assessment_type,status,progress_percentage,error_message,created_at,updated_at,assessment_id FROM assessment_import_jobs WHERE school_id=?${teacher?" AND created_by=?":""} ORDER BY created_at DESC LIMIT 100`,teacher?[schoolId,viewer.id]:[schoolId]);return {imports:rows}}
 
@@ -280,7 +322,24 @@ export async function getAssessmentImportReview(schoolId,ref){
   }
 }
 
-export async function patchImportQuestion(schoolId,ref,questionRef,body={}){const job=await jobByRef(pool,schoolId,ref);const responseLayout=body.response_layout===undefined?null:JSON.stringify(normalizeResponseLayout(body.response_layout));let tableStorage=null;if(body.tables!==undefined){const [[current]]=await pool.query("SELECT bbox_json FROM assessment_import_questions WHERE school_id=? AND import_job_id=? AND public_ref=? LIMIT 1",[schoolId,job.id,questionRef]);if(!current)throw new HttpError(404,"Imported question was not found");tableStorage=JSON.stringify({...parseDbJson(current.bbox_json,{}),structured_tables:normalizeStructuredTables(body.tables)})}const [result]=await pool.query(`UPDATE assessment_import_questions SET question_text=COALESCE(?,question_text),marks=COALESCE(?,marks),difficulty=COALESCE(?,difficulty),topic_id=?,subtopic_id=?,bbox_json=COALESCE(?,bbox_json),response_layout_json=COALESCE(?,response_layout_json),daily_drill_eligible=COALESCE(?,daily_drill_eligible),review_status=COALESCE(?,review_status) WHERE school_id=? AND import_job_id=? AND public_ref=?`,[body.question_text||null,body.marks??null,body.difficulty||null,body.topic_id||null,body.subtopic_id||null,tableStorage,responseLayout,body.daily_drill_eligible===undefined?null:Boolean(body.daily_drill_eligible),body.review_status||"edited",schoolId,job.id,questionRef]);if(!result.affectedRows)throw new HttpError(404,"Imported question was not found");return {ok:true}}
+export async function patchImportQuestion(schoolId,ref,questionRef,body={}){
+  const job=await jobByRef(pool,schoolId,ref)
+  const [[current]]=await pool.query("SELECT topic_id,subtopic_id,bbox_json FROM assessment_import_questions WHERE school_id=? AND import_job_id=? AND public_ref=? LIMIT 1",[schoolId,job.id,questionRef])
+  if(!current)throw new HttpError(404,"Imported question was not found")
+  const responseLayout=body.response_layout===undefined?null:JSON.stringify(normalizeResponseLayout(body.response_layout))
+  const tableStorage=body.tables===undefined?null:JSON.stringify({...parseDbJson(current.bbox_json,{}),structured_tables:normalizeStructuredTables(body.tables)})
+  const hasTopic=Object.prototype.hasOwnProperty.call(body,"topic_id")
+  let hasSubtopic=Object.prototype.hasOwnProperty.call(body,"subtopic_id")
+  const requestedTopic=hasTopic?(body.topic_id||null):current.topic_id
+  let requestedSubtopic=hasSubtopic?(body.subtopic_id||null):current.subtopic_id
+  if(hasTopic&&!requestedTopic&&!hasSubtopic){requestedSubtopic=null;hasSubtopic=true}
+  const topicScope=(requestedTopic||requestedSubtopic)
+    ?await validateSyllabusTopicScope(pool,{schoolId,subjectId:job.subject_id,topicId:requestedTopic,subtopicId:requestedSubtopic})
+    :{topicId:null,subtopicId:null}
+  const [result]=await pool.query(`UPDATE assessment_import_questions SET question_text=COALESCE(?,question_text),marks=COALESCE(?,marks),difficulty=COALESCE(?,difficulty),topic_id=CASE WHEN ? THEN ? ELSE topic_id END,subtopic_id=CASE WHEN ? THEN ? ELSE subtopic_id END,bbox_json=COALESCE(?,bbox_json),response_layout_json=COALESCE(?,response_layout_json),daily_drill_eligible=COALESCE(?,daily_drill_eligible),review_status=COALESCE(?,review_status) WHERE school_id=? AND import_job_id=? AND public_ref=?`,[body.question_text||null,body.marks??null,body.difficulty||null,hasTopic,topicScope.topicId,hasSubtopic,topicScope.subtopicId,tableStorage,responseLayout,body.daily_drill_eligible===undefined?null:Boolean(body.daily_drill_eligible),body.review_status||"edited",schoolId,job.id,questionRef])
+  if(!result.affectedRows)throw new HttpError(404,"Imported question was not found")
+  return {ok:true}
+}
 export async function patchImportMarkingItem(schoolId,ref,itemRef,body={}){const job=await jobByRef(pool,schoolId,ref);const [result]=await pool.query("UPDATE assessment_import_marking_items SET answer_text=COALESCE(?,answer_text),marks=COALESCE(?,marks),marking_points_json=COALESCE(?,marking_points_json),review_status=COALESCE(?,review_status) WHERE school_id=? AND import_job_id=? AND public_ref=?",[body.answer_text||null,body.marks??null,body.marking_points?JSON.stringify(body.marking_points):null,body.review_status||"edited",schoolId,job.id,itemRef]);if(!result.affectedRows)throw new HttpError(404,"Marking item was not found");return {ok:true}}
 export async function linkImportAnswer(schoolId,ref,body={}){const job=await jobByRef(pool,schoolId,ref);const [[q]]=await pool.query("SELECT id FROM assessment_import_questions WHERE school_id=? AND import_job_id=? AND public_ref=?",[schoolId,job.id,body.question_ref]);const [[m]]=await pool.query("SELECT id FROM assessment_import_marking_items WHERE school_id=? AND import_job_id=? AND public_ref=?",[schoolId,job.id,body.marking_ref]);if(!q||!m)throw new HttpError(400,"Question or marking item was not found");await pool.query("DELETE FROM assessment_import_question_answer_links WHERE import_question_id=?",[q.id]);await pool.query("INSERT INTO assessment_import_question_answer_links (public_ref,school_id,import_job_id,import_question_id,marking_item_id,match_method,confidence) VALUES (UUID(),?,?,?,?,'manual',1)",[schoolId,job.id,q.id,m.id]);return {ok:true}}
 
@@ -348,13 +407,22 @@ export async function approveAssessmentImport(schoolId,userId,ref){
     if(job.status!=="review_required")throw new HttpError(409,"Import must be reviewed before approval")
     const [questions]=await connection.query("SELECT * FROM assessment_import_questions WHERE school_id=? AND import_job_id=? AND review_status<>'rejected' ORDER BY id",[schoolId,job.id])
     if(!questions.length)throw new HttpError(409,"Approve at least one extracted question")
+    const validatedTopicPairs=new Set()
+    for(const question of questions){
+      if(!question.topic_id&&!question.subtopic_id)continue
+      const key=`${question.topic_id||""}:${question.subtopic_id||""}`
+      if(validatedTopicPairs.has(key))continue
+      await validateSyllabusTopicScope(connection,{schoolId,subjectId:job.subject_id,topicId:question.topic_id,subtopicId:question.subtopic_id,requireTopic:true})
+      validatedTopicPairs.add(key)
+    }
     const [[term]]=await connection.query("SELECT id,academic_year_id,name FROM terms WHERE school_id=? AND id=?",[schoolId,job.term_id])
     if(!term)throw new HttpError(400,"Select a valid term")
     const [[scope]]=await connection.query("SELECT c.id class_id,s.id subject_id FROM classes c JOIN subjects s ON s.school_id=c.school_id WHERE c.school_id=? AND c.id=? AND s.id=?",[schoolId,job.class_id,job.subject_id])
     if(!scope)throw new HttpError(400,"Select a valid class and subject")
     const typeMap={exam:"end_of_term_exam",test:"class_test",homework:"assignment",quiz:"quiz",other:"class_test",daily_drill_source:"class_test"}
     const total=questions.reduce((sum,question)=>sum+Number(question.marks||0),0)||questions.length
-    const [assessment]=await connection.query(`INSERT INTO assessments (school_id,source_import_job_id,class_id,subject_id,academic_year_id,term_id,teacher_id,name,assessment_type,term_name,total_marks,duration_minutes,status,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'draft',?)`,[schoolId,job.id,job.class_id,job.subject_id,term.academic_year_id,job.term_id,userId,job.title,typeMap[job.assessment_type]||"class_test",term.name,total,job.duration_minutes,userId])
+    const teacherId=await resolveImportAssessmentTeacher(connection,schoolId,userId,job,term)
+    const [assessment]=await connection.query(`INSERT INTO assessments (school_id,source_import_job_id,class_id,subject_id,academic_year_id,term_id,teacher_id,name,assessment_type,term_name,total_marks,duration_minutes,status,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'draft',?)`,[schoolId,job.id,job.class_id,job.subject_id,term.academic_year_id,job.term_id,teacherId,job.title,typeMap[job.assessment_type]||"class_test",term.name,total,job.duration_minutes,userId])
     const questionMediaMap=await copyImportedQuestionAssetsToAssessment(connection,{schoolId,userId,job,assessmentId:assessment.insertId})
     for(let index=0;index<questions.length;index++){
       const question=questions[index]

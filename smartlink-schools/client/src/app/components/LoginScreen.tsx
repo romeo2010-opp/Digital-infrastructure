@@ -45,7 +45,7 @@ export function LoginScreen({
   loading,
   error,
 }: {
-  onLogin: (credentials: { email?: string; studentCode?: string; student_code?: string; password: string; loginType?: string; login_type?: string }) => Promise<any> | void
+  onLogin: (credentials: { email?: string; schoolCode?: string; school_code?: string; studentCode?: string; student_code?: string; password: string; loginType?: string; login_type?: string }) => Promise<any> | void
   onVerifyCode: (payload: { challengeId: string; code: string; trustDevice?: boolean }) => Promise<any> | void
   onResendCode: (payload?: { challengeId?: string }) => Promise<any> | void
   onCancelCode: () => void
@@ -58,6 +58,7 @@ export function LoginScreen({
 }) {
   const [mode, setMode] = useState<'student' | 'staff'>('student')
   const [email, setEmail] = useState('')
+  const [schoolCode, setSchoolCode] = useState('')
   const [studentCode, setStudentCode] = useState('')
   const [password, setPassword] = useState('')
   const [code, setCode] = useState('')
@@ -231,25 +232,39 @@ export function LoginScreen({
             onSubmit={(event) => {
               event.preventDefault()
               if (isStudentMode) {
-                onLogin({ login_type: 'student', student_code: studentCode.trim(), password })
+                onLogin({ login_type: 'student', school_code: schoolCode.trim(), student_code: studentCode.trim(), password })
                 return
               }
               onLogin({ email: email.trim(), password })
             }}
           >
             {isStudentMode ? (
-              <label className="block">
-                <span className={fieldLabelClass}>Student ID / Admission No</span>
-                <Input
-                  type="text"
-                  value={studentCode}
-                  onChange={(event) => setStudentCode(event.target.value)}
-                  placeholder="SL-P1-001"
-                  required
-                  autoComplete="username"
-                  className={inputClass}
-                />
-              </label>
+              <div className="grid gap-5">
+                <label className="block">
+                  <span className={fieldLabelClass}>School Code</span>
+                  <Input
+                    type="text"
+                    value={schoolCode}
+                    onChange={(event) => setSchoolCode(event.target.value)}
+                    placeholder="Ask your school for its code"
+                    required
+                    autoComplete="organization"
+                    className={inputClass}
+                  />
+                </label>
+                <label className="block">
+                  <span className={fieldLabelClass}>Student ID / Admission No</span>
+                  <Input
+                    type="text"
+                    value={studentCode}
+                    onChange={(event) => setStudentCode(event.target.value)}
+                    placeholder="SL-P1-001"
+                    required
+                    autoComplete="username"
+                    className={inputClass}
+                  />
+                </label>
+              </div>
             ) : (
               <label className="block">
                 <span className={fieldLabelClass}>Email</span>

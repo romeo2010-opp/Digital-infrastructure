@@ -1,5 +1,6 @@
 import { Router } from "express"
 import { pool } from "../config/db.js"
+import { HttpError } from "../utils/http.js"
 import authRoutes from "./auth.routes.js"
 import { getDashboard } from "../controllers/dashboardController.js"
 import { listStudents, getStudent, createStudent, updateStudent, uploadStudentPhoto } from "../controllers/studentsController.js"
@@ -494,7 +495,7 @@ router.param("id", async (req, _res, next, value) => {
     if (!String(req.path || "").includes("timetables") || /^\d+$/.test(String(value))) return next()
     const schoolId = Number(req.user?.schoolId || req.user?.school_id || 0)
     const [[row]] = await pool.query("SELECT id FROM timetables WHERE school_id=? AND public_ref=? LIMIT 1", [schoolId, value])
-    if (!row) return next(new Error("Timetable reference was not found."))
+    if (!row) return next(new HttpError(404, "Timetable reference was not found."))
     req.params.id = String(row.id)
     next()
   } catch (error) { next(error) }
@@ -505,7 +506,7 @@ router.param("versionId", async (req, _res, next, value) => {
     if (!String(req.path || "").includes("timetables") || /^\d+$/.test(String(value))) return next()
     const schoolId = Number(req.user?.schoolId || req.user?.school_id || 0)
     const [[row]] = await pool.query("SELECT tv.id FROM timetable_versions tv JOIN timetables tt ON tt.id=tv.timetable_id WHERE tt.school_id=? AND tv.public_ref=? LIMIT 1", [schoolId, value])
-    if (!row) return next(new Error("Timetable version reference was not found."))
+    if (!row) return next(new HttpError(404, "Timetable version reference was not found."))
     req.params.versionId = String(row.id)
     next()
   } catch (error) { next(error) }

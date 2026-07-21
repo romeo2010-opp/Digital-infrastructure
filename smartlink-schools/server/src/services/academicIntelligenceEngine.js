@@ -2,6 +2,7 @@ import { randomUUID } from "crypto"
 import { pool } from "../config/db.js"
 import { HttpError } from "../utils/http.js"
 import { createInAppNotification } from "./operationalCommunicationService.js"
+import { validateSyllabusTopicScope } from "./curriculumScopeService.js"
 
 const DAY_MS = 86_400_000
 
@@ -385,6 +386,179 @@ async function scopedIdByRef(table, schoolId, publicRef, connection = pool) {
   if (!allowed.has(table) || !publicRef) return null
   const [[row]] = await connection.query(`SELECT id FROM ${table} WHERE school_id=? AND public_ref=? LIMIT 1`, [schoolId, String(publicRef)])
   return row?.id || null
+}
+
+function suppliedScopeId(value, label, { required = false } = {}) {
+  const supplied = value !== undefined && value !== null && value !== ""
+  if (!supplied) {
+    if (required) throw new HttpError(400, `${label} is required.`)
+    return null
+  }
+  const id = Number(value)
+  if (!Number.isSafeInteger(id) || id <= 0) throw new HttpError(400, `${label} is invalid.`)
+  return id
+}
+
+async function firstScopeRow(db, sql, params) {
+  const [rows] = await db.query(sql, params)
+  return rows[0] || null
+}
+
+async function validateAcademicWriteEntityScope(db, {
+  schoolId,
+  subjectId,
+  classId = null,
+  studentId = null,
+  topicId = null,
+  termId = null,
+  teacherId = null,
+} = {}) {
+  const school = suppliedScopeId(schoolId, "School", { required: true })
+  const subject = suppliedScopeId(subjectId, "Subject", { required: true })
+  const [subjectRow, classRow, studentRow, termRow, teacherRow] = await Promise.all([
+    firstScopeRow(db, "SELECT id FROM subjects WHERE school_id=? AND id=? LIMIT 1", [school, subject]),
+    classId ? firstScopeRow(db, "SELECT id,grade_level FROM classes WHERE school_id=? AND id=? LIMIT 1", [school, classId]) : null,
+    studentId ? firstScopeRow(db, "SELECT id,class_id,status FROM students WHERE school_id=? AND id=? LIMIT 1", [school, studentId]) : null,
+    termId ? firstScopeRow(db, "SELECT id,academic_year_id,status FROM terms WHERE school_id=? AND id=? LIMIT 1", [school, termId]) : null,
+    teacherId ? firstScopeRow(db, "SELECT id,role,is_active,employment_status FROM users WHERE school_id=? AND id=? AND role='teacher' AND is_active=1 AND employment_status='active' LIMIT 1", [school, teacherId]) : null,
+  ])
+  if (!subjectRow) throw new HttpError(400, "The selected subject does not belong to this school.")
+  if (classId && !classRow) throw new HttpError(400, "The selected class does not belong to this school.")
+  if (studentId && !studentRow) throw new HttpError(400, "The selected learner does not belong to this school.")
+  if (studentRow && String(studentRow.status || "").toLowerCase() !== "active") {
+    throw new HttpError(400, "The selected learner is not active in this school.")
+  }
+  if (termId && !termRow) throw new HttpError(400, "The selected term does not belong to this school.")
+  if (teacherId && !teacherRow) throw new HttpError(400, "The assigned teacher is not an active user in this school.")
+
+  const topicScope = topicId
+    ? await validateSyllabusTopicScope(db, { schoolId: school, subjectId: subject, topicId, requireTopic: true })
+    : { topicId: null, topic: null }
+
+  if (classRow && topicScope.topic?.grade_id) {
+    const gradeMatch = await firstScopeRow(db, `SELECT id FROM grade_levels
+      WHERE school_id=? AND id=? AND name=? LIMIT 1`,
+    [school, topicScope.topic.grade_id, classRow.grade_level])
+    if (!gradeMatch) throw new HttpError(400, "The selected topic does not belong to the selected class year level.")
+  }
+
+  if (studentId) {
+    const enrollment = await firstScopeRow(db, `SELECT id,class_id,term_id,academic_year_id FROM student_enrollments
+      WHERE school_id=? AND student_id=? AND enrollment_status='active'
+        AND (? IS NULL OR class_id=?) AND (? IS NULL OR term_id=?)
+        AND (? IS NULL OR academic_year_id=?)
+      ORDER BY id DESC LIMIT 1`,
+    [school, studentId, classId, classId, termId, termId, termRow?.academic_year_id || null, termRow?.academic_year_id || null])
+    if (!enrollment) throw new HttpError(400, classId || termId
+      ? "The selected learner is not actively enrolled in the selected class and term."
+      : "The selected learner does not have an active enrollment.")
+  }
+
+  if (teacherId) {
+    const assignment = await firstScopeRow(db, `SELECT id FROM teacher_class_subject_assignments
+      WHERE school_id=? AND teacher_id=? AND subject_id=? AND role='subject_teacher' AND is_active=1
+        AND (? IS NULL OR class_id=?)
+        AND (? IS NULL OR academic_year_id IS NULL OR academic_year_id=?)
+        AND (? IS NULL OR term_id IS NULL OR term_id=?) LIMIT 1`,
+    [school, teacherId, subject, classId, classId, termRow?.academic_year_id || null, termRow?.academic_year_id || null, termId, termId])
+    if (!assignment) throw new HttpError(400, "The assigned teacher is not assigned to the selected class, subject and term.")
+  }
+
+  return {
+    schoolId: school,
+    subjectId: subject,
+    classId,
+    studentId,
+    topicId: topicScope.topicId,
+    termId,
+    teacherId,
+    subject: subjectRow,
+    class: classRow,
+    student: studentRow,
+    topic: topicScope.topic,
+    term: termRow,
+    teacher: teacherRow,
+  }
+}
+
+export async function assertAcademicActorWriteScope(db, schoolId, actor, scope = {}) {
+  if (String(actor?.role || "").toLowerCase() !== "teacher") {
+    return { assignedTeacherId: scope.teacherId || null }
+  }
+  const actorId = suppliedScopeId(actor?.id, "Teacher", { required: true })
+  if (!scope.classId || !scope.subjectId) {
+    throw new HttpError(403, "Teachers must select one of their assigned classes and subjects.")
+  }
+  if (scope.teacherId && Number(scope.teacherId) !== actorId) {
+    throw new HttpError(403, "Teachers cannot assign an academic intervention to another teacher.")
+  }
+  let academicYearId = scope.term?.academic_year_id || scope.academicYearId || null
+  let termId = scope.termId || null
+  if (!academicYearId || !termId) {
+    const activeSession = await firstScopeRow(db, `SELECT academic_year.id academic_year_id,term.id term_id
+      FROM academic_years academic_year
+      JOIN terms term ON term.school_id=academic_year.school_id AND term.academic_year_id=academic_year.id
+        AND term.status IN ('open','marking')
+      WHERE academic_year.school_id=? AND academic_year.is_active=1 AND academic_year.status<>'archived'
+      ORDER BY academic_year.status='active' DESC,term.start_date DESC LIMIT 1`, [schoolId])
+    academicYearId ||= activeSession?.academic_year_id || null
+    termId ||= activeSession?.term_id || null
+  }
+  if (!academicYearId || !termId) throw new HttpError(409, "Open an academic term before managing academic support.")
+  const assignment = await firstScopeRow(db, `SELECT id FROM teacher_class_subject_assignments
+    WHERE school_id=? AND teacher_id=? AND class_id=? AND subject_id=?
+      AND role='subject_teacher' AND is_active=1
+      AND (? IS NULL OR academic_year_id IS NULL OR academic_year_id=?)
+      AND (? IS NULL OR term_id IS NULL OR term_id=?)
+    LIMIT 1`,
+  [schoolId, actorId, scope.classId, scope.subjectId,
+    academicYearId, academicYearId, termId, termId])
+  if (!assignment) throw new HttpError(403, "Teachers can only manage academic support for their assigned class and subject.")
+  return { assignedTeacherId: actorId }
+}
+
+export async function validateAcademicInterventionScope(db, schoolId, body = {}) {
+  return validateAcademicWriteEntityScope(db, {
+    schoolId,
+    subjectId: suppliedScopeId(body.subject_id, "Subject", { required: true }),
+    classId: suppliedScopeId(body.class_id, "Class"),
+    studentId: suppliedScopeId(body.student_id, "Learner"),
+    topicId: suppliedScopeId(body.topic_id, "Topic"),
+    termId: suppliedScopeId(body.term_id, "Term"),
+    teacherId: suppliedScopeId(body.assigned_teacher_id, "Assigned teacher"),
+  })
+}
+
+function relatedScopeId(field, label, explicitId, sources) {
+  const linked = [...new Set(sources.map((source) => Number(source?.[field] || 0)).filter(Boolean))]
+  if (linked.length > 1) throw new HttpError(400, `The selected recommendation and intervention do not share the same ${label}.`)
+  if (explicitId && linked.length && Number(explicitId) !== linked[0]) {
+    throw new HttpError(400, `The selected ${label} does not match the linked recommendation or intervention.`)
+  }
+  return explicitId || linked[0] || null
+}
+
+export async function validateRemediationPackScope(db, schoolId, body = {}) {
+  const recommendationId = suppliedScopeId(body.recommendation_id, "Recommendation")
+  const interventionId = suppliedScopeId(body.intervention_id, "Intervention")
+  const [recommendation, intervention] = await Promise.all([
+    recommendationId ? firstScopeRow(db, `SELECT id,student_id,class_id,subject_id,topic_id,term_id
+      FROM academic_recommendations WHERE school_id=? AND id=? LIMIT 1`, [schoolId, recommendationId]) : null,
+    interventionId ? firstScopeRow(db, `SELECT id,student_id,class_id,subject_id,topic_id,term_id,assigned_teacher_id
+      FROM academic_interventions WHERE school_id=? AND id=? LIMIT 1`, [schoolId, interventionId]) : null,
+  ])
+  if (recommendationId && !recommendation) throw new HttpError(400, "The selected recommendation does not belong to this school.")
+  if (interventionId && !intervention) throw new HttpError(400, "The selected intervention does not belong to this school.")
+
+  const sources = [recommendation, intervention].filter(Boolean)
+  const subjectId = relatedScopeId("subject_id", "subject", suppliedScopeId(body.subject_id, "Subject"), sources)
+  const classId = relatedScopeId("class_id", "class", suppliedScopeId(body.class_id, "Class"), sources)
+  const studentId = relatedScopeId("student_id", "learner", suppliedScopeId(body.student_id, "Learner"), sources)
+  const topicId = relatedScopeId("topic_id", "topic", suppliedScopeId(body.topic_id, "Topic"), sources)
+  const termId = relatedScopeId("term_id", "term", suppliedScopeId(body.term_id, "Term"), sources)
+  const teacherId = relatedScopeId("assigned_teacher_id", "assigned teacher", suppliedScopeId(body.assigned_teacher_id, "Assigned teacher"), [intervention].filter(Boolean))
+  const scope = await validateAcademicWriteEntityScope(db, { schoolId, subjectId, classId, studentId, topicId, termId, teacherId })
+  return { ...scope, recommendationId, interventionId, recommendation, intervention }
 }
 
 function masteryStatus(score, confidence, evidenceCount, config = {}) {
@@ -1528,18 +1702,27 @@ export async function updateCurriculumLifecycle(schoolId, publicRef, actor, body
 }
 
 export async function createIntervention(schoolId, actor, body = {}) {
-  const subjectId = Number(body.subject_id || 0)
-  if (!subjectId || !String(body.issue || '').trim() || !String(body.action_plan || '').trim()) throw new HttpError(400, "Subject, issue and action plan are required")
+  if (!String(body.issue || '').trim() || !String(body.action_plan || '').trim()) throw new HttpError(400, "Subject, issue and action plan are required")
+  const scope = await validateAcademicInterventionScope(pool, schoolId, body)
+  const actorScope = await assertAcademicActorWriteScope(pool, schoolId, actor, scope)
+  const interventionType = body.intervention_type || 'individual_remediation'
+  const priority = body.priority || 'medium'
+  const parentNotificationStatus = body.parent_notification_status || 'not_required'
+  const status = body.status || 'draft'
+  if (!['individual_remediation','small_group_support','whole_class_revision','attendance_intervention','prerequisite_recovery','enrichment','teacher_coaching','assessment_correction'].includes(interventionType)) throw new HttpError(400, "Intervention type is invalid")
+  if (!['low','medium','high','urgent'].includes(priority)) throw new HttpError(400, "Intervention priority is invalid")
+  if (!['not_required','pending','approved','sent'].includes(parentNotificationStatus)) throw new HttpError(400, "Parent notification status is invalid")
+  if (!['draft','active','review_due','completed','cancelled'].includes(status)) throw new HttpError(400, "Intervention status is invalid")
   const ref = randomUUID()
   await pool.query(
     `INSERT INTO academic_interventions (public_ref,school_id,student_id,class_id,subject_id,topic_id,term_id,intervention_type,
       issue,evidence_json,assigned_teacher_id,priority,start_date,review_date,action_plan,parent_notification_status,status,created_by)
      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-    [ref, schoolId, body.student_id || null, body.class_id || null, subjectId, body.topic_id || null,
-      body.term_id || null,
-      body.intervention_type || 'individual_remediation', String(body.issue).trim(), JSON.stringify(body.evidence || {}),
-      body.assigned_teacher_id || null, body.priority || 'medium', body.start_date || new Date().toISOString().slice(0,10),
-      body.review_date || null, String(body.action_plan).trim(), body.parent_notification_status || 'not_required', body.status || 'draft', actor.id],
+    [ref, schoolId, scope.studentId, scope.classId, scope.subjectId, scope.topicId,
+      scope.termId,
+      interventionType, String(body.issue).trim(), JSON.stringify(body.evidence || {}),
+      actorScope.assignedTeacherId, priority, body.start_date || new Date().toISOString().slice(0,10),
+      body.review_date || null, String(body.action_plan).trim(), parentNotificationStatus, status, actor.id],
   )
   const [[row]] = await pool.query("SELECT id,public_ref,intervention_type,issue,priority,status,start_date,review_date FROM academic_interventions WHERE school_id=? AND public_ref=?", [schoolId, ref])
   await audit(pool, schoolId, actor, "ACADEMIC_INTERVENTION_CREATED", "academic_intervention", row.id, null, row)
@@ -1550,8 +1733,16 @@ export async function createIntervention(schoolId, actor, body = {}) {
 export async function patchIntervention(schoolId, publicRef, actor, body = {}) {
   const [[before]] = await pool.query("SELECT * FROM academic_interventions WHERE school_id=? AND public_ref=? LIMIT 1", [schoolId, publicRef])
   if (!before) throw new HttpError(404, "Intervention was not found")
+  await assertAcademicActorWriteScope(pool, schoolId, actor, {
+    classId: before.class_id,
+    subjectId: before.subject_id,
+    termId: before.term_id,
+    teacherId: null,
+  })
   const status = body.status || before.status
   const outcome = body.outcome || before.outcome
+  if (!['draft','active','review_due','completed','cancelled'].includes(status)) throw new HttpError(400, "Intervention status is invalid")
+  if (!['pending','improved','unchanged','declined','inconclusive'].includes(outcome)) throw new HttpError(400, "Intervention outcome is invalid")
   await pool.query(
     `UPDATE academic_interventions SET status=?,outcome=?,review_date=COALESCE(?,review_date),action_plan=COALESCE(?,action_plan),
       reassessment_summary_json=COALESCE(?,reassessment_summary_json),completed_by=CASE WHEN ?='completed' THEN ? ELSE completed_by END,
@@ -1606,7 +1797,10 @@ export async function createAssessmentBlueprint(schoolId,actor,body={}){
   if(!classId&&body.class_ref)classId=Number(await scopedIdByRef('classes',schoolId,body.class_ref)||0)
   if(!subjectId&&body.subject_ref)subjectId=Number(await scopedIdByRef('subjects',schoolId,body.subject_ref)||0)
   if(!classId||!subjectId)throw new HttpError(400,'Class and subject are required.')
-  if(String(actor?.role||'').toLowerCase()==='teacher'){const [[assignment]]=await pool.query("SELECT id FROM teacher_class_subject_assignments WHERE school_id=? AND teacher_id=? AND class_id=? AND subject_id=? AND is_active=1 LIMIT 1",[schoolId,actor.id,classId,subjectId]);if(!assignment)throw new HttpError(403,'Teachers can only author blueprints for assigned classes and subjects.')}
+  const scope=await validateAcademicInterventionScope(pool,schoolId,{class_id:classId,subject_id:subjectId,term_id:body.term_id})
+  const academicYearId=suppliedScopeId(body.academic_year_id,'Academic year')||scope.term?.academic_year_id||null
+  if(academicYearId){const academicYear=await firstScopeRow(pool,"SELECT id FROM academic_years WHERE school_id=? AND id=? LIMIT 1",[schoolId,academicYearId]);if(!academicYear)throw new HttpError(400,'The selected academic year does not belong to this school.');if(scope.term?.academic_year_id&&Number(scope.term.academic_year_id)!==academicYearId)throw new HttpError(400,'The selected term does not belong to the selected academic year.')}
+  await assertAcademicActorWriteScope(pool,schoolId,actor,{...scope,academicYearId,teacherId:null})
   const inputTopics=Array.isArray(body.topics)?body.topics:[]
   const topics=[]
   for(const item of inputTopics){let topicId=Number(item.topic_id||0);if(!topicId&&item.topic_ref)topicId=Number(await scopedIdByRef('syllabus_topics',schoolId,item.topic_ref)||0);if(!topicId)throw new HttpError(400,'One blueprint topic reference is invalid.');topics.push({...item,topic_id:topicId})}
@@ -1616,13 +1810,26 @@ export async function createAssessmentBlueprint(schoolId,actor,body={}){
   const topicIds=topics.map((item)=>Number(item.topic_id||0)).filter(Boolean)
   if(topicIds.length){const [rows]=await pool.query(`SELECT id FROM syllabus_topics WHERE school_id=? AND subject_id=? AND id IN (${topicIds.map(()=>'?').join(',')})`,[schoolId,subjectId,...topicIds]);if(rows.length!==new Set(topicIds).size)throw new HttpError(400,'One or more blueprint topics do not belong to this school and subject.')}
   if(body.taught_topic_restriction!==false&&topicIds.length){const [untaught]=await pool.query(`SELECT st.topic_name FROM syllabus_topics st LEFT JOIN curriculum_delivery_records cdr ON cdr.school_id=st.school_id AND cdr.topic_id=st.id AND cdr.class_id=? AND cdr.subject_id=? AND cdr.lifecycle_status IN ('TAUGHT','ASSESSED','PARTIALLY_MASTERED','MASTERED','REQUIRES_REVISION') WHERE st.school_id=? AND st.id IN (${topicIds.map(()=>'?').join(',')}) AND cdr.id IS NULL`,[classId,subjectId,schoolId,...topicIds]);if(untaught.length)validation.warnings.push(`Untaught topics included: ${untaught.map((row)=>row.topic_name).join(', ')}.`)}
-  const ref=randomUUID();await pool.query(`INSERT INTO assessment_blueprints (public_ref,school_id,academic_year_id,term_id,class_id,stream_section,subject_id,title,total_marks,duration_minutes,topics_json,difficulty_distribution_json,cognitive_distribution_json,question_types_json,section_configuration_json,taught_topic_restriction,mastery_focused,examination_board_style,validation_warnings_json,status,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,[ref,schoolId,body.academic_year_id||null,body.term_id||null,classId,body.stream_section||null,subjectId,String(body.title||'Assessment blueprint').trim(),validation.summary.total_marks,validation.summary.duration_minutes,JSON.stringify(topics),JSON.stringify(body.difficulty_distribution||{}),JSON.stringify(body.cognitive_distribution||{}),JSON.stringify(body.question_types||[]),JSON.stringify(body.section_configuration||{}),body.taught_topic_restriction===false?0:1,body.mastery_focused?1:0,body.examination_board_style||null,JSON.stringify(validation.warnings),'validated',actor.id]);const [[row]]=await pool.query("SELECT id,public_ref,title,total_marks,duration_minutes,status,validation_warnings_json,created_at FROM assessment_blueprints WHERE school_id=? AND public_ref=?",[schoolId,ref]);await audit(pool,schoolId,actor,'ASSESSMENT_BLUEPRINT_CREATED','assessment_blueprint',row.id,null,{public_ref:ref,title:row.title,warnings:validation.warnings});delete row.id;return {...row,validation_warnings:jsonValue(row.validation_warnings_json,[]),validation_warnings_json:undefined}
+  const ref=randomUUID();await pool.query(`INSERT INTO assessment_blueprints (public_ref,school_id,academic_year_id,term_id,class_id,stream_section,subject_id,title,total_marks,duration_minutes,topics_json,difficulty_distribution_json,cognitive_distribution_json,question_types_json,section_configuration_json,taught_topic_restriction,mastery_focused,examination_board_style,validation_warnings_json,status,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,[ref,schoolId,academicYearId,scope.termId,classId,body.stream_section||null,subjectId,String(body.title||'Assessment blueprint').trim(),validation.summary.total_marks,validation.summary.duration_minutes,JSON.stringify(topics),JSON.stringify(body.difficulty_distribution||{}),JSON.stringify(body.cognitive_distribution||{}),JSON.stringify(body.question_types||[]),JSON.stringify(body.section_configuration||{}),body.taught_topic_restriction===false?0:1,body.mastery_focused?1:0,body.examination_board_style||null,JSON.stringify(validation.warnings),'validated',actor.id]);const [[row]]=await pool.query("SELECT id,public_ref,title,total_marks,duration_minutes,status,validation_warnings_json,created_at FROM assessment_blueprints WHERE school_id=? AND public_ref=?",[schoolId,ref]);await audit(pool,schoolId,actor,'ASSESSMENT_BLUEPRINT_CREATED','assessment_blueprint',row.id,null,{public_ref:ref,title:row.title,warnings:validation.warnings});delete row.id;return {...row,validation_warnings:jsonValue(row.validation_warnings_json,[]),validation_warnings_json:undefined}
 }
 
-export async function listAssessmentBlueprints(schoolId,query={}){const params=[schoolId];let clause='';if(query.class_id){clause+=' AND ab.class_id=?';params.push(Number(query.class_id))}if(query.subject_id){clause+=' AND ab.subject_id=?';params.push(Number(query.subject_id))}const [rows]=await pool.query(`SELECT ab.public_ref,ab.title,ab.total_marks,ab.duration_minutes,ab.mastery_focused,ab.examination_board_style,ab.validation_warnings_json,ab.status,ab.created_at,c.name class_name,s.name subject_name,u.full_name created_by_name FROM assessment_blueprints ab JOIN classes c ON c.id=ab.class_id AND c.school_id=ab.school_id JOIN subjects s ON s.id=ab.subject_id AND s.school_id=ab.school_id JOIN users u ON u.id=ab.created_by WHERE ab.school_id=?${clause} ORDER BY ab.created_at DESC LIMIT 100`,params);return {blueprints:rows.map((row)=>({...row,validation_warnings:jsonValue(row.validation_warnings_json,[]),validation_warnings_json:undefined}))}}
+export async function listAssessmentBlueprints(schoolId,actor,query={}){const params=[schoolId];let clause='';if(String(actor?.role||'').toLowerCase()==='teacher'){clause+=` AND EXISTS (SELECT 1 FROM teacher_class_subject_assignments tcsa JOIN academic_years current_year ON current_year.school_id=tcsa.school_id AND current_year.is_active=1 AND current_year.status<>'archived' JOIN terms current_term ON current_term.school_id=current_year.school_id AND current_term.academic_year_id=current_year.id AND current_term.status IN ('open','marking') WHERE tcsa.school_id=ab.school_id AND tcsa.teacher_id=? AND tcsa.class_id=ab.class_id AND tcsa.subject_id=ab.subject_id AND tcsa.role='subject_teacher' AND tcsa.is_active=1 AND (tcsa.academic_year_id IS NULL OR tcsa.academic_year_id=current_year.id) AND (tcsa.term_id IS NULL OR tcsa.term_id=current_term.id))`;params.push(Number(actor.id))}if(query.class_id){clause+=' AND ab.class_id=?';params.push(Number(query.class_id))}if(query.subject_id){clause+=' AND ab.subject_id=?';params.push(Number(query.subject_id))}const [rows]=await pool.query(`SELECT ab.public_ref,ab.title,ab.total_marks,ab.duration_minutes,ab.mastery_focused,ab.examination_board_style,ab.validation_warnings_json,ab.status,ab.created_at,c.name class_name,s.name subject_name,u.full_name created_by_name FROM assessment_blueprints ab JOIN classes c ON c.id=ab.class_id AND c.school_id=ab.school_id JOIN subjects s ON s.id=ab.subject_id AND s.school_id=ab.school_id JOIN users u ON u.id=ab.created_by AND u.school_id=ab.school_id WHERE ab.school_id=?${clause} ORDER BY ab.created_at DESC LIMIT 100`,params);return {blueprints:rows.map((row)=>({...row,validation_warnings:jsonValue(row.validation_warnings_json,[]),validation_warnings_json:undefined}))}}
 
-export async function createRemediationPack(schoolId,actor,body={}){const subjectId=Number(body.subject_id||0);if(!subjectId)throw new HttpError(400,'Subject is required.');const title=String(body.title||'Remediation pack').trim();const generationSource=body.generation_source||'teacher';if(generationSource==='ai_draft'&&!body.ai_metadata)throw new HttpError(400,'AI-generated drafts must record model, prompt version, generation date and source evidence.');const ref=randomUUID();const approvalStatus=generationSource==='ai_draft'?'pending_teacher_review':body.approval_status||'draft';await pool.query(`INSERT INTO remediation_packs (public_ref,school_id,recommendation_id,intervention_id,student_id,class_id,subject_id,topic_id,title,prerequisite_review_json,explanation_text,worked_examples_json,guided_practice_json,independent_practice_json,exit_ticket_json,marking_guide_json,teacher_strategy,parent_summary,generation_source,ai_metadata_json,approval_status,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,[ref,schoolId,body.recommendation_id||null,body.intervention_id||null,body.student_id||null,body.class_id||null,subjectId,body.topic_id||null,title,JSON.stringify(body.prerequisite_review||[]),body.explanation_text||null,JSON.stringify(body.worked_examples||[]),JSON.stringify(body.guided_practice||[]),JSON.stringify(body.independent_practice||[]),JSON.stringify(body.exit_ticket||[]),JSON.stringify(body.marking_guide||[]),body.teacher_strategy||null,body.parent_summary||null,generationSource,body.ai_metadata?JSON.stringify(body.ai_metadata):null,approvalStatus,actor.id]);const [[row]]=await pool.query("SELECT id,public_ref,title,generation_source,approval_status,created_at FROM remediation_packs WHERE school_id=? AND public_ref=?",[schoolId,ref]);await audit(pool,schoolId,actor,'REMEDIATION_PACK_CREATED','remediation_pack',row.id,null,row);delete row.id;return row}
+export async function createRemediationPack(schoolId,actor,body={}){
+  const title=String(body.title||'Remediation pack').trim()
+  const generationSource=body.generation_source||'teacher'
+  if(generationSource==='ai_draft'&&!body.ai_metadata)throw new HttpError(400,'AI-generated drafts must record model, prompt version, generation date and source evidence.')
+  const scope=await validateRemediationPackScope(pool,schoolId,body)
+  await assertAcademicActorWriteScope(pool,schoolId,actor,{...scope,teacherId:null})
+  const ref=randomUUID()
+  const approvalStatus=generationSource==='ai_draft'?'pending_teacher_review':body.approval_status||'draft'
+  await pool.query(`INSERT INTO remediation_packs (public_ref,school_id,recommendation_id,intervention_id,student_id,class_id,subject_id,topic_id,title,prerequisite_review_json,explanation_text,worked_examples_json,guided_practice_json,independent_practice_json,exit_ticket_json,marking_guide_json,teacher_strategy,parent_summary,generation_source,ai_metadata_json,approval_status,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,[ref,schoolId,scope.recommendationId,scope.interventionId,scope.studentId,scope.classId,scope.subjectId,scope.topicId,title,JSON.stringify(body.prerequisite_review||[]),body.explanation_text||null,JSON.stringify(body.worked_examples||[]),JSON.stringify(body.guided_practice||[]),JSON.stringify(body.independent_practice||[]),JSON.stringify(body.exit_ticket||[]),JSON.stringify(body.marking_guide||[]),body.teacher_strategy||null,body.parent_summary||null,generationSource,body.ai_metadata?JSON.stringify(body.ai_metadata):null,approvalStatus,actor.id])
+  const [[row]]=await pool.query("SELECT id,public_ref,title,generation_source,approval_status,created_at FROM remediation_packs WHERE school_id=? AND public_ref=?",[schoolId,ref])
+  await audit(pool,schoolId,actor,'REMEDIATION_PACK_CREATED','remediation_pack',row.id,null,row)
+  delete row.id
+  return row
+}
 
-export async function listRemediationPacks(schoolId,query={}){const params=[schoolId];let clause='';if(query.student_id){clause+=' AND rp.student_id=?';params.push(Number(query.student_id))}if(query.class_id){clause+=' AND rp.class_id=?';params.push(Number(query.class_id))}if(query.status){clause+=' AND rp.approval_status=?';params.push(query.status)}const [rows]=await pool.query(`SELECT rp.public_ref,rp.title,rp.generation_source,rp.approval_status,rp.created_at,s.name subject_name,t.topic_name,c.name class_name,CONCAT(st.first_name,' ',st.last_name) student_name,u.full_name created_by_name FROM remediation_packs rp JOIN subjects s ON s.id=rp.subject_id AND s.school_id=rp.school_id LEFT JOIN syllabus_topics t ON t.id=rp.topic_id AND t.school_id=rp.school_id LEFT JOIN classes c ON c.id=rp.class_id AND c.school_id=rp.school_id LEFT JOIN students st ON st.id=rp.student_id AND st.school_id=rp.school_id JOIN users u ON u.id=rp.created_by WHERE rp.school_id=?${clause} ORDER BY rp.created_at DESC LIMIT 100`,params);return {remediation_packs:rows}}
+export async function listRemediationPacks(schoolId,actor,query={}){const params=[schoolId];let clause='';if(String(actor?.role||'').toLowerCase()==='teacher'){clause+=` AND EXISTS (SELECT 1 FROM teacher_class_subject_assignments tcsa WHERE tcsa.school_id=rp.school_id AND tcsa.teacher_id=? AND tcsa.class_id=rp.class_id AND tcsa.subject_id=rp.subject_id AND tcsa.role='subject_teacher' AND tcsa.is_active=1)`;params.push(Number(actor.id))}if(query.student_id){clause+=' AND rp.student_id=?';params.push(Number(query.student_id))}if(query.class_id){clause+=' AND rp.class_id=?';params.push(Number(query.class_id))}if(query.status){clause+=' AND rp.approval_status=?';params.push(query.status)}const [rows]=await pool.query(`SELECT rp.public_ref,rp.title,rp.generation_source,rp.approval_status,rp.created_at,s.name subject_name,t.topic_name,c.name class_name,CONCAT(st.first_name,' ',st.last_name) student_name,u.full_name created_by_name FROM remediation_packs rp JOIN subjects s ON s.id=rp.subject_id AND s.school_id=rp.school_id LEFT JOIN syllabus_topics t ON t.id=rp.topic_id AND t.school_id=rp.school_id LEFT JOIN classes c ON c.id=rp.class_id AND c.school_id=rp.school_id LEFT JOIN students st ON st.id=rp.student_id AND st.school_id=rp.school_id JOIN users u ON u.id=rp.created_by AND u.school_id=rp.school_id WHERE rp.school_id=?${clause} ORDER BY rp.created_at DESC LIMIT 100`,params);return {remediation_packs:rows}}
 
-export async function patchRemediationPack(schoolId,ref,actor,body={}){const [[pack]]=await pool.query("SELECT * FROM remediation_packs WHERE school_id=? AND public_ref=? LIMIT 1",[schoolId,ref]);if(!pack)throw new HttpError(404,'Remediation pack was not found.');const status=body.approval_status||pack.approval_status;if(!['draft','pending_teacher_review','approved','rejected','archived'].includes(status))throw new HttpError(400,'Remediation approval status is invalid.');await pool.query(`UPDATE remediation_packs SET title=COALESCE(?,title),explanation_text=COALESCE(?,explanation_text),worked_examples_json=COALESCE(?,worked_examples_json),guided_practice_json=COALESCE(?,guided_practice_json),independent_practice_json=COALESCE(?,independent_practice_json),exit_ticket_json=COALESCE(?,exit_ticket_json),marking_guide_json=COALESCE(?,marking_guide_json),teacher_strategy=COALESCE(?,teacher_strategy),parent_summary=COALESCE(?,parent_summary),approval_status=?,reviewed_by=CASE WHEN ? IN ('approved','rejected') THEN ? ELSE reviewed_by END,reviewed_at=CASE WHEN ? IN ('approved','rejected') THEN CURRENT_TIMESTAMP ELSE reviewed_at END WHERE school_id=? AND public_ref=?`,[body.title||null,body.explanation_text||null,body.worked_examples?JSON.stringify(body.worked_examples):null,body.guided_practice?JSON.stringify(body.guided_practice):null,body.independent_practice?JSON.stringify(body.independent_practice):null,body.exit_ticket?JSON.stringify(body.exit_ticket):null,body.marking_guide?JSON.stringify(body.marking_guide):null,body.teacher_strategy||null,body.parent_summary||null,status,status,actor.id,status,schoolId,ref]);await audit(pool,schoolId,actor,'REMEDIATION_PACK_UPDATED','remediation_pack',pack.id,{status:pack.approval_status},{status});return {public_ref:ref,approval_status:status}}
+export async function patchRemediationPack(schoolId,ref,actor,body={}){const [[pack]]=await pool.query("SELECT * FROM remediation_packs WHERE school_id=? AND public_ref=? LIMIT 1",[schoolId,ref]);if(!pack)throw new HttpError(404,'Remediation pack was not found.');await assertAcademicActorWriteScope(pool,schoolId,actor,{classId:pack.class_id,subjectId:pack.subject_id,teacherId:null});const status=body.approval_status||pack.approval_status;if(!['draft','pending_teacher_review','approved','rejected','archived'].includes(status))throw new HttpError(400,'Remediation approval status is invalid.');await pool.query(`UPDATE remediation_packs SET title=COALESCE(?,title),explanation_text=COALESCE(?,explanation_text),worked_examples_json=COALESCE(?,worked_examples_json),guided_practice_json=COALESCE(?,guided_practice_json),independent_practice_json=COALESCE(?,independent_practice_json),exit_ticket_json=COALESCE(?,exit_ticket_json),marking_guide_json=COALESCE(?,marking_guide_json),teacher_strategy=COALESCE(?,teacher_strategy),parent_summary=COALESCE(?,parent_summary),approval_status=?,reviewed_by=CASE WHEN ? IN ('approved','rejected') THEN ? ELSE reviewed_by END,reviewed_at=CASE WHEN ? IN ('approved','rejected') THEN CURRENT_TIMESTAMP ELSE reviewed_at END WHERE school_id=? AND public_ref=?`,[body.title||null,body.explanation_text||null,body.worked_examples?JSON.stringify(body.worked_examples):null,body.guided_practice?JSON.stringify(body.guided_practice):null,body.independent_practice?JSON.stringify(body.independent_practice):null,body.exit_ticket?JSON.stringify(body.exit_ticket):null,body.marking_guide?JSON.stringify(body.marking_guide):null,body.teacher_strategy||null,body.parent_summary||null,status,status,actor.id,status,schoolId,ref]);await audit(pool,schoolId,actor,'REMEDIATION_PACK_UPDATED','remediation_pack',pack.id,{status:pack.approval_status},{status});return {public_ref:ref,approval_status:status}}

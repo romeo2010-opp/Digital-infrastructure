@@ -5,7 +5,11 @@
   "type": "module",
   "scripts": {
     "build": "echo \"No server build step required\"",
+    "audit:errors": "node scripts/audit-system-errors.mjs",
+    "audit:academic": "node scripts/audit-academic-system.mjs",
+    "audit:schema": "node scripts/audit-schema-contracts.mjs",
     "db:apply": "node scripts/apply-sql.mjs",
+    "db:seed:sql": "node scripts/apply-sql.mjs --seed-only",
     "demo:greenfield": "node scripts/seed-greenfield-demo.mjs",
     "demo:recalculate": "node scripts/recalculate-greenfield-demo.mjs",
     "demo:validate": "node scripts/validate-greenfield-demo.mjs",

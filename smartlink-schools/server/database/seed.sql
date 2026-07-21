@@ -4,15 +4,14 @@ INSERT INTO schools (id, code, school_prefix, name, city, country, status)
 VALUES (1, 'GREENHILL', 'GPS', 'Greenhill Cambridge Primary School', 'Blantyre', 'Malawi', 'active')
 ON DUPLICATE KEY UPDATE name = VALUES(name), city = VALUES(city), school_prefix = COALESCE(school_prefix, VALUES(school_prefix));
 
-INSERT INTO users (id, school_id, role, full_name, email, password_hash, phone) VALUES
-  (1, NULL, 'super_admin', 'SmartLink Super Admin', 'super@smartlink.test', '$2a$10$QgKlxV4PpXn03iaYGdTpyOjrTGD8APTklsHrGUd2Oph1hPncZ8mlC', '+265 999 000 001'),
-  (2, 1, 'school_owner', 'Mrs. Banda', 'owner@greenhill.test', '$2a$10$dK9g5JaWXEY81JlcuTA41Ok69Iz2YA.7dF9bfy3hgq.4NfiabXIby', '+265 999 000 002'),
-  (3, 1, 'headteacher', 'Mr. Banda', 'head@greenhill.test', '$2a$10$7ShQXgjD.J8rF4SErRxFaeuBJqa/am0U0sm7quVPmQF4PnDgeAUO.', '+265 999 000 003'),
-  (4, 1, 'bursar', 'Mrs. Phiri', 'bursar@greenhill.test', '$2a$10$LU6o6TeVDeB4SJRBGwhLq.YcSJK.8Pd1c4a5V3Trfpo5zYf4XP4ce', '+265 999 000 004'),
-  (5, 1, 'teacher', 'Mr. Mwale', 'teacher@greenhill.test', '$2a$10$TI4A6NqKUv1xv.eRayMZUuHTN9pEZAf2q3svBviOz0hbXaFknomTy', '+265 999 000 005'),
-  (6, 1, 'parent', 'Mrs. Namwera', 'parent@greenhill.test', '$2a$10$kGWVnQ5bxqX6jso/KHWFAOab.APQnrENOcz75ktJ2Js4V84lw4OYG', '+265 999 000 006'),
-  (7, 1, 'student', 'Tadala Kamoto', 'student@greenhill.test', '$2a$10$dD32.ESf6BKnh1udo/h.kOPmNZJl8iZwxGPbJUtC/kldpBBu4F6r.', '+265 999 000 007')
-ON DUPLICATE KEY UPDATE full_name = VALUES(full_name), role = VALUES(role), school_id = VALUES(school_id), password_hash = VALUES(password_hash);
+INSERT INTO users (id, public_ref, school_id, role, full_name, email, password_hash, must_change_password, phone) VALUES
+  (1, UUID(), NULL, 'super_admin', 'SmartLink Super Admin', 'super@smartlink.test', '$2a$10$QgKlxV4PpXn03iaYGdTpyOjrTGD8APTklsHrGUd2Oph1hPncZ8mlC', 1, '+265 999 000 001'),
+  (2, UUID(), 1, 'school_owner', 'Mrs. Banda', 'owner@greenhill.test', '$2a$10$dK9g5JaWXEY81JlcuTA41Ok69Iz2YA.7dF9bfy3hgq.4NfiabXIby', 1, '+265 999 000 002'),
+  (3, UUID(), 1, 'headteacher', 'Mr. Banda', 'head@greenhill.test', '$2a$10$7ShQXgjD.J8rF4SErRxFaeuBJqa/am0U0sm7quVPmQF4PnDgeAUO.', 1, '+265 999 000 003'),
+  (4, UUID(), 1, 'bursar', 'Mrs. Phiri', 'bursar@greenhill.test', '$2a$10$LU6o6TeVDeB4SJRBGwhLq.YcSJK.8Pd1c4a5V3Trfpo5zYf4XP4ce', 1, '+265 999 000 004'),
+  (5, UUID(), 1, 'teacher', 'Mr. Mwale', 'teacher@greenhill.test', '$2a$10$TI4A6NqKUv1xv.eRayMZUuHTN9pEZAf2q3svBviOz0hbXaFknomTy', 1, '+265 999 000 005'),
+  (6, UUID(), 1, 'parent', 'Mrs. Namwera', 'parent@greenhill.test', '$2a$10$kGWVnQ5bxqX6jso/KHWFAOab.APQnrENOcz75ktJ2Js4V84lw4OYG', 1, '+265 999 000 006')
+ON DUPLICATE KEY UPDATE full_name = VALUES(full_name), role = VALUES(role), school_id = VALUES(school_id);
 
 INSERT INTO classes (id, school_id, name, grade_level, teacher_user_id) VALUES
   (1, 1, 'Year 1A', 'Year 1', 5),
@@ -47,12 +46,12 @@ VALUES
   (5, 1, 5, 3, 2, 1, 1, '2026', 'Term 2', 'subject_teacher', 1)
 ON DUPLICATE KEY UPDATE teacher_id = VALUES(teacher_id), subject_id = VALUES(subject_id), academic_year_id = VALUES(academic_year_id), term_id = VALUES(term_id), is_active = VALUES(is_active);
 
-INSERT INTO students (id, school_id, class_id, user_id, admission_no, first_name, last_name, date_of_birth, gender, status) VALUES
-  (1, 1, 1, 7, 'GH-001', 'Tadala', 'Kamoto', '2013-04-18', 'Female', 'active'),
-  (2, 1, 2, NULL, 'GH-002', 'Blessings', 'Phiri', '2014-07-03', 'Male', 'active'),
-  (3, 1, 1, NULL, 'GH-003', 'Chisomo', 'Mwale', '2013-11-24', 'Female', 'active'),
-  (4, 1, 3, NULL, 'GH-004', 'Thandiwe', 'Kachikho', '2015-02-09', 'Female', 'active'),
-  (5, 1, 2, NULL, 'GH-005', 'Wisdom', 'Mbewe', '2014-01-15', 'Male', 'active')
+INSERT INTO students (id, public_ref, school_id, class_id, admission_no, first_name, last_name, date_of_birth, gender, status) VALUES
+  (1, UUID(), 1, 1, 'GH-001', 'Tadala', 'Kamoto', '2013-04-18', 'Female', 'active'),
+  (2, UUID(), 1, 2, 'GH-002', 'Blessings', 'Phiri', '2014-07-03', 'Male', 'active'),
+  (3, UUID(), 1, 1, 'GH-003', 'Chisomo', 'Mwale', '2013-11-24', 'Female', 'active'),
+  (4, UUID(), 1, 3, 'GH-004', 'Thandiwe', 'Kachikho', '2015-02-09', 'Female', 'active'),
+  (5, UUID(), 1, 2, 'GH-005', 'Wisdom', 'Mbewe', '2014-01-15', 'Male', 'active')
 ON DUPLICATE KEY UPDATE first_name = VALUES(first_name), last_name = VALUES(last_name), class_id = VALUES(class_id);
 
 INSERT INTO student_enrollments (school_id, student_id, academic_year_id, term_id, class_id, enrollment_type, enrollment_status, start_date)

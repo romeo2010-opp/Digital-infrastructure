@@ -10,7 +10,6 @@ SET @p3_teacher_id := (SELECT id FROM users WHERE school_id = @school_id AND ema
 SET @p4_teacher_id := (SELECT id FROM users WHERE school_id = @school_id AND email = 'p4.teacher@greenhill.test' LIMIT 1);
 SET @math_teacher_id := (SELECT id FROM users WHERE school_id = @school_id AND email = 'math.teacher@greenhill.test' LIMIT 1);
 SET @english_teacher_id := (SELECT id FROM users WHERE school_id = @school_id AND email = 'english.teacher@greenhill.test' LIMIT 1);
-SET @student_password_hash := '$2a$10$TNcOXdQJHJXZyKBtcIcS/OG0wLuDwqSE6D3RIPU8n.mVZFWMzwGI2';
 
 START TRANSACTION;
 SET FOREIGN_KEY_CHECKS = 0;
@@ -126,39 +125,13 @@ FROM demo_classes c
 CROSS JOIN demo_numbers n;
 
 INSERT INTO students (
-  school_id, class_id, student_id, admission_no, first_name, last_name,
+  public_ref, school_id, class_id, student_id, admission_no, first_name, last_name,
   date_of_birth, gender, stream_section, enrollment_date, student_type, status
 )
-SELECT @school_id, class_id, student_code, admission_no, first_name, last_name,
+SELECT UUID(), @school_id, class_id, student_code, admission_no, first_name, last_name,
   date_of_birth, gender, stream_section, '2026-01-12', 'returning', 'active'
 FROM demo_student_seed
 ORDER BY class_id, seq;
-
-INSERT INTO users (
-  school_id, role, full_name, first_name, last_name, email, password_hash,
-  must_change_password, gender, date_of_birth, is_active
-)
-SELECT @school_id, 'student', CONCAT(first_name, ' ', last_name), first_name, last_name,
-  LOWER(CONCAT(student_code, '@students.greenhill.test')),
-  @student_password_hash, 0, gender, date_of_birth, 1
-FROM demo_student_seed
-ORDER BY class_id, seq
-ON DUPLICATE KEY UPDATE
-  role = VALUES(role),
-  full_name = VALUES(full_name),
-  first_name = VALUES(first_name),
-  last_name = VALUES(last_name),
-  password_hash = VALUES(password_hash),
-  must_change_password = VALUES(must_change_password),
-  gender = VALUES(gender),
-  date_of_birth = VALUES(date_of_birth),
-  is_active = VALUES(is_active);
-
-UPDATE students s
-JOIN demo_student_seed seed ON seed.student_code = s.student_id
-JOIN users u ON u.school_id = s.school_id AND u.email = LOWER(CONCAT(seed.student_code, '@students.greenhill.test'))
-SET s.user_id = u.id
-WHERE s.school_id = @school_id;
 
 INSERT INTO student_enrollments (
   school_id, student_id, academic_year_id, term_id, class_id, stream_section,
@@ -169,8 +142,8 @@ SELECT @school_id, s.id, @year_id, @term3_id, seed.class_id, seed.stream_section
 FROM demo_student_seed seed
 JOIN students s ON s.school_id = @school_id AND s.student_id = seed.student_code;
 
-INSERT INTO student_guardians (school_id, student_id, guardian_number, full_name, relationship, primary_phone, email)
-SELECT @school_id, s.id, 1,
+INSERT INTO student_guardians (public_ref, school_id, student_id, guardian_number, full_name, relationship, primary_phone, email)
+SELECT UUID(), @school_id, s.id, 1,
   CONCAT(seed.last_name, ' Guardian ', LPAD(seed.seq, 2, '0')),
   IF(MOD(seed.seq, 2) = 0, 'mother', 'father'),
   CONCAT('+265 888 ', LPAD(seed.class_id, 3, '0'), ' ', LPAD(seed.seq, 3, '0')),

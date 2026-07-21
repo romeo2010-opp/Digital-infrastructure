@@ -158,7 +158,7 @@ export const portalApi = {
     return request('/api/auth/login-appearance/lookup', { method: 'POST', body: payload })
   },
 
-  login(credentials: { email?: string; studentCode?: string; student_code?: string; password: string; role?: string; loginType?: string; login_type?: string }) {
+  login(credentials: { email?: string; schoolCode?: string; school_code?: string; studentCode?: string; student_code?: string; password: string; role?: string; loginType?: string; login_type?: string }) {
     return request('/api/auth/login', { method: 'POST', body: credentials }).then((payload: any) => ({
       accessToken: payload?.token || payload?.accessToken,
       user: payload?.user,

@@ -333,8 +333,11 @@ async function resolveManualReferences(connection, schoolId, body, current = {})
 
   const gradeId = body.grade_id === undefined ? current.grade_id || null : Number(body.grade_id || 0) || null
   if (gradeId) {
-    const [[grade]] = await connection.query("SELECT id FROM grade_levels WHERE id = ? AND school_id = ? LIMIT 1", [gradeId, schoolId])
+    const [[grade]] = await connection.query("SELECT id, curriculum_id FROM grade_levels WHERE id = ? AND school_id = ? LIMIT 1", [gradeId, schoolId])
     if (!grade) throw new HttpError(400, "Year level does not belong to this school")
+    if (curriculumId && grade.curriculum_id && Number(grade.curriculum_id) !== Number(curriculumId)) {
+      throw new HttpError(400, "Year level does not belong to the selected curriculum")
+    }
   }
 
   return { subjectId, curriculumId, gradeId }
@@ -735,14 +738,15 @@ export async function updateExtractedItem(req, res) {
 async function createTopicFromItem(connection, schoolId, item, upload, parentTopicId = null) {
   const [insert] = await connection.query(
     `INSERT INTO syllabus_topics (
-      school_id, curriculum_id, grade_id, subject_id, parent_topic_id, topic_name, description, term,
+      public_ref, school_id, curriculum_id, grade_id, subject_id, parent_topic_id, topic_name, description, term,
       source_type, source_upload_id, approved_by, is_active
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ai_extracted', ?, ?, 1)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ai_extracted', ?, ?, 1)
     ON DUPLICATE KEY UPDATE description = VALUES(description),
       term = VALUES(term),
       is_active = 1,
       approved_by = VALUES(approved_by)`,
     [
+      randomUUID(),
       schoolId,
       upload.curriculum_id || null,
       upload.grade_id || null,
@@ -960,7 +964,7 @@ async function approveExtractedItemInTransaction(connection, schoolId, itemId, a
         [schoolId, item.parent_extracted_item_id],
       )
       if (parent?.merged_into_topic_id) {
-        await insertLearningObjective(connection, Number(parent.merged_into_topic_id), item.title, null)
+        await insertLearningObjective(connection, schoolId, Number(parent.merged_into_topic_id), item.title, null, item.exam_relevance || null)
       }
     }
     return { item_id: itemId, upload_id: Number(item.upload_id), item_type: item.item_type }
@@ -987,12 +991,7 @@ async function approveExtractedItemInTransaction(connection, schoolId, itemId, a
     [schoolId, itemId],
   )
   for (const objective of objectives) {
-    await connection.query(
-      `INSERT INTO learning_objectives (topic_id, objective_text, exam_relevance)
-       VALUES (?, ?, ?)
-       ON DUPLICATE KEY UPDATE objective_text = objective_text`,
-      [topicId, objective.title, objective.exam_relevance || null],
-    )
+    await insertLearningObjective(connection, schoolId, topicId, objective.title, null, objective.exam_relevance || null)
   }
   return { item_id: itemId, upload_id: Number(item.upload_id), item_type: item.item_type, topic_id: topicId }
 }
@@ -1255,9 +1254,9 @@ async function createTopicFromManualEntry(connection, schoolId, entry, approvedB
   const description = options.description === undefined ? entry.description : options.description
   const [insert] = await connection.query(
     `INSERT INTO syllabus_topics (
-      school_id, curriculum_id, grade_id, subject_id, parent_topic_id, topic_name, description, term,
+      public_ref, school_id, curriculum_id, grade_id, subject_id, parent_topic_id, topic_name, description, term,
       source_type, approved_by, is_active
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'teacher_created', ?, 1)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'teacher_created', ?, 1)
     ON DUPLICATE KEY UPDATE curriculum_id = VALUES(curriculum_id),
       parent_topic_id = VALUES(parent_topic_id),
       description = VALUES(description),
@@ -1265,6 +1264,7 @@ async function createTopicFromManualEntry(connection, schoolId, entry, approvedB
       approved_by = VALUES(approved_by),
       is_active = 1`,
     [
+      randomUUID(),
       schoolId,
       entry.curriculum_id || null,
       entry.grade_id || null,
@@ -1286,16 +1286,19 @@ async function createTopicFromManualEntry(connection, schoolId, entry, approvedB
   return Number(existing?.id || 0)
 }
 
-async function insertLearningObjective(connection, topicId, objectiveText, skillType = null) {
+async function insertLearningObjective(connection, schoolId, topicId, objectiveText, skillType = null, examRelevance = null) {
   const text = cleanText(objectiveText)
   if (!topicId || !text) return
   await connection.query(
-    `INSERT INTO learning_objectives (topic_id, objective_text, skill_type, exam_relevance)
-     SELECT ?, ?, ?, NULL
-     WHERE NOT EXISTS (
-       SELECT 1 FROM learning_objectives WHERE topic_id = ? AND objective_text = ?
+    `INSERT INTO learning_objectives (public_ref, school_id, subject_id, topic_id, objective_text, skill_type, exam_relevance)
+     SELECT ?, topic.school_id, topic.subject_id, topic.id, ?, ?, ?
+     FROM syllabus_topics topic
+     WHERE topic.school_id = ? AND topic.id = ?
+       AND NOT EXISTS (
+       SELECT 1 FROM learning_objectives existing
+       WHERE existing.school_id = topic.school_id AND existing.topic_id = topic.id AND existing.objective_text = ?
      )`,
-    [topicId, text, skillType || null, topicId, text],
+    [randomUUID(), text, skillType || null, cleanText(examRelevance) || null, schoolId, topicId, text],
   )
 }
 
@@ -1316,7 +1319,7 @@ export async function approveManualSyllabusEntry(req, res) {
     const topicId = await createTopicFromManualEntry(connection, schoolId, entry, req.user.id)
     const syllabusPayload = parseManualSyllabusPayload(entry.objectives_json)
     for (const objective of syllabusPayload.flat_objectives) {
-      await insertLearningObjective(connection, topicId, objective)
+      await insertLearningObjective(connection, schoolId, topicId, objective)
     }
     for (const topic of syllabusPayload.topics || []) {
       if (!cleanText(topic.title)) continue
@@ -1327,7 +1330,7 @@ export async function approveManualSyllabusEntry(req, res) {
       })
       for (const criterion of topic.criteria || []) {
         for (const objective of objectiveTextsForCriterion(criterion)) {
-          await insertLearningObjective(connection, childTopicId, objective.text, objective.skillType)
+          await insertLearningObjective(connection, schoolId, childTopicId, objective.text, objective.skillType)
         }
       }
       for (const subtopic of topic.subtopics || []) {
@@ -1339,7 +1342,7 @@ export async function approveManualSyllabusEntry(req, res) {
         })
         for (const criterion of subtopic.criteria || []) {
           for (const objective of objectiveTextsForCriterion(criterion)) {
-            await insertLearningObjective(connection, subtopicId, objective.text, objective.skillType)
+            await insertLearningObjective(connection, schoolId, subtopicId, objective.text, objective.skillType)
           }
         }
       }
@@ -1353,7 +1356,7 @@ export async function approveManualSyllabusEntry(req, res) {
       })
       for (const criterion of subtopic.criteria) {
         for (const objective of objectiveTextsForCriterion(criterion)) {
-          await insertLearningObjective(connection, subtopicId, objective.text, objective.skillType)
+          await insertLearningObjective(connection, schoolId, subtopicId, objective.text, objective.skillType)
         }
       }
     }
@@ -1429,12 +1432,18 @@ export async function createSyllabusTopic(req, res) {
   const subjectId = Number(req.body.subject_id || 0)
   const topicName = cleanText(req.body.topic_name || req.body.name)
   if (!subjectId || !topicName) throw new HttpError(400, "Subject and topic name are required")
+  const references = await resolveManualReferences(pool, schoolId, req.body)
+  const parentTopicId = Number(req.body.parent_topic_id || 0) || null
+  if (parentTopicId) {
+    const [[parent]] = await pool.query("SELECT id FROM syllabus_topics WHERE school_id=? AND subject_id=? AND id=? AND curriculum_id <=> ? AND grade_id <=> ? AND is_active=1 LIMIT 1", [schoolId, references.subjectId, parentTopicId, references.curriculumId, references.gradeId])
+    if (!parent) throw new HttpError(400, "Parent topic does not belong to this school subject, curriculum and year level")
+  }
   const [result] = await pool.query(
     `INSERT INTO syllabus_topics (
-      school_id, curriculum_id, grade_id, subject_id, parent_topic_id, topic_name, description, term, source_type, approved_by, is_active
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'teacher_created', ?, 1)
-    ON DUPLICATE KEY UPDATE description = VALUES(description), term = VALUES(term), is_active = 1`,
-    [schoolId, req.body.curriculum_id || null, req.body.grade_id || null, subjectId, req.body.parent_topic_id || null, topicName, req.body.description || null, req.body.term || null, req.user.id],
+      public_ref, school_id, curriculum_id, grade_id, subject_id, parent_topic_id, topic_name, description, term, source_type, approved_by, is_active
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'teacher_created', ?, 1)
+    ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id), description = VALUES(description), term = VALUES(term), is_active = 1`,
+    [randomUUID(), schoolId, references.curriculumId, references.gradeId, references.subjectId, parentTopicId, topicName, req.body.description || null, req.body.term || null, req.user.id],
   )
   res.status(201).json({ topic_id: Number(result.insertId || 0), ok: true })
 }

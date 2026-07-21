@@ -2,6 +2,8 @@ import fs from "fs/promises"
 import path from "path"
 import dotenv from "dotenv"
 import mysql from "mysql2/promise"
+import { DAILY_DRILL_SCHEMA_MIGRATIONS, validateDatabaseFileSelection } from "../scripts/lib/databaseFilePolicy.mjs"
+import { applyPortableSql } from "../scripts/lib/portableSql.mjs"
 
 dotenv.config()
 
@@ -17,25 +19,15 @@ const config = process.env.DATABASE_URL
       dateStrings: ["DATE"],
     }
 
+const migrations = validateDatabaseFileSelection(DAILY_DRILL_SCHEMA_MIGRATIONS, { seedOnly: false })
 const connection = await mysql.createConnection(config)
 
 try {
-  const migrations = [
-    "007_daily_drills_syllabus_intelligence.sql",
-    "008_gemini_ai_pilot.sql",
-    "009_greenhill_cambridge_primary.sql",
-    "010_manual_syllabus_entries.sql",
-    "011_manual_syllabus_drafts.sql",
-    "012_ai_tts_usage.sql",
-    "013_drill_ai_feedback.sql",
-    "014_teacher_lesson_logs_drill_engine.sql",
-    "015_drill_scoring_interventions.sql",
-  ]
   for (const migration of migrations) {
     const sqlPath = path.resolve("database", migration)
     const sql = await fs.readFile(sqlPath, "utf8")
-    await connection.query(sql)
-    console.log(`${migration} applied.`)
+    const result = await applyPortableSql(connection, sql, { source: migration, log: console.log })
+    console.log(`${migration} applied (${result.applied} statements, ${result.skipped} existing objects, ${result.dialect}).`)
   }
 } finally {
   await connection.end()

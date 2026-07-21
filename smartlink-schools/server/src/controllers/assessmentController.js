@@ -406,6 +406,18 @@ async function assertAssessmentEditable(connection, req, schoolId, assessment) {
   if (isTeacher(req) && !TEACHER_EDITABLE_STATUSES.has(String(assessment.status || ""))) {
     throw new HttpError(403, "You do not have permission to edit this paper.")
   }
+  const [[evidenceUsage]] = await connection.query(
+    `SELECT
+       EXISTS(SELECT 1 FROM academic_mark_sheets marksheet WHERE marksheet.school_id=? AND marksheet.assessment_id=? LIMIT 1) mark_sheet_exists,
+       EXISTS(SELECT 1 FROM result_batches batch WHERE batch.school_id=? AND batch.assessment_id=? LIMIT 1) result_batch_exists,
+       EXISTS(SELECT 1 FROM subject_results result WHERE result.school_id=? AND result.assessment_id=? LIMIT 1) legacy_results_exist`,
+    [schoolId, assessment.id, schoolId, assessment.id, schoolId, assessment.id],
+  )
+  if (evidenceUsage?.mark_sheet_exists || evidenceUsage?.result_batch_exists || evidenceUsage?.legacy_results_exist) {
+    throw new HttpError(409, "This paper already has a marksheet or learner results. Reopen the marksheet correction workflow instead of changing its questions.", {
+      code: "ASSESSMENT_EVIDENCE_EXISTS",
+    })
+  }
 }
 
 async function validateSchoolScope(connection, schoolId, values) {

@@ -2,6 +2,7 @@ import { rankSearchResults } from "./awareSearchService.js"
 import { SCHOOL_PERMISSIONS } from "./authorizationService.js"
 
 const DATA_ENTITIES = new Set(["students", "teachers", "guardians", "classes", "subjects", "fees", "discounts", "leave", "attendance", "homework", "assessments", "results", "support", "calendar", "messages"])
+const CALENDAR_SEARCH_ROLES = Object.freeze(["school_owner", "headteacher", "teacher"])
 
 const NAVIGATION_CATALOG = [
   { id: "dashboard", title: "Dashboard", subtitle: "School command centre and current priorities", route: "/dashboard", keywords: "home overview command centre key metrics" },
@@ -15,9 +16,9 @@ const NAVIGATION_CATALOG = [
   { id: "assessments", title: "Assessment Builder", subtitle: "Create tests, examinations and marking materials", route: "/exam-builder", entity: "assessments", permission: SCHOOL_PERMISSIONS.ACADEMICS_MANAGE, keywords: "exam paper test quiz builder" },
   { id: "assessment-insights", title: "Assessment Insights", subtitle: "Weak topics and class evidence", route: "/assessment-insights", entity: "assessments", permission: SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_VIEW, keywords: "analysis weak topics performance" },
   { id: "academic-intelligence", title: "Academic Intelligence", subtitle: "Evidence, mastery, pacing and readiness", route: "/academic-intelligence", entity: "reports", permission: SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_VIEW, keywords: "mastery evidence trends readiness insights" },
-  { id: "learner-support", title: "Learner Support Centre", subtitle: "Support cases, interventions and reviews", route: "/learner-support", entity: "support", permission: SCHOOL_PERMISSIONS.ACADEMIC_INTERVENTION_MANAGE, keywords: "remediation reassessment intervention evidence" },
+  { id: "learner-support", title: "Learner Support Centre", subtitle: "Support cases, interventions and reviews", route: "/learner-support", entity: "support", permission: SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_VIEW, keywords: "remediation reassessment intervention evidence" },
   { id: "daily-drills", title: "Daily Drills", subtitle: "Adaptive learner practice and drill evidence", route: "/daily-drill", entity: "assessments", permission: SCHOOL_PERMISSIONS.ACADEMICS_MANAGE, keywords: "practice questions revision adaptive" },
-  { id: "calendar", title: "School Calendar", subtitle: "Events, meetings and academic dates", route: "/calendar", entity: "calendar", keywords: "schedule events dates meetings holidays" },
+  { id: "calendar", title: "School Calendar", subtitle: "Events, meetings and academic dates", route: "/calendar", entity: "calendar", roles: CALENDAR_SEARCH_ROLES, keywords: "schedule events dates meetings holidays" },
   { id: "timetables", title: "Timetables", subtitle: "Teaching and examination schedules", route: "/timetables", entity: "timetable", permission: SCHOOL_PERMISSIONS.ACADEMICS_MANAGE, keywords: "periods lessons rooms invigilation schedule" },
   { id: "fees", title: "Fees and Payments", subtitle: "Accounts, balances, receipts and reconciliation", route: "/fees", entity: "fees", permission: SCHOOL_PERMISSIONS.FEES_VIEW, keywords: "finance tuition arrears paid unpaid receipt" },
   { id: "discounts", title: "Discounts and Bursaries", subtitle: "Discount, bursary and scholarship requests", route: "/finance/discounts-bursaries", entity: "discounts", permission: SCHOOL_PERMISSIONS.FEES_VIEW, keywords: "waiver scholarship approval concession" },
@@ -48,6 +49,46 @@ function dateScope(dateRange, column) {
 
 function rows(result) { return result?.[0] || [] }
 
+// Mirrors calendarController.teacherEventCondition: global staff-visible events,
+// direct ownership, assigned classes without a subject, and exact subject pairs.
+export function buildCalendarSearchScope({ user, teacherClassIds, session } = {}) {
+  const role = String(user?.role || "").toLowerCase()
+  if (!CALENDAR_SEARCH_ROLES.includes(role)) return { allowed: false, sql: "", params: [] }
+  if (role !== "teacher") return { allowed: true, sql: "", params: [] }
+
+  const teacherId = Number(user?.id)
+  const classIds = [...new Set((Array.isArray(teacherClassIds) ? teacherClassIds : []).map(Number).filter((id) => Number.isInteger(id) && id > 0))]
+  const params = [teacherId, teacherId]
+  const classClause = classIds.length ? ` OR (se.class_id IN (${classIds.map(() => "?").join(",")}) AND se.subject_id IS NULL)` : ""
+  params.push(...classIds, teacherId)
+
+  let assignmentSessionClause = ""
+  if (!session?.setupRequired && session?.academicYearId && session?.termId) {
+    assignmentSessionClause = " AND (calendar_assignment.academic_year_id=? OR calendar_assignment.academic_year_id IS NULL) AND (calendar_assignment.term_id=? OR calendar_assignment.term_id IS NULL)"
+    params.push(session.academicYearId, session.termId)
+  }
+
+  return {
+    allowed: true,
+    sql: ` AND (
+      (se.class_id IS NULL AND se.visibility IN ('whole_school','teachers_only','staff_only'))
+      OR se.teacher_id=?
+      OR se.created_by=?
+      ${classClause}
+      OR EXISTS (
+        SELECT 1 FROM teacher_class_subject_assignments calendar_assignment
+        WHERE calendar_assignment.school_id=se.school_id
+          AND calendar_assignment.teacher_id=?
+          AND calendar_assignment.class_id=se.class_id
+          AND calendar_assignment.subject_id=se.subject_id
+          AND calendar_assignment.role='subject_teacher'
+          AND calendar_assignment.is_active=1${assignmentSessionClause}
+      )
+    )`,
+    params,
+  }
+}
+
 function wantsFactory(interpretation) {
   if (interpretation.requestedEntity) return (entity) => entity === interpretation.requestedEntity || (entity === "assessments" && interpretation.requestedEntity === "results")
   const explicit = interpretation.entities.filter((entity) => DATA_ENTITIES.has(entity))
@@ -71,7 +112,7 @@ export async function searchSchoolRecords({ db, schoolId, session, user, teacher
   const canStudents = hasPermission(permissions, SCHOOL_PERMISSIONS.STUDENTS_VIEW)
   const canAcademics = hasPermission(permissions, SCHOOL_PERMISSIONS.ACADEMICS_MANAGE) || hasPermission(permissions, SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_VIEW)
   const canAttendance = hasPermission(permissions, SCHOOL_PERMISSIONS.ATTENDANCE_MANAGE)
-  const canSupport = hasPermission(permissions, SCHOOL_PERMISSIONS.ACADEMIC_INTERVENTION_MANAGE)
+  const canSupport = hasPermission(permissions, SCHOOL_PERMISSIONS.ACADEMIC_INTELLIGENCE_VIEW)
   const canFees = hasPermission(permissions, SCHOOL_PERMISSIONS.FEES_VIEW)
   const canLeave = hasPermission(permissions, SCHOOL_PERMISSIONS.LEAVE_VIEW)
   const canMessages = hasPermission(permissions, SCHOOL_PERMISSIONS.MESSAGES_MANAGE)
@@ -86,6 +127,7 @@ export async function searchSchoolRecords({ db, schoolId, session, user, teacher
   const assessmentScope = isTeacher ? { sql: ` AND (a.teacher_id=? OR a.created_by=? OR EXISTS (SELECT 1 FROM teacher_class_subject_assignments tcsa WHERE tcsa.school_id=a.school_id AND tcsa.teacher_id=? AND tcsa.class_id=a.class_id AND tcsa.subject_id=a.subject_id AND tcsa.is_active=1))`, params: [user.id, user.id, user.id] } : { sql: "", params: [] }
   const resultScope = isTeacher ? { sql: ` AND (rb.teacher_id=? OR a.created_by=? OR EXISTS (SELECT 1 FROM teacher_class_subject_assignments tcsa WHERE tcsa.school_id=rb.school_id AND tcsa.teacher_id=? AND tcsa.class_id=rb.class_id AND tcsa.subject_id=rb.subject_id AND tcsa.is_active=1))`, params: [user.id, user.id, user.id] } : { sql: "", params: [] }
   const supportScope = isTeacher ? { sql: ` AND (lsc.owner_user_id=? OR EXISTS (SELECT 1 FROM teacher_class_subject_assignments tcsa WHERE tcsa.school_id=lsc.school_id AND tcsa.teacher_id=? AND tcsa.class_id=lsc.class_id AND tcsa.subject_id=lsc.subject_id AND tcsa.is_active=1))`, params: [user.id, user.id] } : { sql: "", params: [] }
+  const calendarScope = buildCalendarSearchScope({ user, teacherClassIds, session })
 
   let feeCondition = ""
   if (interpretation.primaryState === "outstanding" || interpretation.primaryState === "overdue") feeCondition = " AND f.amount_due+f.penalty_amount-f.discount_amount-f.amount_paid>0"
@@ -128,7 +170,7 @@ export async function searchSchoolRecords({ db, schoolId, session, user, teacher
     assessments: canAcademics && wants("assessments") ? db.query(`SELECT CONCAT('assessment-',a.id) id,a.name title,CONCAT(c.name,' · ',sub.name,' · ',REPLACE(a.assessment_type,'_',' ')) subtitle,'ASSESSMENT' resultType,c.name className,a.status,CONCAT(a.name,' ',c.name,' ',sub.name,' ',a.assessment_type,' ',a.status,' ',a.term_name) keywords,CONCAT('/exam-builder/',a.id) route FROM assessments a JOIN classes c ON c.school_id=a.school_id AND c.id=a.class_id JOIN subjects sub ON sub.school_id=a.school_id AND sub.id=a.subject_id WHERE a.school_id=?${assessmentCondition}${dateScope(interpretation.dateRange, "a.created_at")}${assessmentScope.sql} ORDER BY a.updated_at DESC LIMIT ?`, [schoolId, ...assessmentScope.params, candidateLimit]) : Promise.resolve([[]]),
     results: canAcademics && wants("results") && !setupRequired ? db.query(`SELECT CONCAT('result-',re.id) id,CONCAT(s.first_name,' ',s.last_name) title,CONCAT(a.name,' · ',sub.name,' · ',CASE WHEN re.status='absent' THEN 'Absent' WHEN re.score IS NULL THEN 'No mark' ELSE CONCAT(re.score,'/',a.total_marks) END) subtitle,'RESULT' resultType,c.name className,rb.status,rb.status searchState,CONCAT(s.first_name,' ',s.last_name,' ',COALESCE(s.admission_no,''),' ',a.name,' ',c.name,' ',sub.name,' ',COALESCE(re.grade,''),' ',rb.status) keywords,CONCAT('/results/',a.id) route FROM result_entries re JOIN result_batches rb ON rb.school_id=re.school_id AND rb.id=re.result_batch_id JOIN assessments a ON a.school_id=rb.school_id AND a.id=rb.assessment_id JOIN students s ON s.school_id=re.school_id AND s.id=re.student_id JOIN classes c ON c.school_id=rb.school_id AND c.id=rb.class_id JOIN subjects sub ON sub.school_id=rb.school_id AND sub.id=rb.subject_id WHERE re.school_id=? AND rb.academic_year_id=? AND rb.term_id=?${resultCondition}${dateScope(interpretation.dateRange, "re.updated_at")}${resultScope.sql} ORDER BY re.updated_at DESC LIMIT ?`, [schoolId, session.academicYearId, session.termId, ...resultScope.params, candidateLimit]) : Promise.resolve([[]]),
     support: canSupport && wants("support") ? db.query(`SELECT lsc.public_ref id,COALESCE(CONCAT(s.first_name,' ',s.last_name),c.name,'Support group') title,CONCAT(COALESCE(sub.name,'Cross-subject'),' · ',REPLACE(lsc.case_type,'_',' ')) subtitle,'SUPPORT' resultType,c.name className,lsc.status,lsc.status searchState,CONCAT(COALESCE(s.first_name,''),' ',COALESCE(s.last_name,''),' ',COALESCE(c.name,''),' ',COALESCE(sub.name,''),' ',COALESCE(st.topic_name,''),' ',lsc.case_type,' ',lsc.status,' ',lsc.current_summary) keywords,CONCAT('/learner-support/',lsc.public_ref) route FROM learner_support_cases lsc LEFT JOIN students s ON s.school_id=lsc.school_id AND s.id=lsc.learner_id LEFT JOIN classes c ON c.school_id=lsc.school_id AND c.id=lsc.class_id LEFT JOIN subjects sub ON sub.school_id=lsc.school_id AND sub.id=lsc.subject_id LEFT JOIN syllabus_topics st ON st.school_id=lsc.school_id AND st.id=lsc.primary_topic_id WHERE lsc.school_id=?${supportCondition}${supportScope.sql} ORDER BY lsc.updated_at DESC LIMIT ?`, [schoolId, ...supportScope.params, candidateLimit]) : Promise.resolve([[]]),
-    calendar: wants("calendar") ? db.query(`SELECT CONCAT('event-',se.id) id,se.title,CONCAT(REPLACE(se.event_type,'_',' '),' · ',se.start_datetime) subtitle,'EVENT' resultType,CONCAT(se.title,' ',COALESCE(se.description,''),' ',se.event_type,' ',se.visibility) keywords,'/calendar' route,${interpretation.dateRange ? "1" : "0"} searchDateMatch FROM school_events se WHERE se.school_id=?${dateScope(interpretation.dateRange, "se.start_datetime")} ORDER BY se.start_datetime DESC LIMIT ?`, [schoolId, candidateLimit]) : Promise.resolve([[]]),
+    calendar: calendarScope.allowed && wants("calendar") ? db.query(`SELECT CONCAT('event-',se.id) id,se.title,CONCAT(REPLACE(se.event_type,'_',' '),' · ',se.start_datetime) subtitle,'EVENT' resultType,se.status,CONCAT(se.title,' ',COALESCE(se.description,''),' ',se.event_type,' ',se.visibility) keywords,'/calendar' route,${interpretation.dateRange ? "1" : "0"} searchDateMatch FROM school_events se WHERE se.school_id=? AND se.status IN ('scheduled','active','completed')${dateScope(interpretation.dateRange, "se.start_datetime")}${calendarScope.sql} ORDER BY se.start_datetime DESC LIMIT ?`, [schoolId, ...calendarScope.params, candidateLimit]) : Promise.resolve([[]]),
     messages: canMessages && wants("messages") ? db.query(`SELECT CONCAT('message-',m.id) id,m.subject title,LEFT(m.body,180) subtitle,'MESSAGE' resultType,m.delivery_status status,CONCAT(m.subject,' ',m.body,' ',m.message_type,' ',m.delivery_status) keywords,'/messages' route FROM messages m WHERE m.school_id=? ORDER BY m.created_at DESC LIMIT ?`, [schoolId, candidateLimit]) : Promise.resolve([[]]),
   }
 

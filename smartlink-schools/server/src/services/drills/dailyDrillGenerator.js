@@ -36,18 +36,20 @@ function gradeNameCandidates(classRow = {}) {
   return [...candidates]
 }
 
-async function resolveStudentProfile(connection, schoolId, studentId) {
+async function resolveStudentProfile(connection, schoolId, studentId, academicYearId = null, termId = null) {
+  const sessionScoped = Number(academicYearId || 0) > 0 && Number(termId || 0) > 0
   const [[profile]] = await connection.query(
     `SELECT s.id AS student_id, s.school_id, c.id AS class_id, c.name AS class_name, c.grade_level,
       se.id AS enrollment_id, se.academic_year_id, se.term_id
      FROM students s
-     LEFT JOIN student_enrollments se ON se.student_id = s.id AND se.school_id = s.school_id
+     ${sessionScoped ? "JOIN" : "LEFT JOIN"} student_enrollments se ON se.student_id = s.id AND se.school_id = s.school_id
       AND se.enrollment_status = 'active'
+      ${sessionScoped ? "AND se.academic_year_id = ? AND se.term_id = ?" : ""}
      LEFT JOIN classes c ON c.id = COALESCE(se.class_id, s.class_id) AND c.school_id = s.school_id
      WHERE s.school_id = ? AND s.id = ? AND s.status = 'active'
      ORDER BY se.created_at DESC, se.id DESC
      LIMIT 1`,
-    [schoolId, studentId],
+    [...(sessionScoped ? [Number(academicYearId), Number(termId)] : []), schoolId, studentId],
   )
   if (!profile) return null
   const candidates = gradeNameCandidates(profile)
@@ -60,7 +62,14 @@ async function resolveStudentProfile(connection, schoolId, studentId) {
   return { ...profile, grade: grades[0] || null }
 }
 
-async function chooseSubject(connection, schoolId, gradeId, studentId = null, classId = null, scheduledDate = todayIso(), subjectMode = "smart_rotation") {
+async function chooseSubject(connection, schoolId, gradeId, studentId = null, classId = null, scheduledDate = todayIso(), subjectMode = "smart_rotation", allowedSubjectIds = null) {
+  const allowedIds = Array.isArray(allowedSubjectIds)
+    ? [...new Set(allowedSubjectIds.map(Number).filter((value) => Number.isInteger(value) && value > 0))]
+    : null
+  if (allowedIds && !allowedIds.length) return null
+  const allowedSubjectScope = allowedIds
+    ? ` AND q.subject_id IN (${allowedIds.map(() => "?").join(", ")})`
+    : ""
   const [subjects] = await connection.query(
     `SELECT subj.id, subj.name,
       COUNT(DISTINCT q.id) AS approved_question_count,
@@ -81,11 +90,11 @@ async function chooseSubject(connection, schoolId, gradeId, studentId = null, cl
       AND l.class_id = ? AND l.subject_id = q.subject_id
       AND l.status = 'finalized' AND l.coverage_status <> 'postponed'
       AND l.lesson_date >= DATE_SUB(?, INTERVAL 7 DAY)
-     WHERE q.school_id = ? AND q.grade_id <=> ? AND q.approval_status = 'approved' AND COALESCE(q.is_daily_drill_eligible,1)=1
+     WHERE q.school_id = ? AND q.grade_id <=> ?${allowedSubjectScope} AND q.approval_status = 'approved' AND COALESCE(q.is_daily_drill_eligible,1)=1
        AND q.correct_answer IS NOT NULL AND q.explanation IS NOT NULL
      GROUP BY subj.id, subj.name
      ORDER BY approved_question_count DESC, subj.name`,
-    [scheduledDate, studentId || 0, studentId || 0, scheduledDate, classId || 0, scheduledDate, schoolId, gradeId || null],
+    [scheduledDate, studentId || 0, studentId || 0, scheduledDate, classId || 0, scheduledDate, schoolId, gradeId || null, ...(allowedIds || [])],
   )
   if (!subjects.length) return null
   const scored = []
@@ -1116,20 +1125,33 @@ export async function generateDailyDrill(connection, schoolId, studentId, option
   const scheduledDate = options.scheduledDate || todayIso()
   const settings = await loadDrillSettings(connection, schoolId)
   if (!settings.daily_drill_enabled) return { ok: false, reason: "Daily Drills are disabled for this school." }
-  const profile = await resolveStudentProfile(connection, schoolId, studentId)
+  const profile = await resolveStudentProfile(connection, schoolId, studentId, options.academicYearId, options.termId)
   if (!profile) return { ok: false, reason: "Student profile was not found." }
   const gradeId = profile.grade?.id || null
   const requestedSubjectId = Number(options.subjectId || 0)
+  const allowedSubjectIds = Array.isArray(options.allowedSubjectIds)
+    ? [...new Set(options.allowedSubjectIds.map(Number).filter((value) => Number.isInteger(value) && value > 0))]
+    : null
+  if (allowedSubjectIds && !allowedSubjectIds.length) {
+    return { ok: false, reason: "No actively assigned Daily Drill subjects are available for this learner." }
+  }
+  if (requestedSubjectId && allowedSubjectIds && !allowedSubjectIds.includes(requestedSubjectId)) {
+    return { ok: false, reason: "The selected subject is not actively assigned for this learner." }
+  }
+  const allowedSubjectScope = allowedSubjectIds
+    ? ` AND subject_id IN (${allowedSubjectIds.map(() => "?").join(", ")})`
+    : ""
   const [[existingDrill]] = await connection.query(
     `SELECT id, status, subject_id, total_questions
      FROM drill_sessions
      WHERE school_id = ? AND student_id = ? AND scheduled_date = ?
        AND (? = 0 OR subject_id = ?)
+       ${allowedSubjectScope}
        AND status <> 'missed'
        AND total_questions > 0
      ORDER BY FIELD(status, 'in_progress', 'pending', 'completed', 'missed'), id DESC
      LIMIT 1`,
-    [schoolId, studentId, scheduledDate, requestedSubjectId, requestedSubjectId],
+    [schoolId, studentId, scheduledDate, requestedSubjectId, requestedSubjectId, ...(allowedSubjectIds || [])],
   )
   if (existingDrill) {
     return {
@@ -1145,7 +1167,7 @@ export async function generateDailyDrill(connection, schoolId, studentId, option
 
   const subject = requestedSubjectId
     ? { id: requestedSubjectId, selection_mode: "teacher_selected" }
-    : await chooseSubject(connection, schoolId, gradeId, studentId, profile.class_id, scheduledDate, settings.daily_drill_subject_mode)
+    : await chooseSubject(connection, schoolId, gradeId, studentId, profile.class_id, scheduledDate, settings.daily_drill_subject_mode, allowedSubjectIds)
   if (!subject?.id) return { ok: false, reason: "No approved Daily Drill questions are available for this learner's grade." }
 
   const plan = await buildScoredDrillPlan(connection, schoolId, profile, subject.id, {

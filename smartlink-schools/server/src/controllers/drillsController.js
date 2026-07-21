@@ -1,8 +1,14 @@
 import { pool } from "../config/db.js"
 import { HttpError } from "../utils/http.js"
-import { getScopedSchoolId, getTeacherClassIds, scopedInClause } from "../utils/tenantScope.js"
+import { getScopedSchoolId, scopedInClause } from "../utils/tenantScope.js"
 import { getActiveAcademicSession, sessionPayload } from "../services/academicSessionService.js"
 import { generateDailyDrill, markAnswer, updateMasteryFromAnswer } from "../services/drills/dailyDrillGenerator.js"
+import {
+  assertDrillLearnerAccess,
+  assertDrillSessionAccess,
+  drillActorScopeSql,
+  getTeacherSubjectIdsForClass,
+} from "../services/drills/drillAccessService.js"
 import { recalculateQuestionAnalytics, recalculateStudentMastery } from "../services/academicIntelligenceEngine.js"
 import { markAnswerWithAi } from "../services/drills/aiAnswerMarker.js"
 import { studentCodeSortSql } from "../utils/studentSort.js"
@@ -224,14 +230,50 @@ async function loadDrillSession(schoolId, sessionId, options = {}) {
   }
 }
 
+function requestedSubjectId(req) {
+  return Number(req.body?.subject_id || req.query?.subject_id || 0)
+}
+
+function activeSessionIds(session) {
+  return session.setupRequired
+    ? { academicYearId: null, termId: null }
+    : { academicYearId: session.academicYearId, termId: session.termId }
+}
+
+async function learnerDrillAccess(req, schoolId, studentId, options = {}) {
+  const session = options.session || await getActiveAcademicSession(schoolId)
+  return assertDrillLearnerAccess({
+    db: options.db || pool,
+    actor: req.user,
+    schoolId,
+    studentId,
+    subjectId: options.subjectId || null,
+    action: options.action || "view",
+    ...activeSessionIds(session),
+  })
+}
+
+async function teacherSubjectScope(req, schoolId, classId, session) {
+  if (req.user?.role !== "teacher") return null
+  const subjectIds = await getTeacherSubjectIdsForClass({
+    schoolId,
+    teacherId: req.user.id,
+    classId,
+    ...activeSessionIds(session),
+  })
+  if (!subjectIds.length) {
+    throw new HttpError(403, "Teachers can only access Daily Drills for actively assigned classes and subjects")
+  }
+  return subjectIds
+}
+
 export async function listDrills(req, res) {
   const schoolId = getScopedSchoolId(req)
   const session = await getActiveAcademicSession(schoolId)
   if (session.setupRequired) {
     return res.json({ drills: [], session: sessionPayload(session), setup_required: true })
   }
-  const teacherClassIds = await getTeacherClassIds(req, schoolId)
-  const classScope = scopedInClause(teacherClassIds, "se.class_id")
+  const actorScope = drillActorScopeSql(req.user)
   const [rows] = await pool.query(
     `SELECT ds.id, ds.student_id, s.first_name, s.last_name, c.name AS class_name,
       st.topic_name, q.question_text AS prompt, ds.status, ds.score, ds.percentage, ds.scheduled_date
@@ -243,10 +285,10 @@ export async function listDrills(req, res) {
      LEFT JOIN syllabus_topics st ON st.id = ds.focus_topic_id AND st.school_id = ds.school_id
      LEFT JOIN drill_session_questions dsq ON dsq.drill_session_id = ds.id AND dsq.order_number = 1
      LEFT JOIN question_bank q ON q.id = dsq.question_id
-     WHERE ds.school_id = ? AND s.status = 'active'${classScope.clause}
+     WHERE ds.school_id = ? AND s.status = 'active'${actorScope.clause}
      ORDER BY ds.scheduled_date DESC, ds.created_at DESC
      LIMIT 100`,
-    [session.academicYearId, session.termId, schoolId, ...classScope.params],
+    [session.academicYearId, session.termId, schoolId, ...actorScope.params],
   )
   res.json({ drills: rows, session: sessionPayload(session), setup_required: false })
 }
@@ -255,13 +297,23 @@ export async function generateDrillForStudent(req, res) {
   const schoolId = getScopedSchoolId(req)
   const studentId = studentIdForRequest(req)
   if (!studentId) throw new HttpError(400, "Student is required")
+  const session = await getActiveAcademicSession(schoolId)
+  const subjectId = requestedSubjectId(req)
+  const access = await learnerDrillAccess(req, schoolId, studentId, {
+    session,
+    subjectId,
+    action: "generate",
+  })
   const connection = await pool.getConnection()
   let transactionOpen = false
   try {
     await connection.beginTransaction()
     transactionOpen = true
     const generated = await generateDailyDrill(connection, schoolId, studentId, {
-      subjectId: req.body.subject_id || req.query.subject_id,
+      academicYearId: session.setupRequired ? null : session.academicYearId,
+      termId: session.setupRequired ? null : session.termId,
+      subjectId: subjectId || null,
+      allowedSubjectIds: access.allowedSubjectIds,
       topicId: req.body.topic_id || req.query.topic_id,
       scheduledDate: req.body.scheduled_date || req.query.scheduled_date,
       limit: req.body.limit || 5,
@@ -306,14 +358,13 @@ export async function generateDrillsForClass(req, res) {
   const schoolId = getScopedSchoolId(req)
   const classId = Number(req.params.classId || req.params.class_id || req.body.class_id || 0)
   if (!classId) throw new HttpError(400, "Class is required")
-  if (req.user?.role === "teacher") {
-    const teacherClassIds = await getTeacherClassIds(req, schoolId)
-    if (!teacherClassIds.map(Number).includes(Number(classId))) {
-      throw new HttpError(403, "Teachers can only generate drills for their assigned classes")
-    }
-  }
   const session = await getActiveAcademicSession(schoolId)
   if (session.setupRequired) throw new HttpError(409, session.message)
+  const allowedSubjectIds = await teacherSubjectScope(req, schoolId, classId, session)
+  const subjectId = requestedSubjectId(req)
+  if (subjectId && allowedSubjectIds && !allowedSubjectIds.includes(subjectId)) {
+    throw new HttpError(403, "Teachers can only generate drills for actively assigned classes and subjects")
+  }
   const scheduledDate = req.body.scheduled_date || req.query.scheduled_date || todayIso()
   const [students] = await pool.query(
     `SELECT s.id
@@ -342,7 +393,10 @@ export async function generateDrillsForClass(req, res) {
     try {
       await connection.beginTransaction()
       const generated = await generateDailyDrill(connection, schoolId, student.id, {
-        subjectId: req.body.subject_id || req.query.subject_id,
+        academicYearId: session.academicYearId,
+        termId: session.termId,
+        subjectId: subjectId || null,
+        allowedSubjectIds,
         topicId: req.body.topic_id || req.query.topic_id,
         scheduledDate,
         limit: req.body.limit || 5,
@@ -376,13 +430,16 @@ export async function getTodayDrill(req, res) {
   const schoolId = getScopedSchoolId(req)
   const studentId = studentIdForRequest(req)
   if (!studentId) throw new HttpError(400, "Student is required")
+  const activeSession = await getActiveAcademicSession(schoolId)
+  const access = await learnerDrillAccess(req, schoolId, studentId, { session: activeSession, action: "view" })
   const date = req.query.date || todayIso()
+  const subjectScope = scopedInClause(access.allowedSubjectIds, "subject_id")
   const [[existing]] = await pool.query(
     `SELECT id FROM drill_sessions
-     WHERE school_id = ? AND student_id = ? AND scheduled_date = ? AND status <> 'missed'
+     WHERE school_id = ? AND student_id = ? AND scheduled_date = ? AND status <> 'missed'${subjectScope.clause}
      ORDER BY FIELD(status, 'in_progress', 'pending', 'completed', 'missed'), id DESC
      LIMIT 1`,
-    [schoolId, studentId, date],
+    [schoolId, studentId, date, ...subjectScope.params],
   )
   let sessionId = existing?.id
   let generation = null
@@ -390,7 +447,13 @@ export async function getTodayDrill(req, res) {
     const connection = await pool.getConnection()
     try {
       await connection.beginTransaction()
-      generation = await generateDailyDrill(connection, schoolId, studentId, { scheduledDate: date, limit: 5 })
+      generation = await generateDailyDrill(connection, schoolId, studentId, {
+        academicYearId: activeSession.setupRequired ? null : activeSession.academicYearId,
+        termId: activeSession.setupRequired ? null : activeSession.termId,
+        scheduledDate: date,
+        limit: 5,
+        allowedSubjectIds: access.allowedSubjectIds,
+      })
       await connection.commit()
       if (generation.ok) sessionId = generation.session_id
     } catch (error) {
@@ -422,12 +485,13 @@ export async function answerDrillQuestion(req, res) {
   const answer = req.body.answer ?? req.body.student_answer ?? ""
   if (!sessionId) throw new HttpError(400, "Drill session is required")
   if (!sessionQuestionId && !questionId) throw new HttpError(400, "Question is required")
+  const activeSession = await getActiveAcademicSession(schoolId)
 
   const connection = await pool.getConnection()
   try {
     await connection.beginTransaction()
     const [[row]] = await connection.query(
-      `SELECT ds.student_id, ds.status, dsq.id AS session_question_id, q.*
+      `SELECT ds.student_id, ds.subject_id AS drill_subject_id, ds.status, dsq.id AS session_question_id, q.*
        FROM drill_sessions ds
        JOIN drill_session_questions dsq ON dsq.drill_session_id = ds.id
        JOIN question_bank q ON q.id = dsq.question_id
@@ -437,9 +501,12 @@ export async function answerDrillQuestion(req, res) {
       [schoolId, sessionId, sessionQuestionId || questionId],
     )
     if (!row) throw new HttpError(404, "Drill question was not found")
-    if (req.user.role === "student" && Number(row.student_id) !== Number(req.user.studentId || req.user.id)) {
-      throw new HttpError(403, "Students can only answer their own drills")
-    }
+    await learnerDrillAccess(req, schoolId, row.student_id, {
+      db: connection,
+      session: activeSession,
+      subjectId: row.drill_subject_id,
+      action: "answer",
+    })
     if (row.status === "completed") throw new HttpError(409, "This drill has already been submitted")
     let mark = markAnswer(row, answer)
     if (
@@ -513,9 +580,12 @@ export async function submitDrill(req, res) {
   const sessionId = Number(req.params.id || 0)
   const [[session]] = await pool.query("SELECT * FROM drill_sessions WHERE school_id = ? AND id = ? LIMIT 1", [schoolId, sessionId])
   if (!session) throw new HttpError(404, "Drill session was not found")
-  if (req.user.role === "student" && Number(session.student_id) !== Number(req.user.studentId || req.user.id)) {
-    throw new HttpError(403, "Students can only submit their own drills")
-  }
+  const activeSession = await getActiveAcademicSession(schoolId)
+  await learnerDrillAccess(req, schoolId, session.student_id, {
+    session: activeSession,
+    subjectId: session.subject_id,
+    action: "submit",
+  })
   const [[aggregate]] = await pool.query(
     `SELECT COUNT(*) AS total,
       SUM(CASE WHEN answered_at IS NOT NULL THEN 1 ELSE 0 END) AS answered,
@@ -549,10 +619,15 @@ export async function getDrillSession(req, res) {
   const schoolId = getScopedSchoolId(req)
   const sessionId = Number(req.params.id || req.params.sessionId || 0)
   if (!sessionId) throw new HttpError(400, "Drill session is required")
-  const drill = await loadDrillSession(schoolId, sessionId, { includeAnswers: req.user.role !== "student" })
-  if (req.user.role === "student" && Number(drill.student_id) !== Number(req.user.studentId || req.user.id)) {
-    throw new HttpError(403, "Students can only view their own drills")
-  }
+  const activeSession = await getActiveAcademicSession(schoolId)
+  await assertDrillSessionAccess({
+    actor: req.user,
+    schoolId,
+    sessionId,
+    action: "view",
+    ...activeSessionIds(activeSession),
+  })
+  const drill = await loadDrillSession(schoolId, sessionId, { includeAnswers: !["student", "parent"].includes(String(req.user.role || "")) })
   res.json({ drill })
 }
 
@@ -560,15 +635,18 @@ export async function getDrillHistory(req, res) {
   const schoolId = getScopedSchoolId(req)
   const studentId = studentIdForRequest(req)
   if (!studentId) throw new HttpError(400, "Student is required")
+  const activeSession = await getActiveAcademicSession(schoolId)
+  const access = await learnerDrillAccess(req, schoolId, studentId, { session: activeSession, action: "history" })
+  const subjectScope = scopedInClause(access.allowedSubjectIds, "ds.subject_id")
   const [sessions] = await pool.query(
     `SELECT ds.*, subj.name AS subject_name, st.topic_name AS focus_topic_name
      FROM drill_sessions ds
      JOIN subjects subj ON subj.id = ds.subject_id AND subj.school_id = ds.school_id
      LEFT JOIN syllabus_topics st ON st.id = ds.focus_topic_id AND st.school_id = ds.school_id
-     WHERE ds.school_id = ? AND ds.student_id = ?
+     WHERE ds.school_id = ? AND ds.student_id = ?${subjectScope.clause}
      ORDER BY ds.scheduled_date DESC
      LIMIT 60`,
-    [schoolId, studentId],
+    [schoolId, studentId, ...subjectScope.params],
   )
   res.json({ sessions })
 }
@@ -577,13 +655,11 @@ export async function getTeacherDrillInsights(req, res) {
   const schoolId = getScopedSchoolId(req)
   const classId = Number(req.params.classId || req.params.class_id || 0)
   if (!classId) throw new HttpError(400, "Class is required")
-  if (req.user?.role === "teacher") {
-    const teacherClassIds = await getTeacherClassIds(req, schoolId)
-    if (!teacherClassIds.map(Number).includes(Number(classId))) {
-      throw new HttpError(403, "You can only view drill insights for your assigned classes")
-    }
-  }
   const session = await getActiveAcademicSession(schoolId)
+  const teacherSubjectIds = await teacherSubjectScope(req, schoolId, classId, session)
+  const summarySubjectScope = scopedInClause(teacherSubjectIds, "ds.subject_id")
+  const masterySubjectScope = scopedInClause(teacherSubjectIds, "stm.subject_id")
+  const questionSubjectScope = scopedInClause(teacherSubjectIds, "q.subject_id")
   const drillWindow = activeDrillWindow(session)
   const [[summary]] = await pool.query(
     `SELECT COUNT(DISTINCT ds.id) AS sessions,
@@ -591,8 +667,10 @@ export async function getTeacherDrillInsights(req, res) {
       AVG(ds.percentage) AS average_score
      FROM drill_sessions ds
      JOIN student_enrollments se ON se.student_id = ds.student_id AND se.school_id = ds.school_id
-     WHERE ds.school_id = ? AND se.class_id = ? AND se.enrollment_status = 'active'`,
-    [schoolId, classId],
+     WHERE ds.school_id = ? AND se.class_id = ? AND se.enrollment_status = 'active'
+       ${session.setupRequired ? "" : "AND se.academic_year_id = ? AND se.term_id = ?"}
+       AND ds.scheduled_date BETWEEN ? AND ?${summarySubjectScope.clause}`,
+    [schoolId, classId, ...(session.setupRequired ? [] : [session.academicYearId, session.termId]), drillWindow.start, drillWindow.end, ...summarySubjectScope.params],
   )
   const [weakTopics] = await pool.query(
     `SELECT st.topic_name, subj.name AS subject_name, COUNT(*) AS weak_students, AVG(stm.mastery_score) AS average_mastery
@@ -601,22 +679,25 @@ export async function getTeacherDrillInsights(req, res) {
      JOIN subjects subj ON subj.id = stm.subject_id AND subj.school_id = stm.school_id
      JOIN student_enrollments se ON se.student_id = stm.student_id AND se.school_id = stm.school_id
      WHERE stm.school_id = ? AND se.class_id = ? AND se.enrollment_status = 'active'
-       AND stm.mastery_label IN ('weak', 'developing')
+       ${session.setupRequired ? "" : "AND se.academic_year_id = ? AND se.term_id = ?"}
+       AND stm.mastery_label IN ('weak', 'developing')${masterySubjectScope.clause}
      GROUP BY st.id, st.topic_name, subj.name
      ORDER BY weak_students DESC, average_mastery ASC
      LIMIT 10`,
-    [schoolId, classId],
+    [schoolId, classId, ...(session.setupRequired ? [] : [session.academicYearId, session.termId]), ...masterySubjectScope.params],
   )
   const [missed] = await pool.query(
     `SELECT s.id, s.first_name, s.last_name, COUNT(ds.id) AS missed_drills
      FROM drill_sessions ds
      JOIN students s ON s.id = ds.student_id AND s.school_id = ds.school_id
      JOIN student_enrollments se ON se.student_id = s.id AND se.school_id = s.school_id
-     WHERE ds.school_id = ? AND se.class_id = ? AND ds.status = 'missed'
+     WHERE ds.school_id = ? AND se.class_id = ? AND se.enrollment_status = 'active'
+       ${session.setupRequired ? "" : "AND se.academic_year_id = ? AND se.term_id = ?"}
+       AND ds.scheduled_date BETWEEN ? AND ? AND ds.status = 'missed'${summarySubjectScope.clause}
      GROUP BY s.id, s.student_id, s.admission_no, s.first_name, s.last_name
      ORDER BY missed_drills DESC
      LIMIT 10`,
-    [schoolId, classId],
+    [schoolId, classId, ...(session.setupRequired ? [] : [session.academicYearId, session.termId]), drillWindow.start, drillWindow.end, ...summarySubjectScope.params],
   )
   let interventions = []
   let questionWarnings = []
@@ -631,11 +712,12 @@ export async function getTeacherDrillInsights(req, res) {
        JOIN subjects subj ON subj.id = stm.subject_id AND subj.school_id = stm.school_id
        JOIN syllabus_topics st ON st.id = stm.topic_id AND st.school_id = stm.school_id
        WHERE stm.school_id = ? AND se.class_id = ? AND se.enrollment_status = 'active'
+         ${masterySubjectScope.clause}
          ${session.setupRequired ? "" : "AND se.academic_year_id = ? AND se.term_id = ?"}
          AND (stm.intervention_needed = 1 OR stm.consecutive_failures >= 3)
        ORDER BY stm.consecutive_failures DESC, stm.mastery_score ASC
        LIMIT 20`,
-      [schoolId, classId, ...(session.setupRequired ? [] : [session.academicYearId, session.termId])],
+      [schoolId, classId, ...masterySubjectScope.params, ...(session.setupRequired ? [] : [session.academicYearId, session.termId])],
     )
     interventions = interventionRows.map((row) => ({
       ...row,
@@ -661,10 +743,10 @@ export async function getTeacherDrillInsights(req, res) {
        WHERE q.school_id = ?
          AND q.approval_status = 'approved'
          AND q.times_attempted >= 5
-         AND (q.percent_correct <= 20 OR q.percent_correct >= 95 OR q.flag_count > 0)
+         AND (q.percent_correct <= 20 OR q.percent_correct >= 95 OR q.flag_count > 0)${questionSubjectScope.clause}
        ORDER BY q.flag_count DESC, q.times_attempted DESC
        LIMIT 20`,
-      [schoolId],
+      [schoolId, ...questionSubjectScope.params],
     )
     questionWarnings = warningRows.map((row) => ({
       ...row,
@@ -696,6 +778,7 @@ export async function getTeacherDrillInsights(req, res) {
      LEFT JOIN drill_sessions ds ON ds.school_id = se.school_id
       AND ds.student_id = s.id
       AND ds.scheduled_date BETWEEN ? AND ?
+      ${summarySubjectScope.clause}
      LEFT JOIN drill_session_questions dsq ON dsq.drill_session_id = ds.id
      LEFT JOIN question_bank q ON q.id = dsq.question_id AND q.school_id = ds.school_id
      WHERE se.school_id = ?
@@ -704,7 +787,7 @@ export async function getTeacherDrillInsights(req, res) {
        ${session.setupRequired ? "" : "AND se.academic_year_id = ? AND se.term_id = ?"}
      GROUP BY s.id, s.first_name, s.last_name
      ORDER BY average_score DESC, completed_drills DESC, ${studentCodeSortSql("s")}, s.first_name, s.last_name`,
-    [drillWindow.start, drillWindow.end, schoolId, classId, ...(session.setupRequired ? [] : [session.academicYearId, session.termId])],
+    [drillWindow.start, drillWindow.end, ...summarySubjectScope.params, schoolId, classId, ...(session.setupRequired ? [] : [session.academicYearId, session.termId])],
   )
   const learnerProfiles = learnerRows.map((row) => {
     const recentScore = percentValue(row.recent_score)
@@ -759,34 +842,41 @@ export async function getGuardianDrillSummary(req, res) {
   const schoolId = getScopedSchoolId(req)
   const studentId = Number(req.params.studentId || req.params.student_id || 0)
   if (!studentId) throw new HttpError(400, "Student is required")
+  const activeSession = await getActiveAcademicSession(schoolId)
+  const access = await learnerDrillAccess(req, schoolId, studentId, {
+    session: activeSession,
+    action: "summary",
+  })
+  const sessionSubjectScope = scopedInClause(access.allowedSubjectIds, "ds.subject_id")
+  const masterySubjectScope = scopedInClause(access.allowedSubjectIds, "stm.subject_id")
   const [sessions] = await pool.query(
     `SELECT ds.*, subj.name AS subject_name, st.topic_name AS focus_topic_name
      FROM drill_sessions ds
      JOIN subjects subj ON subj.id = ds.subject_id AND subj.school_id = ds.school_id
      LEFT JOIN syllabus_topics st ON st.id = ds.focus_topic_id AND st.school_id = ds.school_id
-     WHERE ds.school_id = ? AND ds.student_id = ? AND ds.scheduled_date >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
+     WHERE ds.school_id = ? AND ds.student_id = ? AND ds.scheduled_date >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)${sessionSubjectScope.clause}
      ORDER BY ds.scheduled_date DESC`,
-    [schoolId, studentId],
+    [schoolId, studentId, ...sessionSubjectScope.params],
   )
   const [weak] = await pool.query(
     `SELECT st.topic_name, subj.name AS subject_name, stm.mastery_score
      FROM student_topic_mastery stm
      JOIN syllabus_topics st ON st.id = stm.topic_id AND st.school_id = stm.school_id
      JOIN subjects subj ON subj.id = stm.subject_id AND subj.school_id = stm.school_id
-     WHERE stm.school_id = ? AND stm.student_id = ?
+     WHERE stm.school_id = ? AND stm.student_id = ?${masterySubjectScope.clause}
      ORDER BY stm.mastery_score ASC
      LIMIT 1`,
-    [schoolId, studentId],
+    [schoolId, studentId, ...masterySubjectScope.params],
   )
   const [strong] = await pool.query(
     `SELECT subj.name AS subject_name, AVG(stm.mastery_score) AS score
      FROM student_topic_mastery stm
      JOIN subjects subj ON subj.id = stm.subject_id AND subj.school_id = stm.school_id
-     WHERE stm.school_id = ? AND stm.student_id = ?
+     WHERE stm.school_id = ? AND stm.student_id = ?${masterySubjectScope.clause}
      GROUP BY subj.id, subj.name
      ORDER BY score DESC
      LIMIT 1`,
-    [schoolId, studentId],
+    [schoolId, studentId, ...masterySubjectScope.params],
   )
   const completed = sessions.filter((row) => row.status === "completed").length
   const missed = sessions.filter((row) => row.status === "missed").length

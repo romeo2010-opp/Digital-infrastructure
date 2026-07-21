@@ -123,32 +123,30 @@ VALUES
 ON DUPLICATE KEY UPDATE code = VALUES(code);
 
 INSERT INTO users (
-  school_id, role, full_name, first_name, last_name, email, password_hash,
+  public_ref, school_id, role, full_name, first_name, last_name, email, password_hash,
   must_change_password, phone, gender, date_of_birth, employee_id,
   qualification, specialization, address, employment_status, role_type, is_active
 )
 VALUES
-  (@school_id, 'school_owner', 'Amelia Reign', 'Amelia', 'Reign', 'owner@ria.com', @ria_password_hash, 0, '+265 887 430 001', 'Female', '1982-04-17', 'RIA-ADM-001', 'B.Ed Leadership', 'School Operations', 'Reign Internation Academy, Blantyre', 'active', 'admin_teacher', 1),
-  (@school_id, 'headteacher', 'Jonathan Moyo', 'Jonathan', 'Moyo', 'headteacheer@ria.com', @ria_password_hash, 0, '+265 887 430 002', 'Male', '1979-11-03', 'RIA-T-001', 'M.Ed Educational Leadership', 'Primary School Leadership', 'Reign Internation Academy, Blantyre', 'active', 'headteacher', 1),
-  (@school_id, 'bursar', 'Naomi Banda', 'Naomi', 'Banda', 'bursar@ria.com', @ria_password_hash, 0, '+265 887 430 003', 'Female', '1986-02-21', 'RIA-ADM-002', 'Diploma in Accounting', 'Finance', 'Reign Internation Academy, Blantyre', 'active', 'admin_teacher', 1),
-  (@school_id, 'teacher', 'Ruth Mwale', 'Ruth', 'Mwale', 'year1.teacher@ria.com', @ria_password_hash, 0, '+265 887 431 001', 'Female', '1991-08-14', 'RIA-T-101', 'Diploma in Primary Education', 'Early Years', 'Reign Internation Academy, Blantyre', 'active', 'teacher', 1),
-  (@school_id, 'teacher', 'Daniel Phiri', 'Daniel', 'Phiri', 'year2.teacher@ria.com', @ria_password_hash, 0, '+265 887 431 002', 'Male', '1989-05-08', 'RIA-T-102', 'Diploma in Primary Education', 'Lower Primary Numeracy', 'Reign Internation Academy, Blantyre', 'active', 'teacher', 1),
-  (@school_id, 'teacher', 'Grace Tembo', 'Grace', 'Tembo', 'year3.teacher@ria.com', @ria_password_hash, 0, '+265 887 431 003', 'Female', '1990-12-19', 'RIA-T-103', 'B.Ed Primary Education', 'Reading Development', 'Reign Internation Academy, Blantyre', 'active', 'teacher', 1),
-  (@school_id, 'teacher', 'Kelvin Chirwa', 'Kelvin', 'Chirwa', 'year4.teacher@ria.com', @ria_password_hash, 0, '+265 887 431 004', 'Male', '1988-09-27', 'RIA-T-104', 'B.Ed Primary Education', 'Upper Primary', 'Reign Internation Academy, Blantyre', 'active', 'teacher', 1),
-  (@school_id, 'teacher', 'Martha Gondwe', 'Martha', 'Gondwe', 'year5.teacher@ria.com', @ria_password_hash, 0, '+265 887 431 005', 'Female', '1987-06-16', 'RIA-T-105', 'B.Ed Primary Education', 'Mathematics Support', 'Reign Internation Academy, Blantyre', 'active', 'teacher', 1),
-  (@school_id, 'teacher', 'Peter Nkhoma', 'Peter', 'Nkhoma', 'year6.teacher@ria.com', @ria_password_hash, 0, '+265 887 431 006', 'Male', '1985-03-25', 'RIA-T-106', 'B.Ed Primary Education', 'Checkpoint Preparation', 'Reign Internation Academy, Blantyre', 'active', 'teacher', 1),
-  (@school_id, 'teacher', 'Lindiwe Kachale', 'Lindiwe', 'Kachale', 'english.teacher@ria.com', @ria_password_hash, 0, '+265 887 432 001', 'Female', '1992-01-12', 'RIA-T-201', 'B.Ed Languages', 'English', 'Reign Internation Academy, Blantyre', 'active', 'teacher', 1),
-  (@school_id, 'teacher', 'Samuel Mkandawire', 'Samuel', 'Mkandawire', 'writing.teacher@ria.com', @ria_password_hash, 0, '+265 887 432 002', 'Male', '1991-10-04', 'RIA-T-202', 'B.Ed Languages', 'Creative Writing', 'Reign Internation Academy, Blantyre', 'active', 'teacher', 1),
-  (@school_id, 'teacher', 'Memory Jere', 'Memory', 'Jere', 'mathematics.teacher@ria.com', @ria_password_hash, 0, '+265 887 432 003', 'Female', '1989-07-23', 'RIA-T-203', 'B.Ed Mathematics', 'Mathematics', 'Reign Internation Academy, Blantyre', 'active', 'teacher', 1),
-  (@school_id, 'teacher', 'Patrick Munthali', 'Patrick', 'Munthali', 'science.teacher@ria.com', @ria_password_hash, 0, '+265 887 432 004', 'Male', '1988-04-30', 'RIA-T-204', 'B.Ed Science', 'Science', 'Reign Internation Academy, Blantyre', 'active', 'teacher', 1)
+  (UUID(), @school_id, 'school_owner', 'Amelia Reign', 'Amelia', 'Reign', 'owner@ria.com', @ria_password_hash, 1, '+265 887 430 001', 'Female', '1982-04-17', 'RIA-ADM-001', 'B.Ed Leadership', 'School Operations', 'Reign Internation Academy, Blantyre', 'active', 'admin_teacher', 1),
+  (UUID(), @school_id, 'headteacher', 'Jonathan Moyo', 'Jonathan', 'Moyo', 'headteacheer@ria.com', @ria_password_hash, 1, '+265 887 430 002', 'Male', '1979-11-03', 'RIA-T-001', 'M.Ed Educational Leadership', 'Primary School Leadership', 'Reign Internation Academy, Blantyre', 'active', 'headteacher', 1),
+  (UUID(), @school_id, 'bursar', 'Naomi Banda', 'Naomi', 'Banda', 'bursar@ria.com', @ria_password_hash, 1, '+265 887 430 003', 'Female', '1986-02-21', 'RIA-ADM-002', 'Diploma in Accounting', 'Finance', 'Reign Internation Academy, Blantyre', 'active', 'admin_teacher', 1),
+  (UUID(), @school_id, 'teacher', 'Ruth Mwale', 'Ruth', 'Mwale', 'year1.teacher@ria.com', @ria_password_hash, 1, '+265 887 431 001', 'Female', '1991-08-14', 'RIA-T-101', 'Diploma in Primary Education', 'Early Years', 'Reign Internation Academy, Blantyre', 'active', 'teacher', 1),
+  (UUID(), @school_id, 'teacher', 'Daniel Phiri', 'Daniel', 'Phiri', 'year2.teacher@ria.com', @ria_password_hash, 1, '+265 887 431 002', 'Male', '1989-05-08', 'RIA-T-102', 'Diploma in Primary Education', 'Lower Primary Numeracy', 'Reign Internation Academy, Blantyre', 'active', 'teacher', 1),
+  (UUID(), @school_id, 'teacher', 'Grace Tembo', 'Grace', 'Tembo', 'year3.teacher@ria.com', @ria_password_hash, 1, '+265 887 431 003', 'Female', '1990-12-19', 'RIA-T-103', 'B.Ed Primary Education', 'Reading Development', 'Reign Internation Academy, Blantyre', 'active', 'teacher', 1),
+  (UUID(), @school_id, 'teacher', 'Kelvin Chirwa', 'Kelvin', 'Chirwa', 'year4.teacher@ria.com', @ria_password_hash, 1, '+265 887 431 004', 'Male', '1988-09-27', 'RIA-T-104', 'B.Ed Primary Education', 'Upper Primary', 'Reign Internation Academy, Blantyre', 'active', 'teacher', 1),
+  (UUID(), @school_id, 'teacher', 'Martha Gondwe', 'Martha', 'Gondwe', 'year5.teacher@ria.com', @ria_password_hash, 1, '+265 887 431 005', 'Female', '1987-06-16', 'RIA-T-105', 'B.Ed Primary Education', 'Mathematics Support', 'Reign Internation Academy, Blantyre', 'active', 'teacher', 1),
+  (UUID(), @school_id, 'teacher', 'Peter Nkhoma', 'Peter', 'Nkhoma', 'year6.teacher@ria.com', @ria_password_hash, 1, '+265 887 431 006', 'Male', '1985-03-25', 'RIA-T-106', 'B.Ed Primary Education', 'Checkpoint Preparation', 'Reign Internation Academy, Blantyre', 'active', 'teacher', 1),
+  (UUID(), @school_id, 'teacher', 'Lindiwe Kachale', 'Lindiwe', 'Kachale', 'english.teacher@ria.com', @ria_password_hash, 1, '+265 887 432 001', 'Female', '1992-01-12', 'RIA-T-201', 'B.Ed Languages', 'English', 'Reign Internation Academy, Blantyre', 'active', 'teacher', 1),
+  (UUID(), @school_id, 'teacher', 'Samuel Mkandawire', 'Samuel', 'Mkandawire', 'writing.teacher@ria.com', @ria_password_hash, 1, '+265 887 432 002', 'Male', '1991-10-04', 'RIA-T-202', 'B.Ed Languages', 'Creative Writing', 'Reign Internation Academy, Blantyre', 'active', 'teacher', 1),
+  (UUID(), @school_id, 'teacher', 'Memory Jere', 'Memory', 'Jere', 'mathematics.teacher@ria.com', @ria_password_hash, 1, '+265 887 432 003', 'Female', '1989-07-23', 'RIA-T-203', 'B.Ed Mathematics', 'Mathematics', 'Reign Internation Academy, Blantyre', 'active', 'teacher', 1),
+  (UUID(), @school_id, 'teacher', 'Patrick Munthali', 'Patrick', 'Munthali', 'science.teacher@ria.com', @ria_password_hash, 1, '+265 887 432 004', 'Male', '1988-04-30', 'RIA-T-204', 'B.Ed Science', 'Science', 'Reign Internation Academy, Blantyre', 'active', 'teacher', 1)
 ON DUPLICATE KEY UPDATE
   school_id = VALUES(school_id),
   role = VALUES(role),
   full_name = VALUES(full_name),
   first_name = VALUES(first_name),
   last_name = VALUES(last_name),
-  password_hash = VALUES(password_hash),
-  must_change_password = VALUES(must_change_password),
   phone = VALUES(phone),
   gender = VALUES(gender),
   date_of_birth = VALUES(date_of_birth),
@@ -230,10 +228,10 @@ VALUES
   ('Year 6', 'RIA-Y6-006', 'Andrew', 'Chirwa', '2014-02-14', 'Male');
 
 INSERT INTO students (
-  school_id, class_id, student_id, admission_no, first_name, last_name,
+  public_ref, school_id, class_id, student_id, admission_no, first_name, last_name,
   date_of_birth, gender, stream_section, enrollment_date, student_type, status
 )
-SELECT @school_id, c.id, roster.student_code, roster.student_code,
+SELECT UUID(), @school_id, c.id, roster.student_code, roster.student_code,
   roster.first_name, roster.last_name, roster.date_of_birth, roster.gender,
   'A', '2026-05-04', 'returning', 'active'
 FROM ria_students roster

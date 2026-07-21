@@ -168,9 +168,9 @@ export async function postParentAcademicInsight(req,res){res.status(201).json({i
 export async function patchParentAcademicInsight(req,res){res.json({insight:await updateParentAcademicInsight(getScopedSchoolId(req),String(req.params.insightRef||''),req.user,req.body||{})})}
 export async function parentPortalAcademicInsights(req,res){res.json(await getParentPortalAcademicInsights(getScopedSchoolId(req),req.user,req.query||{}))}
 export async function updateIntervention(req,res){res.json({intervention:await patchIntervention(getScopedSchoolId(req),String(req.params.interventionRef||''),req.user,req.body||{})})}
-export async function assessmentBlueprints(req,res){res.json(await listAssessmentBlueprints(getScopedSchoolId(req),req.query))}
+export async function assessmentBlueprints(req,res){res.json(await listAssessmentBlueprints(getScopedSchoolId(req),req.user,req.query))}
 export async function postAssessmentBlueprint(req,res){res.status(201).json({blueprint:await createAssessmentBlueprint(getScopedSchoolId(req),req.user,req.body||{})})}
-export async function remediationPacks(req,res){res.json(await listRemediationPacks(getScopedSchoolId(req),req.query))}
+export async function remediationPacks(req,res){res.json(await listRemediationPacks(getScopedSchoolId(req),req.user,req.query))}
 export async function postRemediationPack(req,res){res.status(201).json({remediation_pack:await createRemediationPack(getScopedSchoolId(req),req.user,req.body||{})})}
 export async function updateRemediationPack(req,res){res.json({remediation_pack:await patchRemediationPack(getScopedSchoolId(req),String(req.params.packRef||''),req.user,req.body||{})})}
 

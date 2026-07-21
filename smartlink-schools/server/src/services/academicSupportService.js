@@ -3,6 +3,7 @@ import { pool } from "../config/db.js"
 import { HttpError } from "../utils/http.js"
 import { createInAppNotification } from "./operationalCommunicationService.js"
 import { createTargetedAssessmentDraft } from "./academicOperationsService.js"
+import { validateSyllabusTopicScope } from "./curriculumScopeService.js"
 
 export const DEFAULT_ESCALATION_POLICY = Object.freeze({
   firstWeakEvidenceAction: "teacher_follow_up",
@@ -39,17 +40,33 @@ let supportSchemaCache = null
 let supportSchemaCheckedAt = 0
 async function supportSchemaCapabilities(db = pool) {
   if (supportSchemaCache && Date.now() - supportSchemaCheckedAt < 30_000) return supportSchemaCache
-  const [columns] = await db.query(`SELECT table_name,column_name FROM information_schema.columns
-    WHERE table_schema=DATABASE() AND table_name IN ('learner_support_case_assignments','learner_support_case_notes','intervention_sessions','academic_intervention_reassessments')`)
+  const [columns] = await db.query(`SELECT TABLE_NAME AS table_name,COLUMN_NAME AS column_name FROM information_schema.columns
+    WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN ('learner_support_case_assignments','learner_support_case_notes','intervention_sessions','academic_intervention_reassessments')`)
   const available = new Set(columns.map((row) => `${row.table_name}.${row.column_name}`))
+  const hasColumns = (table, required) => required.every((column) => available.has(`${table}.${column}`))
   supportSchemaCache = {
-    assignments: available.has("learner_support_case_assignments.id"),
-    notes: available.has("learner_support_case_notes.id"),
-    sessionDetails: available.has("intervention_sessions.duration_minutes") && available.has("intervention_sessions.teacher_observation") && available.has("intervention_sessions.next_action"),
+    assignments: hasColumns("learner_support_case_assignments", ["id", "school_id", "case_id", "assigned_user_id", "assignment_type", "assignment_status", "action_label", "due_at", "acknowledged_at", "completed_at", "assigned_by", "created_at"]),
+    notes: hasColumns("learner_support_case_notes", ["id", "school_id", "case_id", "term_id", "author_user_id", "visibility", "note_text", "status", "created_at"]),
+    sessionDetails: hasColumns("intervention_sessions", ["duration_minutes", "delivery_method", "target_topic_id", "target_objective_id", "teacher_observation", "next_action"]),
     reassessmentDueAt: available.has("academic_intervention_reassessments.due_at"),
   }
   supportSchemaCheckedAt = Date.now()
   return supportSchemaCache
+}
+const SUPPORT_SCHEMA_CAPABILITY_LABELS = Object.freeze({
+  assignments: "case assignments",
+  notes: "academic case notes",
+  sessionDetails: "detailed support sessions",
+  reassessmentDueAt: "scheduled reassessments",
+})
+async function requireSupportSchemaCapability(db, capability) {
+  const capabilities = await supportSchemaCapabilities(db)
+  if (capabilities[capability]) return capabilities
+  throw new HttpError(503, `Learner-support ${SUPPORT_SCHEMA_CAPABILITY_LABELS[capability] || "features"} are temporarily unavailable while this school's database upgrade is completed.`, {
+    code: "LEARNER_SUPPORT_SCHEMA_UPGRADE_REQUIRED",
+    details: { required_migration: "062_teacher_learner_support_access.sql", capability },
+    expose: true,
+  })
 }
 async function optionalRows(db, sql, params = []) {
   try { return (await db.query(sql, params))[0] }
@@ -255,6 +272,35 @@ async function lockedCase(db, schoolId, caseId, actor, requestedAction) {
   return { record: access.case, access }
 }
 
+export async function validateSupportCaseOwner(db, schoolId, record, ownerUserId) {
+  const ownerId = number(ownerUserId)
+  const [[owner]] = await db.query(`SELECT id,role,role_type FROM users
+    WHERE school_id=? AND id=? AND role IN ('school_owner','director','owner','headteacher','teacher')
+      AND employment_status='active' AND is_active=1 LIMIT 1`, [schoolId, ownerId])
+  if (!owner) throw new HttpError(400, "Select an active academic staff member from this school.")
+  if (owner.role !== "teacher" || ["headteacher", "deputy_headteacher", "admin_teacher"].includes(String(owner.role_type || ""))) {
+    return owner
+  }
+  if (!record?.class_id) throw new HttpError(400, "A class-scoped academic staff member is required for this support case.")
+  const [assignmentResult, primaryClassResult] = await Promise.all([
+    db.query(`SELECT id FROM teacher_class_subject_assignments
+      WHERE school_id=? AND teacher_id=? AND class_id=? AND is_active=1
+        AND ((role='subject_teacher' AND ? IS NOT NULL AND subject_id=?) OR role='class_teacher')
+        AND (academic_year_id IS NULL OR ? IS NULL OR academic_year_id=?)
+        AND (term_id IS NULL OR ? IS NULL OR term_id=?)
+      LIMIT 1`, [schoolId, owner.id, record.class_id, record.subject_id || null, record.subject_id || null,
+      record.academic_year_id || null, record.academic_year_id || null,
+      record.current_term_id || null, record.current_term_id || null]),
+    db.query("SELECT id FROM classes WHERE school_id=? AND id=? AND teacher_user_id=? LIMIT 1", [schoolId, record.class_id, owner.id]),
+  ])
+  const assignment = assignmentResult[0]?.[0]
+  const primaryClass = primaryClassResult[0]?.[0]
+  if (!assignment && !primaryClass) {
+    throw new HttpError(400, "The selected teacher is not assigned to this learner-support class and subject.")
+  }
+  return owner
+}
+
 function assertVersion(record, body = {}) {
   if (body.version_number !== undefined && number(body.version_number) !== number(record.version_number)) throw new HttpError(409, "This support case changed after it was opened. Refresh and try again.", { code: "STALE_SUPPORT_CASE" })
 }
@@ -371,7 +417,7 @@ export async function getSupportCase(schoolId, caseId, actor) {
     pool.query(sessionSql, [schoolId, record.id]).then(([rows]) => rows),
     capabilities.notes ? optionalRows(pool, `SELECT note.public_ref,note.visibility,note.note_text,note.created_at,CONCAT(author.first_name,' ',author.last_name) author_name FROM learner_support_case_notes note JOIN users author ON author.school_id=note.school_id AND author.id=note.author_user_id WHERE note.school_id=? AND note.case_id=? AND note.status='active' AND note.visibility IN (${noteVisibility.map(() => "?").join(",")}) ORDER BY note.created_at DESC`, [schoolId, record.id, ...noteVisibility]) : Promise.resolve([]),
     pool.query(reassessmentSql, [schoolId, record.id]).then(([rows]) => rows),
-    capabilities.assignments ? optionalRows(pool, "SELECT assignment.public_ref,assignment.assignment_type,assignment.assignment_status,assignment.action_label,assignment.due_at,assignment.acknowledged_at,assignment.completed_at,user.public_ref user_ref,CONCAT(user.first_name,' ',user.last_name) user_name FROM learner_support_case_assignments assignment JOIN users user ON user.school_id=assignment.school_id AND user.id=assignment.assigned_user_id WHERE assignment.school_id=? AND assignment.case_id=? AND assignment.assignment_status<>'removed' ORDER BY assignment.created_at", [schoolId, record.id]) : Promise.resolve([]),
+    capabilities.assignments ? optionalRows(pool, "SELECT case_assignment.public_ref,case_assignment.assignment_type,case_assignment.assignment_status,case_assignment.action_label,case_assignment.due_at,case_assignment.acknowledged_at,case_assignment.completed_at,support_user.public_ref user_ref,CONCAT(support_user.first_name,' ',support_user.last_name) user_name FROM learner_support_case_assignments case_assignment JOIN users support_user ON support_user.school_id=case_assignment.school_id AND support_user.id=case_assignment.assigned_user_id WHERE case_assignment.school_id=? AND case_assignment.case_id=? AND case_assignment.assignment_status<>'removed' ORDER BY case_assignment.created_at", [schoolId, record.id]) : Promise.resolve([]),
   ])
   const attendanceRows = await optionalRows(pool, `SELECT session.public_ref session_ref,student.public_ref learner_ref,CONCAT(student.first_name,' ',student.last_name) learner_name,attendance.attendance_status status,attendance.note
     FROM intervention_session_attendance attendance
@@ -393,6 +439,7 @@ export async function getSupportCase(schoolId, caseId, actor) {
     if (!capabilities.notes && action === SUPPORT_ACTIONS.addNote) return false
     if (!capabilities.sessionDetails && action === SUPPORT_ACTIONS.recordSession) return false
     if (!capabilities.reassessmentDueAt && action === SUPPORT_ACTIONS.scheduleReassessment) return false
+    if (action === SUPPORT_ACTIONS.createAssessment && (record.case_type === "multi_subject_decline" || !record.class_id || !record.subject_id || !record.primary_topic_id)) return false
     return true
   })
   delete record.id
@@ -534,8 +581,8 @@ export async function listLearnerSupportIndicators(schoolId, actor, classId) {
     SELECT DISTINCT c.public_ref case_ref,learner.public_ref learner_ref,c.status,c.severity,c.updated_at,
     CASE WHEN c.status='reassessment_pending' THEN 'reassessment_due' WHEN c.status='strategy_review' THEN 'review_required' WHEN c.successful_cycle_count>0 THEN 'improving' ELSE 'support_active' END support_state
     FROM learner_support_cases c
-    JOIN learner_support_case_members member ON member.school_id=c.school_id AND member.case_id=c.id AND member.membership_status='active'
-    JOIN students learner ON learner.school_id=member.school_id AND learner.id=member.learner_id
+    JOIN learner_support_case_members case_member ON case_member.school_id=c.school_id AND case_member.case_id=c.id AND case_member.membership_status='active'
+    JOIN students learner ON learner.school_id=case_member.school_id AND learner.id=case_member.learner_id
     WHERE c.school_id=? AND c.class_id=? AND c.status NOT IN ('resolved','closed_inconclusive','transferred')${scope.sql}
     ORDER BY FIELD(severity,'urgent','high','medium','low'),updated_at DESC`, [schoolId, classId, ...scope.params, schoolId, classId, ...scope.params])
   const byLearner = new Map()
@@ -545,6 +592,7 @@ export async function listLearnerSupportIndicators(schoolId, actor, classId) {
 
 export async function acknowledgeSupportCase(schoolId, caseId, actor, body = {}) {
   return inTransaction(async (db) => {
+    await requireSupportSchemaCapability(db, "assignments")
     const { record, access } = await lockedCase(db, schoolId, caseId, actor, SUPPORT_ACTIONS.acknowledge)
     await db.query(`INSERT INTO learner_support_case_assignments (public_ref,school_id,case_id,assigned_user_id,assignment_type,assignment_status,action_label,due_at,acknowledged_at,assigned_by) VALUES (UUID(),?,?,?,?,'acknowledged',?,?,CURRENT_TIMESTAMP,?) ON DUPLICATE KEY UPDATE assignment_status='acknowledged',acknowledged_at=CURRENT_TIMESTAMP`, [schoolId, record.id, actor.id, access.relationships.includes("owner") ? "owner" : access.relationships.includes("support_teacher") ? "support_teacher" : "action", body.action_label || "Learner-support follow-up", body.due_at || record.next_review_at, record.created_by || actor.id])
     await event(db, schoolId, record, actor, "case_assignment_acknowledged", "The assigned teacher acknowledged the learner-support case.", { idempotencyKey: body.idempotency_key || `acknowledge:${record.id}:${actor.id}` })
@@ -554,6 +602,7 @@ export async function acknowledgeSupportCase(schoolId, caseId, actor, body = {})
 
 export async function completeSupportAssignment(schoolId, caseId, actor, body = {}) {
   return inTransaction(async (db) => {
+    await requireSupportSchemaCapability(db, "assignments")
     const { record } = await lockedCase(db, schoolId, caseId, actor, SUPPORT_ACTIONS.completeAssignment)
     const duplicate = await duplicateMutation(db, schoolId, record, body.idempotency_key); if (duplicate) return duplicate
     const [result] = await db.query("UPDATE learner_support_case_assignments SET assignment_status='completed',completed_at=CURRENT_TIMESTAMP WHERE school_id=? AND case_id=? AND assigned_user_id=? AND assignment_status IN ('assigned','acknowledged','reassignment_requested')", [schoolId, record.id, actor.id])
@@ -565,6 +614,7 @@ export async function completeSupportAssignment(schoolId, caseId, actor, body = 
 
 export async function acceptSupportOwnership(schoolId, caseId, actor, body = {}) {
   return inTransaction(async (db) => {
+    await requireSupportSchemaCapability(db, "assignments")
     const { record } = await lockedCase(db, schoolId, caseId, actor, SUPPORT_ACTIONS.acceptOwnership)
     assertVersion(record, body)
     await db.query("UPDATE learner_support_cases SET owner_user_id=?,owner_role=?,status=IF(status='detected','teacher_follow_up',status),version_number=version_number+1,updated_by=? WHERE school_id=? AND id=?", [actor.id, actor.role, actor.id, schoolId, record.id])
@@ -576,6 +626,7 @@ export async function acceptSupportOwnership(schoolId, caseId, actor, body = {})
 
 export async function requestSupportReassignment(schoolId, caseId, actor, body = {}) {
   const result = await inTransaction(async (db) => {
+    await requireSupportSchemaCapability(db, "assignments")
     const { record } = await lockedCase(db, schoolId, caseId, actor, SUPPORT_ACTIONS.requestReassignment)
     const explanation = String(body.explanation || body.reason || "").trim()
     if (!explanation) throw new HttpError(400, "Explain why reassignment is needed.")
@@ -590,6 +641,7 @@ export async function requestSupportReassignment(schoolId, caseId, actor, body =
 
 export async function addSupportNote(schoolId, caseId, actor, body = {}) {
   return inTransaction(async (db) => {
+    await requireSupportSchemaCapability(db, "notes")
     const { record, access } = await lockedCase(db, schoolId, caseId, actor, SUPPORT_ACTIONS.addNote)
     const noteText = String(body.note_text || body.note || "").trim()
     if (!noteText) throw new HttpError(400, "Academic note text is required.")
@@ -607,8 +659,11 @@ export async function createCaseTargetedAssessment(schoolId, caseId, actor, body
   const access = await canAccessLearnerSupportCase({ userId: actor?.id, schoolId, caseId, requestedAction: SUPPORT_ACTIONS.createAssessment, actorRole: actor?.role })
   if (!access.allowed || !access.case) throw new HttpError(403, "You are not authorised to create an assessment for this case.")
   const record = access.case
+  if (record.case_type === "multi_subject_decline" || !record.class_id || !record.subject_id || !record.primary_topic_id) {
+    throw new HttpError(409, "A cross-subject support case cannot create one targeted assessment. Open a subject-specific support case first.", { code: "SUBJECT_SPECIFIC_SUPPORT_CASE_REQUIRED" })
+  }
   const [memberRows, [cycleRows]] = await Promise.all([
-    pool.query("SELECT student.public_ref student_ref FROM learner_support_case_members member JOIN students student ON student.school_id=member.school_id AND student.id=member.learner_id WHERE member.school_id=? AND member.case_id=? AND member.membership_status='active'", [schoolId, record.id]).then(([rows]) => rows),
+    pool.query("SELECT student.public_ref student_ref FROM learner_support_case_members case_member JOIN students student ON student.school_id=case_member.school_id AND student.id=case_member.learner_id WHERE case_member.school_id=? AND case_member.case_id=? AND case_member.membership_status='active'", [schoolId, record.id]).then(([rows]) => rows),
     pool.query("SELECT legacy_intervention_id,success_criterion_json FROM intervention_cycles WHERE school_id=? AND case_id=? ORDER BY cycle_number DESC LIMIT 1", [schoolId, record.id]),
   ])
   const learnerRefs = [...new Set([...(record.learner_id ? (await pool.query("SELECT public_ref FROM students WHERE school_id=? AND id=?", [schoolId, record.learner_id]))[0].map((row) => row.public_ref) : []), ...memberRows.map((row) => row.student_ref)])]
@@ -631,12 +686,12 @@ export async function createCaseTargetedAssessment(schoolId, caseId, actor, body
 
 export async function assignSupportCase(schoolId, caseId, actor, body = {}) {
   return inTransaction(async (db) => {
+    await requireSupportSchemaCapability(db, "assignments")
     const { record } = await lockedCase(db, schoolId, caseId, actor, SUPPORT_ACTIONS.assign)
     const duplicate = await duplicateMutation(db, schoolId, record, body.idempotency_key); if (duplicate) return duplicate
     assertVersion(record, body)
     const ownerId = number(body.owner_user_id)
-    const [[owner]] = await db.query("SELECT id,role FROM users WHERE school_id=? AND id=? AND employment_status='active' AND is_active=1 LIMIT 1", [schoolId, ownerId])
-    if (!owner) throw new HttpError(400, "The selected case owner is not an active user in this school.")
+    const owner = await validateSupportCaseOwner(db, schoolId, record, ownerId)
     await db.query("UPDATE learner_support_cases SET owner_user_id=?,owner_role=?,status=IF(status='detected','teacher_follow_up',status),version_number=version_number+1,updated_by=? WHERE school_id=? AND id=?", [owner.id, owner.role, actor.id, schoolId, record.id])
     await db.query(`INSERT INTO learner_support_case_assignments (public_ref,school_id,case_id,assigned_user_id,assignment_type,assignment_status,action_label,due_at,assigned_by) VALUES (UUID(),?,?,?,'owner','assigned',?,?,?) ON DUPLICATE KEY UPDATE assignment_status='assigned',action_label=VALUES(action_label),due_at=VALUES(due_at),acknowledged_at=NULL,completed_at=NULL,assigned_by=VALUES(assigned_by)`, [schoolId, record.id, owner.id, body.action_label || "Own and coordinate learner support", body.due_at || record.next_review_at, actor.id])
     await event(db, schoolId, record, actor, "case_assigned", "The learner support case was assigned for follow-up.", { idempotencyKey: body.idempotency_key || `assign:${record.id}:${owner.id}:${record.version_number}`, evidence: { owner_user_id: owner.id, owner_role: owner.role } })
@@ -668,6 +723,7 @@ export async function createSupportIntervention(schoolId, caseId, actor, body = 
     const plannedDates = Array.isArray(body.session_dates) ? body.session_dates.filter(Boolean) : []
     const plannedCount = Math.max(plannedDates.length, number(body.planned_session_count, plannedDates.length || 1))
     const ownerId = number(body.owner_user_id || record.owner_user_id || actor.id)
+    const owner = await validateSupportCaseOwner(db, schoolId, record, ownerId)
     const interventionRef = randomUUID()
     const interventionType = record.scope_type === "class" ? "whole_class_revision" : record.scope_type === "group" ? "small_group_support" : "individual_remediation"
     const [legacyResult] = await db.query(`INSERT INTO academic_interventions (public_ref,school_id,student_id,class_id,subject_id,topic_id,term_id,intervention_type,issue,evidence_json,assigned_teacher_id,priority,start_date,review_date,action_plan,parent_notification_status,status,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [interventionRef, schoolId, record.learner_id, record.class_id, record.subject_id, record.primary_topic_id, record.current_term_id, interventionType, record.current_summary, JSON.stringify({ support_case_ref: record.public_ref }), ownerId, record.severity, body.start_date || dateOnly(), body.review_date || addDays(14), String(body.action_plan || `${strategy.label}: ${strategy.description || "structured support"}`), "not_required", "active", actor.id])
@@ -675,7 +731,7 @@ export async function createSupportIntervention(schoolId, caseId, actor, body = 
     await db.query(`INSERT INTO intervention_cycles (public_ref,school_id,case_id,term_id,legacy_intervention_id,cycle_number,strategy_type_id,owner_user_id,planned_session_count,success_criterion_json,delivery_threshold,attendance_threshold,start_date,review_date,status,created_by,updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [cycleRef, schoolId, record.id, record.current_term_id, legacyResult.insertId, cycleNumber, strategy.id, ownerId, plannedCount, JSON.stringify(body.success_criterion || { mastery_threshold: number(body.mastery_threshold, policy.masteryThreshold), minimum_meaningful_change: number(body.minimum_meaningful_change, 5) }), number(body.delivery_threshold, policy.minimumSupportDeliveryRate), number(body.attendance_threshold, policy.minimumSupportAttendanceRate), body.start_date || dateOnly(), body.review_date || addDays(policy.reviewWithinSchoolDays), "active", actor.id, actor.id])
     const [[cycle]] = await db.query("SELECT id FROM intervention_cycles WHERE school_id=? AND public_ref=?", [schoolId, cycleRef])
     for (let index = 0; index < plannedDates.length; index += 1) await db.query("INSERT INTO intervention_sessions (public_ref,school_id,term_id,cycle_id,session_number,scheduled_at,status,created_by,updated_by) VALUES (?,?,?,?,?,?,'planned',?,?)", [randomUUID(), schoolId, record.current_term_id, cycle.id, index + 1, plannedDates[index], actor.id, actor.id])
-    await db.query("UPDATE learner_support_cases SET status='intervention_active',escalation_level=GREATEST(escalation_level,2),intervention_cycle_count=?,owner_user_id=?,owner_role=COALESCE(owner_role,?),next_review_at=?,version_number=version_number+1,updated_by=? WHERE school_id=? AND id=?", [cycleNumber, ownerId, actor.role, body.review_date || addDays(14), actor.id, schoolId, record.id])
+    await db.query("UPDATE learner_support_cases SET status='intervention_active',escalation_level=GREATEST(escalation_level,2),intervention_cycle_count=?,owner_user_id=?,owner_role=?,next_review_at=?,version_number=version_number+1,updated_by=? WHERE school_id=? AND id=?", [cycleNumber, ownerId, owner.role, body.review_date || addDays(14), actor.id, schoolId, record.id])
     await event(db, schoolId, record, actor, "intervention_cycle_created", `Support cycle ${cycleNumber} was created using ${strategy.label}.`, { idempotencyKey: body.idempotency_key || `cycle:${record.id}:${cycleNumber}`, linkedType: "intervention_cycle", linkedRef: cycleRef, evidence: { strategy_code: strategy.strategy_code, planned_session_count: plannedCount } })
     return { public_ref: cycleRef, legacy_intervention_ref: interventionRef, cycle_number: cycleNumber, strategy_code: strategy.strategy_code, status: "active", case_version_number: number(record.version_number) + 1 }
   })
@@ -683,6 +739,7 @@ export async function createSupportIntervention(schoolId, caseId, actor, body = 
 
 export async function recordSupportSession(schoolId, caseId, actor, body = {}) {
   return inTransaction(async (db) => {
+    await requireSupportSchemaCapability(db, "sessionDetails")
     const { record } = await lockedCase(db, schoolId, caseId, actor, SUPPORT_ACTIONS.recordSession)
     const duplicate = await duplicateMutation(db, schoolId, record, body.idempotency_key); if (duplicate) return duplicate
     assertVersion(record, body)
@@ -707,7 +764,14 @@ export async function recordSupportSession(schoolId, caseId, actor, body = {}) {
     const status = String(body.status || "completed")
     if (!["completed", "partially_completed", "cancelled", "learner_absent", "teacher_absent", "rescheduled", "planned", "missed"].includes(status)) throw new HttpError(400, "Session status is invalid.")
     const delivered = ["completed", "partially_completed"].includes(status)
-    await db.query(`UPDATE intervention_sessions SET status=?,scheduled_at=COALESCE(?,scheduled_at),completed_at=IF(?,COALESCE(?,CURRENT_TIMESTAMP),NULL),duration_minutes=?,delivery_method=?,target_topic_id=COALESCE(?,target_topic_id),target_objective_id=COALESCE(?,target_objective_id),teacher_attended=?,target_taught=?,prerequisite_addressed=?,resources_json=?,activities_json=?,teacher_notes=?,teacher_observation=?,practice_assigned=?,next_action=?,review_status=?,updated_by=? WHERE school_id=? AND id=?`, [status, body.scheduled_at || null, delivered, body.completed_at || null, body.duration_minutes || null, body.delivery_method || null, body.target_topic_id || record.primary_topic_id || null, body.target_objective_id || record.primary_objective_id || null, status === "teacher_absent" ? false : body.teacher_attended === undefined ? null : Boolean(body.teacher_attended), body.target_taught === undefined ? null : Boolean(body.target_taught), body.prerequisite_addressed === undefined ? null : Boolean(body.prerequisite_addressed), JSON.stringify(body.resources || []), JSON.stringify(body.activities || []), body.teacher_notes || null, body.teacher_observation || null, body.practice_assigned || null, body.next_action || null, body.review_status || "pending", actor.id, schoolId, session.id])
+    const targetTopicId = number(body.target_topic_id || record.primary_topic_id) || null
+    const targetObjectiveId = number(body.target_objective_id || record.primary_objective_id) || null
+    if (targetTopicId) await validateSyllabusTopicScope(db, { schoolId, subjectId: record.subject_id, topicId: targetTopicId, requireTopic: true })
+    if (targetObjectiveId) {
+      const [[objective]] = await db.query("SELECT id FROM learning_objectives WHERE school_id=? AND subject_id=? AND id=? AND (? IS NULL OR topic_id=?) AND is_active=1 LIMIT 1", [schoolId, record.subject_id, targetObjectiveId, targetTopicId, targetTopicId])
+      if (!objective) throw new HttpError(400, "The selected learning objective does not belong to this support topic.")
+    }
+    await db.query(`UPDATE intervention_sessions SET status=?,scheduled_at=COALESCE(?,scheduled_at),completed_at=IF(?,COALESCE(?,CURRENT_TIMESTAMP),NULL),duration_minutes=?,delivery_method=?,target_topic_id=COALESCE(?,target_topic_id),target_objective_id=COALESCE(?,target_objective_id),teacher_attended=?,target_taught=?,prerequisite_addressed=?,resources_json=?,activities_json=?,teacher_notes=?,teacher_observation=?,practice_assigned=?,next_action=?,review_status=?,updated_by=? WHERE school_id=? AND id=?`, [status, body.scheduled_at || null, delivered, body.completed_at || null, body.duration_minutes || null, body.delivery_method || null, targetTopicId, targetObjectiveId, status === "teacher_absent" ? false : body.teacher_attended === undefined ? null : Boolean(body.teacher_attended), body.target_taught === undefined ? null : Boolean(body.target_taught), body.prerequisite_addressed === undefined ? null : Boolean(body.prerequisite_addressed), JSON.stringify(body.resources || []), JSON.stringify(body.activities || []), body.teacher_notes || null, body.teacher_observation || null, body.practice_assigned || null, body.next_action || null, body.review_status || "pending", actor.id, schoolId, session.id])
     for (const attendance of Array.isArray(body.attendance) ? body.attendance : []) {
       let learnerId = number(attendance.learner_id)
       if (!learnerId && attendance.learner_ref) {
@@ -726,20 +790,87 @@ export async function recordSupportSession(schoolId, caseId, actor, body = {}) {
   })
 }
 
+export async function validateSupportReassessmentEvidence(db, schoolId, record, body = {}) {
+  if (!body.generated_assessment_id && !body.generated_assessment_ref) {
+    throw new HttpError(400, "An approved targeted assessment is required.")
+  }
+  const [[generated]] = await db.query(`SELECT generated.id,generated.public_ref,generated.status
+    FROM generated_assessments generated
+    WHERE generated.school_id=? AND (generated.id=? OR generated.public_ref=?)
+      AND generated.status IN ('approved','published')
+      AND generated.class_id=? AND generated.subject_id=?
+      AND generated.academic_year_id=? AND generated.term_id=?
+      AND (? IS NULL OR generated.topic_id=?)
+      AND (generated.assessment_id IS NULL OR EXISTS (
+        SELECT 1 FROM assessments assessment
+        WHERE assessment.school_id=generated.school_id AND assessment.id=generated.assessment_id
+          AND assessment.class_id=generated.class_id AND assessment.subject_id=generated.subject_id
+          AND assessment.academic_year_id=generated.academic_year_id AND assessment.term_id=generated.term_id
+      ))
+    LIMIT 1`, [schoolId, number(body.generated_assessment_id), String(body.generated_assessment_ref || ""),
+    record.class_id, record.subject_id, record.academic_year_id, record.current_term_id,
+    record.primary_topic_id || null, record.primary_topic_id || null])
+  if (!generated) {
+    throw new HttpError(400, "The targeted assessment must match this support case's class, subject, topic and academic session.")
+  }
+
+  let baselineMarkSheetId = null
+  if (body.baseline_mark_sheet_id !== undefined && body.baseline_mark_sheet_id !== null && body.baseline_mark_sheet_id !== "") {
+    baselineMarkSheetId = number(body.baseline_mark_sheet_id)
+    if (!baselineMarkSheetId) throw new HttpError(400, "The baseline marksheet reference is invalid.")
+    const [[baseline]] = await db.query(`SELECT marksheet.id
+      FROM academic_mark_sheets marksheet
+      JOIN assessments assessment ON assessment.school_id=marksheet.school_id AND assessment.id=marksheet.assessment_id
+      WHERE marksheet.school_id=? AND marksheet.id=? AND marksheet.status IN ('published','locked')
+        AND marksheet.class_id=? AND marksheet.subject_id=?
+        AND marksheet.academic_year_id=? AND marksheet.term_id=?
+        AND assessment.class_id=marksheet.class_id AND assessment.subject_id=marksheet.subject_id
+        AND assessment.academic_year_id=marksheet.academic_year_id AND assessment.term_id=marksheet.term_id
+        AND (? IS NULL OR EXISTS (
+          SELECT 1 FROM assessment_questions question
+          LEFT JOIN question_topic_mappings mapping
+            ON mapping.school_id=question.school_id AND mapping.assessment_question_id=question.id AND mapping.topic_id=?
+          WHERE question.school_id=marksheet.school_id AND question.assessment_id=marksheet.assessment_id
+            AND (question.topic_id=? OR mapping.id IS NOT NULL)
+        ))
+      LIMIT 1`, [schoolId, baselineMarkSheetId, record.class_id, record.subject_id,
+      record.academic_year_id, record.current_term_id, record.primary_topic_id || null,
+      record.primary_topic_id || null, record.primary_topic_id || null])
+    if (!baseline) throw new HttpError(400, "The baseline marksheet must be published evidence for this case's class, subject, topic and academic session.")
+
+    const [memberRows] = await db.query("SELECT learner_id FROM learner_support_case_members WHERE school_id=? AND case_id=? AND membership_status='active'", [schoolId, record.id])
+    let learnerIds = [...new Set([record.learner_id, ...memberRows.map((row) => row.learner_id)].map(number).filter(Boolean))]
+    if (!learnerIds.length && record.class_id) {
+      const [classLearners] = await db.query(`SELECT student_id learner_id FROM student_enrollments
+        WHERE school_id=? AND class_id=? AND academic_year_id=? AND term_id=? AND enrollment_status='active'`,
+      [schoolId, record.class_id, record.academic_year_id, record.current_term_id])
+      learnerIds = [...new Set(classLearners.map((row) => number(row.learner_id)).filter(Boolean))]
+    }
+    if (!learnerIds.length) throw new HttpError(400, "The support case has no active learners to compare against a baseline marksheet.")
+    const [[coverage]] = await db.query(`SELECT COUNT(DISTINCT student_id) matched_learners
+      FROM learner_assessment_entries
+      WHERE school_id=? AND mark_sheet_id=? AND is_official=1
+        AND student_id IN (${learnerIds.map(() => "?").join(",")})`, [schoolId, baselineMarkSheetId, ...learnerIds])
+    if (number(coverage?.matched_learners) !== learnerIds.length) {
+      throw new HttpError(400, "The baseline marksheet does not contain official evidence for every learner in this support case.")
+    }
+  }
+  return { generated, baselineMarkSheetId }
+}
+
 export async function scheduleSupportReassessment(schoolId, caseId, actor, body = {}) {
   return inTransaction(async (db) => {
+    await requireSupportSchemaCapability(db, "reassessmentDueAt")
     const { record } = await lockedCase(db, schoolId, caseId, actor, SUPPORT_ACTIONS.scheduleReassessment)
     const duplicate = await duplicateMutation(db, schoolId, record, body.idempotency_key); if (duplicate) return duplicate
     assertVersion(record, body)
     const [[cycle]] = await db.query("SELECT * FROM intervention_cycles WHERE school_id=? AND case_id=? AND (public_ref=? OR id=? OR ?='') ORDER BY cycle_number DESC LIMIT 1 FOR UPDATE", [schoolId, record.id, String(body.cycle_ref || ""), number(body.cycle_id), String(body.cycle_ref || "")])
     if (!cycle) throw new HttpError(409, "Create an intervention cycle before scheduling reassessment.")
-    if (!body.generated_assessment_id && !body.generated_assessment_ref) throw new HttpError(400, "An approved targeted assessment is required.")
-    const [[generated]] = await db.query("SELECT id,status FROM generated_assessments WHERE school_id=? AND (id=? OR public_ref=?) AND status IN ('approved','published') LIMIT 1", [schoolId, number(body.generated_assessment_id), String(body.generated_assessment_ref || "")])
-    if (!generated) throw new HttpError(400, "The targeted assessment must belong to this school and be approved or published.")
-    await db.query(`INSERT INTO academic_intervention_reassessments (public_ref,school_id,support_case_id,intervention_id,intervention_cycle_id,generated_assessment_id,baseline_mark_sheet_id,success_criterion_json,comparability_json,due_at,outcome) VALUES (?,?,?,?,?,?,?,?,?,?,'pending') ON DUPLICATE KEY UPDATE support_case_id=VALUES(support_case_id),intervention_cycle_id=VALUES(intervention_cycle_id),success_criterion_json=VALUES(success_criterion_json),comparability_json=VALUES(comparability_json),due_at=VALUES(due_at)`, [randomUUID(), schoolId, record.id, cycle.legacy_intervention_id, cycle.id, generated.id, body.baseline_mark_sheet_id || null, JSON.stringify(body.success_criterion || json(cycle.success_criterion_json)), JSON.stringify(body.comparability || {}), body.due_date || addDays(5)])
+    const { generated, baselineMarkSheetId } = await validateSupportReassessmentEvidence(db, schoolId, record, body)
+    await db.query(`INSERT INTO academic_intervention_reassessments (public_ref,school_id,support_case_id,intervention_id,intervention_cycle_id,generated_assessment_id,baseline_mark_sheet_id,success_criterion_json,comparability_json,due_at,outcome) VALUES (?,?,?,?,?,?,?,?,?,?,'pending') ON DUPLICATE KEY UPDATE support_case_id=VALUES(support_case_id),intervention_cycle_id=VALUES(intervention_cycle_id),success_criterion_json=VALUES(success_criterion_json),comparability_json=VALUES(comparability_json),due_at=VALUES(due_at)`, [randomUUID(), schoolId, record.id, cycle.legacy_intervention_id, cycle.id, generated.id, baselineMarkSheetId, JSON.stringify(body.success_criterion || json(cycle.success_criterion_json)), JSON.stringify(body.comparability || {}), body.due_date || addDays(5)])
     await db.query("UPDATE intervention_cycles SET status='awaiting_reassessment',version_number=version_number+1,updated_by=? WHERE school_id=? AND id=?", [actor.id, schoolId, cycle.id])
     await db.query("UPDATE learner_support_cases SET status='reassessment_pending',next_review_at=?,version_number=version_number+1,updated_by=? WHERE school_id=? AND id=?", [body.due_date || addDays(5), actor.id, schoolId, record.id])
-    await event(db, schoolId, record, actor, "reassessment_scheduled", "A targeted reassessment was linked to this support cycle.", { idempotencyKey: body.idempotency_key || `reassessment:${record.id}:${body.generated_assessment_id}`, linkedType: "generated_assessment", linkedRef: String(body.generated_assessment_id) })
+    await event(db, schoolId, record, actor, "reassessment_scheduled", "A targeted reassessment was linked to this support cycle.", { idempotencyKey: body.idempotency_key || `reassessment:${record.id}:${generated.public_ref}`, linkedType: "generated_assessment", linkedRef: generated.public_ref })
     return { case_ref: record.public_ref, cycle_ref: cycle.public_ref, status: "reassessment_pending" }
   })
 }

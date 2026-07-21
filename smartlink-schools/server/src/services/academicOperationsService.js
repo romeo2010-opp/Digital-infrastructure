@@ -290,10 +290,10 @@ export async function listAuthoringTopics(schoolId, filters = {}) {
   if (filters.class_id) { clauses.push("(st.grade_id IS NULL OR gl.name=(SELECT grade_level FROM classes WHERE school_id=? AND id=? LIMIT 1))"); params.push(schoolId, Number(filters.class_id)) }
   if (filters.term_id) { clauses.push("(st.term IS NULL OR st.term='' OR st.term=(SELECT name FROM terms WHERE school_id=? AND id=? LIMIT 1))"); params.push(schoolId, Number(filters.term_id)) }
   if (filters.search) { clauses.push("(st.topic_name LIKE ? OR parent.topic_name LIKE ? OR lo.objective_text LIKE ?)"); const term = `%${String(filters.search).trim()}%`; params.push(term, term, term) }
-  const [rows] = await pool.query(`SELECT DISTINCT st.id,st.public_ref,st.topic_name,st.description,st.term,st.order_number,parent.public_ref parent_ref,parent.topic_name parent_name,s.public_ref subject_ref,s.name subject_name,gl.name grade_name FROM syllabus_topics st JOIN subjects s ON s.id=st.subject_id AND s.school_id=st.school_id LEFT JOIN syllabus_topics parent ON parent.id=st.parent_topic_id AND parent.school_id=st.school_id LEFT JOIN grade_levels gl ON gl.id=st.grade_id AND gl.school_id=st.school_id LEFT JOIN learning_objectives lo ON lo.topic_id=st.id AND lo.school_id=st.school_id WHERE st.school_id=? AND ${clauses.join(" AND ")} ORDER BY s.name,COALESCE(parent.order_number,st.order_number,999999),st.order_number,st.topic_name LIMIT 250`, params)
+  const [rows] = await pool.query(`SELECT DISTINCT st.id,st.public_ref,st.topic_name,st.description,st.term,st.order_number,parent.public_ref parent_ref,parent.topic_name parent_name,s.public_ref subject_ref,s.name subject_name,gl.name grade_name,COALESCE(parent.order_number,st.order_number,999999) hierarchy_order FROM syllabus_topics st JOIN subjects s ON s.id=st.subject_id AND s.school_id=st.school_id LEFT JOIN syllabus_topics parent ON parent.id=st.parent_topic_id AND parent.school_id=st.school_id LEFT JOIN grade_levels gl ON gl.id=st.grade_id AND gl.school_id=st.school_id LEFT JOIN learning_objectives lo ON lo.topic_id=st.id AND lo.school_id=st.school_id WHERE st.school_id=? AND ${clauses.join(" AND ")} ORDER BY subject_name,hierarchy_order,order_number,topic_name LIMIT 250`, params)
   const ids = rows.map((row) => Number(row.id))
   const [objectives] = ids.length ? await pool.query(`SELECT topic_id,public_ref,objective_text,skill_type,expected_difficulty FROM learning_objectives WHERE school_id=? AND is_active=1 AND topic_id IN (${ids.map(() => "?").join(",")}) ORDER BY curriculum_order,id`, [schoolId, ...ids]) : [[]]
-  return { topics: rows.map(({ id, ...row }) => ({ ...row, hierarchy_label: [row.parent_name, row.topic_name].filter(Boolean).join(" → "), objectives: objectives.filter((objective) => Number(objective.topic_id) === Number(id)).map(({ topic_id, ...objective }) => objective) })) }
+  return { topics: rows.map(({ id, hierarchy_order: _hierarchyOrder, ...row }) => ({ ...row, hierarchy_label: [row.parent_name, row.topic_name].filter(Boolean).join(" → "), objectives: objectives.filter((objective) => Number(objective.topic_id) === Number(id)).map(({ topic_id, ...objective }) => objective) })) }
 }
 
 export async function saveQuestionMappings(schoolId, assessmentId, questionId, actor, body = {}) {
@@ -353,8 +353,8 @@ async function loadLearners(connection, schoolId, assessment) {
   const params = targeted
     ? [targeted.id, schoolId, assessment.class_id, assessment.academic_year_id, assessment.academic_year_id, assessment.term_id, assessment.term_id]
     : [schoolId, assessment.class_id, assessment.academic_year_id, assessment.academic_year_id, assessment.term_id, assessment.term_id]
-  const [rows] = await connection.query(`SELECT DISTINCT s.id student_id,s.public_ref student_ref,CONCAT(s.first_name,' ',s.last_name) student_name,se.id enrollment_id FROM student_enrollments se JOIN students s ON s.id=se.student_id AND s.school_id=se.school_id ${targetedJoin} WHERE se.school_id=? AND se.class_id=? AND (? IS NULL OR se.academic_year_id=?) AND (? IS NULL OR se.term_id=?) AND se.enrollment_status='active' ORDER BY s.last_name,s.first_name,s.id`, params)
-  return rows
+  const [rows] = await connection.query(`SELECT DISTINCT s.id student_id,s.public_ref student_ref,CONCAT(s.first_name,' ',s.last_name) student_name,s.last_name student_last_name,s.first_name student_first_name,se.id enrollment_id FROM student_enrollments se JOIN students s ON s.id=se.student_id AND s.school_id=se.school_id ${targetedJoin} WHERE se.school_id=? AND se.class_id=? AND (? IS NULL OR se.academic_year_id=?) AND (? IS NULL OR se.term_id=?) AND se.enrollment_status='active' ORDER BY student_last_name,student_first_name,student_id`, params)
+  return rows.map(({ student_last_name: _lastName, student_first_name: _firstName, ...row }) => row)
 }
 
 export async function getAcademicMarkSheet(schoolId, assessmentId, filters = {}, actor = null) {
@@ -706,7 +706,7 @@ export async function createTargetedAssessmentDraft(schoolId, actor, body = {}) 
     if (!learners.length && (body.auto_select_below_threshold || body.finding_ref)) {
       const config = await getAcademicEngineConfig(schoolId, connection)
       const [suggested] = await connection.query(
-        `SELECT DISTINCT s.id student_id,s.public_ref student_ref,amr.mastery_score,amr.confidence_score,amr.mastery_status
+        `SELECT DISTINCT s.id student_id,s.public_ref student_ref,amr.mastery_score,amr.confidence_score,amr.mastery_status,s.last_name student_last_name,s.first_name student_first_name
          FROM student_enrollments se
          JOIN students s ON s.id=se.student_id AND s.school_id=se.school_id
          LEFT JOIN academic_mastery_records amr ON amr.id=(
@@ -718,7 +718,7 @@ export async function createTargetedAssessmentDraft(schoolId, actor, body = {}) 
          WHERE se.school_id=? AND se.class_id=? AND se.enrollment_status='active'
            AND (? IS NULL OR se.academic_year_id=?) AND (? IS NULL OR se.term_id=?)
            AND (amr.mastery_score IS NULL OR amr.mastery_score<?)
-         ORDER BY amr.mastery_score IS NULL,amr.mastery_score,s.last_name,s.first_name LIMIT 60`,
+         ORDER BY amr.mastery_score IS NULL,amr.mastery_score,student_last_name,student_first_name LIMIT 60`,
         [subjectId,targetTopicId,schoolId,classId,body.academic_year_id || null,body.academic_year_id || null,body.term_id || null,body.term_id || null,Number(config.mastery_threshold || 70)],
       )
       learners = suggested.map((learner) => ({ student_id: learner.student_id, student_ref: learner.student_ref, reason: learner.mastery_score === null ? "Valid recent topic evidence is missing" : `Topic mastery is ${Number(learner.mastery_score).toFixed(1)}%, below the secure threshold`, confidence: learner.confidence_score, evidence: { mastery_score: learner.mastery_score, mastery_status: learner.mastery_status, source: "academic_mastery_record" } }))

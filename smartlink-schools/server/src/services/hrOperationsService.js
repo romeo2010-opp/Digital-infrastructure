@@ -157,6 +157,58 @@ export async function transitionPayrollRun(schoolId,actor,runRef,action) {
 
 async function leaveByRef(connection,schoolId,ref,lock=false){const [[row]]=await connection.query(`SELECT * FROM staff_leave_requests WHERE school_id=? AND public_ref=? LIMIT 1${lock?" FOR UPDATE":""}`,[schoolId,text(ref,36)]);if(!row)throw new HttpError(404,"Leave request was not found");return row}
 
+const closedLeaveStatuses = new Set(["completed", "cancelled", "rejected"])
+const leaveTransitionRules = Object.freeze({
+  approve: { from: "pending", to: "approved" },
+  reject: { from: "pending", to: "rejected" },
+  cancel: { from: null, to: "cancelled" },
+  complete: { from: "approved", to: "completed" },
+})
+
+export function planLeaveTransition(currentStatus, action) {
+  const rule = leaveTransitionRules[action]
+  if (!rule) throw new HttpError(400, "Unsupported leave action")
+  if (currentStatus === rule.to) return { ...rule, applied: false, balanceDirection: 0 }
+  if (rule.from && currentStatus !== rule.from) throw new HttpError(409, `Only ${rule.from} leave can be ${action}d`)
+  if (closedLeaveStatuses.has(currentStatus)) throw new HttpError(409, "This leave request is already closed")
+  return {
+    ...rule,
+    applied: true,
+    balanceDirection: action === "approve" ? 1 : action === "cancel" && currentStatus === "approved" ? -1 : 0,
+  }
+}
+
+export async function adjustLeaveBalance(connection, schoolId, leave, direction) {
+  if (!direction) return
+  const days = money(leave.total_days)
+  const leaveYear = Number(String(leave.start_date).slice(0, 4))
+  if (!(days > 0) || !Number.isInteger(leaveYear)) throw new HttpError(409, "Leave balance could not be adjusted because the leave dates or duration are invalid")
+
+  const identity = [schoolId, leave.staff_user_id, leave.leave_type, leaveYear]
+  if (direction > 0) {
+    await connection.query(
+      `INSERT INTO staff_leave_balances (public_ref,school_id,staff_user_id,leave_type,leave_year,entitlement_days,used_days,remaining_days)
+       VALUES (UUID(),?,?,?,?,0,?,0)
+       ON DUPLICATE KEY UPDATE used_days=used_days+VALUES(used_days)`,
+      [...identity, days],
+    )
+  } else {
+    await connection.query(
+      `UPDATE staff_leave_balances
+       SET used_days=GREATEST(used_days-?,0)
+       WHERE school_id=? AND staff_user_id=? AND leave_type=? AND leave_year=?`,
+      [days, ...identity],
+    )
+  }
+
+  await connection.query(
+    `UPDATE staff_leave_balances
+     SET remaining_days=GREATEST(entitlement_days-used_days,0)
+     WHERE school_id=? AND staff_user_id=? AND leave_type=? AND leave_year=?`,
+    identity,
+  )
+}
+
 export async function getLeaveDashboard(schoolId,filters={}) {
   const conditions=["lr.school_id=?"],params=[schoolId]
   if(filters.status){conditions.push("lr.status=?");params.push(filters.status)} if(filters.leave_type){conditions.push("lr.leave_type=?");params.push(filters.leave_type)}
@@ -172,12 +224,15 @@ export async function getLeaveDashboard(schoolId,filters={}) {
   return {settings:await getHrSettings(schoolId),requests:rows,summary:{currently_on_leave:current.length,pending:rows.filter((r)=>r.status==="pending").length,ending_this_week:current.filter((r)=>String(r.end_date).slice(0,10)<=weekEnd).length,uncovered:current.filter((r)=>!r.coverage_ref).length,approved:rows.filter((r)=>r.status==="approved").length,rejected_or_cancelled:rows.filter((r)=>["rejected","cancelled"].includes(r.status)).length},leave_by_type:Object.entries(typeCounts).map(([name,value])=>({name,value}))}
 }
 
-export async function getOwnLeaveDashboard(schoolId,userId) {
+const teacherLeaveRequestsAllowed = (actor, settings) => String(actor?.role || "").toLowerCase() !== "teacher" || settings?.allow_teacher_leave_requests === true || Number(settings?.allow_teacher_leave_requests) === 1
+
+export async function getOwnLeaveDashboard(schoolId,actor) {
+  const userId=Number(actor?.id)
   const dashboard=await getLeaveDashboard(schoolId,{staff_user_id:userId})
   const [balances]=await pool.query("SELECT public_ref,leave_type,leave_year,entitlement_days,used_days,remaining_days FROM staff_leave_balances WHERE school_id=? AND staff_user_id=? ORDER BY leave_year DESC,leave_type",[schoolId,userId])
   const today=new Date().toISOString().slice(0,10)
   const upcoming=dashboard.requests.filter((row)=>["pending","approved"].includes(row.status)&&String(row.end_date).slice(0,10)>=today).length
-  return {...dashboard,balances,summary:{...dashboard.summary,upcoming}}
+  return {...dashboard,balances,can_request_leave:teacherLeaveRequestsAllowed(actor,dashboard.settings),summary:{...dashboard.summary,upcoming}}
 }
 
 export async function getLeaveRequest(schoolId,ref){const leave=await leaveByRef(pool,schoolId,ref);const dashboard=await getLeaveDashboard(schoolId);const request=dashboard.requests.find((r)=>r.public_ref===ref);const [balances]=await pool.query("SELECT public_ref,leave_type,leave_year,entitlement_days,used_days,remaining_days FROM staff_leave_balances WHERE school_id=? AND staff_user_id=? ORDER BY leave_year DESC,leave_type",[schoolId,leave.staff_user_id]);return {request,balances}}
@@ -194,6 +249,8 @@ export async function createLeaveRequest(schoolId,actor,body={}) {
 }
 
 export async function createOwnLeaveRequest(schoolId,actor,body={}) {
+  const settings=await getHrSettings(schoolId)
+  if(!teacherLeaveRequestsAllowed(actor,settings))throw new HttpError(403,"Teacher leave requests are disabled by the school's leave settings")
   const [[staff]]=await pool.query("SELECT public_ref FROM users WHERE school_id=? AND id=? AND is_active=1 LIMIT 1",[schoolId,actor.id])
   if(!staff)throw new HttpError(403,"Your staff account is not active in this school")
   return createLeaveRequest(schoolId,actor,{...body,staff_user_ref:staff.public_ref,coverage_staff_ref:null})
@@ -216,24 +273,31 @@ export async function cancelOwnLeaveRequest(schoolId,actor,ref) {
 }
 
 export async function transitionLeave(schoolId,actor,ref,action,body={}) {
-  const map={approve:["pending","approved"],reject:["pending","rejected"],cancel:[null,"cancelled"],complete:["approved","completed"]},rule=map[action];if(!rule)throw new HttpError(400,"Unsupported leave action")
-  const connection=await pool.getConnection();let leave,staff,coverage
-  try{await connection.beginTransaction();leave=await leaveByRef(connection,schoolId,ref,true);if(rule[0]&&leave.status!==rule[0])throw new HttpError(409,`Only ${rule[0]} leave can be ${action}d`);if(["completed","cancelled","rejected"].includes(leave.status))throw new HttpError(409,"This leave request is already closed")
-    if(body.coverage_staff_ref){coverage=await userByRef(connection,schoolId,body.coverage_staff_ref);if(coverage.id===leave.staff_user_id)throw new HttpError(400,"Coverage must be assigned to another staff member")}
-    const status=rule[1],approval=action==="approve"?",approved_by=?,approved_at=CURRENT_TIMESTAMP":"";await connection.query(`UPDATE staff_leave_requests SET status=?,coverage_staff_user_id=COALESCE(?,coverage_staff_user_id),decision_notes=COALESCE(?,decision_notes)${approval} WHERE id=?`,[status,coverage?.id||null,text(body.decision_notes)||null,...(approval?[actor.id]:[]),leave.id])
-    if(action==="approve")await connection.query(`INSERT INTO staff_leave_balances (public_ref,school_id,staff_user_id,leave_type,leave_year,entitlement_days,used_days,remaining_days) VALUES (UUID(),?,?,?,?,0,?,0)
-      ON DUPLICATE KEY UPDATE used_days=used_days+VALUES(used_days),remaining_days=GREATEST(entitlement_days-(used_days+VALUES(used_days)),0)`,[schoolId,leave.staff_user_id,leave.leave_type,new Date(leave.start_date).getFullYear(),leave.total_days])
-    ;[[staff]]=await connection.query("SELECT id,full_name FROM users WHERE id=?",[leave.staff_user_id]);await connection.commit()
+  const connection=await pool.getConnection();let leave,staff,coverage,transition
+  try{await connection.beginTransaction();leave=await leaveByRef(connection,schoolId,ref,true);transition=planLeaveTransition(leave.status,action)
+    if(transition.applied){
+      const coverageProvided=Object.prototype.hasOwnProperty.call(body,"coverage_staff_ref")
+      if(coverageProvided&&body.coverage_staff_ref){coverage=await userByRef(connection,schoolId,body.coverage_staff_ref);if(coverage.id===leave.staff_user_id)throw new HttpError(400,"Coverage must be assigned to another staff member")}
+      else if(!coverageProvided&&leave.coverage_staff_user_id){[[coverage]]=await connection.query("SELECT id,public_ref,full_name FROM users WHERE school_id=? AND id=? LIMIT 1",[schoolId,leave.coverage_staff_user_id])}
+      const approval=action==="approve"?",approved_by=?,approved_at=CURRENT_TIMESTAMP":""
+      const coverageUpdate=coverageProvided?"coverage_staff_user_id=?":"coverage_staff_user_id=coverage_staff_user_id"
+      const [updated]=await connection.query(`UPDATE staff_leave_requests SET status=?,${coverageUpdate},decision_notes=COALESCE(?,decision_notes)${approval} WHERE id=? AND school_id=? AND status=?`,[transition.to,...(coverageProvided?[coverage?.id||null]:[]),text(body.decision_notes)||null,...(approval?[actor.id]:[]),leave.id,schoolId,leave.status])
+      if(!updated.affectedRows)throw new HttpError(409,"The leave request changed while this action was being processed")
+      await adjustLeaveBalance(connection,schoolId,leave,transition.balanceDirection)
+      ;[[staff]]=await connection.query("SELECT id,full_name FROM users WHERE school_id=? AND id=?",[schoolId,leave.staff_user_id])
+    }
+    await connection.commit()
   }catch(error){await connection.rollback();throw error}finally{connection.release()}
-  await audit(schoolId,actor.id,`LEAVE_${rule[1].toUpperCase()}`,"staff_leave",leave.id,{leave_ref:ref,coverage_ref:coverage?.public_ref||null})
-  await createInAppNotification({schoolId,recipientUserId:staff.id,title:`Leave request ${rule[1].replaceAll("_"," ")}`,message:`Your ${leave.leave_type.replaceAll("_"," ")} leave request has been ${rule[1].replaceAll("_"," ")}.`,category:"staff",priority:"medium",linkedEntityType:"staff_leave",linkedEntityId:leave.id,createdBy:actor.id})
+  if(!transition.applied)return getLeaveRequest(schoolId,ref)
+  await audit(schoolId,actor.id,`LEAVE_${transition.to.toUpperCase()}`,"staff_leave",leave.id,{leave_ref:ref,coverage_ref:coverage?.public_ref||null})
+  await createInAppNotification({schoolId,recipientUserId:staff.id,title:`Leave request ${transition.to.replaceAll("_"," ")}`,message:`Your ${leave.leave_type.replaceAll("_"," ")} leave request has been ${transition.to.replaceAll("_"," ")}.`,category:"staff",priority:"medium",linkedEntityType:"staff_leave",linkedEntityId:leave.id,createdBy:actor.id})
   if(action==="approve"&&coverage)await createInAppNotification({schoolId,recipientUserId:coverage.id,title:"Leave coverage assigned",message:`You have been assigned to cover ${staff.full_name} from ${String(leave.start_date).slice(0,10)} to ${String(leave.end_date).slice(0,10)}.`,category:"staff",priority:"high",linkedEntityType:"staff_leave",linkedEntityId:leave.id,createdBy:actor.id})
   if(action==="approve"&&!coverage){const settings=await getHrSettings(schoolId);if(settings.require_leave_coverage)await createDirectorTask(schoolId,actor.id,{title:`Assign coverage for ${staff.full_name}'s leave`,description:`Approved ${leave.leave_type} leave from ${String(leave.start_date).slice(0,10)} to ${String(leave.end_date).slice(0,10)} has no coverage teacher.`,category:"staff",priority:"high",assigned_to_user_id:actor.id,due_date:String(leave.start_date).slice(0,10),linked_entity_type:"staff_leave",linked_entity_id:leave.id,context_snapshot:{staff_name:staff.full_name,leave_type:leave.leave_type}})}
   return getLeaveRequest(schoolId,ref)
 }
 
 export async function updateLeaveRequest(schoolId,actorId,ref,body={}) {
-  const connection=await pool.getConnection();try{const leave=await leaveByRef(connection,schoolId,ref);if(!["pending","approved"].includes(leave.status))throw new HttpError(409,"Closed leave cannot be edited");let coverage=null;if(body.coverage_staff_ref)coverage=await userByRef(connection,schoolId,body.coverage_staff_ref);await connection.query("UPDATE staff_leave_requests SET coverage_staff_user_id=COALESCE(?,coverage_staff_user_id),decision_notes=COALESCE(?,decision_notes) WHERE id=?",[coverage?.id||null,text(body.decision_notes)||null,leave.id]);await audit(schoolId,actorId,"LEAVE_COVERAGE_UPDATED","staff_leave",leave.id,{coverage_ref:coverage?.public_ref});return getLeaveRequest(schoolId,ref)}finally{connection.release()}
+  const connection=await pool.getConnection();try{const leave=await leaveByRef(connection,schoolId,ref);if(!["pending","approved"].includes(leave.status))throw new HttpError(409,"Closed leave cannot be edited");const coverageProvided=Object.prototype.hasOwnProperty.call(body,"coverage_staff_ref"),notesProvided=Object.prototype.hasOwnProperty.call(body,"decision_notes");let coverage=null;if(coverageProvided&&body.coverage_staff_ref){coverage=await userByRef(connection,schoolId,body.coverage_staff_ref);if(coverage.id===leave.staff_user_id)throw new HttpError(400,"Coverage must be assigned to another staff member")};const updates=[],params=[];if(coverageProvided){updates.push("coverage_staff_user_id=?");params.push(coverage?.id||null)}if(notesProvided){updates.push("decision_notes=?");params.push(text(body.decision_notes)||null)}if(updates.length)await connection.query(`UPDATE staff_leave_requests SET ${updates.join(",")} WHERE id=? AND school_id=?`,[...params,leave.id,schoolId]);await audit(schoolId,actorId,"LEAVE_COVERAGE_UPDATED","staff_leave",leave.id,{coverage_ref:coverageProvided?coverage?.public_ref||null:undefined});return getLeaveRequest(schoolId,ref)}finally{connection.release()}
 }
 
 export async function saveLeaveBalance(schoolId,actorId,ref,body={}) {

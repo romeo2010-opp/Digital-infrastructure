@@ -5,6 +5,7 @@ import { pool } from "../config/db.js"
 import { HttpError } from "../utils/http.js"
 import { createInAppNotification, broadcastSchoolNotification } from "./operationalCommunicationService.js"
 import { syncCurriculumFromLesson } from "./academicIntelligenceEngine.js"
+import { validateSyllabusTopicScope } from "./curriculumScopeService.js"
 
 const RESOURCE_STATUSES = new Set(['DRAFT','SUBMITTED','UNDER_REVIEW','CHANGES_REQUESTED','APPROVED','REJECTED','ARCHIVED','UNCLASSIFIED'])
 const RESOURCE_TRANSITIONS = {
@@ -34,6 +35,8 @@ const SAFE_MIME_TYPES = new Set([
   'image/png','image/jpeg','image/webp','text/plain','audio/mpeg','video/mp4',
 ])
 const MAX_RESOURCE_BYTES = 40 * 1024 * 1024
+const UNDERSTANDING_CONFIDENCE_LEVELS = new Set(['low','medium','high'])
+const FORMATIVE_ACTIVITY_TYPES = new Set(['oral_questions','written_class_exercise','exercise_book','printed_worksheet','exit_ticket','homework','board_work','paper_quiz','none'])
 
 function clean(value, max = 500) {
   return String(value ?? '').trim().slice(0, max)
@@ -42,6 +45,138 @@ function clean(value, max = 500) {
 function numberOrNull(value) {
   const number = Number(value || 0)
   return Number.isFinite(number) && number > 0 ? number : null
+}
+
+function suppliedResourceId(value, label, { required = false } = {}) {
+  const supplied = value !== undefined && value !== null && value !== ''
+  if (!supplied) {
+    if (required) throw new HttpError(400, `${label} is required.`)
+    return null
+  }
+  const id = Number(value)
+  if (!Number.isSafeInteger(id) || id <= 0) throw new HttpError(400, `${label} is invalid.`)
+  return id
+}
+
+async function firstResourceScopeRow(db, sql, params) {
+  const [rows] = await db.query(sql, params)
+  return rows[0] || null
+}
+
+function assertMatchingResourceScope(values, message) {
+  const ids = [...new Set(values.map((value) => Number(value || 0)).filter(Boolean))]
+  if (ids.length > 1) throw new HttpError(400, message)
+}
+
+export async function validateTeachingResourceWriteScope(db, schoolId, body = {}) {
+  const school = suppliedResourceId(schoolId, 'School', { required: true })
+  const subjectId = suppliedResourceId(body.subject_id, 'Subject')
+  const classId = suppliedResourceId(body.class_id, 'Class')
+  const topicId = suppliedResourceId(body.topic_id, 'Topic')
+  const subtopicId = suppliedResourceId(body.subtopic_id, 'Subtopic')
+  const objectiveId = suppliedResourceId(body.learning_objective_id, 'Learning objective')
+  const curriculumId = suppliedResourceId(body.curriculum_id, 'Curriculum')
+  const academicYearId = suppliedResourceId(body.academic_year_id, 'Academic year')
+  const termId = suppliedResourceId(body.term_id, 'Term')
+
+  if ((topicId || subtopicId || objectiveId) && !subjectId) {
+    throw new HttpError(400, 'Select a subject before choosing a topic, subtopic or learning objective.')
+  }
+
+  const [subject, classRow, curriculum, academicYear, term] = await Promise.all([
+    subjectId ? firstResourceScopeRow(db, 'SELECT id FROM subjects WHERE school_id=? AND id=? LIMIT 1', [school, subjectId]) : null,
+    classId ? firstResourceScopeRow(db, `SELECT c.id,c.grade_level,gl.id grade_id,gl.curriculum_id grade_curriculum_id
+      FROM classes c
+      LEFT JOIN grade_levels gl ON gl.school_id=c.school_id AND gl.name=c.grade_level
+      WHERE c.school_id=? AND c.id=? LIMIT 1`, [school, classId]) : null,
+    curriculumId ? firstResourceScopeRow(db, 'SELECT id FROM curricula WHERE school_id=? AND id=? LIMIT 1', [school, curriculumId]) : null,
+    academicYearId ? firstResourceScopeRow(db, 'SELECT id FROM academic_years WHERE school_id=? AND id=? LIMIT 1', [school, academicYearId]) : null,
+    termId ? firstResourceScopeRow(db, 'SELECT id,academic_year_id FROM terms WHERE school_id=? AND id=? LIMIT 1', [school, termId]) : null,
+  ])
+
+  if (subjectId && !subject) throw new HttpError(400, 'The selected subject does not belong to this school.')
+  if (classId && !classRow) throw new HttpError(400, 'The selected class does not belong to this school.')
+  if (curriculumId && !curriculum) throw new HttpError(400, 'The selected curriculum does not belong to this school.')
+  if (academicYearId && !academicYear) throw new HttpError(400, 'The selected academic year does not belong to this school.')
+  if (termId && !term) throw new HttpError(400, 'The selected term does not belong to this school.')
+  if (academicYearId && term && Number(term.academic_year_id) !== academicYearId) {
+    throw new HttpError(400, 'The selected term does not belong to the selected academic year.')
+  }
+
+  const topicScope = topicId || subtopicId
+    ? await validateSyllabusTopicScope(db, { schoolId: school, subjectId, topicId, subtopicId, requireTopic: Boolean(topicId) })
+    : { topicId: null, subtopicId: null, topic: null, subtopic: null }
+
+  const objective = objectiveId
+    ? await firstResourceScopeRow(db, `SELECT lo.id,lo.topic_id,lo.subject_id,st.curriculum_id,st.grade_id
+      FROM learning_objectives lo
+      JOIN syllabus_topics st ON st.id=lo.topic_id AND st.school_id=lo.school_id AND st.subject_id=lo.subject_id
+      WHERE lo.school_id=? AND lo.id=? AND lo.subject_id=? AND lo.is_active=1 LIMIT 1`, [school, objectiveId, subjectId])
+    : null
+  if (objectiveId && !objective) {
+    throw new HttpError(400, 'The selected learning objective does not belong to this school and subject.')
+  }
+  if (objective && (topicId || subtopicId) && ![topicId, subtopicId].filter(Boolean).includes(Number(objective.topic_id))) {
+    throw new HttpError(400, 'The selected learning objective does not belong to the selected topic or subtopic.')
+  }
+
+  const relatedTopics = [topicScope.topic, topicScope.subtopic, objective].filter(Boolean)
+  const relatedGradeIds = relatedTopics.map((row) => row.grade_id)
+  if (classRow && relatedGradeIds.some(Boolean)) {
+    if (!classRow.grade_id || relatedGradeIds.some((gradeId) => gradeId && Number(gradeId) !== Number(classRow.grade_id))) {
+      throw new HttpError(400, 'The selected topic, subtopic or learning objective does not belong to the selected class level.')
+    }
+  }
+
+  const relatedCurriculumIds = [classRow?.grade_curriculum_id, ...relatedTopics.map((row) => row.curriculum_id)]
+  assertMatchingResourceScope(relatedCurriculumIds, 'The selected class, topic and learning objective do not share one curriculum.')
+  if (curriculumId && relatedCurriculumIds.some((linkedId) => linkedId && Number(linkedId) !== curriculumId)) {
+    throw new HttpError(400, 'The selected class, topic or learning objective does not belong to the selected curriculum.')
+  }
+
+  return {
+    schoolId: school,
+    subjectId,
+    classId,
+    topicId: topicScope.topicId,
+    subtopicId: topicScope.subtopicId,
+    objectiveId,
+    curriculumId,
+    academicYearId,
+    termId,
+    subject,
+    class: classRow,
+    topic: topicScope.topic,
+    subtopic: topicScope.subtopic,
+    objective,
+    curriculum,
+    academicYear,
+    term,
+  }
+}
+
+async function resolveTeachingResourceReference(db, schoolId, numericValue, referenceValue, table, label) {
+  const numericId = suppliedResourceId(numericValue, label)
+  const reference = clean(referenceValue, 80)
+  if (!reference) return numericId
+  const row = await firstResourceScopeRow(db, `SELECT id FROM ${table} WHERE school_id=? AND public_ref=? LIMIT 1`, [schoolId, reference])
+  if (!row) throw new HttpError(400, `The selected ${label.toLowerCase()} does not belong to this school.`)
+  if (numericId && numericId !== Number(row.id)) throw new HttpError(400, `The selected ${label.toLowerCase()} identifiers do not match.`)
+  return Number(row.id)
+}
+
+export async function validateTeachingResourceRequestWriteScope(db, schoolId, body = {}) {
+  const school = suppliedResourceId(schoolId, 'School', { required: true })
+  const [classId, subjectId, topicId] = await Promise.all([
+    resolveTeachingResourceReference(db, school, body.class_id, body.class_ref, 'classes', 'Class'),
+    resolveTeachingResourceReference(db, school, body.subject_id, body.subject_ref, 'subjects', 'Subject'),
+    resolveTeachingResourceReference(db, school, body.topic_id, body.topic_ref, 'syllabus_topics', 'Topic'),
+  ])
+  return validateTeachingResourceWriteScope(db, school, {
+    class_id: classId,
+    subject_id: subjectId,
+    topic_id: topicId,
+  })
 }
 
 function jsonValue(value, fallback = null) {
@@ -137,6 +272,7 @@ export async function createTeachingResource(schoolId, actor, body = {}) {
   const title = clean(body.title, 240)
   const resourceType = clean(body.resource_type, 80)
   if (!title || !resourceType) throw new HttpError(400, 'Resource title and type are required.')
+  const scope = await validateTeachingResourceWriteScope(pool, schoolId, body)
   const file = decodeDataUrl(body.file_data_url || body.fileDataUrl)
   const ref = randomUUID()
   const versionRef = randomUUID()
@@ -156,9 +292,9 @@ export async function createTeachingResource(schoolId, actor, body = {}) {
         topic_id,subtopic_id,learning_objective_id,academic_year_id,term_id,language,estimated_duration_minutes,
         source,copyright_status,confidentiality,approval_status,original_creator_id,uploader_id,printable,download_allowed
       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-      [ref,schoolId,title,clean(body.description,4000)||null,resourceType,numberOrNull(body.subject_id),numberOrNull(body.class_id),
-        clean(body.stream_section,80)||null,numberOrNull(body.curriculum_id),numberOrNull(body.topic_id),numberOrNull(body.subtopic_id),
-        numberOrNull(body.learning_objective_id),numberOrNull(body.academic_year_id),numberOrNull(body.term_id),clean(body.language,60)||'English',
+      [ref,schoolId,title,clean(body.description,4000)||null,resourceType,scope.subjectId,scope.classId,
+        clean(body.stream_section,80)||null,scope.curriculumId,scope.topicId,scope.subtopicId,
+        scope.objectiveId,scope.academicYearId,scope.termId,clean(body.language,60)||'English',
         numberOrNull(body.estimated_duration_minutes),clean(body.source,180)||null,body.copyright_status||'unknown',
         body.confidentiality||'normal',body.submit ? 'SUBMITTED' : 'DRAFT',actor.id,actor.id,body.printable===false?0:1,body.download_allowed===false?0:1],
     )
@@ -337,12 +473,9 @@ export async function resolveTeachingResourceDownload(schoolId, ref, actor, vers
 export async function createTeachingResourceRequest(schoolId,actor,body={}) {
   const requestText=clean(body.request_text,3000)
   if(!requestText)throw new HttpError(400,'Describe the teaching resource you need.')
-  let classId=numberOrNull(body.class_id),subjectId=numberOrNull(body.subject_id),topicId=numberOrNull(body.topic_id)
-  if(!classId&&body.class_ref){const [[row]]=await pool.query("SELECT id FROM classes WHERE school_id=? AND public_ref=? LIMIT 1",[schoolId,clean(body.class_ref,80)]);classId=row?.id||null}
-  if(!subjectId&&body.subject_ref){const [[row]]=await pool.query("SELECT id FROM subjects WHERE school_id=? AND public_ref=? LIMIT 1",[schoolId,clean(body.subject_ref,80)]);subjectId=row?.id||null}
-  if(!topicId&&body.topic_ref){const [[row]]=await pool.query("SELECT id FROM syllabus_topics WHERE school_id=? AND public_ref=? LIMIT 1",[schoolId,clean(body.topic_ref,80)]);topicId=row?.id||null}
+  const scope=await validateTeachingResourceRequestWriteScope(pool,schoolId,body)
   const ref=randomUUID();const priority=['low','medium','high','urgent'].includes(body.priority)?body.priority:'medium'
-  const [insert]=await pool.query("INSERT INTO teaching_resource_requests (public_ref,school_id,requested_by,subject_id,class_id,topic_id,request_text,required_at,priority,status) VALUES (?,?,?,?,?,?,?,?,?,'submitted')",[ref,schoolId,actor.id,subjectId,classId,topicId,requestText,body.required_at||null,priority])
+  const [insert]=await pool.query("INSERT INTO teaching_resource_requests (public_ref,school_id,requested_by,subject_id,class_id,topic_id,request_text,required_at,priority,status) VALUES (?,?,?,?,?,?,?,?,?,'submitted')",[ref,schoolId,actor.id,scope.subjectId,scope.classId,scope.topicId,requestText,body.required_at||null,priority])
   await broadcastSchoolNotification({schoolId,roles:['librarian'],title:'Teacher resource request',message:`${actor.fullName||'A teacher'} requested classroom material: ${requestText.slice(0,180)}`,category:'library',priority,linkedEntityType:'teaching_resource_request',linkedEntityId:insert.insertId,createdBy:actor.id})
   await audit(pool,schoolId,actor,'TEACHING_RESOURCE_REQUESTED','teaching_resource_request',insert.insertId,null,{public_ref:ref,priority})
   return {public_ref:ref,status:'submitted'}
@@ -541,10 +674,16 @@ export async function startClassroomSession(schoolId,actor,body={}) {
       }
       throw new HttpError(409,'Complete or end the unfinished Classroom Mode lesson before starting the class that is active now.')
     }
-    const [[assignment]]=await connection.query("SELECT id FROM teacher_class_subject_assignments WHERE school_id=? AND teacher_id=? AND class_id=? AND subject_id=? AND is_active=1 LIMIT 1",[schoolId,actor.id,classId,subjectId])
-    if(!assignment)throw new HttpError(403,'Classroom Mode can only open an assigned class and subject.')
+    if(topicId)await validateSyllabusTopicScope(connection,{schoolId,subjectId,topicId,requireTopic:true})
     const [[academicSession]]=await connection.query("SELECT ay.id academic_year_id,t.id term_id FROM academic_years ay JOIN terms t ON t.academic_year_id=ay.id AND t.school_id=ay.school_id WHERE ay.school_id=? AND ay.status='active' AND t.status IN ('open','marking') ORDER BY t.start_date DESC LIMIT 1",[schoolId])
     if(!academicSession)throw new HttpError(409,'Open an academic term before starting Classroom Mode.')
+    const [[assignment]]=await connection.query(`SELECT id FROM teacher_class_subject_assignments
+      WHERE school_id=? AND teacher_id=? AND class_id=? AND subject_id=?
+        AND role='subject_teacher' AND is_active=1
+        AND (academic_year_id IS NULL OR academic_year_id=?)
+        AND (term_id IS NULL OR term_id=?)
+      LIMIT 1`,[schoolId,actor.id,classId,subjectId,academicSession.academic_year_id,academicSession.term_id])
+    if(!assignment)throw new HttpError(403,'Classroom Mode can only open an assigned class and subject for the active academic session.')
     const requestedTimetableEntryId=numberOrNull(body.timetable_entry_id)
     let timetableEntryId=null
     try{
@@ -567,8 +706,8 @@ export async function startClassroomSession(schoolId,actor,body={}) {
     const [lesson]=await connection.query(`INSERT INTO teacher_lesson_logs (
       school_id,academic_year_id,term_id,teacher_id,class_id,subject_id,timetable_entry_id,lesson_date,started_at,status,
       main_topic_id,coverage_status,coverage_percentage,lesson_outcome,difficulty_observed
-    ) VALUES (?,?,?,?,?,?,NULL,?,COALESCE(?,CURTIME()),'draft',?,'introduced',0,'not_assessed','none')`,
-    [schoolId,academicSession.academic_year_id,academicSession.term_id,actor.id,classId,subjectId,lessonDate,body.started_at||null,topicId])
+    ) VALUES (?,?,?,?,?,?,?,?,COALESCE(?,CURTIME()),'draft',?,'introduced',0,'not_assessed','none')`,
+    [schoolId,academicSession.academic_year_id,academicSession.term_id,actor.id,classId,subjectId,timetableEntryId,lessonDate,body.started_at||null,topicId])
     const ref=randomUUID()
     await connection.query(`INSERT INTO classroom_sessions (
       public_ref,school_id,lesson_log_id,teacher_id,class_id,subject_id,timetable_entry_id,status,sync_token,offline_client_id,last_synced_at
@@ -618,7 +757,7 @@ export async function getClassroomSession(schoolId,ref,actor) {
 }
 
 export async function saveClassroomSession(schoolId,ref,actor,body={}) {
-  const connection=await pool.getConnection();try{await connection.beginTransaction();const [[session]]=await connection.query("SELECT cs.*,l.main_topic_id FROM classroom_sessions cs JOIN teacher_lesson_logs l ON l.id=cs.lesson_log_id AND l.school_id=cs.school_id WHERE cs.school_id=? AND cs.public_ref=? LIMIT 1 FOR UPDATE",[schoolId,ref]);if(!session)throw new HttpError(404,'Classroom session was not found.');if(String(actor.role).toLowerCase()==='teacher'&&Number(session.teacher_id)!==Number(actor.id))throw new HttpError(403,'Teachers can only edit their own Classroom Mode sessions.');if(session.status==='completed')throw new HttpError(409,'Completed lessons are read-only.');const estimate=body.understanding_estimate||session.understanding_estimate;if(!['STRONG','SATISFACTORY','MIXED','WEAK','NOT_ASSESSED'].includes(estimate))throw new HttpError(400,'Understanding estimate is invalid.');await connection.query(`UPDATE classroom_sessions SET understanding_estimate=?,understanding_confidence=?,observation_note=?,formal_check_used=?,formative_activity_type=?,formative_summary_json=?,last_synced_at=CURRENT_TIMESTAMP,sync_token=UUID() WHERE id=? AND school_id=?`,[estimate,body.understanding_confidence||session.understanding_confidence,body.observation_note??session.observation_note,body.formal_check_used===undefined?session.formal_check_used:(body.formal_check_used?1:0),body.formative_activity_type||session.formative_activity_type,body.formative_summary?JSON.stringify(body.formative_summary):session.formative_summary_json,session.id,schoolId]);const topicId=numberOrNull(body.topic_id)||session.main_topic_id;await connection.query(`UPDATE teacher_lesson_logs SET main_topic_id=?,coverage_status=COALESCE(?,coverage_status),coverage_percentage=COALESCE(?,coverage_percentage),lesson_outcome=?,difficulty_observed=COALESCE(?,difficulty_observed),lesson_notes=COALESCE(?,lesson_notes),misconceptions_observed=COALESCE(?,misconceptions_observed),homework_assigned=COALESCE(?,homework_assigned),next_lesson_action=COALESCE(?,next_lesson_action) WHERE id=? AND school_id=?`,[topicId,body.coverage_status||null,body.coverage_percentage??null,estimate==='STRONG'?'students_understood':estimate==='WEAK'?'students_struggled':estimate==='NOT_ASSESSED'?'not_assessed':'mixed_understanding',body.difficulty_observed||null,body.lesson_notes||null,body.misconceptions_observed||null,body.homework_assigned||null,body.next_lesson_action||null,session.lesson_log_id,schoolId]);if(topicId){await connection.query("DELETE FROM teacher_lesson_log_topics WHERE lesson_log_id=? AND topic_role='main'",[session.lesson_log_id]);await connection.query("INSERT INTO teacher_lesson_log_topics (lesson_log_id,syllabus_topic_id,topic_role,coverage_percentage,difficulty_observed,drill_priority_override) VALUES (?,?,'main',?,?,?)",[session.lesson_log_id,topicId,body.coverage_percentage??0,body.difficulty_observed||'none',estimate==='WEAK'?'high':'normal'])}if(Array.isArray(body.objectives)){for(const item of body.objectives){const [[objective]]=await connection.query("SELECT id FROM learning_objectives WHERE school_id=? AND public_ref=? LIMIT 1",[schoolId,item.objective_ref]);if(objective)await connection.query("INSERT INTO teacher_lesson_log_objectives (lesson_log_id,learning_objective_id,achievement_status) VALUES (?,?,?) ON DUPLICATE KEY UPDATE achievement_status=VALUES(achievement_status)",[session.lesson_log_id,objective.id,item.achievement_status||'not_assessed'])}}if(Array.isArray(body.observations)){for(const item of body.observations){if(!clean(item.code,80))continue;await connection.query("INSERT INTO classroom_observations (public_ref,school_id,classroom_session_id,observation_code,note,created_by) VALUES (UUID(),?,?,?,?,?)",[schoolId,session.id,clean(item.code,80),clean(item.note,2000)||null,actor.id])}}await audit(connection,schoolId,actor,'CLASSROOM_SESSION_SAVED','classroom_session',session.id,null,{estimate,offline_retry:Boolean(body.offline_retry)});await connection.commit();return getClassroomSession(schoolId,ref,actor)}catch(error){await connection.rollback();throw error}finally{connection.release()}
+  const connection=await pool.getConnection();try{await connection.beginTransaction();const [[session]]=await connection.query("SELECT cs.*,l.main_topic_id FROM classroom_sessions cs JOIN teacher_lesson_logs l ON l.id=cs.lesson_log_id AND l.school_id=cs.school_id WHERE cs.school_id=? AND cs.public_ref=? LIMIT 1 FOR UPDATE",[schoolId,ref]);if(!session)throw new HttpError(404,'Classroom session was not found.');if(String(actor.role).toLowerCase()==='teacher'&&Number(session.teacher_id)!==Number(actor.id))throw new HttpError(403,'Teachers can only edit their own Classroom Mode sessions.');if(session.status==='completed')throw new HttpError(409,'Completed lessons are read-only.');const estimate=body.understanding_estimate||session.understanding_estimate;if(!['STRONG','SATISFACTORY','MIXED','WEAK','NOT_ASSESSED'].includes(estimate))throw new HttpError(400,'Understanding estimate is invalid.');const confidence=body.understanding_confidence??session.understanding_confidence;if(confidence&&!UNDERSTANDING_CONFIDENCE_LEVELS.has(confidence))throw new HttpError(400,'Understanding confidence is invalid.');const formativeActivity=body.formative_activity_type||session.formative_activity_type;if(!FORMATIVE_ACTIVITY_TYPES.has(formativeActivity))throw new HttpError(400,'Formative activity type is invalid.');await connection.query(`UPDATE classroom_sessions SET understanding_estimate=?,understanding_confidence=?,observation_note=?,formal_check_used=?,formative_activity_type=?,formative_summary_json=?,last_synced_at=CURRENT_TIMESTAMP,sync_token=UUID() WHERE id=? AND school_id=?`,[estimate,confidence,body.observation_note??session.observation_note,body.formal_check_used===undefined?session.formal_check_used:(body.formal_check_used?1:0),formativeActivity,body.formative_summary?JSON.stringify(body.formative_summary):session.formative_summary_json,session.id,schoolId]);const topicId=numberOrNull(body.topic_id)||session.main_topic_id;if(topicId)await validateSyllabusTopicScope(connection,{schoolId,subjectId:session.subject_id,topicId,requireTopic:true});await connection.query(`UPDATE teacher_lesson_logs SET main_topic_id=?,coverage_status=COALESCE(?,coverage_status),coverage_percentage=COALESCE(?,coverage_percentage),lesson_outcome=?,difficulty_observed=COALESCE(?,difficulty_observed),lesson_notes=COALESCE(?,lesson_notes),misconceptions_observed=COALESCE(?,misconceptions_observed),homework_assigned=COALESCE(?,homework_assigned),next_lesson_action=COALESCE(?,next_lesson_action) WHERE id=? AND school_id=?`,[topicId,body.coverage_status||null,body.coverage_percentage??null,estimate==='STRONG'?'students_understood':estimate==='WEAK'?'students_struggled':estimate==='NOT_ASSESSED'?'not_assessed':'mixed_understanding',body.difficulty_observed||null,body.lesson_notes||null,body.misconceptions_observed||null,body.homework_assigned||null,body.next_lesson_action||null,session.lesson_log_id,schoolId]);if(topicId){await connection.query(`DELETE objective_link FROM teacher_lesson_log_objectives objective_link JOIN learning_objectives objective ON objective.id=objective_link.learning_objective_id WHERE objective_link.lesson_log_id=? AND (objective.school_id<>? OR objective.subject_id<>? OR objective.topic_id<>?)`,[session.lesson_log_id,schoolId,session.subject_id,topicId]);await connection.query("DELETE FROM teacher_lesson_log_topics WHERE lesson_log_id=? AND topic_role='main'",[session.lesson_log_id]);await connection.query("INSERT INTO teacher_lesson_log_topics (lesson_log_id,syllabus_topic_id,topic_role,coverage_percentage,difficulty_observed,drill_priority_override) VALUES (?,?,'main',?,?,?)",[session.lesson_log_id,topicId,body.coverage_percentage??0,body.difficulty_observed||'none',estimate==='WEAK'?'high':'normal'])}if(Array.isArray(body.objectives)){for(const item of body.objectives){const [[objective]]=await connection.query("SELECT lo.id FROM learning_objectives lo JOIN syllabus_topics st ON st.id=lo.topic_id AND st.school_id=lo.school_id WHERE lo.school_id=? AND lo.public_ref=? AND lo.subject_id=? AND lo.topic_id=? AND st.subject_id=? LIMIT 1",[schoolId,item.objective_ref,session.subject_id,topicId,session.subject_id]);if(!objective)throw new HttpError(400,'One selected learning objective does not belong to this lesson topic.');await connection.query("INSERT INTO teacher_lesson_log_objectives (lesson_log_id,learning_objective_id,achievement_status) VALUES (?,?,?) ON DUPLICATE KEY UPDATE achievement_status=VALUES(achievement_status)",[session.lesson_log_id,objective.id,item.achievement_status||'not_assessed'])}}if(Array.isArray(body.observations)){for(const item of body.observations){if(!clean(item.code,80))continue;await connection.query("INSERT INTO classroom_observations (public_ref,school_id,classroom_session_id,observation_code,note,created_by) VALUES (UUID(),?,?,?,?,?)",[schoolId,session.id,clean(item.code,80),clean(item.note,2000)||null,actor.id])}}await audit(connection,schoolId,actor,'CLASSROOM_SESSION_SAVED','classroom_session',session.id,null,{estimate,offline_retry:Boolean(body.offline_retry)});await connection.commit();return getClassroomSession(schoolId,ref,actor)}catch(error){await connection.rollback();throw error}finally{connection.release()}
 }
 
 export async function saveClassroomAttendance(schoolId,ref,actor,body={}) {

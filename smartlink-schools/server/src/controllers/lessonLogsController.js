@@ -186,17 +186,82 @@ async function assertTopicsBelongToScope(connection, schoolId, subjectId, topicR
   ]
   if (!ids.length) return
   const [rows] = await connection.query(
-    `SELECT id FROM syllabus_topics
+    `SELECT id,parent_topic_id FROM syllabus_topics
      WHERE school_id = ? AND subject_id = ? AND is_active = 1
        AND id IN (${ids.map(() => "?").join(",")})`,
     [schoolId, subjectId, ...ids],
   )
   if (rows.length !== ids.length) throw new HttpError(400, "One or more selected topics do not belong to this subject.")
+  const byId = new Map(rows.map((row) => [Number(row.id), row]))
+  for (const topic of topicRows) {
+    if (topic.syllabus_subtopic_id && Number(byId.get(Number(topic.syllabus_subtopic_id))?.parent_topic_id) !== Number(topic.syllabus_topic_id)) {
+      throw new HttpError(400, "One or more selected subtopics do not belong to their main topic.")
+    }
+  }
 }
 
-async function replaceLessonChildren(connection, schoolId, lessonLogId, subjectId, payload) {
+async function assertObjectivesBelongToScope(connection, schoolId, subjectId, topicIds, objectiveRows) {
+  const ids = [...new Set(objectiveRows.map((row) => Number(row.learning_objective_id)).filter(Boolean))]
+  if (!ids.length) return
+  if (!topicIds.length) throw new HttpError(400, "Select a lesson topic before selecting learning objectives.")
+  const [rows] = await connection.query(
+    `SELECT id FROM learning_objectives
+     WHERE school_id = ? AND subject_id = ? AND is_active = 1
+       AND topic_id IN (${topicIds.map(() => "?").join(",")})
+       AND id IN (${ids.map(() => "?").join(",")})`,
+    [schoolId, subjectId, ...topicIds, ...ids],
+  )
+  if (rows.length !== ids.length) throw new HttpError(400, "One or more selected learning objectives do not belong to this subject.")
+}
+
+async function assertStudentsBelongToClass(connection, schoolId, scope, studentRows) {
+  const ids = [...new Set(studentRows.map((row) => Number(row.student_id)).filter(Boolean))]
+  if (!ids.length) return
+  const [rows] = await connection.query(
+    `SELECT DISTINCT student.id
+     FROM students student
+     JOIN student_enrollments enrollment
+       ON enrollment.school_id = student.school_id AND enrollment.student_id = student.id
+     WHERE student.school_id = ? AND enrollment.class_id = ?
+       AND enrollment.academic_year_id = ? AND enrollment.term_id = ?
+       AND enrollment.enrollment_status = 'active'
+       AND student.id IN (${ids.map(() => "?").join(",")})`,
+    [schoolId, scope.class_id, scope.academic_year_id, scope.term_id, ...ids],
+  )
+  if (rows.length !== ids.length) throw new HttpError(400, "One or more selected learners are not enrolled in this class for the active session.")
+}
+
+async function assertLessonLogEntityScope(connection, schoolId, scope) {
+  const [[validScope]] = await connection.query(`SELECT class.id
+    FROM classes class
+    JOIN subjects subject ON subject.school_id=class.school_id AND subject.id=?
+    JOIN users teacher ON teacher.school_id=class.school_id AND teacher.id=?
+      AND teacher.role IN ('teacher','headteacher') AND teacher.is_active=1 AND teacher.employment_status='active'
+    JOIN academic_years academic_year ON academic_year.school_id=class.school_id AND academic_year.id=?
+    JOIN terms term ON term.school_id=class.school_id AND term.id=? AND term.academic_year_id=academic_year.id
+    WHERE class.school_id=? AND class.id=? LIMIT 1`, [scope.subject_id, scope.teacher_id,
+    scope.academic_year_id, scope.term_id, schoolId, scope.class_id])
+  if (!validScope) throw new HttpError(400, "The lesson teacher, class, subject or academic session does not belong to this school.")
+  if (!scope.timetable_entry_id) return
+  const [[period]] = await connection.query(`SELECT entry.id FROM timetable_entries entry
+    JOIN timetable_versions version ON version.id=entry.timetable_version_id
+    JOIN timetables timetable ON timetable.id=version.timetable_id AND timetable.school_id=?
+    WHERE entry.id=? AND entry.teacher_id=? AND entry.class_id=? AND entry.subject_id=? LIMIT 1`,
+  [schoolId, scope.timetable_entry_id, scope.teacher_id, scope.class_id, scope.subject_id])
+  if (!period) throw new HttpError(400, "The selected timetable period does not belong to this lesson's school, teacher, class and subject.")
+}
+
+async function replaceLessonChildren(connection, schoolId, lessonLogId, scope, payload) {
   const topicRows = normalizeTopics(payload)
-  await assertTopicsBelongToScope(connection, schoolId, subjectId, topicRows)
+  const topicsForValidation = scope.main_topic_id
+    ? [{ syllabus_topic_id: scope.main_topic_id, syllabus_subtopic_id: null }, ...topicRows]
+    : topicRows
+  await assertTopicsBelongToScope(connection, schoolId, scope.subject_id, topicsForValidation)
+  const objectives = normalizeObjectives(payload)
+  const objectiveTopicIds = [...new Set([scope.main_topic_id, ...topicRows.flatMap((row) => [row.syllabus_topic_id, row.syllabus_subtopic_id])].map(Number).filter(Boolean))]
+  await assertObjectivesBelongToScope(connection, schoolId, scope.subject_id, objectiveTopicIds, objectives)
+  const studentRows = normalizeStudentExceptions(payload)
+  await assertStudentsBelongToClass(connection, schoolId, scope, studentRows)
   await connection.query("DELETE FROM teacher_lesson_log_topics WHERE lesson_log_id = ?", [lessonLogId])
   for (const topic of topicRows) {
     await connection.query(
@@ -215,7 +280,6 @@ async function replaceLessonChildren(connection, schoolId, lessonLogId, subjectI
     )
   }
 
-  const objectives = normalizeObjectives(payload)
   await connection.query("DELETE FROM teacher_lesson_log_objectives WHERE lesson_log_id = ?", [lessonLogId])
   for (const objective of objectives) {
     await connection.query(
@@ -225,7 +289,6 @@ async function replaceLessonChildren(connection, schoolId, lessonLogId, subjectI
     )
   }
 
-  const studentRows = normalizeStudentExceptions(payload)
   await connection.query("DELETE FROM teacher_lesson_log_students WHERE lesson_log_id = ?", [lessonLogId])
   for (const row of studentRows) {
     await connection.query(
@@ -243,7 +306,7 @@ async function loadLessonLogById(connection, schoolId, lessonLogId) {
      FROM teacher_lesson_logs l
      JOIN classes c ON c.id = l.class_id AND c.school_id = l.school_id
      JOIN subjects subj ON subj.id = l.subject_id AND subj.school_id = l.school_id
-     JOIN users u ON u.id = l.teacher_id
+     JOIN users u ON u.id = l.teacher_id AND u.school_id = l.school_id
      LEFT JOIN syllabus_topics st ON st.id = l.main_topic_id AND st.school_id = l.school_id
      WHERE l.school_id = ? AND l.id = ?
      LIMIT 1`,
@@ -254,32 +317,45 @@ async function loadLessonLogById(connection, schoolId, lessonLogId) {
   const [topics] = await connection.query(
     `SELECT tlt.*, topic.topic_name, subtopic.topic_name AS subtopic_name
      FROM teacher_lesson_log_topics tlt
-     JOIN syllabus_topics topic ON topic.id = tlt.syllabus_topic_id
-     LEFT JOIN syllabus_topics subtopic ON subtopic.id = tlt.syllabus_subtopic_id
+     JOIN teacher_lesson_logs scoped_log ON scoped_log.id = tlt.lesson_log_id AND scoped_log.school_id = ?
+     JOIN syllabus_topics topic ON topic.id = tlt.syllabus_topic_id AND topic.school_id = scoped_log.school_id AND topic.subject_id = scoped_log.subject_id
+     LEFT JOIN syllabus_topics subtopic ON subtopic.id = tlt.syllabus_subtopic_id AND subtopic.school_id = scoped_log.school_id AND subtopic.subject_id = scoped_log.subject_id AND subtopic.parent_topic_id = topic.id
      WHERE tlt.lesson_log_id = ?
      ORDER BY FIELD(tlt.topic_role, 'main', 'supporting', 'revision', 'prerequisite'), tlt.id`,
-    [lessonLogId],
+    [schoolId, lessonLogId],
   )
   const [objectives] = await connection.query(
-    `SELECT tlo.*, lo.objective_text, lo.skill_type
+     `SELECT tlo.*, lo.objective_text, lo.skill_type
      FROM teacher_lesson_log_objectives tlo
-     JOIN learning_objectives lo ON lo.id = tlo.learning_objective_id
-     WHERE tlo.lesson_log_id = ?
+     JOIN teacher_lesson_logs scoped_log ON scoped_log.id = tlo.lesson_log_id AND scoped_log.school_id = ?
+     JOIN learning_objectives lo ON lo.id = tlo.learning_objective_id AND lo.school_id = scoped_log.school_id AND lo.subject_id = scoped_log.subject_id
+     WHERE tlo.lesson_log_id = ? AND (lo.topic_id = scoped_log.main_topic_id OR EXISTS (
+       SELECT 1 FROM teacher_lesson_log_topics scoped_topic
+       WHERE scoped_topic.lesson_log_id = scoped_log.id
+         AND lo.topic_id IN (scoped_topic.syllabus_topic_id,scoped_topic.syllabus_subtopic_id)
+     ))
      ORDER BY tlo.id`,
-    [lessonLogId],
+    [schoolId, lessonLogId],
   )
   const [students] = await connection.query(
-    `SELECT tls.*, s.first_name, s.last_name, s.admission_no
+     `SELECT tls.*, s.first_name, s.last_name, s.admission_no
      FROM teacher_lesson_log_students tls
-     JOIN students s ON s.id = tls.student_id
-     WHERE tls.lesson_log_id = ?
+     JOIN teacher_lesson_logs scoped_log ON scoped_log.id = tls.lesson_log_id AND scoped_log.school_id = ?
+     JOIN students s ON s.id = tls.student_id AND s.school_id = scoped_log.school_id
+     WHERE tls.lesson_log_id = ? AND EXISTS (
+       SELECT 1 FROM student_enrollments enrollment
+       WHERE enrollment.school_id = scoped_log.school_id AND enrollment.student_id = s.id
+         AND enrollment.class_id = scoped_log.class_id
+         AND enrollment.academic_year_id = scoped_log.academic_year_id AND enrollment.term_id = scoped_log.term_id
+         AND enrollment.enrollment_status = 'active'
+     )
      ORDER BY ${studentCodeSortSql("s")}, s.first_name, s.last_name`,
-    [lessonLogId],
+    [schoolId, lessonLogId],
   )
   const [auditEvents] = await connection.query(
     `SELECT a.*, u.full_name AS actor_name
      FROM lesson_log_audit_events a
-     JOIN users u ON u.id = a.actor_user_id
+     JOIN users u ON u.id = a.actor_user_id AND u.school_id = a.school_id
      WHERE a.school_id = ? AND a.lesson_log_id = ?
      ORDER BY a.created_at DESC, a.id DESC
      LIMIT 25`,
@@ -455,12 +531,16 @@ export async function createLessonLog(req, res) {
   const schoolId = getScopedSchoolId(req)
   const session = await requireActiveAcademicSession(schoolId)
   const fields = lessonLogFields(req.body, session, req)
+  fields.academic_year_id = session.academicYearId
+  fields.term_id = session.termId
   if (!fields.class_id || !fields.subject_id) throw new HttpError(400, "Class and subject are required.")
+  if (isTeacher(req) && Number(fields.teacher_id) !== Number(req.user.id)) throw new HttpError(403, "Teachers can only create their own lesson logs.")
   await assertTeacherCanUseSubjectInClass(req, schoolId, fields.class_id, fields.subject_id)
 
   const connection = await pool.getConnection()
   try {
     await connection.beginTransaction()
+    await assertLessonLogEntityScope(connection, schoolId, fields)
     const shouldFinalize = Boolean(req.body.finalize)
     const status = shouldFinalize ? "finalized" : fields.status === "finalized" ? "draft" : fields.status
     const [result] = await connection.query(
@@ -496,7 +576,7 @@ export async function createLessonLog(req, res) {
       ],
     )
     const lessonLogId = Number(result.insertId)
-    await replaceLessonChildren(connection, schoolId, lessonLogId, fields.subject_id, req.body)
+    await replaceLessonChildren(connection, schoolId, lessonLogId, fields, req.body)
     await audit(connection, schoolId, lessonLogId, req.user.id, "created", null, { ...fields, status })
     if (shouldFinalize) await audit(connection, schoolId, lessonLogId, req.user.id, "finalized", null, { status: "finalized" })
     await connection.commit()
@@ -519,7 +599,9 @@ export async function updateLessonLog(req, res) {
     const existing = await loadLessonLogById(connection, schoolId, lessonLogId)
     await assertCanEditLessonLog(req, existing)
     const fields = lessonLogFields({ ...existing, ...req.body }, session, req)
+    if (isTeacher(req) && Number(fields.teacher_id) !== Number(req.user.id)) throw new HttpError(403, "Teachers can only keep lesson logs under their own account.")
     await assertTeacherCanUseSubjectInClass(req, schoolId, fields.class_id, fields.subject_id)
+    await assertLessonLogEntityScope(connection, schoolId, fields)
     await connection.query(
       `UPDATE teacher_lesson_logs
        SET teacher_id = ?, class_id = ?, subject_id = ?, timetable_entry_id = ?, lesson_date = ?,
@@ -551,7 +633,7 @@ export async function updateLessonLog(req, res) {
         lessonLogId,
       ],
     )
-    await replaceLessonChildren(connection, schoolId, lessonLogId, fields.subject_id, req.body)
+    await replaceLessonChildren(connection, schoolId, lessonLogId, fields, req.body)
     await audit(connection, schoolId, lessonLogId, req.user.id, "updated", existing, fields)
     await connection.commit()
     res.json({ lesson_log: await loadLessonLogById(pool, schoolId, lessonLogId) })

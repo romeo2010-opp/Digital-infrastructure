@@ -2,6 +2,7 @@ import { pool } from "../config/db.js"
 import { HttpError } from "../utils/http.js"
 import { getScopedSchoolId, getTeacherClassSubjectPairs, isTeacher } from "../utils/tenantScope.js"
 import { generateDraftQuestions } from "../services/questions/questionDraftingService.js"
+import { validateSyllabusTopicScope } from "../services/curriculumScopeService.js"
 
 function cleanText(value, fallback = "") {
   return String(value ?? fallback).trim()
@@ -470,6 +471,13 @@ export async function createQuestion(req, res) {
       throw new HttpError(403, "Teachers can only add questions for subjects they teach")
     }
   }
+  const topicScope = await validateSyllabusTopicScope(pool, {
+    schoolId,
+    subjectId,
+    topicId,
+    subtopicId: req.body.subtopic_id || null,
+    requireTopic: true,
+  })
   const requestedStatus = cleanText(req.body.approval_status || "pending_review") || "pending_review"
   const approvalStatus = isTeacher(req) && requestedStatus === "approved" ? "pending_review" : requestedStatus
   const [result] = await pool.query(
@@ -480,11 +488,11 @@ export async function createQuestion(req, res) {
     ) VALUES (UUID(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       schoolId,
-      req.body.curriculum_id || null,
-      req.body.grade_id || null,
+      topicScope.topic?.curriculum_id || null,
+      topicScope.topic?.grade_id || null,
       subjectId,
-      topicId,
-      req.body.subtopic_id || null,
+      topicScope.topicId,
+      topicScope.subtopicId,
       questionBankType(req.body.question_type || "multiple_choice"),
       questionText,
       req.body.options_json ? JSON.stringify(req.body.options_json) : normalizeJsonArray(req.body.options),
@@ -874,6 +882,18 @@ export async function getQuestionBatchReview(req, res) {
 export async function updateQuestion(req, res) {
   const schoolId = getScopedSchoolId(req)
   const questionId = Number(req.params.id || 0)
+  const [[current]] = await pool.query(
+    "SELECT id,subject_id,topic_id,subtopic_id FROM question_bank WHERE school_id=? AND id=? LIMIT 1",
+    [schoolId, questionId],
+  )
+  if (!current) throw new HttpError(404, "Question was not found")
+  const topicScope = await validateSyllabusTopicScope(pool, {
+    schoolId,
+    subjectId: current.subject_id,
+    topicId: req.body.topic_id === undefined ? current.topic_id : req.body.topic_id,
+    subtopicId: req.body.subtopic_id === undefined ? current.subtopic_id : req.body.subtopic_id,
+    requireTopic: true,
+  })
   const [result] = await pool.query(
     `UPDATE question_bank
      SET question_text = COALESCE(?, question_text),
@@ -887,8 +907,8 @@ export async function updateQuestion(req, res) {
        marks = COALESCE(?, marks),
        common_mistake = COALESCE(?, common_mistake),
        confidence = COALESCE(?, confidence),
-       topic_id = COALESCE(?, topic_id),
-       subtopic_id = COALESCE(?, subtopic_id)
+       topic_id = ?,
+       subtopic_id = ?
      WHERE school_id = ? AND id = ?`,
     [
       req.body.question_text === undefined ? null : cleanText(req.body.question_text),
@@ -902,8 +922,8 @@ export async function updateQuestion(req, res) {
       req.body.marks === undefined ? null : Number(req.body.marks || 1),
       req.body.common_mistake === undefined ? null : cleanText(req.body.common_mistake),
       req.body.confidence === undefined ? null : Number(req.body.confidence || 0),
-      req.body.topic_id === undefined ? null : Number(req.body.topic_id || 0),
-      req.body.subtopic_id === undefined ? null : Number(req.body.subtopic_id || 0) || null,
+      topicScope.topicId,
+      topicScope.subtopicId,
       schoolId,
       questionId,
     ],

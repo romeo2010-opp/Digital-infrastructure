@@ -132,18 +132,17 @@ SET @chichewa_id := (SELECT id FROM subjects WHERE school_id = @school_id AND co
 SET @social_id := (SELECT id FROM subjects WHERE school_id = @school_id AND code = 'SOC' LIMIT 1);
 
 INSERT INTO users (
-  school_id, role, full_name, first_name, last_name, email, password_hash,
+  public_ref, school_id, role, full_name, first_name, last_name, email, password_hash,
   must_change_password, phone, gender, employee_id, qualification, specialization,
   address, employment_status, role_type, is_active
 ) VALUES
-  (@school_id, 'school_owner', 'Agnes Banda', 'Agnes', 'Banda', 'owner@greenhill.test', @demo_password_hash, 0, '+265 999 100 001', 'Female', 'GPS-ADM-001', 'B.Ed Leadership', 'School Operations', 'Greenhill Cambridge Primary School, Blantyre', 'active', 'admin_teacher', 1),
-  (@school_id, 'bursar', 'Patrick Mbewe', 'Patrick', 'Mbewe', 'bursar@greenhill.test', @demo_password_hash, 0, '+265 999 100 002', 'Male', 'GPS-ADM-002', 'Diploma in Accounting', 'Finance', 'Greenhill Cambridge Primary School, Blantyre', 'active', 'admin_teacher', 1)
+  (UUID(), @school_id, 'school_owner', 'Agnes Banda', 'Agnes', 'Banda', 'owner@greenhill.test', @demo_password_hash, 1, '+265 999 100 001', 'Female', 'GPS-ADM-001', 'B.Ed Leadership', 'School Operations', 'Greenhill Cambridge Primary School, Blantyre', 'active', 'admin_teacher', 1),
+  (UUID(), @school_id, 'bursar', 'Patrick Mbewe', 'Patrick', 'Mbewe', 'bursar@greenhill.test', @demo_password_hash, 1, '+265 999 100 002', 'Male', 'GPS-ADM-002', 'Diploma in Accounting', 'Finance', 'Greenhill Cambridge Primary School, Blantyre', 'active', 'admin_teacher', 1)
 ON DUPLICATE KEY UPDATE
   role = VALUES(role),
   full_name = VALUES(full_name),
   first_name = VALUES(first_name),
   last_name = VALUES(last_name),
-  password_hash = VALUES(password_hash),
   phone = VALUES(phone),
   employee_id = VALUES(employee_id),
   qualification = VALUES(qualification),
@@ -153,24 +152,23 @@ ON DUPLICATE KEY UPDATE
   is_active = VALUES(is_active);
 
 INSERT INTO users (
-  school_id, role, full_name, first_name, last_name, email, password_hash,
+  public_ref, school_id, role, full_name, first_name, last_name, email, password_hash,
   must_change_password, phone, gender, date_of_birth, employee_id, qualification,
   specialization, address, employment_status, role_type, is_active
 ) VALUES
-  (@school_id, 'headteacher', 'Elizabeth Phiri', 'Elizabeth', 'Phiri', 'headteacher@greenhill.test', @demo_password_hash, 0, '+265 999 110 001', 'Female', '1981-03-14', 'GPS-T-001', 'B.Ed Primary Education', 'School Leadership', 'Greenhill Cambridge Primary School, Blantyre', 'active', 'headteacher', 1),
-  (@school_id, 'teacher', 'Joseph Mvula', 'Joseph', 'Mvula', 'deputy@greenhill.test', @demo_password_hash, 0, '+265 999 110 002', 'Male', '1984-09-22', 'GPS-T-002', 'B.Ed Education', 'Deputy Headteacher', 'Greenhill Cambridge Primary School, Blantyre', 'active', 'deputy_headteacher', 1),
-  (@school_id, 'teacher', 'Grace Moyo', 'Grace', 'Moyo', 'p1.teacher@greenhill.test', @demo_password_hash, 0, '+265 999 110 003', 'Female', '1990-01-18', 'GPS-T-003', 'Diploma in Education', 'Early Grade Literacy', 'Greenhill Cambridge Primary School, Blantyre', 'active', 'teacher', 1),
-  (@school_id, 'teacher', 'Samuel Kachingwe', 'Samuel', 'Kachingwe', 'p2.teacher@greenhill.test', @demo_password_hash, 0, '+265 999 110 004', 'Male', '1988-07-05', 'GPS-T-004', 'Diploma in Education', 'Numeracy', 'Greenhill Cambridge Primary School, Blantyre', 'active', 'teacher', 1),
-  (@school_id, 'teacher', 'Mercy Chirwa', 'Mercy', 'Chirwa', 'p3.teacher@greenhill.test', @demo_password_hash, 0, '+265 999 110 005', 'Female', '1992-12-11', 'GPS-T-005', 'B.Ed Primary Education', 'Science and Health', 'Greenhill Cambridge Primary School, Blantyre', 'active', 'teacher', 1),
-  (@school_id, 'teacher', 'Daniel Nkhata', 'Daniel', 'Nkhata', 'p4.teacher@greenhill.test', @demo_password_hash, 0, '+265 999 110 006', 'Male', '1986-05-30', 'GPS-T-006', 'B.Ed Primary Education', 'Upper Primary', 'Greenhill Cambridge Primary School, Blantyre', 'active', 'teacher', 1),
-  (@school_id, 'teacher', 'Ruth Tembo', 'Ruth', 'Tembo', 'math.teacher@greenhill.test', @demo_password_hash, 0, '+265 999 110 007', 'Female', '1989-10-03', 'GPS-T-007', 'B.Ed Mathematics', 'Mathematics', 'Greenhill Cambridge Primary School, Blantyre', 'active', 'teacher', 1),
-  (@school_id, 'teacher', 'Andrew Gondwe', 'Andrew', 'Gondwe', 'english.teacher@greenhill.test', @demo_password_hash, 0, '+265 999 110 008', 'Male', '1991-02-19', 'GPS-T-008', 'B.Ed Languages', 'English and Chichewa', 'Greenhill Cambridge Primary School, Blantyre', 'active', 'teacher', 1)
+  (UUID(), @school_id, 'headteacher', 'Elizabeth Phiri', 'Elizabeth', 'Phiri', 'headteacher@greenhill.test', @demo_password_hash, 1, '+265 999 110 001', 'Female', '1981-03-14', 'GPS-T-001', 'B.Ed Primary Education', 'School Leadership', 'Greenhill Cambridge Primary School, Blantyre', 'active', 'headteacher', 1),
+  (UUID(), @school_id, 'teacher', 'Joseph Mvula', 'Joseph', 'Mvula', 'deputy@greenhill.test', @demo_password_hash, 1, '+265 999 110 002', 'Male', '1984-09-22', 'GPS-T-002', 'B.Ed Education', 'Deputy Headteacher', 'Greenhill Cambridge Primary School, Blantyre', 'active', 'deputy_headteacher', 1),
+  (UUID(), @school_id, 'teacher', 'Grace Moyo', 'Grace', 'Moyo', 'p1.teacher@greenhill.test', @demo_password_hash, 1, '+265 999 110 003', 'Female', '1990-01-18', 'GPS-T-003', 'Diploma in Education', 'Early Grade Literacy', 'Greenhill Cambridge Primary School, Blantyre', 'active', 'teacher', 1),
+  (UUID(), @school_id, 'teacher', 'Samuel Kachingwe', 'Samuel', 'Kachingwe', 'p2.teacher@greenhill.test', @demo_password_hash, 1, '+265 999 110 004', 'Male', '1988-07-05', 'GPS-T-004', 'Diploma in Education', 'Numeracy', 'Greenhill Cambridge Primary School, Blantyre', 'active', 'teacher', 1),
+  (UUID(), @school_id, 'teacher', 'Mercy Chirwa', 'Mercy', 'Chirwa', 'p3.teacher@greenhill.test', @demo_password_hash, 1, '+265 999 110 005', 'Female', '1992-12-11', 'GPS-T-005', 'B.Ed Primary Education', 'Science and Health', 'Greenhill Cambridge Primary School, Blantyre', 'active', 'teacher', 1),
+  (UUID(), @school_id, 'teacher', 'Daniel Nkhata', 'Daniel', 'Nkhata', 'p4.teacher@greenhill.test', @demo_password_hash, 1, '+265 999 110 006', 'Male', '1986-05-30', 'GPS-T-006', 'B.Ed Primary Education', 'Upper Primary', 'Greenhill Cambridge Primary School, Blantyre', 'active', 'teacher', 1),
+  (UUID(), @school_id, 'teacher', 'Ruth Tembo', 'Ruth', 'Tembo', 'math.teacher@greenhill.test', @demo_password_hash, 1, '+265 999 110 007', 'Female', '1989-10-03', 'GPS-T-007', 'B.Ed Mathematics', 'Mathematics', 'Greenhill Cambridge Primary School, Blantyre', 'active', 'teacher', 1),
+  (UUID(), @school_id, 'teacher', 'Andrew Gondwe', 'Andrew', 'Gondwe', 'english.teacher@greenhill.test', @demo_password_hash, 1, '+265 999 110 008', 'Male', '1991-02-19', 'GPS-T-008', 'B.Ed Languages', 'English and Chichewa', 'Greenhill Cambridge Primary School, Blantyre', 'active', 'teacher', 1)
 ON DUPLICATE KEY UPDATE
   role = VALUES(role),
   full_name = VALUES(full_name),
   first_name = VALUES(first_name),
   last_name = VALUES(last_name),
-  password_hash = VALUES(password_hash),
   phone = VALUES(phone),
   gender = VALUES(gender),
   date_of_birth = VALUES(date_of_birth),
@@ -180,6 +178,8 @@ ON DUPLICATE KEY UPDATE
   employment_status = VALUES(employment_status),
   role_type = VALUES(role_type),
   is_active = VALUES(is_active);
+
+UPDATE users SET public_ref = UUID() WHERE school_id = @school_id AND (public_ref IS NULL OR public_ref = '');
 
 SET @headteacher_id := (SELECT id FROM users WHERE school_id = @school_id AND email = 'headteacher@greenhill.test' LIMIT 1);
 SET @deputy_id := (SELECT id FROM users WHERE school_id = @school_id AND email = 'deputy@greenhill.test' LIMIT 1);
@@ -236,37 +236,39 @@ JOIN subjects subj ON subj.school_id = c.school_id AND subj.code IN ('MATH', 'EN
 WHERE c.school_id = @school_id AND c.name IN ('Year 1A', 'Year 2A', 'Year 3A', 'Year 4A', 'Year 5A', 'Year 6A');
 
 INSERT INTO students (
-  school_id, class_id, student_id, admission_no, first_name, last_name,
+  public_ref, school_id, class_id, student_id, admission_no, first_name, last_name,
   date_of_birth, gender, stream_section, enrollment_date, student_type, status
 ) VALUES
-  (@school_id, (SELECT id FROM classes WHERE school_id = @school_id AND name = 'Year 1A'), 'GPS-2026-00001', 'GPS-2026-00001', 'Thoko', 'Banda', '2019-02-12', 'Female', 'A', '2026-05-05', 'new', 'active'),
-  (@school_id, (SELECT id FROM classes WHERE school_id = @school_id AND name = 'Year 1A'), 'GPS-2026-00002', 'GPS-2026-00002', 'Yamikani', 'Phiri', '2019-06-21', 'Male', 'A', '2026-05-05', 'new', 'active'),
-  (@school_id, (SELECT id FROM classes WHERE school_id = @school_id AND name = 'Year 1A'), 'GPS-2026-00003', 'GPS-2026-00003', 'Tadala', 'Mbewe', '2018-11-09', 'Female', 'A', '2026-05-05', 'returning', 'active'),
-  (@school_id, (SELECT id FROM classes WHERE school_id = @school_id AND name = 'Year 1A'), 'GPS-2026-00004', 'GPS-2026-00004', 'Blessings', 'Nkhoma', '2019-09-30', 'Male', 'A', '2026-05-05', 'new', 'active'),
-  (@school_id, (SELECT id FROM classes WHERE school_id = @school_id AND name = 'Year 1A'), 'GPS-2026-00005', 'GPS-2026-00005', 'Chikondi', 'Chirwa', '2018-12-17', 'Female', 'A', '2026-05-05', 'returning', 'active'),
-  (@school_id, (SELECT id FROM classes WHERE school_id = @school_id AND name = 'Year 1A'), 'GPS-2026-00006', 'GPS-2026-00006', 'Pemphero', 'Kumwenda', '2019-04-04', 'Male', 'A', '2026-05-05', 'new', 'active'),
-  (@school_id, (SELECT id FROM classes WHERE school_id = @school_id AND name = 'Year 2A'), 'GPS-2026-00007', 'GPS-2026-00007', 'Ruth', 'Jere', '2018-01-25', 'Female', 'A', '2026-05-05', 'returning', 'active'),
-  (@school_id, (SELECT id FROM classes WHERE school_id = @school_id AND name = 'Year 2A'), 'GPS-2026-00008', 'GPS-2026-00008', 'Mphatso', 'Mvula', '2018-08-13', 'Male', 'A', '2026-05-05', 'returning', 'active'),
-  (@school_id, (SELECT id FROM classes WHERE school_id = @school_id AND name = 'Year 2A'), 'GPS-2026-00009', 'GPS-2026-00009', 'Lumbani', 'Tembo', '2017-10-01', 'Female', 'A', '2026-05-05', 'transfer', 'active'),
-  (@school_id, (SELECT id FROM classes WHERE school_id = @school_id AND name = 'Year 2A'), 'GPS-2026-00010', 'GPS-2026-00010', 'Dalitso', 'Kachale', '2018-03-19', 'Male', 'A', '2026-05-05', 'returning', 'active'),
-  (@school_id, (SELECT id FROM classes WHERE school_id = @school_id AND name = 'Year 2A'), 'GPS-2026-00011', 'GPS-2026-00011', 'Madalitso', 'Soko', '2018-05-07', 'Female', 'A', '2026-05-05', 'new', 'active'),
-  (@school_id, (SELECT id FROM classes WHERE school_id = @school_id AND name = 'Year 2A'), 'GPS-2026-00012', 'GPS-2026-00012', 'Takondwa', 'Ngoma', '2017-12-28', 'Male', 'A', '2026-05-05', 'returning', 'active'),
-  (@school_id, (SELECT id FROM classes WHERE school_id = @school_id AND name = 'Year 3A'), 'GPS-2026-00013', 'GPS-2026-00013', 'Memory', 'Kondowe', '2017-02-03', 'Female', 'A', '2026-05-05', 'returning', 'active'),
-  (@school_id, (SELECT id FROM classes WHERE school_id = @school_id AND name = 'Year 3A'), 'GPS-2026-00014', 'GPS-2026-00014', 'Gift', 'Mkandawire', '2017-07-16', 'Male', 'A', '2026-05-05', 'returning', 'active'),
-  (@school_id, (SELECT id FROM classes WHERE school_id = @school_id AND name = 'Year 3A'), 'GPS-2026-00015', 'GPS-2026-00015', 'Natasha', 'Kaphale', '2016-09-08', 'Female', 'A', '2026-05-05', 'transfer', 'active'),
-  (@school_id, (SELECT id FROM classes WHERE school_id = @school_id AND name = 'Year 3A'), 'GPS-2026-00016', 'GPS-2026-00016', 'Tapiwa', 'Lungu', '2017-11-20', 'Male', 'A', '2026-05-05', 'returning', 'active'),
-  (@school_id, (SELECT id FROM classes WHERE school_id = @school_id AND name = 'Year 3A'), 'GPS-2026-00017', 'GPS-2026-00017', 'Esnart', 'Kalua', '2017-04-14', 'Female', 'A', '2026-05-05', 'returning', 'active'),
-  (@school_id, (SELECT id FROM classes WHERE school_id = @school_id AND name = 'Year 3A'), 'GPS-2026-00018', 'GPS-2026-00018', 'Innocent', 'Nyirenda', '2016-12-02', 'Male', 'A', '2026-05-05', 'new', 'active'),
-  (@school_id, (SELECT id FROM classes WHERE school_id = @school_id AND name = 'Year 4A'), 'GPS-2026-00019', 'GPS-2026-00019', 'Chisomo', 'Mwale', '2016-01-29', 'Female', 'A', '2026-05-05', 'returning', 'active'),
-  (@school_id, (SELECT id FROM classes WHERE school_id = @school_id AND name = 'Year 4A'), 'GPS-2026-00020', 'GPS-2026-00020', 'Patrick', 'Munthali', '2016-06-18', 'Male', 'A', '2026-05-05', 'returning', 'active'),
-  (@school_id, (SELECT id FROM classes WHERE school_id = @school_id AND name = 'Year 4A'), 'GPS-2026-00021', 'GPS-2026-00021', 'Favour', 'Manda', '2015-08-24', 'Female', 'A', '2026-05-05', 'transfer', 'active'),
-  (@school_id, (SELECT id FROM classes WHERE school_id = @school_id AND name = 'Year 4A'), 'GPS-2026-00022', 'GPS-2026-00022', 'Kelvin', 'Nyirenda', '2016-10-10', 'Male', 'A', '2026-05-05', 'returning', 'active'),
-  (@school_id, (SELECT id FROM classes WHERE school_id = @school_id AND name = 'Year 4A'), 'GPS-2026-00023', 'GPS-2026-00023', 'Martha', 'Kamanga', '2016-03-05', 'Female', 'A', '2026-05-05', 'returning', 'active'),
-  (@school_id, (SELECT id FROM classes WHERE school_id = @school_id AND name = 'Year 4A'), 'GPS-2026-00024', 'GPS-2026-00024', 'Wisdom', 'Zimba', '2015-12-12', 'Male', 'A', '2026-05-05', 'new', 'active');
+  (UUID(), @school_id, (SELECT id FROM classes WHERE school_id = @school_id AND name = 'Year 1A'), 'GPS-2026-00001', 'GPS-2026-00001', 'Thoko', 'Banda', '2019-02-12', 'Female', 'A', '2026-05-05', 'new', 'active'),
+  (UUID(), @school_id, (SELECT id FROM classes WHERE school_id = @school_id AND name = 'Year 1A'), 'GPS-2026-00002', 'GPS-2026-00002', 'Yamikani', 'Phiri', '2019-06-21', 'Male', 'A', '2026-05-05', 'new', 'active'),
+  (UUID(), @school_id, (SELECT id FROM classes WHERE school_id = @school_id AND name = 'Year 1A'), 'GPS-2026-00003', 'GPS-2026-00003', 'Tadala', 'Mbewe', '2018-11-09', 'Female', 'A', '2026-05-05', 'returning', 'active'),
+  (UUID(), @school_id, (SELECT id FROM classes WHERE school_id = @school_id AND name = 'Year 1A'), 'GPS-2026-00004', 'GPS-2026-00004', 'Blessings', 'Nkhoma', '2019-09-30', 'Male', 'A', '2026-05-05', 'new', 'active'),
+  (UUID(), @school_id, (SELECT id FROM classes WHERE school_id = @school_id AND name = 'Year 1A'), 'GPS-2026-00005', 'GPS-2026-00005', 'Chikondi', 'Chirwa', '2018-12-17', 'Female', 'A', '2026-05-05', 'returning', 'active'),
+  (UUID(), @school_id, (SELECT id FROM classes WHERE school_id = @school_id AND name = 'Year 1A'), 'GPS-2026-00006', 'GPS-2026-00006', 'Pemphero', 'Kumwenda', '2019-04-04', 'Male', 'A', '2026-05-05', 'new', 'active'),
+  (UUID(), @school_id, (SELECT id FROM classes WHERE school_id = @school_id AND name = 'Year 2A'), 'GPS-2026-00007', 'GPS-2026-00007', 'Ruth', 'Jere', '2018-01-25', 'Female', 'A', '2026-05-05', 'returning', 'active'),
+  (UUID(), @school_id, (SELECT id FROM classes WHERE school_id = @school_id AND name = 'Year 2A'), 'GPS-2026-00008', 'GPS-2026-00008', 'Mphatso', 'Mvula', '2018-08-13', 'Male', 'A', '2026-05-05', 'returning', 'active'),
+  (UUID(), @school_id, (SELECT id FROM classes WHERE school_id = @school_id AND name = 'Year 2A'), 'GPS-2026-00009', 'GPS-2026-00009', 'Lumbani', 'Tembo', '2017-10-01', 'Female', 'A', '2026-05-05', 'transfer', 'active'),
+  (UUID(), @school_id, (SELECT id FROM classes WHERE school_id = @school_id AND name = 'Year 2A'), 'GPS-2026-00010', 'GPS-2026-00010', 'Dalitso', 'Kachale', '2018-03-19', 'Male', 'A', '2026-05-05', 'returning', 'active'),
+  (UUID(), @school_id, (SELECT id FROM classes WHERE school_id = @school_id AND name = 'Year 2A'), 'GPS-2026-00011', 'GPS-2026-00011', 'Madalitso', 'Soko', '2018-05-07', 'Female', 'A', '2026-05-05', 'new', 'active'),
+  (UUID(), @school_id, (SELECT id FROM classes WHERE school_id = @school_id AND name = 'Year 2A'), 'GPS-2026-00012', 'GPS-2026-00012', 'Takondwa', 'Ngoma', '2017-12-28', 'Male', 'A', '2026-05-05', 'returning', 'active'),
+  (UUID(), @school_id, (SELECT id FROM classes WHERE school_id = @school_id AND name = 'Year 3A'), 'GPS-2026-00013', 'GPS-2026-00013', 'Memory', 'Kondowe', '2017-02-03', 'Female', 'A', '2026-05-05', 'returning', 'active'),
+  (UUID(), @school_id, (SELECT id FROM classes WHERE school_id = @school_id AND name = 'Year 3A'), 'GPS-2026-00014', 'GPS-2026-00014', 'Gift', 'Mkandawire', '2017-07-16', 'Male', 'A', '2026-05-05', 'returning', 'active'),
+  (UUID(), @school_id, (SELECT id FROM classes WHERE school_id = @school_id AND name = 'Year 3A'), 'GPS-2026-00015', 'GPS-2026-00015', 'Natasha', 'Kaphale', '2016-09-08', 'Female', 'A', '2026-05-05', 'transfer', 'active'),
+  (UUID(), @school_id, (SELECT id FROM classes WHERE school_id = @school_id AND name = 'Year 3A'), 'GPS-2026-00016', 'GPS-2026-00016', 'Tapiwa', 'Lungu', '2017-11-20', 'Male', 'A', '2026-05-05', 'returning', 'active'),
+  (UUID(), @school_id, (SELECT id FROM classes WHERE school_id = @school_id AND name = 'Year 3A'), 'GPS-2026-00017', 'GPS-2026-00017', 'Esnart', 'Kalua', '2017-04-14', 'Female', 'A', '2026-05-05', 'returning', 'active'),
+  (UUID(), @school_id, (SELECT id FROM classes WHERE school_id = @school_id AND name = 'Year 3A'), 'GPS-2026-00018', 'GPS-2026-00018', 'Innocent', 'Nyirenda', '2016-12-02', 'Male', 'A', '2026-05-05', 'new', 'active'),
+  (UUID(), @school_id, (SELECT id FROM classes WHERE school_id = @school_id AND name = 'Year 4A'), 'GPS-2026-00019', 'GPS-2026-00019', 'Chisomo', 'Mwale', '2016-01-29', 'Female', 'A', '2026-05-05', 'returning', 'active'),
+  (UUID(), @school_id, (SELECT id FROM classes WHERE school_id = @school_id AND name = 'Year 4A'), 'GPS-2026-00020', 'GPS-2026-00020', 'Patrick', 'Munthali', '2016-06-18', 'Male', 'A', '2026-05-05', 'returning', 'active'),
+  (UUID(), @school_id, (SELECT id FROM classes WHERE school_id = @school_id AND name = 'Year 4A'), 'GPS-2026-00021', 'GPS-2026-00021', 'Favour', 'Manda', '2015-08-24', 'Female', 'A', '2026-05-05', 'transfer', 'active'),
+  (UUID(), @school_id, (SELECT id FROM classes WHERE school_id = @school_id AND name = 'Year 4A'), 'GPS-2026-00022', 'GPS-2026-00022', 'Kelvin', 'Nyirenda', '2016-10-10', 'Male', 'A', '2026-05-05', 'returning', 'active'),
+  (UUID(), @school_id, (SELECT id FROM classes WHERE school_id = @school_id AND name = 'Year 4A'), 'GPS-2026-00023', 'GPS-2026-00023', 'Martha', 'Kamanga', '2016-03-05', 'Female', 'A', '2026-05-05', 'returning', 'active'),
+  (UUID(), @school_id, (SELECT id FROM classes WHERE school_id = @school_id AND name = 'Year 4A'), 'GPS-2026-00024', 'GPS-2026-00024', 'Wisdom', 'Zimba', '2015-12-12', 'Male', 'A', '2026-05-05', 'new', 'active');
 
 UPDATE students
 SET previous_school = 'Namiwawa Primary School'
 WHERE school_id = @school_id AND student_type = 'transfer';
+
+UPDATE students SET public_ref = UUID() WHERE school_id = @school_id AND (public_ref IS NULL OR public_ref = '');
 
 INSERT INTO school_student_sequences (school_id, sequence_year, last_sequence)
 VALUES (@school_id, 2026, 24)
@@ -282,10 +284,10 @@ FROM students s
 WHERE s.school_id = @school_id;
 
 INSERT INTO student_guardians (
-  school_id, student_id, guardian_number, full_name, relationship,
+  public_ref, school_id, student_id, guardian_number, full_name, relationship,
   primary_phone, secondary_phone, email, national_id
 )
-SELECT @school_id, s.id, 1,
+SELECT UUID(), @school_id, s.id, 1,
   CONCAT('Mrs. ', s.last_name),
   'guardian',
   CONCAT('+265 888 ', LPAD(200000 + ROW_NUMBER() OVER (ORDER BY s.admission_no), 6, '0')),

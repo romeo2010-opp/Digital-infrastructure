@@ -167,11 +167,12 @@ async function decorateSessionUser(user) {
 }
 
 async function loginStudent(req) {
+  const schoolCode = String(req.body.school_code || req.body.schoolCode || req.body.school_prefix || req.body.schoolPrefix || "").trim()
   const studentCode = String(
     req.body.student_code || req.body.studentCode || req.body.admission_no || req.body.admissionNo || req.body.email || "",
   ).trim()
   const password = String(req.body.password || "")
-  if (!studentCode || !password) throw new HttpError(401, "Invalid credentials")
+  if (!schoolCode || !studentCode || !password) throw new HttpError(401, "Invalid credentials")
 
   const [rows] = await pool.query(
     `SELECT s.id, s.school_id, 'student' AS role, NULL AS email,
@@ -179,14 +180,16 @@ async function loginStudent(req) {
       s.id AS student_db_id, COALESCE(s.student_id, s.admission_no) AS student_code,
       s.admission_no, s.date_of_birth, COALESCE(se.class_id, s.class_id) AS class_id, c.name AS class_name
      FROM students s
+     JOIN schools school ON school.id=s.school_id AND school.status='active'
      LEFT JOIN student_enrollments se ON se.student_id = s.id AND se.school_id = s.school_id
       AND se.enrollment_status = 'active'
      LEFT JOIN classes c ON c.id = COALESCE(se.class_id, s.class_id) AND c.school_id = s.school_id
      WHERE s.status = 'active'
+       AND (LOWER(school.code)=LOWER(?) OR LOWER(school.school_prefix)=LOWER(?))
        AND (s.student_id = ? OR s.admission_no = ?)
      ORDER BY se.created_at DESC, se.id DESC
      LIMIT 1`,
-    [studentCode, studentCode],
+    [schoolCode, schoolCode, studentCode, studentCode],
   )
   const user = rows[0]
   if (!user || !studentDatePasswordCandidates(user.date_of_birth).has(password.trim())) {

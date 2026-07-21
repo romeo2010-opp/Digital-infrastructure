@@ -106,15 +106,20 @@ test("parents use the canonical student portal with guardian-scoped learner swit
 })
 
 test("Classroom Mode prioritises the active timetable subject over stale lessons", async () => {
-  const [service, client] = await Promise.all([
+  const [service, client, migration] = await Promise.all([
     source("server/src/services/libraryClassroomService.js"),
     source("client/src/app/pages/ClassroomModePage.tsx"),
+    source("server/database/064_lesson_log_timetable_scope.sql"),
   ])
   assert.match(service, /activeMatchesPeriod/)
   assert.match(service, /unfinished_lesson/)
   assert.match(service, /selected timetable period is not active for this class and subject/)
-  assert.match(service, /teacher_lesson_logs[\s\S]*VALUES \(\?,\?,\?,\?,\?,\?,NULL/)
+  assert.match(service, /teacher_lesson_logs[\s\S]*timetableEntryId,lessonDate/)
   assert.match(service, /classroom_sessions[\s\S]*timetableEntryId/)
+  assert.match(service, /role='subject_teacher'[\s\S]*academic_year_id IS NULL[\s\S]*term_id IS NULL/)
+  assert.match(service, /DELETE objective_link FROM teacher_lesson_log_objectives/)
+  assert.match(migration, /REFERENCES timetable_entries\(id\)/)
+  assert.doesNotMatch(migration, /REFERENCES exam_timetable_entries\(id\)/)
   assert.match(client, /current\.subject_ref/)
   assert.match(client, /selectedIsCurrent/)
   assert.doesNotMatch(client, /setSubjectRef\(['"]English['"]\)/)

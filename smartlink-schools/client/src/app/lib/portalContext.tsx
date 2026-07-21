@@ -724,7 +724,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
     if (shouldPreload) await preloadLoginPackets(payload?.accessToken, payload?.user)
   }
 
-  const login = async (credentials: { email?: string; studentCode?: string; student_code?: string; password: string; loginType?: string; login_type?: string }) => {
+  const login = async (credentials: { email?: string; schoolCode?: string; school_code?: string; studentCode?: string; student_code?: string; password: string; loginType?: string; login_type?: string }) => {
     setBootLoading(true)
     setLoginError('')
     setLoginSuccessGate(false)

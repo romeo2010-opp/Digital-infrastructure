@@ -52,17 +52,17 @@ ON DUPLICATE KEY UPDATE curriculum_id=VALUES(curriculum_id),stage=VALUES(stage),
 INSERT INTO users (public_ref,school_id,role,full_name,first_name,last_name,email,password_hash,must_change_password,
   phone,employee_id,qualification,specialization,employment_status,role_type,is_active)
 VALUES
-  (UUID(),@school_id,'school_owner','Romeo JFK Owner','Romeo','JFK','owner@romeojfk.academy',@demo_password_hash,0,'+265 888 700 001','RJK-ADM-001','B.Ed Educational Leadership','School Operations','active','admin_teacher',1),
-  (UUID(),@school_id,'headteacher','Evelyn Mbewe','Evelyn','Mbewe','headteacher@romeojfk.academy',@demo_password_hash,0,'+265 888 700 002','RJK-HT-001','M.Ed Educational Leadership','Academic Leadership','active','headteacher',1),
-  (UUID(),@school_id,'bursar','Tiwonge Phiri','Tiwonge','Phiri','bursar@romeojfk.academy',@demo_password_hash,0,'+265 888 700 003','RJK-BUR-001','Diploma in Accounting','Finance','active','admin_teacher',1),
-  (UUID(),@school_id,'teacher','Ruth Mwale','Ruth','Mwale','ruth.mwale@romeojfk.academy',@demo_password_hash,0,'+265 888 701 001','RJK-T-001','B.Ed Primary Education','Year 1 and Mathematics','active','teacher',1),
-  (UUID(),@school_id,'teacher','Daniel Phiri','Daniel','Phiri','daniel.phiri@romeojfk.academy',@demo_password_hash,0,'+265 888 701 002','RJK-T-002','B.Ed Primary Education','Year 2 and English','active','teacher',1),
-  (UUID(),@school_id,'teacher','Grace Tembo','Grace','Tembo','grace.tembo@romeojfk.academy',@demo_password_hash,0,'+265 888 701 003','RJK-T-003','B.Ed Primary Education','Year 3 and Science','active','teacher',1),
-  (UUID(),@school_id,'teacher','Kelvin Chirwa','Kelvin','Chirwa','kelvin.chirwa@romeojfk.academy',@demo_password_hash,0,'+265 888 701 004','RJK-T-004','B.Ed Primary Education','Year 4 and Agriculture','active','teacher',1),
-  (UUID(),@school_id,'teacher','Martha Gondwe','Martha','Gondwe','martha.gondwe@romeojfk.academy',@demo_password_hash,0,'+265 888 701 005','RJK-T-005','B.Ed Primary Education','Year 5 and Social Studies','active','teacher',1),
-  (UUID(),@school_id,'teacher','Peter Nkhoma','Peter','Nkhoma','peter.nkhoma@romeojfk.academy',@demo_password_hash,0,'+265 888 701 006','RJK-T-006','B.Ed Primary Education','Year 6 and ICT','active','teacher',1)
+  (UUID(),@school_id,'school_owner','Romeo JFK Owner','Romeo','JFK','owner@romeojfk.academy',@demo_password_hash,1,'+265 888 700 001','RJK-ADM-001','B.Ed Educational Leadership','School Operations','active','admin_teacher',1),
+  (UUID(),@school_id,'headteacher','Evelyn Mbewe','Evelyn','Mbewe','headteacher@romeojfk.academy',@demo_password_hash,1,'+265 888 700 002','RJK-HT-001','M.Ed Educational Leadership','Academic Leadership','active','headteacher',1),
+  (UUID(),@school_id,'bursar','Tiwonge Phiri','Tiwonge','Phiri','bursar@romeojfk.academy',@demo_password_hash,1,'+265 888 700 003','RJK-BUR-001','Diploma in Accounting','Finance','active','admin_teacher',1),
+  (UUID(),@school_id,'teacher','Ruth Mwale','Ruth','Mwale','ruth.mwale@romeojfk.academy',@demo_password_hash,1,'+265 888 701 001','RJK-T-001','B.Ed Primary Education','Year 1 and Mathematics','active','teacher',1),
+  (UUID(),@school_id,'teacher','Daniel Phiri','Daniel','Phiri','daniel.phiri@romeojfk.academy',@demo_password_hash,1,'+265 888 701 002','RJK-T-002','B.Ed Primary Education','Year 2 and English','active','teacher',1),
+  (UUID(),@school_id,'teacher','Grace Tembo','Grace','Tembo','grace.tembo@romeojfk.academy',@demo_password_hash,1,'+265 888 701 003','RJK-T-003','B.Ed Primary Education','Year 3 and Science','active','teacher',1),
+  (UUID(),@school_id,'teacher','Kelvin Chirwa','Kelvin','Chirwa','kelvin.chirwa@romeojfk.academy',@demo_password_hash,1,'+265 888 701 004','RJK-T-004','B.Ed Primary Education','Year 4 and Agriculture','active','teacher',1),
+  (UUID(),@school_id,'teacher','Martha Gondwe','Martha','Gondwe','martha.gondwe@romeojfk.academy',@demo_password_hash,1,'+265 888 701 005','RJK-T-005','B.Ed Primary Education','Year 5 and Social Studies','active','teacher',1),
+  (UUID(),@school_id,'teacher','Peter Nkhoma','Peter','Nkhoma','peter.nkhoma@romeojfk.academy',@demo_password_hash,1,'+265 888 701 006','RJK-T-006','B.Ed Primary Education','Year 6 and ICT','active','teacher',1)
 ON DUPLICATE KEY UPDATE role=VALUES(role),full_name=VALUES(full_name),first_name=VALUES(first_name),last_name=VALUES(last_name),
-  password_hash=VALUES(password_hash),phone=VALUES(phone),employee_id=VALUES(employee_id),qualification=VALUES(qualification),
+  phone=VALUES(phone),employee_id=VALUES(employee_id),qualification=VALUES(qualification),
   specialization=VALUES(specialization),employment_status='active',role_type=VALUES(role_type),is_active=1;
 
 SET @owner_id := (SELECT id FROM users WHERE school_id=@school_id AND email='owner@romeojfk.academy' LIMIT 1);

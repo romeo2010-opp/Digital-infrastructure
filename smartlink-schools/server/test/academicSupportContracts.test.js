@@ -136,6 +136,30 @@ test("support case reassessment query avoids MySQL reserved aliases", () => {
   assert.match(reassessmentQuery, /generated_assessments\s+generated_assessment\b/i)
 })
 
+test("support schema capability detection is portable across MySQL metadata casing", () => {
+  const support = read(root, "src/services/academicSupportService.js")
+  assert.match(support, /TABLE_NAME AS table_name,COLUMN_NAME AS column_name/)
+  for (const column of ["delivery_method", "target_topic_id", "target_objective_id"]) {
+    assert.match(support, new RegExp(`sessionDetails:[^\\n]+${column}`))
+  }
+})
+
+test("schema-dependent support writes fail clearly instead of issuing invalid SQL", () => {
+  const support = read(root, "src/services/academicSupportService.js")
+  assert.match(support, /LEARNER_SUPPORT_SCHEMA_UPGRADE_REQUIRED/)
+  for (const capability of ["assignments", "notes", "sessionDetails", "reassessmentDueAt"]) {
+    assert.match(support, new RegExp(`requireSupportSchemaCapability\\(db, "${capability}"\\)`))
+  }
+  assert.match(support, /generated\.public_ref/)
+  assert.doesNotMatch(support, /linkedRef: String\(body\.generated_assessment_id\)/)
+})
+
+test("cross-subject support cases cannot start a malformed targeted assessment", () => {
+  const support = read(root, "src/services/academicSupportService.js")
+  assert.match(support, /record\.case_type === "multi_subject_decline"/)
+  assert.match(support, /SUBJECT_SPECIFIC_SUPPORT_CASE_REQUIRED/)
+})
+
 test("teacher learner-support extension reuses canonical support structures", () => {
   const migration = read(root, "database/062_teacher_learner_support_access.sql")
   const support = read(root, "src/services/academicSupportService.js")

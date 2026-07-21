@@ -132,7 +132,6 @@ CREATE TABLE IF NOT EXISTS students (
   id BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
   school_id BIGINT UNSIGNED NOT NULL,
   class_id BIGINT UNSIGNED NULL,
-  user_id BIGINT UNSIGNED NULL,
   student_id VARCHAR(80) NULL,
   admission_no VARCHAR(80) NOT NULL,
   first_name VARCHAR(100) NOT NULL,
@@ -152,8 +151,7 @@ CREATE TABLE IF NOT EXISTS students (
   UNIQUE KEY uq_students_school_admission (school_id, admission_no),
   KEY idx_students_school_class (school_id, class_id),
   CONSTRAINT fk_students_school FOREIGN KEY (school_id) REFERENCES schools(id),
-  CONSTRAINT fk_students_class FOREIGN KEY (class_id) REFERENCES classes(id),
-  CONSTRAINT fk_students_user FOREIGN KEY (user_id) REFERENCES users(id)
+  CONSTRAINT fk_students_class FOREIGN KEY (class_id) REFERENCES classes(id)
 );
 
 CREATE TABLE IF NOT EXISTS school_student_sequences (

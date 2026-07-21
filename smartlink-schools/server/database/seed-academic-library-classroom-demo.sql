@@ -12,7 +12,7 @@ SET @term_id := (SELECT id FROM terms WHERE school_id=@school_id AND academic_ye
 SET @demo_password_hash := '$2a$10$DnEcFlwc8PvKflxlzWHWO.fKt2UTi8ReqzZLibmsqsFnc21cLM03u';
 
 INSERT INTO users (public_ref,school_id,role,full_name,first_name,last_name,email,password_hash,must_change_password,phone,employee_id,qualification,specialization,employment_status,role_type,is_active)
-SELECT UUID(),@school_id,'librarian','Mervis Nkhoma','Mervis','Nkhoma','librarian@greenhill.test',@demo_password_hash,0,'+265 999 110 020','GPS-LIB-001','Diploma in Library and Information Studies','School Library and Records','active','admin_teacher',1
+SELECT UUID(),@school_id,'librarian','Mervis Nkhoma','Mervis','Nkhoma','librarian@greenhill.test',@demo_password_hash,1,'+265 999 110 020','GPS-LIB-001','Diploma in Library and Information Studies','School Library and Records','active','admin_teacher',1
 WHERE @school_id IS NOT NULL
 ON DUPLICATE KEY UPDATE role='librarian',full_name=VALUES(full_name),is_active=1;
 SET @librarian_id := (SELECT id FROM users WHERE school_id=@school_id AND email='librarian@greenhill.test' LIMIT 1);
