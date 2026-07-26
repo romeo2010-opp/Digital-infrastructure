@@ -49,6 +49,7 @@ import { LibrarianPortalPage, TeachingResourceDetailPage } from './pages/Librari
 import { ClassroomModePage } from './pages/ClassroomModePage'
 import { AcademicIntelligencePage } from './pages/AcademicIntelligencePage'
 import { LearnerSupportPage } from './pages/LearnerSupportPage'
+import { TeamSuiteApp } from './team/TeamSuiteApp'
 
 const routeMeta = [
   { path: '/dashboard', title: 'School Dashboard', subtitle: 'Students, fees, attendance and academic progress' },
@@ -724,6 +725,15 @@ function GlobalRequestActivity() {
 }
 
 export default function App() {
+  if (typeof window !== 'undefined' && window.location.pathname.startsWith('/team')) {
+    return (
+      <BrowserRouter>
+        <TeamSuiteApp />
+        <Toaster />
+      </BrowserRouter>
+    )
+  }
+
   if (shouldRenderPublicSite()) {
     return (
       <>

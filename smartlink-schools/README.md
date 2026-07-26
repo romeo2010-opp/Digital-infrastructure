@@ -2,6 +2,8 @@
 
 SmartLink Schools is a separate MVP from the existing fuel platform. It is a multi-school SaaS prototype with a React/Vite frontend, an Express API, MySQL schema, RBAC middleware, and tenant-scoped queries using `school_id`.
 
+The same repository also contains **SmartLink Team Suite**, a securely separated internal CRM and operations workspace at `/team`. See [docs/team-suite.md](docs/team-suite.md) for its architecture, migration, roles, routes, demo seed and test checklist.
+
 ## Structure
 
 - `client/` React + Vite school portal UI

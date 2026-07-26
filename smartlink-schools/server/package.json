@@ -10,6 +10,7 @@
     "audit:schema": "node scripts/audit-schema-contracts.mjs",
     "db:apply": "node scripts/apply-sql.mjs",
     "db:seed:sql": "node scripts/apply-sql.mjs --seed-only",
+    "db:seed:team": "node scripts/seed-team-suite.mjs",
     "demo:greenfield": "node scripts/seed-greenfield-demo.mjs",
     "demo:recalculate": "node scripts/recalculate-greenfield-demo.mjs",
     "demo:validate": "node scripts/validate-greenfield-demo.mjs",

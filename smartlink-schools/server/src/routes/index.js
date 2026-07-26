@@ -2,6 +2,7 @@ import { Router } from "express"
 import { pool } from "../config/db.js"
 import { HttpError } from "../utils/http.js"
 import authRoutes from "./auth.routes.js"
+import teamRoutes from "./team.routes.js"
 import { getDashboard } from "../controllers/dashboardController.js"
 import { listStudents, getStudent, createStudent, updateStudent, uploadStudentPhoto } from "../controllers/studentsController.js"
 import {
@@ -522,6 +523,7 @@ function directorPage(section) {
 }
 
 router.use("/auth", authRoutes)
+router.use("/team", teamRoutes)
 router.post("/public/school-setup-drafts", asyncHandler(savePublicSchoolSetupDraft))
 router.use(requireAuth)
 router.use(requirePasswordReady)
