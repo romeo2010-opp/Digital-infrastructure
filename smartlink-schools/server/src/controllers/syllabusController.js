@@ -5,7 +5,13 @@ import { execFile } from "child_process"
 import { promisify } from "util"
 import { pool } from "../config/db.js"
 import { HttpError } from "../utils/http.js"
-import { getScopedSchoolId } from "../utils/tenantScope.js"
+import {
+  assertTeacherCanAuthorSubjectGrade,
+  getScopedSchoolId,
+  getTeacherSubjectGradeScopes,
+  isTeacher,
+} from "../utils/tenantScope.js"
+import { getActiveAcademicSession } from "../services/academicSessionService.js"
 import { chunkSyllabusText, extractSyllabusStructure } from "../services/syllabus/syllabusExtractor.js"
 
 const execFileAsync = promisify(execFile)
@@ -294,7 +300,7 @@ function safeFilename(fileName) {
 }
 
 function canReviewManualSyllabus(req) {
-  return ["super_admin", "school_owner", "headteacher"].includes(String(req.user?.role || ""))
+  return ["super_admin", "school_owner", "owner", "director", "headteacher"].includes(String(req.user?.role || "").toLowerCase())
 }
 
 function resolveStoredUploadPath(value) {
@@ -323,6 +329,13 @@ async function resolveManualReferences(connection, schoolId, body, current = {})
   if (!subject) throw new HttpError(400, "Subject does not belong to this school")
 
   let curriculumId = body.curriculum_id === undefined ? current.curriculum_id || null : Number(body.curriculum_id || 0) || null
+  const gradeId = body.grade_id === undefined ? current.grade_id || null : Number(body.grade_id || 0) || null
+  let grade = null
+  if (gradeId) {
+    [[grade]] = await connection.query("SELECT id, curriculum_id FROM grade_levels WHERE id = ? AND school_id = ? LIMIT 1", [gradeId, schoolId])
+    if (!grade) throw new HttpError(400, "Year level does not belong to this school")
+    if (!curriculumId && grade.curriculum_id) curriculumId = Number(grade.curriculum_id)
+  }
   if (!curriculumId) {
     const [[activeCurriculum]] = await connection.query("SELECT id FROM curricula WHERE school_id = ? AND is_active = 1 ORDER BY id LIMIT 1", [schoolId])
     curriculumId = activeCurriculum?.id || null
@@ -331,16 +344,83 @@ async function resolveManualReferences(connection, schoolId, body, current = {})
     if (!curriculum) throw new HttpError(400, "Curriculum does not belong to this school")
   }
 
-  const gradeId = body.grade_id === undefined ? current.grade_id || null : Number(body.grade_id || 0) || null
-  if (gradeId) {
-    const [[grade]] = await connection.query("SELECT id, curriculum_id FROM grade_levels WHERE id = ? AND school_id = ? LIMIT 1", [gradeId, schoolId])
-    if (!grade) throw new HttpError(400, "Year level does not belong to this school")
+  if (grade) {
     if (curriculumId && grade.curriculum_id && Number(grade.curriculum_id) !== Number(curriculumId)) {
       throw new HttpError(400, "Year level does not belong to the selected curriculum")
     }
   }
 
   return { subjectId, curriculumId, gradeId }
+}
+
+export async function resolveSyllabusUploadReferences(connection, schoolId, body, current = {}) {
+  const references = await resolveManualReferences(connection, schoolId, body, current)
+  if (!references.gradeId) throw new HttpError(400, "Year level is required for a syllabus upload")
+  const academicYearId = Number(body.academic_year_id ?? current.academic_year_id ?? 0)
+  const termId = Number(body.term_id ?? current.term_id ?? 0)
+  if (!academicYearId || !termId) throw new HttpError(400, "Academic year and term are required for a syllabus upload")
+  const [[academicYear]] = await connection.query(
+    "SELECT id FROM academic_years WHERE school_id = ? AND id = ? LIMIT 1",
+    [schoolId, academicYearId],
+  )
+  if (!academicYear) throw new HttpError(400, "Academic year does not belong to this school")
+  const [[term]] = await connection.query(
+    "SELECT id, academic_year_id FROM terms WHERE school_id = ? AND id = ? LIMIT 1",
+    [schoolId, termId],
+  )
+  if (!term || Number(term.academic_year_id) !== academicYearId) {
+    throw new HttpError(400, "Term does not belong to the selected school academic year")
+  }
+  return { ...references, academicYearId, termId }
+}
+
+async function assertTeacherSyllabusReferenceScope(req, schoolId, references, db = pool, options = {}) {
+  if (!isTeacher(req)) return
+  const session = options.session || await getActiveAcademicSession(schoolId)
+  if (session.setupRequired) throw new HttpError(409, "An active academic year and term are required before teachers can manage syllabus uploads")
+  if (Number(references.academicYearId) !== Number(session.academicYearId) || Number(references.termId) !== Number(session.termId)) {
+    throw new HttpError(403, "Teachers can only manage syllabus uploads for the active academic year and term")
+  }
+  await assertTeacherCanAuthorSubjectGrade(req, schoolId, {
+    subjectId: references.subjectId,
+    gradeId: references.gradeId,
+  }, { db, session })
+}
+
+export async function assertTeacherSyllabusUploadScope(req, schoolId, uploadId, db = pool, options = {}) {
+  if (!isTeacher(req)) return null
+  const [[upload]] = await db.query(
+    `SELECT id, uploaded_by, subject_id, grade_id, curriculum_id, academic_year_id, term_id, processing_status
+     FROM syllabus_uploads
+     WHERE school_id = ? AND id = ?
+     LIMIT 1`,
+    [schoolId, uploadId],
+  )
+  if (!upload || Number(upload.uploaded_by) !== Number(req.user.id)) {
+    throw new HttpError(404, "Syllabus upload was not found in your current assigned scope")
+  }
+  await assertTeacherSyllabusReferenceScope(req, schoolId, {
+    subjectId: upload.subject_id,
+    gradeId: upload.grade_id,
+    academicYearId: upload.academic_year_id,
+    termId: upload.term_id,
+  }, db, options)
+  return upload
+}
+
+async function assertTeacherSyllabusItemScope(req, schoolId, itemId, db = pool) {
+  if (!isTeacher(req)) return null
+  const [[item]] = await db.query(
+    `SELECT item.id, item.upload_id
+     FROM syllabus_extracted_items item
+     JOIN syllabus_uploads upload ON upload.school_id = item.school_id AND upload.id = item.upload_id
+     WHERE item.school_id = ? AND item.id = ? AND upload.uploaded_by = ?
+     LIMIT 1`,
+    [schoolId, itemId, req.user.id],
+  )
+  if (!item) throw new HttpError(404, "Extracted syllabus item was not found in your current assigned scope")
+  await assertTeacherSyllabusUploadScope(req, schoolId, Number(item.upload_id), db)
+  return item
 }
 
 function decodeUploadPayload(body) {
@@ -555,11 +635,30 @@ export async function getSyllabusSetup(req, res) {
   const [subjects] = await pool.query("SELECT * FROM subjects WHERE school_id = ? ORDER BY name", [schoolId])
   const [years] = await pool.query("SELECT * FROM academic_years WHERE school_id = ? ORDER BY start_date DESC", [schoolId])
   const [terms] = await pool.query("SELECT * FROM terms WHERE school_id = ? ORDER BY start_date DESC", [schoolId])
+  if (isTeacher(req)) {
+    const session = await getActiveAcademicSession(schoolId)
+    const scopes = session.setupRequired ? [] : await getTeacherSubjectGradeScopes(req, schoolId, { session })
+    const subjectIds = new Set(scopes.map((scope) => Number(scope.subjectId)))
+    const gradeIds = new Set(scopes.map((scope) => Number(scope.gradeId)).filter(Boolean))
+    const scopedGrades = grades.filter((row) => gradeIds.has(Number(row.id)))
+    const curriculumIds = new Set(scopedGrades.map((row) => Number(row.curriculum_id)).filter(Boolean))
+    res.json({
+      curricula: curricula.filter((row) => curriculumIds.has(Number(row.id))),
+      grades: scopedGrades,
+      exam_tracks: examTracks.filter((row) => !row.grade_id || gradeIds.has(Number(row.grade_id))),
+      subjects: subjects.filter((row) => subjectIds.has(Number(row.id))),
+      academic_years: session.setupRequired ? [] : years.filter((row) => Number(row.id) === Number(session.academicYearId)),
+      terms: session.setupRequired ? [] : terms.filter((row) => Number(row.id) === Number(session.termId)),
+    })
+    return
+  }
   res.json({ curricula, grades, exam_tracks: examTracks, subjects, academic_years: years, terms })
 }
 
 export async function createSyllabusUpload(req, res) {
   const schoolId = getScopedSchoolId(req)
+  const references = await resolveSyllabusUploadReferences(pool, schoolId, req.body)
+  await assertTeacherSyllabusReferenceScope(req, schoolId, references)
   const fileName = safeFilename(req.body.file_name || req.body.fileName || req.body.original_filename || "syllabus.txt")
   const fileType = cleanText(req.body.file_type || req.body.fileType || req.body.mime_type || req.body.mimeType || "text/plain")
   const buffer = decodeUploadPayload({ ...req.body, file_type: fileType })
@@ -580,11 +679,11 @@ export async function createSyllabusUpload(req, res) {
       [
         schoolId,
         req.user.id,
-        req.body.curriculum_id || null,
-        req.body.grade_id || null,
-        req.body.subject_id || null,
-        req.body.academic_year_id || null,
-        req.body.term_id || null,
+        references.curriculumId,
+        references.gradeId,
+        references.subjectId,
+        references.academicYearId,
+        references.termId,
         req.body.material_type || "other",
         fileName,
         storedName,
@@ -607,6 +706,21 @@ export async function createSyllabusUpload(req, res) {
 
 export async function listSyllabusUploads(req, res) {
   const schoolId = getScopedSchoolId(req)
+  const filters = ["su.school_id = ?"]
+  const params = [schoolId]
+  if (isTeacher(req)) {
+    const session = await getActiveAcademicSession(schoolId)
+    filters.push("su.uploaded_by = ?")
+    params.push(req.user.id)
+    if (session.setupRequired) {
+      filters.push("1 = 0")
+    } else {
+      filters.push("su.academic_year_id = ?", "su.term_id = ?")
+      params.push(session.academicYearId, session.termId)
+      const scopes = await getTeacherSubjectGradeScopes(req, schoolId, { session })
+      addTeacherSubjectGradeFilter(filters, params, scopes, "su")
+    }
+  }
   const [uploads] = await pool.query(
     `SELECT su.*, subj.name AS subject_name, gl.name AS grade_name, c.name AS curriculum_name, u.full_name AS uploaded_by_name,
       COUNT(sei.id) AS extracted_items,
@@ -618,10 +732,10 @@ export async function listSyllabusUploads(req, res) {
      LEFT JOIN curricula c ON c.id = su.curriculum_id AND c.school_id = su.school_id
      LEFT JOIN users u ON u.id = su.uploaded_by AND u.school_id = su.school_id
      LEFT JOIN syllabus_extracted_items sei ON sei.upload_id = su.id AND sei.school_id = su.school_id
-     WHERE su.school_id = ?
+     WHERE ${filters.join(" AND ")}
      GROUP BY su.id, subj.name, gl.name, c.name, u.full_name
      ORDER BY su.created_at DESC`,
-    [schoolId],
+    params,
   )
   res.json({ uploads: uploads.map((row) => ({ ...row, extraction_summary_json: parseJson(row.extraction_summary_json, null) })) })
 }
@@ -629,6 +743,7 @@ export async function listSyllabusUploads(req, res) {
 export async function deleteSyllabusUpload(req, res) {
   const schoolId = getScopedSchoolId(req)
   const uploadId = Number(req.params.id || 0)
+  await assertTeacherSyllabusUploadScope(req, schoolId, uploadId)
   const [[upload]] = await pool.query("SELECT id, uploaded_by, processing_status, file_path, extracted_text_path FROM syllabus_uploads WHERE school_id = ? AND id = ? LIMIT 1", [schoolId, uploadId])
   if (!upload) throw new HttpError(404, "Uploaded material was not found")
   const leadership = canReviewManualSyllabus(req)
@@ -662,6 +777,10 @@ export async function deleteSyllabusUpload(req, res) {
 export async function processSyllabusUpload(req, res) {
   const schoolId = getScopedSchoolId(req)
   const uploadId = Number(req.params.id || 0)
+  const scopedUpload = await assertTeacherSyllabusUploadScope(req, schoolId, uploadId)
+  if (isTeacher(req) && scopedUpload?.processing_status === "approved") {
+    throw new HttpError(403, "Only school leadership can reprocess an approved syllabus upload")
+  }
   const connection = await pool.getConnection()
   try {
     await connection.beginTransaction()
@@ -679,6 +798,7 @@ export async function processSyllabusUpload(req, res) {
 export async function getSyllabusReview(req, res) {
   const schoolId = getScopedSchoolId(req)
   const uploadId = Number(req.params.id || 0)
+  await assertTeacherSyllabusUploadScope(req, schoolId, uploadId)
   const [[upload]] = await pool.query(
     `SELECT su.*, subj.name AS subject_name, gl.name AS grade_name, c.name AS curriculum_name
      FROM syllabus_uploads su
@@ -711,6 +831,7 @@ export async function getSyllabusReview(req, res) {
 export async function updateExtractedItem(req, res) {
   const schoolId = getScopedSchoolId(req)
   const itemId = Number(req.params.id || 0)
+  await assertTeacherSyllabusItemScope(req, schoolId, itemId)
   const [result] = await pool.query(
     `UPDATE syllabus_extracted_items
      SET title = COALESCE(?, title),
@@ -719,7 +840,7 @@ export async function updateExtractedItem(req, res) {
        suggested_week = COALESCE(?, suggested_week),
        exam_relevance = COALESCE(?, exam_relevance),
        keywords_json = COALESCE(?, keywords_json)
-     WHERE school_id = ? AND id = ?`,
+     WHERE school_id = ? AND id = ? AND status = 'pending_review'`,
     [
       req.body.title === undefined ? null : cleanText(req.body.title),
       req.body.description === undefined ? null : cleanText(req.body.description),
@@ -997,6 +1118,7 @@ async function approveExtractedItemInTransaction(connection, schoolId, itemId, a
 }
 
 export async function approveExtractedItem(req, res) {
+  if (!canReviewManualSyllabus(req)) throw new HttpError(403, "Only school leadership can approve extracted syllabus content")
   const schoolId = getScopedSchoolId(req)
   const itemId = Number(req.params.id || 0)
   const connection = await pool.getConnection()
@@ -1016,6 +1138,7 @@ export async function approveExtractedItem(req, res) {
 }
 
 export async function approveExtractedItems(req, res) {
+  if (!canReviewManualSyllabus(req)) throw new HttpError(403, "Only school leadership can approve extracted syllabus content")
   const schoolId = getScopedSchoolId(req)
   const rawIds = Array.isArray(req.body.item_ids) ? req.body.item_ids : Array.isArray(req.body.itemIds) ? req.body.itemIds : []
   const itemIds = [...new Set(rawIds.map((id) => Number(id || 0)).filter(Boolean))].slice(0, 500)
@@ -1061,6 +1184,7 @@ export async function approveExtractedItems(req, res) {
 }
 
 export async function rejectExtractedItem(req, res) {
+  if (!canReviewManualSyllabus(req)) throw new HttpError(403, "Only school leadership can reject extracted syllabus content")
   const schoolId = getScopedSchoolId(req)
   const itemId = Number(req.params.id || 0)
   const [result] = await pool.query(
@@ -1072,10 +1196,29 @@ export async function rejectExtractedItem(req, res) {
 }
 
 export async function mergeExtractedItem(req, res) {
+  if (!canReviewManualSyllabus(req)) throw new HttpError(403, "Only school leadership can merge extracted syllabus content")
   const schoolId = getScopedSchoolId(req)
   const itemId = Number(req.params.id || 0)
   const topicId = Number(req.body.topic_id || req.body.topicId || 0)
   if (!topicId) throw new HttpError(400, "Target topic is required")
+  const [[scope]] = await pool.query(
+    `SELECT item.id, upload.subject_id, upload.grade_id, upload.curriculum_id
+     FROM syllabus_extracted_items item
+     JOIN syllabus_uploads upload ON upload.school_id = item.school_id AND upload.id = item.upload_id
+     WHERE item.school_id = ? AND item.id = ?
+     LIMIT 1`,
+    [schoolId, itemId],
+  )
+  if (!scope) throw new HttpError(404, "Extracted item was not found")
+  const [[targetTopic]] = await pool.query(
+    `SELECT id
+     FROM syllabus_topics
+     WHERE school_id = ? AND id = ? AND subject_id = ?
+       AND grade_id <=> ? AND curriculum_id <=> ? AND is_active = 1
+     LIMIT 1`,
+    [schoolId, topicId, scope.subject_id, scope.grade_id || null, scope.curriculum_id || null],
+  )
+  if (!targetTopic) throw new HttpError(400, "Target topic must belong to the upload's school, subject, curriculum and year level")
   const [result] = await pool.query(
     `UPDATE syllabus_extracted_items
      SET status = 'merged', merged_into_topic_id = ?, approved_by = ?, approved_at = CURRENT_TIMESTAMP
@@ -1143,6 +1286,10 @@ export async function createManualSyllabusEntry(req, res) {
   const topicName = cleanText(req.body.topic_name || req.body.topicName || req.body.title) || (nextStatus === "draft" ? "Untitled syllabus draft" : "")
   if (!topicName) throw new HttpError(400, "Syllabus document title is required")
   const references = await resolveManualReferences(pool, schoolId, req.body)
+  await assertTeacherCanAuthorSubjectGrade(req, schoolId, {
+    subjectId: references.subjectId,
+    gradeId: references.gradeId,
+  })
   const syllabusPayload = parseManualSyllabusPayload(manualSyllabusPayloadFromBody(req.body, []))
   const [[existing]] = await pool.query(
     `SELECT id, submitted_by, status
@@ -1216,6 +1363,11 @@ export async function updateManualSyllabusEntry(req, res) {
     const topicName = requestedTopicName || (nextStatus === "draft" ? "Untitled syllabus draft" : "")
     if (!topicName) throw new HttpError(400, "Syllabus document title is required")
     const references = await resolveManualReferences(connection, schoolId, req.body, entry)
+    await assertTeacherCanAuthorSubjectGrade(req, schoolId, {
+      subjectId: references.subjectId,
+      gradeId: references.gradeId,
+      createdBy: entry.submitted_by,
+    })
     const syllabusPayload = parseManualSyllabusPayload(manualSyllabusPayloadFromBody(req.body, entry.objectives_json))
     await connection.query(
       `UPDATE manual_syllabus_entries
@@ -1300,6 +1452,27 @@ async function insertLearningObjective(connection, schoolId, topicId, objectiveT
      )`,
     [randomUUID(), text, skillType || null, cleanText(examRelevance) || null, schoolId, topicId, text],
   )
+}
+
+function uniqueSubjectGradeScopes(scopes = []) {
+  const unique = new Map()
+  for (const scope of scopes) {
+    const subjectId = Number(scope.subjectId || 0)
+    const gradeId = scope.gradeId === null || scope.gradeId === undefined ? null : Number(scope.gradeId)
+    if (!subjectId) continue
+    unique.set(`${subjectId}:${gradeId ?? "general"}`, { subjectId, gradeId })
+  }
+  return [...unique.values()]
+}
+
+function addTeacherSubjectGradeFilter(filters, params, scopes, alias) {
+  const uniqueScopes = uniqueSubjectGradeScopes(scopes)
+  if (!uniqueScopes.length) {
+    filters.push("1 = 0")
+    return
+  }
+  filters.push(`(${uniqueScopes.map(() => `(${alias}.subject_id = ? AND (${alias}.grade_id IS NULL OR ${alias}.grade_id <=> ?))`).join(" OR ")})`)
+  params.push(...uniqueScopes.flatMap((scope) => [scope.subjectId, scope.gradeId]))
 }
 
 export async function approveManualSyllabusEntry(req, res) {
@@ -1407,6 +1580,20 @@ export async function deleteManualSyllabusEntry(req, res) {
 
 export async function listSyllabusTopics(req, res) {
   const schoolId = getScopedSchoolId(req)
+  const filters = ["st.school_id = ?", "st.is_active = 1"]
+  const params = [schoolId]
+  if (req.query.subject_id) {
+    filters.push("st.subject_id = ?")
+    params.push(Number(req.query.subject_id))
+  }
+  if (req.query.grade_id) {
+    filters.push("st.grade_id = ?")
+    params.push(Number(req.query.grade_id))
+  }
+  if (isTeacher(req)) {
+    const scopes = await getTeacherSubjectGradeScopes(req, schoolId)
+    addTeacherSubjectGradeFilter(filters, params, scopes, "st")
+  }
   const [topics] = await pool.query(
     `SELECT st.*, subj.name AS subject_name, gl.name AS grade_name, parent.topic_name AS parent_topic_name,
       COUNT(lo.id) AS objective_count,
@@ -1417,12 +1604,10 @@ export async function listSyllabusTopics(req, res) {
      LEFT JOIN syllabus_topics parent ON parent.id = st.parent_topic_id AND parent.school_id = st.school_id
      LEFT JOIN learning_objectives lo ON lo.topic_id = st.id
      LEFT JOIN question_bank q ON q.topic_id = st.id AND q.school_id = st.school_id AND q.approval_status = 'approved'
-     WHERE st.school_id = ? AND st.is_active = 1
-       ${req.query.subject_id ? "AND st.subject_id = ?" : ""}
-       ${req.query.grade_id ? "AND st.grade_id = ?" : ""}
+     WHERE ${filters.join(" AND ")}
      GROUP BY st.id, subj.name, gl.name, parent.topic_name
      ORDER BY gl.order_number, subj.name, COALESCE(parent.topic_name, st.topic_name), st.order_number, st.topic_name`,
-    [schoolId, ...(req.query.subject_id ? [Number(req.query.subject_id)] : []), ...(req.query.grade_id ? [Number(req.query.grade_id)] : [])],
+    params,
   )
   res.json({ topics })
 }
@@ -1433,6 +1618,10 @@ export async function createSyllabusTopic(req, res) {
   const topicName = cleanText(req.body.topic_name || req.body.name)
   if (!subjectId || !topicName) throw new HttpError(400, "Subject and topic name are required")
   const references = await resolveManualReferences(pool, schoolId, req.body)
+  await assertTeacherCanAuthorSubjectGrade(req, schoolId, {
+    subjectId: references.subjectId,
+    gradeId: references.gradeId,
+  })
   const parentTopicId = Number(req.body.parent_topic_id || 0) || null
   if (parentTopicId) {
     const [[parent]] = await pool.query("SELECT id FROM syllabus_topics WHERE school_id=? AND subject_id=? AND id=? AND curriculum_id <=> ? AND grade_id <=> ? AND is_active=1 LIMIT 1", [schoolId, references.subjectId, parentTopicId, references.curriculumId, references.gradeId])
@@ -1451,6 +1640,15 @@ export async function createSyllabusTopic(req, res) {
 export async function updateSyllabusTopic(req, res) {
   const schoolId = getScopedSchoolId(req)
   const topicId = Number(req.params.id || 0)
+  const [[topic]] = await pool.query(
+    "SELECT id, subject_id, grade_id FROM syllabus_topics WHERE school_id = ? AND id = ? LIMIT 1",
+    [schoolId, topicId],
+  )
+  if (!topic) throw new HttpError(404, "Syllabus topic was not found")
+  await assertTeacherCanAuthorSubjectGrade(req, schoolId, {
+    subjectId: topic.subject_id,
+    gradeId: topic.grade_id,
+  })
   const [result] = await pool.query(
     `UPDATE syllabus_topics
      SET topic_name = COALESCE(?, topic_name),

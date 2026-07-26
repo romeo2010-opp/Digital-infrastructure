@@ -74,7 +74,11 @@ function selectClassName() {
 }
 
 function roleCanReview(user: any) {
-  return ['school_owner', 'headteacher', 'super_admin'].includes(String(user?.role || '').toLowerCase())
+  return ['super_admin', 'school_owner', 'owner', 'director', 'headteacher'].includes(String(user?.role || '').toLowerCase())
+}
+
+function roleCanModerateQuestions(user: any) {
+  return ['super_admin', 'school_owner', 'owner', 'director', 'headteacher'].includes(String(user?.role || '').toLowerCase())
 }
 
 function canDeleteSyllabusDocument(user: any, row: any) {
@@ -87,6 +91,11 @@ function canDeleteSyllabusUpload(user: any, row: any) {
   if (roleCanReview(user)) return true
   if (Number(row?.uploaded_by) !== Number(user?.id)) return false
   return row?.processing_status !== 'approved'
+}
+
+function canReprocessSyllabusUpload(user: any, row: any) {
+  if (roleCanReview(user)) return true
+  return String(row?.processing_status || '').toLowerCase() !== 'approved'
 }
 
 function reviewUploadWithCounts(payload: any) {
@@ -116,6 +125,7 @@ export function SyllabusIntelligencePage() {
   const { token, api, user } = usePortal()
   const navigate = useNavigate()
   const canReviewManualEntries = roleCanReview(user)
+  const canModerateQuestions = roleCanModerateQuestions(user)
   const [activeTab, setActiveTab] = useState<TabKey>('uploads')
   const [setup, setSetup] = useState<any>({ curricula: [], grades: [], subjects: [], academic_years: [], terms: [] })
   const [ai, setAi] = useState<any>(null)
@@ -360,8 +370,8 @@ export function SyllabusIntelligencePage() {
 
   const uploadMaterial = async () => {
     if (!token) return
-    if (!uploadForm.subject_id) {
-      toast.error('Select the subject before extracting.')
+    if (!uploadForm.subject_id || !uploadForm.grade_id || !uploadForm.academic_year_id || !uploadForm.term_id) {
+      toast.error('Select the subject, year level, academic year and term before extracting.')
       return
     }
     if (!uploadFile && !uploadText.trim()) {
@@ -724,7 +734,7 @@ export function SyllabusIntelligencePage() {
         </div>
       </ModalShell>
 
-      <SectionCard title="Uploaded Material" subtitle="Every uploaded file stays in review until a teacher or leader approves the extracted syllabus items.">
+      <SectionCard title="Uploaded Material" subtitle="Every uploaded file stays in review until school leadership approves the extracted syllabus items.">
         <PortalTable
           rows={uploads}
           columns={[
@@ -743,7 +753,9 @@ export function SyllabusIntelligencePage() {
                   {documentForUpload(row) ? (
                     <button type="button" className="text-[11px] font-bold text-[#166534]" onClick={(event) => { event.stopPropagation(); navigate(`/syllabus/create/${documentForUpload(row)?.id}`) }}>Open document</button>
                   ) : null}
-                  <button type="button" className="text-[11px] font-bold text-[#475569]" onClick={(event) => { event.stopPropagation(); api.processSyllabusUpload(token, row.id).then(() => openReview(row.id)).then(load).catch((err: any) => toast.error(err?.message || 'Unable to reprocess material.')) }}>Reprocess</button>
+                  {canReprocessSyllabusUpload(user, row) ? (
+                    <button type="button" className="text-[11px] font-bold text-[#475569]" onClick={(event) => { event.stopPropagation(); api.processSyllabusUpload(token, row.id).then(() => openReview(row.id)).then(load).catch((err: any) => toast.error(err?.message || 'Unable to reprocess material.')) }}>Reprocess</button>
+                  ) : null}
                   {canDeleteSyllabusUpload(user, row) ? (
                     <button type="button" className="inline-flex items-center gap-1 text-[11px] font-bold text-[#b91c1c]" disabled={busy} onClick={(event) => { event.stopPropagation(); deleteSyllabusUpload(row) }}>
                       <Trash2 className="size-3" />
@@ -834,11 +846,11 @@ export function SyllabusIntelligencePage() {
       </SectionCard>
 
       {review ? (
-        <SectionCard title={`Review: ${review.upload?.original_filename}`} subtitle={review.upload?.error_message || 'Approve, edit, reject, or merge extracted syllabus items.'}>
+        <SectionCard title={`Review: ${review.upload?.original_filename}`} subtitle={review.upload?.error_message || (canReviewManualEntries ? 'Approve, edit, reject, or merge extracted syllabus items.' : 'Edit extracted items from your upload and submit them for school leadership moderation.')}>
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#e2e8f0] p-3">
             <div>
               <div className="text-[12px] font-semibold text-[#64748b]">{review.items?.length || 0} extracted items</div>
-              {selectedReviewItems.length ? (
+              {canReviewManualEntries && selectedReviewItems.length ? (
                 <div className="mt-0.5 text-[11px] font-bold text-[#111827]">{selectedReviewItems.length} selected for approval</div>
               ) : null}
             </div>
@@ -849,17 +861,19 @@ export function SyllabusIntelligencePage() {
                   Open Document
                 </Button>
               ) : null}
-              <Button type="button" variant="outline" className="h-8 rounded-[5px] text-[12px]" disabled={busy || !pendingReviewItems.length} onClick={selectPendingReviewItems}>
+              {canReviewManualEntries ? <Button type="button" variant="outline" className="h-8 rounded-[5px] text-[12px]" disabled={busy || !pendingReviewItems.length} onClick={selectPendingReviewItems}>
                 Select Reviewable
-              </Button>
-              {selectedReviewItems.length ? (
+              </Button> : null}
+              {canReviewManualEntries && selectedReviewItems.length ? (
                 <Button type="button" className="h-8 rounded-[5px] text-[12px]" disabled={busy} onClick={approveSelectedItems}>
                   {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}
                   Approve Selected
                 </Button>
               ) : null}
-              <Button type="button" variant="outline" className="h-8 rounded-[5px] text-[12px]" onClick={() => api.processSyllabusUpload(token, review.upload.id).then(() => openReview(review.upload.id))}><RotateCcw className="size-3.5" /> Reprocess</Button>
-              <Button type="button" className="h-8 rounded-[5px] text-[12px]" onClick={approveHighConfidence}><Check className="size-3.5" /> Approve High Confidence</Button>
+              {canReprocessSyllabusUpload(user, review.upload) ? (
+                <Button type="button" variant="outline" className="h-8 rounded-[5px] text-[12px]" onClick={() => api.processSyllabusUpload(token, review.upload.id).then(() => openReview(review.upload.id))}><RotateCcw className="size-3.5" /> Reprocess</Button>
+              ) : null}
+              {canReviewManualEntries ? <Button type="button" className="h-8 rounded-[5px] text-[12px]" onClick={approveHighConfidence}><Check className="size-3.5" /> Approve High Confidence</Button> : null}
             </div>
           </div>
           {editingItem ? (
@@ -910,11 +924,11 @@ export function SyllabusIntelligencePage() {
           <PortalTable
             rows={review.items || []}
             columns={[
-              {
+              ...(canReviewManualEntries ? [{
                 key: 'select',
                 label: 'Select',
                 className: 'w-12',
-                render: (row) => (
+                render: (row: any) => (
                   <input
                     type="checkbox"
                     className="size-4 rounded border-[#cbd5e1] accent-[#111827]"
@@ -925,7 +939,7 @@ export function SyllabusIntelligencePage() {
                     onChange={() => toggleReviewSelection(row)}
                   />
                 ),
-              },
+              }] : []),
               { key: 'item_type', label: 'Type', render: (row) => valueLabel(row.item_type) },
               { key: 'title', label: 'Title' },
               { key: 'confidence', label: 'Confidence', render: (row) => <span className={row.low_confidence ? 'rounded-[4px] bg-[#fff7ed] px-2 py-1 text-[11px] font-bold text-[#9a3412]' : 'text-[12px] font-semibold text-[#166534]'}>{Math.round(Number(row.confidence || 0) * 100)}%</span> },
@@ -937,8 +951,8 @@ export function SyllabusIntelligencePage() {
                 render: (row) => (
                   <div className="flex gap-2">
                     <button type="button" className="text-[11px] font-bold text-[#2563eb]" disabled={row.status !== 'pending_review'} onClick={(event) => { event.stopPropagation(); startEditingItem(row) }}>Edit</button>
-                    <button type="button" className="text-[11px] font-bold text-[#166534]" disabled={row.status !== 'pending_review'} onClick={(event) => { event.stopPropagation(); approveItem(row) }}>Approve</button>
-                    <button type="button" className="text-[11px] font-bold text-[#b91c1c]" disabled={row.status !== 'pending_review'} onClick={(event) => { event.stopPropagation(); rejectItem(row) }}>Reject</button>
+                    {canReviewManualEntries ? <button type="button" className="text-[11px] font-bold text-[#166534]" disabled={row.status !== 'pending_review'} onClick={(event) => { event.stopPropagation(); approveItem(row) }}>Approve</button> : null}
+                    {canReviewManualEntries ? <button type="button" className="text-[11px] font-bold text-[#b91c1c]" disabled={row.status !== 'pending_review'} onClick={(event) => { event.stopPropagation(); rejectItem(row) }}>Reject</button> : null}
                   </div>
                 ),
               },
@@ -972,7 +986,7 @@ export function SyllabusIntelligencePage() {
   )
 
   const renderQuestions = () => (
-    <SectionCard title="Question Bank" subtitle="A question must be approved, tagged, answered, and explained before students can use it.">
+    <SectionCard title="Question Bank" subtitle={canModerateQuestions ? 'A question must be approved, tagged, answered, and explained before students can use it.' : 'Teachers can prepare questions for their assigned subjects; school leadership completes final moderation.'}>
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#e2e8f0] p-3">
         <div className="flex min-w-[240px] flex-1 items-center gap-2">
           <Search className="size-3.5 text-[#94a3b8]" />
@@ -992,7 +1006,7 @@ export function SyllabusIntelligencePage() {
           { key: 'topic_name', label: 'Topic' },
           { key: 'difficulty', label: 'Difficulty', render: (row) => valueLabel(row.difficulty) },
           { key: 'approval_status', label: 'Status', render: (row) => statusChip(row.approval_status) },
-          {
+          ...(canModerateQuestions ? [{
             key: 'actions',
             label: 'Actions',
             render: (row) => (
@@ -1001,7 +1015,7 @@ export function SyllabusIntelligencePage() {
                 <button type="button" className="text-[11px] font-bold text-[#b91c1c]" onClick={(event) => { event.stopPropagation(); rejectQuestion(row) }}>Reject</button>
               </div>
             ),
-          },
+          }] : []),
         ]}
         emptyMessage="No questions found."
       />
@@ -1037,7 +1051,7 @@ export function SyllabusIntelligencePage() {
           </Button>
         </div>
       </SectionCard>
-      <SectionCard title="Draft Review" subtitle="AI drafts stay pending until a teacher approves them.">
+      <SectionCard title="Draft Review" subtitle={canModerateQuestions ? 'AI drafts stay pending until school leadership approves them.' : 'Edit drafts for your assigned subjects, then submit them for school leadership moderation.'}>
         {batch?.batch?.id ? (
           <div className="flex items-center justify-between gap-2 border-b border-[#e2e8f0] p-3">
             <div className="min-w-0">
@@ -1057,7 +1071,7 @@ export function SyllabusIntelligencePage() {
             { key: 'question_type', label: 'Type', render: (row) => valueLabel(row.question_type) },
             { key: 'difficulty', label: 'Difficulty', render: (row) => valueLabel(row.difficulty) },
             { key: 'approval_status', label: 'Status', render: (row) => statusChip(row.approval_status) },
-            { key: 'actions', label: 'Actions', render: (row) => <div className="flex gap-2"><button type="button" className="text-[11px] font-bold text-[#166534]" onClick={(event) => { event.stopPropagation(); approveQuestion(row) }}>Approve</button><button type="button" className="text-[11px] font-bold text-[#b91c1c]" onClick={(event) => { event.stopPropagation(); rejectQuestion(row) }}>Reject</button></div> },
+            ...(canModerateQuestions ? [{ key: 'actions', label: 'Actions', render: (row: any) => <div className="flex gap-2"><button type="button" className="text-[11px] font-bold text-[#166534]" onClick={(event) => { event.stopPropagation(); approveQuestion(row) }}>Approve</button><button type="button" className="text-[11px] font-bold text-[#b91c1c]" onClick={(event) => { event.stopPropagation(); rejectQuestion(row) }}>Reject</button></div> }] : []),
           ]}
           emptyMessage="No draft questions are waiting for review."
         />

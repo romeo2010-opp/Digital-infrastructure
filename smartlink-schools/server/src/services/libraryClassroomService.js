@@ -6,6 +6,7 @@ import { HttpError } from "../utils/http.js"
 import { createInAppNotification, broadcastSchoolNotification } from "./operationalCommunicationService.js"
 import { syncCurriculumFromLesson } from "./academicIntelligenceEngine.js"
 import { validateSyllabusTopicScope } from "./curriculumScopeService.js"
+import { getActiveAcademicSession } from "./academicSessionService.js"
 
 const RESOURCE_STATUSES = new Set(['DRAFT','SUBMITTED','UNDER_REVIEW','CHANGES_REQUESTED','APPROVED','REJECTED','ARCHIVED','UNCLASSIFIED'])
 const RESOURCE_TRANSITIONS = {
@@ -37,6 +38,21 @@ const SAFE_MIME_TYPES = new Set([
 const MAX_RESOURCE_BYTES = 40 * 1024 * 1024
 const UNDERSTANDING_CONFIDENCE_LEVELS = new Set(['low','medium','high'])
 const FORMATIVE_ACTIVITY_TYPES = new Set(['oral_questions','written_class_exercise','exercise_book','printed_worksheet','exit_ticket','homework','board_work','paper_quiz','none'])
+let lessonTimetableForeignKey = { checkedAt: 0, supported: false }
+
+async function lessonLogsSupportSchoolTimetable(connection) {
+  if (Date.now() - lessonTimetableForeignKey.checkedAt < 30_000) return lessonTimetableForeignKey.supported
+  const [[constraint]] = await connection.query(`SELECT REFERENCED_TABLE_NAME referenced_table
+    FROM information_schema.key_column_usage
+    WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='teacher_lesson_logs'
+      AND COLUMN_NAME='timetable_entry_id' AND REFERENCED_TABLE_NAME IS NOT NULL
+    LIMIT 1`)
+  lessonTimetableForeignKey = {
+    checkedAt: Date.now(),
+    supported: String(constraint?.referenced_table || '').toLowerCase() === 'timetable_entries',
+  }
+  return lessonTimetableForeignKey.supported
+}
 
 function clean(value, max = 500) {
   return String(value ?? '').trim().slice(0, max)
@@ -45,6 +61,41 @@ function clean(value, max = 500) {
 function numberOrNull(value) {
   const number = Number(value || 0)
   return Number.isFinite(number) && number > 0 ? number : null
+}
+
+async function currentTeacherLibrarySession(schoolId, actor, options = {}) {
+  if (String(actor?.role || '').toLowerCase() !== 'teacher') return null
+  const db = options.db || pool
+  const session = options.session || await getActiveAcademicSession(schoolId, db)
+  if (session.setupRequired || !Number(session.academicYearId || 0) || !Number(session.termId || 0)) return null
+  return { academicYearId: Number(session.academicYearId), termId: Number(session.termId) }
+}
+
+export async function assertTeacherLibraryAssignment(db, schoolId, actor, scope = {}, options = {}) {
+  if (String(actor?.role || '').toLowerCase() !== 'teacher') return null
+  const session = await currentTeacherLibrarySession(schoolId, actor, { ...options, db })
+  if (!session) throw new HttpError(403, 'Teachers require an explicit library assignment for the current academic year and term.')
+  const subjectId = numberOrNull(scope.subjectId ?? scope.subject_id)
+  const classId = numberOrNull(scope.classId ?? scope.class_id)
+  const academicYearId = numberOrNull(scope.academicYearId ?? scope.academic_year_id)
+  const termId = numberOrNull(scope.termId ?? scope.term_id)
+  if (!subjectId) throw new HttpError(403, 'Teachers must select one of their currently assigned subjects.')
+  if ((academicYearId && academicYearId !== session.academicYearId) || (termId && termId !== session.termId)) {
+    throw new HttpError(403, 'Teachers can only author library content for the current academic year and term.')
+  }
+  const classClause = classId ? ' AND class_id=?' : ''
+  const params = [schoolId, actor.id, subjectId, session.academicYearId, session.termId]
+  if (classId) params.push(classId)
+  const [[assignment]] = await db.query(
+    `SELECT id FROM teacher_class_subject_assignments
+     WHERE school_id=? AND teacher_id=? AND subject_id=?
+       AND academic_year_id=? AND term_id=?
+       AND role='subject_teacher' AND is_active=1${classClause}
+     LIMIT 1`,
+    params,
+  )
+  if (!assignment) throw new HttpError(403, 'Teachers can only use library content for their currently assigned classes and subjects.')
+  return session
 }
 
 function suppliedResourceId(value, label, { required = false } = {}) {
@@ -273,6 +324,11 @@ export async function createTeachingResource(schoolId, actor, body = {}) {
   const resourceType = clean(body.resource_type, 80)
   if (!title || !resourceType) throw new HttpError(400, 'Resource title and type are required.')
   const scope = await validateTeachingResourceWriteScope(pool, schoolId, body)
+  const teacherSession = await assertTeacherLibraryAssignment(pool, schoolId, actor, scope)
+  if (teacherSession) {
+    scope.academicYearId = teacherSession.academicYearId
+    scope.termId = teacherSession.termId
+  }
   const file = decodeDataUrl(body.file_data_url || body.fileDataUrl)
   const ref = randomUUID()
   const versionRef = randomUUID()
@@ -328,12 +384,15 @@ export async function listTeachingResources(schoolId, actor, query = {}) {
   if (status && RESOURCE_STATUSES.has(status)) { where.push('tr.approval_status=?'); params.push(status) }
   else if (!['librarian','school_owner','director','owner','headteacher','super_admin'].includes(String(actor.role).toLowerCase())) where.push("tr.approval_status='APPROVED'")
   if (String(actor.role).toLowerCase() === 'teacher') {
+    const session = await currentTeacherLibrarySession(schoolId, actor)
+    if (!session) return { resources: [], limit: Math.min(100,Math.max(1,Number(query.limit||40))), offset: Math.max(0,Number(query.offset||0)) }
     where.push(`(tr.subject_id IS NULL OR EXISTS (
       SELECT 1 FROM teacher_class_subject_assignments ta
       WHERE ta.school_id=tr.school_id AND ta.teacher_id=? AND ta.subject_id=tr.subject_id
-        AND ta.is_active=1 AND (tr.class_id IS NULL OR ta.class_id=tr.class_id)
+        AND ta.academic_year_id=? AND ta.term_id=?
+        AND ta.role='subject_teacher' AND ta.is_active=1 AND (tr.class_id IS NULL OR ta.class_id=tr.class_id)
     ))`)
-    params.push(actor.id)
+    params.push(actor.id,session.academicYearId,session.termId)
   }
   if (query.subject_id) { where.push('tr.subject_id=?'); params.push(Number(query.subject_id)) }
   if (query.class_id) { where.push('(tr.class_id=? OR tr.class_id IS NULL)'); params.push(Number(query.class_id)) }
@@ -367,14 +426,8 @@ export async function listTeachingResources(schoolId, actor, query = {}) {
 
 export async function getTeachingResource(schoolId, ref, actor = null) {
   const resource = await resourceByRef(pool,schoolId,ref)
-  if (actor && String(actor.role).toLowerCase() === 'teacher') {
-    const [[assignment]] = await pool.query(
-      `SELECT 1 allowed FROM teacher_class_subject_assignments
-       WHERE school_id=? AND teacher_id=? AND subject_id=? AND is_active=1
-         AND (? IS NULL OR class_id=?) LIMIT 1`,
-      [schoolId,actor.id,resource.subject_id||0,resource.class_id,resource.class_id],
-    )
-    if (resource.subject_id && !assignment) throw new HttpError(403,'Teachers can only access resources for assigned classes and subjects.')
+  if (actor && String(actor.role).toLowerCase() === 'teacher' && resource.subject_id) {
+    await assertTeacherLibraryAssignment(pool, schoolId, actor, { subjectId: resource.subject_id, classId: resource.class_id })
   }
   const [versions,reviews,usage] = await Promise.all([
     pool.query(`SELECT public_ref,version_number,change_description,original_filename,mime_type,file_size,page_count,approval_status,is_current,approved_at,created_at FROM teaching_resource_versions WHERE school_id=? AND resource_id=? ORDER BY version_number DESC`,[schoolId,resource.id]),
@@ -394,6 +447,9 @@ export async function transitionTeachingResource(schoolId, ref, actor, body = {}
   try {
     await connection.beginTransaction()
     const resource = await resourceByRef(connection,schoolId,ref,true)
+    if (String(actor.role || '').toLowerCase() === 'teacher' && resource.subject_id) {
+      await assertTeacherLibraryAssignment(connection, schoolId, actor, { subjectId: resource.subject_id, classId: resource.class_id })
+    }
     if (!RESOURCE_TRANSITIONS[resource.approval_status]?.has(next)) throw new HttpError(409,`A ${resource.approval_status.toLowerCase()} resource cannot move directly to ${next.toLowerCase()}.`)
     if (next === 'APPROVED') {
       const [reviews] = await connection.query("SELECT review_type,decision FROM teaching_resource_reviews WHERE school_id=? AND resource_id=? AND version_id=?",[schoolId,resource.id,resource.current_version_id])
@@ -440,8 +496,11 @@ export async function reviewTeachingResource(schoolId, ref, actor, body = {}) {
 }
 
 export async function createTeachingResourceVersion(schoolId,ref,actor,body={}){
-  const file=decodeDataUrl(body.file_data_url||body.fileDataUrl)
   const resource=await resourceByRef(pool,schoolId,ref)
+  if (String(actor.role || '').toLowerCase() === 'teacher' && resource.subject_id) {
+    await assertTeacherLibraryAssignment(pool, schoolId, actor, { subjectId: resource.subject_id, classId: resource.class_id })
+  }
+  const file=decodeDataUrl(body.file_data_url||body.fileDataUrl)
   const versionRef=randomUUID();const filename=safeName(body.original_filename||body.filename,file.mimeType)
   const folder=path.resolve(process.cwd(),'uploads','teaching-resources',String(schoolId),ref)
   const storedFilename=`${versionRef}-${filename}`;const absolutePath=path.join(folder,storedFilename)
@@ -452,6 +511,9 @@ export async function createTeachingResourceVersion(schoolId,ref,actor,body={}){
 
 export async function resolveTeachingResourceDownload(schoolId, ref, actor, versionRef = null) {
   const resource = await resourceByRef(pool,schoolId,ref)
+  if (String(actor.role || '').toLowerCase() === 'teacher' && resource.subject_id) {
+    await assertTeacherLibraryAssignment(pool, schoolId, actor, { subjectId: resource.subject_id, classId: resource.class_id })
+  }
   if (!resource.download_allowed) throw new HttpError(403,'Downloads are disabled for this resource.')
   if (['restricted_assessment','marking_scheme','confidential'].includes(resource.confidentiality) && !['school_owner','director','owner','headteacher','super_admin'].includes(String(actor.role).toLowerCase()) && !actor.permissions?.includes('ARCHIVED_MARKING_SCHEME_VIEW')) {
     throw new HttpError(403,'This confidential academic file requires explicit access.')
@@ -474,6 +536,7 @@ export async function createTeachingResourceRequest(schoolId,actor,body={}) {
   const requestText=clean(body.request_text,3000)
   if(!requestText)throw new HttpError(400,'Describe the teaching resource you need.')
   const scope=await validateTeachingResourceRequestWriteScope(pool,schoolId,body)
+  await assertTeacherLibraryAssignment(pool, schoolId, actor, scope)
   const ref=randomUUID();const priority=['low','medium','high','urgent'].includes(body.priority)?body.priority:'medium'
   const [insert]=await pool.query("INSERT INTO teaching_resource_requests (public_ref,school_id,requested_by,subject_id,class_id,topic_id,request_text,required_at,priority,status) VALUES (?,?,?,?,?,?,?,?,?,'submitted')",[ref,schoolId,actor.id,scope.subjectId,scope.classId,scope.topicId,requestText,body.required_at||null,priority])
   await broadcastSchoolNotification({schoolId,roles:['librarian'],title:'Teacher resource request',message:`${actor.fullName||'A teacher'} requested classroom material: ${requestText.slice(0,180)}`,category:'library',priority,linkedEntityType:'teaching_resource_request',linkedEntityId:insert.insertId,createdBy:actor.id})
@@ -562,6 +625,9 @@ export async function returnLibraryLoan(schoolId,loanRef,actor,body={}) {
 export async function createPrintRequest(schoolId,actor,body={}) {
   const resource=await resourceByRef(pool,schoolId,body.resource_ref);if(!resource.printable)throw new HttpError(409,'This resource is not marked as printable.')
   let classId=numberOrNull(body.class_id);if(!classId&&body.class_ref){const [[row]]=await pool.query("SELECT id FROM classes WHERE school_id=? AND public_ref=? LIMIT 1",[schoolId,clean(body.class_ref,80)]);classId=row?.id||null}
+  if (String(actor.role || '').toLowerCase() === 'teacher' && resource.subject_id) {
+    await assertTeacherLibraryAssignment(pool, schoolId, actor, { subjectId: resource.subject_id, classId: classId || resource.class_id })
+  }
   const copies=Math.min(5000,Math.max(1,Number(body.copies||1)));const sensitive=['restricted_assessment','marking_scheme','confidential'].includes(resource.confidentiality)
   const ref=randomUUID();const [insert]=await pool.query(`INSERT INTO print_requests (public_ref,school_id,requested_by,resource_id,version_id,class_id,copies,paper_size,print_sides,colour_mode,required_at,confidentiality,assessment_security,notes,status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,[ref,schoolId,actor.id,resource.id,resource.current_version_id,classId,copies,body.paper_size||'A4',body.print_sides||'single',body.colour_mode||'black_white',body.required_at||null,resource.confidentiality,sensitive?1:0,clean(body.notes,2000)||null,'SUBMITTED']);await pool.query("INSERT INTO print_request_events (public_ref,school_id,print_request_id,next_status,note,actor_user_id) VALUES (UUID(),?,?,'SUBMITTED',?,?)",[schoolId,insert.insertId,clean(body.notes,2000)||null,actor.id]);await pool.query("INSERT INTO teaching_resource_usage (public_ref,school_id,resource_id,version_id,user_id,class_id,usage_type) VALUES (UUID(),?,?,?,?,?,'print_request')",[schoolId,resource.id,resource.current_version_id,actor.id,classId]);await broadcastSchoolNotification({schoolId,roles:['librarian'],title:sensitive?'Confidential print request':'New print request',message:`${actor.fullName||'A teacher'} requested ${copies} copies of “${resource.title}”.`,category:'library',priority:sensitive?'high':'medium',linkedEntityType:'print_request',linkedEntityId:insert.insertId,createdBy:actor.id});await audit(pool,schoolId,actor,'PRINT_REQUEST_CREATED','print_request',insert.insertId,null,{public_ref:ref,copies,sensitive});return {public_ref:ref,status:'SUBMITTED'}
 }
@@ -614,17 +680,18 @@ export async function getClassroomSetup(schoolId,actor) {
     currentPeriod=period||null
   } catch(error) { if(!['ER_NO_SUCH_TABLE','ER_BAD_FIELD_ERROR'].includes(error?.code)) throw error }
   const [[activeLesson]]=await pool.query("SELECT public_ref,class_id,subject_id,timetable_entry_id,started_at FROM classroom_sessions WHERE school_id=? AND teacher_id=? AND status='active' ORDER BY started_at DESC LIMIT 1",[schoolId,actor.id])
-  const [rows]=await pool.query(`SELECT c.public_ref class_ref,c.name class_name,c.grade_level,
-    subj.id subject_id,subj.public_ref subject_ref,subj.name subject_name,subj.code subject_code
-    FROM teacher_class_subject_assignments a
-    JOIN classes c ON c.id=a.class_id AND c.school_id=a.school_id
-    JOIN subjects subj ON subj.id=a.subject_id AND subj.school_id=a.school_id
-    LEFT JOIN academic_years ay ON ay.id=a.academic_year_id AND ay.school_id=a.school_id
-    LEFT JOIN terms t ON t.id=a.term_id AND t.school_id=a.school_id
-    WHERE a.school_id=? AND a.teacher_id=? AND a.is_active=1
-      AND (a.academic_year_id IS NULL OR ay.status='active')
-      AND (a.term_id IS NULL OR t.status IN ('open','marking'))
-    ORDER BY c.name,subj.name`,[schoolId,actor.id])
+  const session=await getActiveAcademicSession(schoolId)
+  let rows=[]
+  if(!session.setupRequired){
+    ;[rows]=await pool.query(`SELECT c.public_ref class_ref,c.name class_name,c.grade_level,
+      subj.id subject_id,subj.public_ref subject_ref,subj.name subject_name,subj.code subject_code
+      FROM teacher_class_subject_assignments a
+      JOIN classes c ON c.id=a.class_id AND c.school_id=a.school_id
+      JOIN subjects subj ON subj.id=a.subject_id AND subj.school_id=a.school_id
+      WHERE a.school_id=? AND a.teacher_id=? AND a.role='subject_teacher' AND a.is_active=1
+        AND a.academic_year_id=? AND a.term_id=?
+      ORDER BY c.name,subj.name`,[schoolId,actor.id,session.academicYearId,session.termId])
+  }
   const subjectIds=[...new Set(rows.map((row)=>Number(row.subject_id)).filter(Boolean))]
   const topicsBySubject=new Map()
   if(subjectIds.length){const [topics]=await pool.query(`SELECT st.public_ref,st.subject_id,st.topic_name,NULL topic_code,1 is_mandatory,gl.name grade_name
@@ -675,14 +742,13 @@ export async function startClassroomSession(schoolId,actor,body={}) {
       throw new HttpError(409,'Complete or end the unfinished Classroom Mode lesson before starting the class that is active now.')
     }
     if(topicId)await validateSyllabusTopicScope(connection,{schoolId,subjectId,topicId,requireTopic:true})
-    const [[academicSession]]=await connection.query("SELECT ay.id academic_year_id,t.id term_id FROM academic_years ay JOIN terms t ON t.academic_year_id=ay.id AND t.school_id=ay.school_id WHERE ay.school_id=? AND ay.status='active' AND t.status IN ('open','marking') ORDER BY t.start_date DESC LIMIT 1",[schoolId])
-    if(!academicSession)throw new HttpError(409,'Open an academic term before starting Classroom Mode.')
+    const academicSession=await getActiveAcademicSession(schoolId,connection)
+    if(academicSession.setupRequired)throw new HttpError(409,academicSession.message||'Open an academic term before starting Classroom Mode.')
     const [[assignment]]=await connection.query(`SELECT id FROM teacher_class_subject_assignments
       WHERE school_id=? AND teacher_id=? AND class_id=? AND subject_id=?
         AND role='subject_teacher' AND is_active=1
-        AND (academic_year_id IS NULL OR academic_year_id=?)
-        AND (term_id IS NULL OR term_id=?)
-      LIMIT 1`,[schoolId,actor.id,classId,subjectId,academicSession.academic_year_id,academicSession.term_id])
+        AND academic_year_id=? AND term_id=?
+      LIMIT 1`,[schoolId,actor.id,classId,subjectId,academicSession.academicYearId,academicSession.termId])
     if(!assignment)throw new HttpError(403,'Classroom Mode can only open an assigned class and subject for the active academic session.')
     const requestedTimetableEntryId=numberOrNull(body.timetable_entry_id)
     let timetableEntryId=null
@@ -703,11 +769,12 @@ export async function startClassroomSession(schoolId,actor,body={}) {
         timetableEntryId=scheduled?.id||null
         if(requestedTimetableEntryId&&!timetableEntryId)throw new HttpError(400,'The selected timetable period is not active for this class and subject.')
     }catch(error){if(!['ER_NO_SUCH_TABLE','ER_BAD_FIELD_ERROR'].includes(error?.code))throw error}
+    const lessonTimetableEntryId=timetableEntryId&&await lessonLogsSupportSchoolTimetable(connection)?timetableEntryId:null
     const [lesson]=await connection.query(`INSERT INTO teacher_lesson_logs (
       school_id,academic_year_id,term_id,teacher_id,class_id,subject_id,timetable_entry_id,lesson_date,started_at,status,
       main_topic_id,coverage_status,coverage_percentage,lesson_outcome,difficulty_observed
     ) VALUES (?,?,?,?,?,?,?,?,COALESCE(?,CURTIME()),'draft',?,'introduced',0,'not_assessed','none')`,
-    [schoolId,academicSession.academic_year_id,academicSession.term_id,actor.id,classId,subjectId,timetableEntryId,lessonDate,body.started_at||null,topicId])
+    [schoolId,academicSession.academicYearId,academicSession.termId,actor.id,classId,subjectId,lessonTimetableEntryId,lessonDate,body.started_at||null,topicId])
     const ref=randomUUID()
     await connection.query(`INSERT INTO classroom_sessions (
       public_ref,school_id,lesson_log_id,teacher_id,class_id,subject_id,timetable_entry_id,status,sync_token,offline_client_id,last_synced_at

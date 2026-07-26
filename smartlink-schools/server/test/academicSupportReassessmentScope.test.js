@@ -17,10 +17,10 @@ function evidenceDb({ generated = [{ id: 80, public_ref: "generated-80", status:
     async query(source) {
       const sql = String(source).replace(/\s+/g, " ").trim()
       if (/ FROM generated_assessments generated /i.test(` ${sql} `)) return [generated]
-      if (/ FROM academic_mark_sheets marksheet /i.test(` ${sql} `)) return [baseline]
       if (/ FROM learner_support_case_members /i.test(` ${sql} `)) return [members]
       if (/ FROM student_enrollments /i.test(` ${sql} `)) return [[]]
-      if (/ FROM learner_assessment_entries /i.test(` ${sql} `)) return [[{ matched_learners: matchedLearners }]]
+      if (/ FROM academic_mark_sheets marksheet /i.test(` ${sql} `)) return [matchedLearners >= 1 + members.length ? baseline : []]
+      if (/ FROM generated_assessment_learners /i.test(` ${sql} `)) return [[{ matched_learners: matchedLearners }]]
       throw new Error(`Unhandled reassessment validation query: ${sql}`)
     },
   }
@@ -40,7 +40,7 @@ test("support reassessments require a targeted assessment in the case's exact ac
 test("baseline evidence must be published in scope and cover every support-case learner", async () => {
   await assert.rejects(
     validateSupportReassessmentEvidence(evidenceDb({ baseline: [] }), 1, record, { generated_assessment_id: 80, baseline_mark_sheet_id: 90 }),
-    /published evidence for this case's class, subject, topic and academic session/i,
+    /publish mapped baseline evidence for every learner/i,
   )
   await assert.rejects(
     validateSupportReassessmentEvidence(evidenceDb({ members: [{ learner_id: 31 }], matchedLearners: 1 }), 1, record, { generated_assessment_id: 80, baseline_mark_sheet_id: 90 }),
@@ -65,9 +65,10 @@ test("support reassessment queries encode the required tenant, session, topic an
     "generated.topic_id=?",
     "marksheet.status IN ('published','locked')",
     "marksheet.academic_year_id=? AND marksheet.term_id=?",
-    "question_topic_mappings",
-    "learner_support_case_members",
+    "learner_topic_results",
+    "supportCaseLearnerIds",
     "learner_assessment_entries",
+    "generated_assessment_learners",
     "is_official=1",
   ]) assert.ok(validator.includes(contract), `missing reassessment contract: ${contract}`)
 })

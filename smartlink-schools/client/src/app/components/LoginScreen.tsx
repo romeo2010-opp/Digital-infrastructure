@@ -272,7 +272,7 @@ export function LoginScreen({
                   type="email"
                   value={email}
                   onChange={(event) => setEmail(event.target.value)}
-                  placeholder="admin@greenhill.mw"
+                  placeholder="name@school.edu"
                   required
                   autoComplete="username"
                   className={inputClass}

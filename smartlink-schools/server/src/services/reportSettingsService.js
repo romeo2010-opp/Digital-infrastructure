@@ -26,8 +26,6 @@ export const REPORT_PDF_TEMPLATES = Object.freeze([
   },
 ])
 
-const REPORT_TEMPLATE_IDS = new Set(REPORT_PDF_TEMPLATES.map((template) => template.id))
-
 function parseSettingValue(value) {
   if (!value) return {}
   if (typeof value === "object" && !Buffer.isBuffer(value)) return value
@@ -61,9 +59,15 @@ export function defaultReportPdfTemplate(schoolInfo = {}) {
   return /(^|\s)ria(\s|$)|reign/i.test(identity) ? "ria_exact" : "smartlink_word"
 }
 
+export function reportPdfTemplatesForSchool(schoolInfo = {}) {
+  const allowReignIdentity = defaultReportPdfTemplate(schoolInfo) === "ria_exact"
+  return REPORT_PDF_TEMPLATES.filter((template) => allowReignIdentity || template.id !== "ria_exact")
+}
+
 export function normalizeReportPdfTemplateId(value, schoolInfo = {}) {
   const candidate = String(value || "").trim()
-  if (REPORT_TEMPLATE_IDS.has(candidate)) return candidate
+  const availableTemplateIds = new Set(reportPdfTemplatesForSchool(schoolInfo).map((template) => template.id))
+  if (availableTemplateIds.has(candidate)) return candidate
   return defaultReportPdfTemplate(schoolInfo)
 }
 
@@ -77,10 +81,10 @@ export async function getReportPdfSettings(connection = pool, schoolId, schoolIn
     )
     const parsed = parseSettingValue(row?.setting_value)
     const selectedTemplate = normalizeReportPdfTemplateId(parsed.report_pdf_template || parsed.selected_template || parsed.template, school)
-    return { selected_template: selectedTemplate, templates: REPORT_PDF_TEMPLATES }
+    return { selected_template: selectedTemplate, templates: reportPdfTemplatesForSchool(school) }
   } catch (error) {
     if (safeMissingSettingsTable(error)) {
-      return { selected_template: defaultReportPdfTemplate(school), templates: REPORT_PDF_TEMPLATES }
+      return { selected_template: defaultReportPdfTemplate(school), templates: reportPdfTemplatesForSchool(school) }
     }
     throw error
   }
@@ -104,5 +108,5 @@ export async function saveReportPdfSettings(connection = pool, schoolId, value, 
      ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)`,
     [schoolId, REPORT_TEMPLATE_SETTING_KEY, JSON.stringify({ report_pdf_template: selectedTemplate })],
   )
-  return { selected_template: selectedTemplate, templates: REPORT_PDF_TEMPLATES }
+  return { selected_template: selectedTemplate, templates: reportPdfTemplatesForSchool(school) }
 }

@@ -9,12 +9,15 @@ import {
   recordAcademicIntelligenceSnapshot,
 } from "./academicIntelligenceEngine.js"
 import {
-  evaluateInterventionDelivery,
-  getInterventionDeliveryMetrics,
+  derivePersistedSupportCycleOutcome,
+  getActiveSupportPolicy,
+  reconcileSupportCasesForAssessmentEvidence,
   recordSupportCaseEvent,
   syncSupportCasesFromPublishedAssessment,
 } from "./academicSupportService.js"
+import { requireActiveAcademicSession } from "./academicSessionService.js"
 import { generateDraftQuestions } from "./questions/questionDraftingService.js"
+import { assertTeacherCanAuthorSubjectGrade, getTeacherSubjectGradeScopes } from "../utils/tenantScope.js"
 
 const EPSILON = 0.01
 const ENTRY_MODES = new Set(["question", "topic", "overall"])
@@ -245,13 +248,31 @@ async function assessmentContext(connection, schoolId, assessmentId, lock = fals
   return assessment
 }
 
-async function assertTeacherAssessmentAccess(connection, schoolId, assessment, actor) {
+export async function assertTeacherAssessmentAccess(connection, schoolId, assessment, actor, options = {}) {
   if (String(actor?.role || "").toLowerCase() !== "teacher") return
+  if (!Number(assessment?.academic_year_id) || !Number(assessment?.term_id)) {
+    throw new HttpError(403, "The assessment does not have an explicit academic session.")
+  }
+  const session = options.session || await requireActiveAcademicSession(schoolId, connection)
+  if (Number(assessment.academic_year_id) !== Number(session.academicYearId)
+    || Number(assessment.term_id) !== Number(session.termId)) {
+    throw new HttpError(403, "Teachers can only access assessments in the current academic year and term.")
+  }
   const [[assignment]] = await connection.query(`SELECT id FROM teacher_class_subject_assignments
     WHERE school_id=? AND teacher_id=? AND class_id=? AND subject_id=? AND role='subject_teacher' AND is_active=1
-      AND (academic_year_id IS NULL OR academic_year_id=?) AND (term_id IS NULL OR term_id=?) LIMIT 1`,
+      AND academic_year_id=? AND term_id=? LIMIT 1`,
   [schoolId, actor.id, assessment.class_id, assessment.subject_id, assessment.academic_year_id, assessment.term_id])
-  if (!assignment) throw new HttpError(403, "Teachers can only access marks and evidence for assigned subjects.")
+  if (!assignment) throw new HttpError(403, "Teachers can only manage targeted assessments for their exact active class, subject and academic session assignment.")
+}
+
+export async function assertTargetedAssessmentMutationAccess(connection, schoolId, assessment, actor) {
+  const session = await requireActiveAcademicSession(schoolId, connection)
+  if (Number(assessment?.academic_year_id) !== Number(session.academicYearId)
+    || Number(assessment?.term_id) !== Number(session.termId)) {
+    throw new HttpError(409, "This targeted assessment belongs to a closed academic session. Create a new assessment in the current open term.")
+  }
+  await assertTeacherAssessmentAccess(connection, schoolId, assessment, actor, { session })
+  return session
 }
 
 async function loadMappedQuestions(connection, schoolId, assessmentId) {
@@ -281,9 +302,18 @@ function topicsFromQuestions(questions = []) {
   return [...topics.values()].map((topic) => ({ ...topic, marks_available: round(topic.marks_available) }))
 }
 
-export async function listAuthoringTopics(schoolId, filters = {}) {
+export async function listAuthoringTopics(schoolId, filters = {}, actor = null) {
   const params = [schoolId]
   const clauses = ["st.is_active=1"]
+  if (String(actor?.role || "").toLowerCase() === "teacher") {
+    const scopes = await getTeacherSubjectGradeScopes({ user: actor }, schoolId)
+    const uniqueScopes = [...new Map((scopes || []).map((scope) => [`${scope.subjectId}:${scope.gradeId ?? "*"}`, scope])).values()]
+    if (!uniqueScopes.length) clauses.push("1=0")
+    else {
+      clauses.push(`(${uniqueScopes.map(() => "(st.subject_id=? AND (st.grade_id IS NULL OR st.grade_id <=> ?))").join(" OR ")})`)
+      params.push(...uniqueScopes.flatMap((scope) => [scope.subjectId, scope.gradeId]))
+    }
+  }
   if (filters.subject_ref) { clauses.push("s.public_ref=?"); params.push(String(filters.subject_ref)) }
   if (filters.subject_id) { clauses.push("s.id=?"); params.push(Number(filters.subject_id)) }
   if (filters.class_ref) { clauses.push("(st.grade_id IS NULL OR gl.name=(SELECT grade_level FROM classes WHERE school_id=? AND public_ref=? LIMIT 1))"); params.push(schoolId, String(filters.class_ref)) }
@@ -301,6 +331,7 @@ export async function saveQuestionMappings(schoolId, assessmentId, questionId, a
   try {
     await connection.beginTransaction()
     const assessment = await assessmentContext(connection, schoolId, assessmentId, true)
+    await assertTeacherAssessmentAccess(connection, schoolId, assessment, actor)
     const [[question]] = await connection.query("SELECT * FROM assessment_questions WHERE school_id=? AND assessment_id=? AND id=? LIMIT 1 FOR UPDATE", [schoolId, assessment.id, Number(questionId)])
     if (!question) throw new HttpError(404, "Assessment question was not found.")
     const rawMappings = Array.isArray(body.topic_mappings) ? body.topic_mappings : []
@@ -514,7 +545,56 @@ async function reconcileTopicFinding(connection, schoolId, assessment, sheet, to
 
 async function evaluateLinkedReassessment(connection, schoolId, sheet, actor) {
   const [[link]] = await connection.query(`SELECT air.*,ai.public_ref intervention_ref,ga.topic_id FROM academic_intervention_reassessments air JOIN generated_assessments ga ON ga.id=air.generated_assessment_id AND ga.school_id=air.school_id JOIN academic_interventions ai ON ai.id=air.intervention_id AND ai.school_id=air.school_id WHERE air.school_id=? AND ga.assessment_id=? AND air.outcome='pending' LIMIT 1`, [schoolId, sheet.assessment_id])
-  if (!link || !link.baseline_mark_sheet_id) return null
+  if (!link) return null
+  if (link.support_case_id && link.intervention_cycle_id) {
+    const [[supportCase], [cycleRows]] = await Promise.all([
+      connection.query("SELECT * FROM learner_support_cases WHERE school_id=? AND id=? LIMIT 1 FOR UPDATE", [schoolId, link.support_case_id]).then(([rows]) => rows),
+      connection.query("SELECT * FROM intervention_cycles WHERE school_id=? AND id=? LIMIT 1 FOR UPDATE", [schoolId, link.intervention_cycle_id]),
+    ])
+    const cycle = cycleRows[0]
+    if (!supportCase || !cycle || Number(cycle.case_id) !== Number(supportCase.id)) return null
+    await connection.query("UPDATE academic_intervention_reassessments SET reassessment_mark_sheet_id=? WHERE id=? AND school_id=? AND outcome='pending'", [sheet.id, link.id, schoolId])
+    const { policy: supportPolicy } = await getActiveSupportPolicy(connection, schoolId)
+    const evaluation = await derivePersistedSupportCycleOutcome(connection, schoolId, supportCase, cycle, supportPolicy, { reassessmentId: link.id })
+    const { diagnostic, evidence, cycleStatus, cycleOutcome, transition, outcomeWasAlreadyApplied } = evaluation
+    const persistedOutcome = ["effective", "partially_effective", "ineffective", "inconclusive"].includes(diagnostic.outcome)
+      ? diagnostic.outcome
+      : diagnostic.outcome === "awaiting_reassessment" ? "pending" : "inconclusive"
+    const diagnosticSummary = {
+      ...diagnostic,
+      automaticEvaluation: true,
+      previousCaseState: {
+        status: supportCase.status,
+        escalationLevel: Number(supportCase.escalation_level || 0),
+        successfulCycleCount: Number(supportCase.successful_cycle_count || 0),
+        unsuccessfulCycleCount: Number(supportCase.unsuccessful_cycle_count || 0),
+      },
+      appliedTransition: {
+        status: transition.status,
+        level: transition.level,
+        successfulCycles: transition.successfulCycles,
+        unsuccessfulCycles: transition.unsuccessfulCycles,
+      },
+    }
+    await connection.query(`UPDATE academic_intervention_reassessments SET outcome=?,comparability_json=?,outcome_summary_json=?,
+      evaluated_at=IF(?='pending',NULL,CURRENT_TIMESTAMP),evaluated_by=IF(?='pending',NULL,?)
+      WHERE id=? AND school_id=?`, [persistedOutcome, JSON.stringify({ comparable: evidence.reassessmentComparable, comparisons: evidence.comparisons, evidence_source: evidence.evidenceSource, targeted_learner_coverage: evidence.targetedLearnerCoverage, baseline_mark_sheet_id: evidence.baselineMarkSheetId, reassessment_mark_sheet_id: evidence.reassessmentMarkSheetId }), JSON.stringify(diagnosticSummary), persistedOutcome, persistedOutcome, actor.id, link.id, schoolId])
+    await connection.query("UPDATE academic_interventions SET outcome=?,status=?,reassessment_summary_json=?,completed_by=CASE WHEN ?='completed' THEN ? ELSE completed_by END,completed_at=CASE WHEN ?='completed' THEN CURRENT_TIMESTAMP ELSE completed_at END WHERE id=? AND school_id=?", [["effective", "partially_effective"].includes(diagnostic.outcome) ? "improved" : diagnostic.outcome === "ineffective" ? "unchanged" : "inconclusive", cycleStatus === "completed" ? "completed" : "review_due", JSON.stringify(diagnosticSummary), cycleStatus, actor.id, cycleStatus, link.intervention_id, schoolId])
+    await connection.query("UPDATE intervention_cycles SET status=?,outcome=?,diagnostic_json=?,version_number=version_number+1,updated_by=? WHERE school_id=? AND id=?", [cycleStatus, cycleOutcome, JSON.stringify(diagnosticSummary), actor.id, schoolId, cycle.id])
+    if (!outcomeWasAlreadyApplied) {
+      const nextReview = new Date(Date.now() + Number(supportPolicy.reviewWithinSchoolDays || 5) * 86_400_000)
+      await connection.query("UPDATE learner_support_cases SET status=?,escalation_level=?,successful_cycle_count=?,unsuccessful_cycle_count=?,last_reviewed_at=CURRENT_TIMESTAMP,next_review_at=?,current_summary=CONCAT(current_summary,' Published reassessment outcome: ',?),version_number=version_number+1,updated_by=? WHERE school_id=? AND id=?", [transition.status, transition.level, transition.successfulCycles, transition.unsuccessfulCycles, nextReview, diagnostic.outcome.replaceAll("_", " "), actor.id, schoolId, supportCase.id])
+      await recordSupportCaseEvent(connection, schoolId, supportCase, actor, "reassessment_outcome_evaluated", `Published reassessment evidence classified the intervention outcome as ${diagnostic.outcome.replaceAll("_", " ")}.`, { idempotencyKey: `published-reassessment:${link.id}:${sheet.id}:${sheet.version_number}`, linkedType: "academic_mark_sheet", linkedRef: sheet.public_ref, status: transition.status, evidence: diagnosticSummary })
+    }
+    return {
+      intervention_ref: link.intervention_ref,
+      support_case_ref: link.support_case_id,
+      canonical_outcome: diagnostic,
+      expected_learners: evidence.expectedLearnerCount,
+      comparable_learners: evidence.comparableLearnerCount,
+    }
+  }
+  if (!link.baseline_mark_sheet_id) return null
   const [baseline] = await connection.query(`SELECT ltr.student_id,ltr.marks_awarded,ltr.marks_available,'published' status,'baseline_assessment' evidence_type FROM learner_topic_results ltr JOIN generated_assessment_learners gal ON gal.school_id=ltr.school_id AND gal.student_id=ltr.student_id AND gal.generated_assessment_id=? AND gal.confirmed_at IS NOT NULL WHERE ltr.school_id=? AND ltr.mark_sheet_id=? AND ltr.topic_id=? AND ltr.is_official=1`, [link.generated_assessment_id, schoolId, link.baseline_mark_sheet_id, link.topic_id])
   const [reassessment] = await connection.query(`SELECT ltr.student_id,ltr.marks_awarded,ltr.marks_available,'published' status,'reassessment' evidence_type FROM learner_topic_results ltr JOIN generated_assessment_learners gal ON gal.school_id=ltr.school_id AND gal.student_id=ltr.student_id AND gal.generated_assessment_id=? AND gal.confirmed_at IS NOT NULL WHERE ltr.school_id=? AND ltr.mark_sheet_id=? AND ltr.topic_id=? AND ltr.is_official=1`, [link.generated_assessment_id, schoolId, sheet.id, link.topic_id])
   const criterion = parseJson(link.success_criterion_json, {})
@@ -529,41 +609,9 @@ async function evaluateLinkedReassessment(connection, schoolId, sheet, actor) {
   const learnerOutcome = { targeted_learners: afterByStudent.size, comparable_learners: comparable.length, improved_learners: comparable.filter(([studentId, score]) => score > beforeByStudent.get(studentId) + EPSILON).length, reached_success_criterion: [...afterByStudent.values()].filter((score) => score !== null && score >= Number(criterion.success_threshold || 60)).length, remaining_below_criterion: [...afterByStudent.values()].filter((score) => score === null || score < Number(criterion.success_threshold || 60)).length }
   const outcomeSummary = { ...result, ...learnerOutcome }
   const outcome = result.outcome === "EFFECTIVE" ? "effective" : result.outcome === "PARTIALLY_EFFECTIVE" ? "partially_effective" : result.outcome === "INEFFECTIVE" ? "ineffective" : "inconclusive"
-  await connection.query("UPDATE academic_intervention_reassessments SET reassessment_mark_sheet_id=?,outcome=?,outcome_summary_json=?,evaluated_at=CURRENT_TIMESTAMP,evaluated_by=? WHERE id=? AND school_id=?", [sheet.id, outcome, JSON.stringify(outcomeSummary), actor.id, link.id, schoolId])
+  await connection.query("UPDATE academic_intervention_reassessments SET reassessment_mark_sheet_id=?,outcome=?,comparability_json=?,outcome_summary_json=?,evaluated_at=CURRENT_TIMESTAMP,evaluated_by=? WHERE id=? AND school_id=?", [sheet.id, outcome, JSON.stringify({ comparable: result.baseline_score !== null && result.reassessment_score !== null, evidence_source: "published_official_topic_results", baseline_mark_sheet_id: link.baseline_mark_sheet_id, reassessment_mark_sheet_id: sheet.id }), JSON.stringify(outcomeSummary), actor.id, link.id, schoolId])
   await connection.query("UPDATE academic_interventions SET outcome=?,status=?,reassessment_summary_json=?,completed_by=CASE WHEN ?='completed' THEN ? ELSE completed_by END,completed_at=CASE WHEN ?='completed' THEN CURRENT_TIMESTAMP ELSE completed_at END WHERE id=? AND school_id=?", [outcome === "effective" || outcome === "partially_effective" ? "improved" : outcome === "ineffective" ? "unchanged" : "inconclusive", outcome === "effective" ? "completed" : "review_due", JSON.stringify(outcomeSummary), outcome === "effective" ? "completed" : "review_due", actor.id, outcome === "effective" ? "completed" : "review_due", link.intervention_id, schoolId])
-  let canonicalOutcome = null
-  if (link.support_case_id && link.intervention_cycle_id) {
-    const [[supportCase], [cycleRows]] = await Promise.all([
-      connection.query("SELECT * FROM learner_support_cases WHERE school_id=? AND id=? LIMIT 1 FOR UPDATE", [schoolId, link.support_case_id]).then(([rows]) => rows),
-      connection.query("SELECT * FROM intervention_cycles WHERE school_id=? AND id=? LIMIT 1 FOR UPDATE", [schoolId, link.intervention_cycle_id]),
-    ])
-    const cycle = cycleRows[0]
-    if (supportCase && cycle) {
-      const delivery = await getInterventionDeliveryMetrics(connection, schoolId, cycle.id)
-      const comparable = result.baseline_score !== null && result.reassessment_score !== null
-      canonicalOutcome = evaluateInterventionDelivery({
-        plannedSessions: cycle.planned_session_count,
-        completedSessions: delivery.deliveredSessions,
-        attendanceEligible: delivery.attendanceEligible,
-        attendedSessions: delivery.attendedSessions,
-        reassessmentPublished: true,
-        reassessmentComparable: comparable,
-        baselineScore: result.baseline_score,
-        reassessmentScore: result.reassessment_score,
-        successCriterion: Number(criterion.mastery_threshold || criterion.success_threshold || 60),
-        minimumMeaningfulChange: Number(criterion.minimum_meaningful_change || criterion.minimum_change || 5),
-      }, { minimumSupportDeliveryRate: cycle.delivery_threshold, minimumSupportAttendanceRate: cycle.attendance_threshold })
-      const cycleStatus = canonicalOutcome.outcome === "awaiting_reassessment" ? "awaiting_reassessment" : ["incomplete_delivery", "insufficient_participation", "inconclusive"].includes(canonicalOutcome.outcome) ? canonicalOutcome.outcome : "completed"
-      const cycleOutcome = ["effective", "partially_effective", "ineffective", "inconclusive"].includes(canonicalOutcome.outcome) ? canonicalOutcome.outcome : "not_classified"
-      const improved = canonicalOutcome.outcome === "effective"
-      const unsuccessful = ["partially_effective", "ineffective"].includes(canonicalOutcome.outcome)
-      const caseStatus = improved ? "continued_support" : unsuccessful ? "strategy_review" : canonicalOutcome.outcome === "awaiting_reassessment" ? "reassessment_pending" : "intervention_active"
-      await connection.query("UPDATE intervention_cycles SET status=?,outcome=?,diagnostic_json=?,version_number=version_number+1,updated_by=? WHERE school_id=? AND id=?", [cycleStatus, cycleOutcome, JSON.stringify({ ...canonicalOutcome, ...learnerOutcome }), actor.id, schoolId, cycle.id])
-      await connection.query("UPDATE learner_support_cases SET status=?,successful_cycle_count=successful_cycle_count+?,unsuccessful_cycle_count=unsuccessful_cycle_count+?,last_reviewed_at=CURRENT_TIMESTAMP,next_review_at=DATE_ADD(CURRENT_DATE,INTERVAL 5 DAY),current_summary=CONCAT(current_summary,' Published reassessment outcome: ',?),version_number=version_number+1,updated_by=? WHERE school_id=? AND id=?", [caseStatus, improved ? 1 : 0, unsuccessful ? 1 : 0, canonicalOutcome.outcome.replaceAll("_", " "), actor.id, schoolId, supportCase.id])
-      await recordSupportCaseEvent(connection, schoolId, supportCase, actor, "reassessment_outcome_evaluated", `Published reassessment evidence classified the intervention outcome as ${canonicalOutcome.outcome.replaceAll("_", " ")}.`, { idempotencyKey: `published-reassessment:${link.id}:${sheet.id}`, linkedType: "academic_mark_sheet", linkedRef: sheet.public_ref, status: caseStatus, evidence: { ...canonicalOutcome, ...learnerOutcome } })
-    }
-  }
-  return { intervention_ref: link.intervention_ref, support_case_ref: canonicalOutcome ? link.support_case_id : null, canonical_outcome: canonicalOutcome, ...outcomeSummary }
+  return { intervention_ref: link.intervention_ref, support_case_ref: null, canonical_outcome: null, ...outcomeSummary }
 }
 
 export async function publishAcademicMarkSheet(schoolId, assessmentId, actor, body = {}) {
@@ -621,13 +669,101 @@ export async function publishAcademicMarkSheet(schoolId, assessmentId, actor, bo
     if (mode !== "overall") for (const topic of topics) findings.push(await reconcileTopicFinding(connection, schoolId, assessment, { ...sheet, evidence_level: mode }, topic, config, actor))
     const supportCases = mode === "overall"
       ? { cases_touched: [], weak_evidence_count: 0 }
-      : await syncSupportCasesFromPublishedAssessment(connection, schoolId, assessment, actor)
+      : await syncSupportCasesFromPublishedAssessment(connection, schoolId, assessment, actor, { markSheetRef: sheet.public_ref, markSheetVersion: sheet.version_number })
     const interventionOutcome = await evaluateLinkedReassessment(connection, schoolId, sheet, actor)
     await audit(connection, schoolId, actor, "ACADEMIC_MARK_SHEET_PUBLISHED", "academic_mark_sheet", sheet.id, { assessment_id: assessment.id, mode, learners: present.length, scoped_topics: mode === "overall" ? 0 : topics.length, intervention_outcome: interventionOutcome, support_cases: supportCases })
     await connection.commit()
     await recordAcademicIntelligenceSnapshot({ schoolId, academicYearId: assessment.academic_year_id, termId: assessment.term_id, scopeType: "class", scopeRef: assessment.class_ref, metricKey: "mapped_assessment_published", metricValue: classMastery.average_mastery, confidenceScore: findings.filter(Boolean).length ? round(findings.filter(Boolean).reduce((sum, finding) => sum + Number(finding.confidence || 0), 0) / findings.filter(Boolean).length) : 20, evidenceState: mode === "overall" ? "limited" : "sufficient", reason: mode === "overall" ? "Overall totals published; no topic claim was created." : "Mapped marks published and scoped intelligence recalculated.", evidenceSummary: { assessment_id: assessment.id, mode, topics: topics.map((topic) => topic.topic_ref), intervention_outcome: interventionOutcome }, formulaVersion: "academic-operations-v1" })
     return { public_ref: sheet.public_ref, status: "published", evidence_level: mode, learners_published: present.length, topics_recalculated: mode === "overall" ? 0 : topics.length, class_mastery: classMastery, findings: findings.filter(Boolean), support_cases: supportCases, intervention_outcome: interventionOutcome, limitations: mode === "overall" ? ["Topic-level intelligence is unavailable because only final totals were recorded."] : [] }
   } catch (error) { await connection.rollback(); throw error } finally { connection.release() }
+}
+
+export function reassessmentOutcomeCountDelta(evidence = {}, fallbackOutcome = "pending") {
+  const previous = evidence.previousCaseState || {}
+  const applied = evidence.appliedTransition || {}
+  const hasRecordedCounts = Number.isFinite(Number(previous.successfulCycleCount))
+    && Number.isFinite(Number(previous.unsuccessfulCycleCount))
+    && Number.isFinite(Number(applied.successfulCycles))
+    && Number.isFinite(Number(applied.unsuccessfulCycles))
+  if (hasRecordedCounts) {
+    return {
+      successful: Math.max(0, Number(applied.successfulCycles) - Number(previous.successfulCycleCount)),
+      unsuccessful: Math.max(0, Number(applied.unsuccessfulCycles) - Number(previous.unsuccessfulCycleCount)),
+    }
+  }
+  const outcome = String(evidence.outcome || fallbackOutcome || "pending")
+  if (outcome === "effective") return { successful: 1, unsuccessful: 0 }
+  if (outcome === "ineffective") return { successful: 0, unsuccessful: 1 }
+  if (outcome === "partially_effective" && (evidence.recommendedEscalation === "strategy_review" || evidence.strategyRepeated)) return { successful: 0, unsuccessful: 1 }
+  return { successful: 0, unsuccessful: 0 }
+}
+
+async function retractLinkedReassessmentForCorrection(connection, schoolId, sheet, actor) {
+  const [[link]] = await connection.query(`SELECT reassessment.*,generated_assessment.assessment_id,intervention.public_ref intervention_ref
+    FROM academic_intervention_reassessments reassessment
+    JOIN generated_assessments generated_assessment ON generated_assessment.school_id=reassessment.school_id AND generated_assessment.id=reassessment.generated_assessment_id
+    JOIN academic_interventions intervention ON intervention.school_id=reassessment.school_id AND intervention.id=reassessment.intervention_id
+    WHERE reassessment.school_id=? AND reassessment.reassessment_mark_sheet_id=? AND generated_assessment.assessment_id=?
+    LIMIT 1 FOR UPDATE`, [schoolId, sheet.id, sheet.assessment_id])
+  if (!link) return null
+
+  const previousSummary = parseJson(link.outcome_summary_json, {})
+  const previousComparability = parseJson(link.comparability_json, {})
+  const retraction = {
+    state: "retracted_for_marksheet_correction",
+    previousOutcome: link.outcome,
+    previousSummary,
+    previousComparability,
+    markSheetRef: sheet.public_ref,
+    retractedBy: actor.id,
+    retractedAt: new Date().toISOString(),
+  }
+  await connection.query(`UPDATE academic_intervention_reassessments
+    SET reassessment_mark_sheet_id=NULL,outcome='pending',comparability_json=?,outcome_summary_json=?,evaluated_at=NULL,evaluated_by=NULL
+    WHERE school_id=? AND id=?`, [JSON.stringify({ status: "pending_server_evaluation", reason: "marksheet_reopened_for_correction" }), JSON.stringify(retraction), schoolId, link.id])
+  await connection.query(`UPDATE academic_interventions
+    SET status='review_due',outcome='pending',reassessment_summary_json=?,completed_by=NULL,completed_at=NULL
+    WHERE school_id=? AND id=?`, [JSON.stringify(retraction), schoolId, link.intervention_id])
+
+  let caseRollback = null
+  if (link.support_case_id && link.intervention_cycle_id) {
+    const [[supportCase], [cycleRows]] = await Promise.all([
+      connection.query("SELECT * FROM learner_support_cases WHERE school_id=? AND id=? LIMIT 1 FOR UPDATE", [schoolId, link.support_case_id]).then(([rows]) => rows),
+      connection.query("SELECT * FROM intervention_cycles WHERE school_id=? AND id=? LIMIT 1 FOR UPDATE", [schoolId, link.intervention_cycle_id]),
+    ])
+    const cycle = cycleRows[0]
+    if (supportCase && cycle && Number(cycle.case_id) === Number(supportCase.id)) {
+      const [automaticEventRows, reviewEvents, latestCycleRows] = await Promise.all([
+        connection.query("SELECT evidence_json FROM learner_support_case_events WHERE school_id=? AND case_id=? AND event_type='reassessment_outcome_evaluated' AND linked_entity_type='academic_mark_sheet' AND linked_entity_ref=? ORDER BY occurred_at DESC,id DESC LIMIT 1", [schoolId, supportCase.id, sheet.public_ref]).then(([rows]) => rows),
+        connection.query("SELECT evidence_json FROM learner_support_case_events WHERE school_id=? AND case_id=? AND event_type='intervention_outcome_reviewed' AND linked_entity_ref=? ORDER BY occurred_at DESC,id DESC", [schoolId, supportCase.id, cycle.public_ref]).then(([rows]) => rows),
+        connection.query("SELECT MAX(cycle_number) latest_cycle_number FROM intervention_cycles WHERE school_id=? AND case_id=?", [schoolId, supportCase.id]).then(([rows]) => rows),
+      ])
+      const automaticEvent = automaticEventRows[0]
+      const latestCycle = latestCycleRows[0]
+      let appliedEvidence = automaticEvent ? parseJson(automaticEvent.evidence_json, {}) : null
+      if (!appliedEvidence) {
+        const matchingReview = reviewEvents.find((row) => String(parseJson(row.evidence_json, {}).reassessmentRef || "") === String(link.public_ref || ""))
+        if (matchingReview) appliedEvidence = parseJson(matchingReview.evidence_json, {})
+      }
+      const delta = appliedEvidence ? reassessmentOutcomeCountDelta(appliedEvidence, link.outcome) : { successful: 0, unsuccessful: 0 }
+      const isLatestCycle = Number(latestCycle?.latest_cycle_number || 0) === Number(cycle.cycle_number || 0)
+      const priorLevel = Number(appliedEvidence?.previousCaseState?.escalationLevel)
+      const nextLevel = isLatestCycle && Number.isFinite(priorLevel) ? priorLevel : Number(supportCase.escalation_level || 0)
+      const nextStatus = isLatestCycle ? "reassessment_pending" : supportCase.status
+      const successfulCycles = Math.max(0, Number(supportCase.successful_cycle_count || 0) - delta.successful)
+      const unsuccessfulCycles = Math.max(0, Number(supportCase.unsuccessful_cycle_count || 0) - delta.unsuccessful)
+      await connection.query("UPDATE intervention_cycles SET status='awaiting_reassessment',outcome='pending',diagnostic_json=?,version_number=version_number+1,updated_by=? WHERE school_id=? AND id=?", [JSON.stringify(retraction), actor.id, schoolId, cycle.id])
+      await connection.query(`UPDATE learner_support_cases
+        SET status=?,escalation_level=?,successful_cycle_count=?,unsuccessful_cycle_count=?,
+          last_reviewed_at=CURRENT_TIMESTAMP,next_review_at=IF(?,CURRENT_TIMESTAMP,next_review_at),
+          closed_at=IF(?,NULL,closed_at),current_summary=CONCAT(current_summary,' Reassessment outcome retracted while its marksheet is corrected.'),
+          version_number=version_number+1,updated_by=?
+        WHERE school_id=? AND id=?`, [nextStatus, nextLevel, successfulCycles, unsuccessfulCycles, isLatestCycle ? 1 : 0, isLatestCycle ? 1 : 0, actor.id, schoolId, supportCase.id])
+      caseRollback = { case_ref: supportCase.public_ref, cycle_ref: cycle.public_ref, status: nextStatus, is_latest_cycle: isLatestCycle, successful_count_delta: -delta.successful, unsuccessful_count_delta: -delta.unsuccessful }
+      await recordSupportCaseEvent(connection, schoolId, supportCase, actor, "reassessment_outcome_retracted_for_correction", "Published reassessment evidence was retracted because its marksheet was reopened for correction.", { idempotencyKey: `reopened-reassessment:${link.id}:${sheet.id}:${sheet.version_number}`, linkedType: "academic_mark_sheet", linkedRef: sheet.public_ref, status: nextStatus, evidence: { ...retraction, caseRollback } })
+    }
+  }
+  return { reassessment_ref: link.public_ref, intervention_ref: link.intervention_ref, previous_outcome: link.outcome, case_rollback: caseRollback }
 }
 
 export async function reopenAcademicMarkSheet(schoolId, assessmentId, actor, body = {}) {
@@ -646,11 +782,16 @@ export async function reopenAcademicMarkSheet(schoolId, assessmentId, actor, bod
     }
     const [[finalBatch]] = await connection.query(`SELECT id,status FROM result_batches WHERE school_id=? AND assessment_id=? AND status IN ('submitted','approved','locked') LIMIT 1`, [schoolId, assessment.id])
     if (finalBatch) throw new HttpError(409, 'Return the submitted overall results for correction before reopening academic evidence.')
-    await connection.query(`UPDATE learner_support_case_evidence ce
-      JOIN mastery_evidence me ON me.id=ce.mastery_evidence_id AND me.school_id=ce.school_id
-      SET ce.evidence_status='invalidated',ce.updated_by=?
-      WHERE ce.school_id=? AND me.assessment_id=? AND ce.evidence_status='valid'`, [actor.id, schoolId, assessment.id])
+    const reassessmentRollback = await retractLinkedReassessmentForCorrection(connection, schoolId, sheet, actor)
+    await connection.query(`UPDATE learner_support_case_evidence
+      SET evidence_status='invalidated',updated_by=?
+      WHERE school_id=? AND assessment_id=? AND evidence_status='valid'`, [actor.id, schoolId, assessment.id])
     await connection.query(`UPDATE mastery_evidence SET publication_state='invalidated',evidence_status='invalidated' WHERE school_id=? AND assessment_id=? AND publication_state IN ('published','locked')`, [schoolId, assessment.id])
+    const supportEvidenceReconciliation = await reconcileSupportCasesForAssessmentEvidence(connection, schoolId, assessment, actor, {
+      phase: "retracted",
+      markSheetRef: sheet.public_ref,
+      markSheetVersion: sheet.version_number,
+    })
     await connection.query('UPDATE learner_assessment_entries SET is_official=0,updated_by=? WHERE school_id=? AND mark_sheet_id=?', [actor.id, schoolId, sheet.id])
     await connection.query('UPDATE learner_question_marks SET is_official=0,updated_by=? WHERE school_id=? AND mark_sheet_id=?', [actor.id, schoolId, sheet.id])
     await connection.query('UPDATE learner_topic_results SET is_official=0,updated_by=? WHERE school_id=? AND mark_sheet_id=?', [actor.id, schoolId, sheet.id])
@@ -662,9 +803,9 @@ export async function reopenAcademicMarkSheet(schoolId, assessmentId, actor, bod
       for (const topic of topics) await recalculateStudentMastery(schoolId, learner.student_id, assessment.subject_id, { academic_year_id: assessment.academic_year_id, term_id: assessment.term_id, topic_id: topic.topic_id }, connection)
     }
     await recalculateClassMastery(schoolId, { classId: assessment.class_id, subjectId: assessment.subject_id, academicYearId: assessment.academic_year_id, termId: assessment.term_id }, connection)
-    await audit(connection, schoolId, actor, 'ACADEMIC_MARK_SHEET_REOPENED', 'academic_mark_sheet', sheet.id, { assessment_id: assessment.id, mode, invalidated_official_evidence: true })
+    await audit(connection, schoolId, actor, 'ACADEMIC_MARK_SHEET_REOPENED', 'academic_mark_sheet', sheet.id, { assessment_id: assessment.id, mode, invalidated_official_evidence: true, linked_reassessment_rollback: reassessmentRollback, support_evidence_reconciliation: supportEvidenceReconciliation })
     await connection.commit()
-    return { public_ref: sheet.public_ref, status: 'draft', entry_mode: mode, version_number: Number(sheet.version_number || 1) + 1 }
+    return { public_ref: sheet.public_ref, status: 'draft', entry_mode: mode, version_number: Number(sheet.version_number || 1) + 1, linked_reassessment_rollback: reassessmentRollback, support_evidence_reconciliation: supportEvidenceReconciliation }
   } catch (error) {
     await connection.rollback()
     throw error
@@ -673,37 +814,183 @@ export async function reopenAcademicMarkSheet(schoolId, assessmentId, actor, bod
   }
 }
 
-async function resolveRef(connection, table, schoolId, ref, numeric = null) {
-  if (numeric) return Number(numeric)
-  if (!ref) return null
-  const [[row]] = await connection.query(`SELECT id FROM ${table} WHERE school_id=? AND public_ref=? LIMIT 1`, [schoolId, String(ref)])
-  return row ? Number(row.id) : null
+const TARGETED_REFERENCE_SPECS = Object.freeze({
+  classes: { columns: "id,public_ref,name,grade_level", label: "Class", refPredicate: "public_ref=?" },
+  subjects: { columns: "id,public_ref,name", label: "Subject", refPredicate: "public_ref=?" },
+  syllabus_topics: { columns: "id,public_ref,subject_id,parent_topic_id,curriculum_id,grade_id,is_active", label: "Topic", refPredicate: "public_ref=?", extraPredicate: "is_active=1" },
+  students: { columns: "id,public_ref,status,class_id", label: "Learner", refPredicate: "public_ref=?" },
+  academic_years: { columns: "id,name,status,is_active", label: "Academic year", refPredicate: "SHA2(CONCAT('academic-year:',school_id,':',id),256)=?" },
+  terms: { columns: "id,academic_year_id,name,status", label: "Term", refPredicate: "SHA2(CONCAT('term:',school_id,':',id),256)=?" },
+  academic_interventions: { columns: "id,public_ref,class_id,subject_id,topic_id,term_id,assigned_teacher_id,status", label: "Intervention", refPredicate: "public_ref=?" },
+})
+
+const hasReferenceValue = (value) => value !== undefined && value !== null && String(value).trim() !== ""
+
+function targetedNumericId(value, label) {
+  if (!hasReferenceValue(value)) return null
+  const id = Number(value)
+  if (!Number.isSafeInteger(id) || id <= 0) throw new HttpError(400, `${label} is invalid.`)
+  return id
+}
+
+async function resolveTargetedTenantReference(connection, table, schoolId, numeric, ref) {
+  const spec = TARGETED_REFERENCE_SPECS[table]
+  if (!spec) throw new Error(`Unsupported targeted assessment reference table: ${table}`)
+  const id = targetedNumericId(numeric, spec.label)
+  const publicRef = hasReferenceValue(ref) ? String(ref).trim() : null
+  if (!id && !publicRef) return null
+  const predicates = ["school_id=?"]
+  const params = [Number(schoolId)]
+  if (id) { predicates.push("id=?"); params.push(id) }
+  if (publicRef) { predicates.push(spec.refPredicate); params.push(publicRef) }
+  if (spec.extraPredicate) predicates.push(spec.extraPredicate)
+  const [[row]] = await connection.query(`SELECT ${spec.columns} FROM ${table} WHERE ${predicates.join(" AND ")} LIMIT 1`, params)
+  if (!row) throw new HttpError(400, `${spec.label} does not belong to this school or the supplied ID and reference do not identify the same record.`)
+  return { ...row, id: Number(row.id) }
+}
+
+async function assertTargetedTopicGrade(connection, schoolId, classRecord, topicRecord) {
+  if (!topicRecord?.grade_id) return
+  const [[grade]] = await connection.query("SELECT id FROM grade_levels WHERE school_id=? AND id=? AND name=? LIMIT 1", [schoolId, Number(topicRecord.grade_id), String(classRecord.grade_level || "")])
+  if (!grade) throw new HttpError(400, "The selected syllabus topic does not belong to the selected class year level.")
+}
+
+export async function resolveTargetedAssessmentDraftScope(connection, schoolId, actor, body = {}) {
+  const session = await requireActiveAcademicSession(schoolId, connection)
+  const [classRecord, subjectRecord, topicRecord, requestedSubtopic, requestedYear, requestedTerm] = await Promise.all([
+    resolveTargetedTenantReference(connection, "classes", schoolId, body.class_id, body.class_ref),
+    resolveTargetedTenantReference(connection, "subjects", schoolId, body.subject_id, body.subject_ref),
+    resolveTargetedTenantReference(connection, "syllabus_topics", schoolId, body.topic_id, body.topic_ref),
+    hasReferenceValue(body.subtopic_id) || hasReferenceValue(body.subtopic_ref)
+      ? resolveTargetedTenantReference(connection, "syllabus_topics", schoolId, body.subtopic_id, body.subtopic_ref)
+      : null,
+    hasReferenceValue(body.academic_year_id) || hasReferenceValue(body.academic_year_ref)
+      ? resolveTargetedTenantReference(connection, "academic_years", schoolId, body.academic_year_id, body.academic_year_ref)
+      : session.academicYear,
+    hasReferenceValue(body.term_id) || hasReferenceValue(body.term_ref)
+      ? resolveTargetedTenantReference(connection, "terms", schoolId, body.term_id, body.term_ref)
+      : session.term,
+  ])
+  if (!classRecord || !subjectRecord || !topicRecord) throw new HttpError(400, "Class, subject and target topic are required.")
+
+  const academicYearId = Number(requestedYear?.id || 0)
+  const termId = Number(requestedTerm?.id || 0)
+  if (academicYearId !== Number(session.academicYearId) || termId !== Number(session.termId)) {
+    throw new HttpError(409, "Targeted assessments can only be created in the school's current open academic session.")
+  }
+  if (Number(requestedTerm.academic_year_id) !== academicYearId) throw new HttpError(400, "The selected term does not belong to the selected academic year.")
+  if (Number(topicRecord.subject_id) !== Number(subjectRecord.id)) throw new HttpError(400, "The selected topic must belong to the selected subject syllabus.")
+  await assertTargetedTopicGrade(connection, schoolId, classRecord, topicRecord)
+  if (requestedSubtopic) {
+    if (Number(requestedSubtopic.subject_id) !== Number(subjectRecord.id) || Number(requestedSubtopic.parent_topic_id) !== Number(topicRecord.id)) {
+      throw new HttpError(400, "The selected subtopic must belong to the selected syllabus topic.")
+    }
+    await assertTargetedTopicGrade(connection, schoolId, classRecord, requestedSubtopic)
+  }
+
+  const scope = {
+    classId: Number(classRecord.id),
+    subjectId: Number(subjectRecord.id),
+    topicId: Number(topicRecord.id),
+    subtopicId: requestedSubtopic ? Number(requestedSubtopic.id) : null,
+    targetTopicId: Number(requestedSubtopic?.id || topicRecord.id),
+    academicYearId,
+    termId,
+  }
+  await assertTeacherAssessmentAccess(connection, schoolId, {
+    class_id: scope.classId,
+    subject_id: scope.subjectId,
+    academic_year_id: scope.academicYearId,
+    term_id: scope.termId,
+  }, actor, { exactSession: true })
+  return scope
+}
+
+export async function resolveCanonicalTargetedLearners(connection, schoolId, learners = [], scope = {}) {
+  const resolved = []
+  for (const learner of Array.isArray(learners) ? learners : []) {
+    if (!learner || typeof learner !== "object") throw new HttpError(400, "One selected learner is invalid.")
+    const student = await resolveTargetedTenantReference(connection, "students", schoolId, learner.student_id, learner.student_ref)
+    if (!student) throw new HttpError(400, "One selected learner is invalid.")
+    if (String(student.status || "").toLowerCase() !== "active") throw new HttpError(400, "Every selected learner must be active.")
+    resolved.push({ ...learner, student_id: Number(student.id), student_ref: student.public_ref || learner.student_ref || null })
+  }
+
+  const canonical = dedupeTargetedLearners(resolved)
+  for (const learner of canonical) {
+    const [[eligible]] = await connection.query(
+      "SELECT id FROM student_enrollments WHERE school_id=? AND student_id=? AND class_id=? AND academic_year_id=? AND term_id=? AND enrollment_status='active' LIMIT 1",
+      [schoolId, learner.student_id, scope.classId, scope.academicYearId, scope.termId],
+    )
+    if (!eligible) throw new HttpError(400, "Every selected learner must be actively enrolled in the selected class and academic session.")
+  }
+  return canonical
+}
+
+function assertCompatibleTargetedLink(link, scope, label) {
+  if (Number(link.class_id || 0) !== Number(scope.classId)) throw new HttpError(400, `${label} does not belong to the selected class.`)
+  if (Number(link.subject_id || 0) !== Number(scope.subjectId)) throw new HttpError(400, `${label} does not belong to the selected subject.`)
+  const compatibleTopics = new Set([Number(scope.topicId), Number(scope.targetTopicId)].filter(Boolean))
+  if (!compatibleTopics.has(Number(link.topic_id || 0))) throw new HttpError(400, `${label} does not belong to the selected syllabus topic.`)
+  if (Number(link.term_id || 0) !== Number(scope.termId)) throw new HttpError(400, `${label} does not belong to the current academic session.`)
+}
+
+export async function resolveTargetedAssessmentLinks(connection, schoolId, actor, body = {}, scope = {}) {
+  let intervention = null
+  if (hasReferenceValue(body.intervention_id) || hasReferenceValue(body.intervention_ref)) {
+    intervention = await resolveTargetedTenantReference(connection, "academic_interventions", schoolId, body.intervention_id, body.intervention_ref)
+    assertCompatibleTargetedLink(intervention, scope, "The selected intervention")
+    if (String(actor?.role || "").toLowerCase() === "teacher" && intervention.assigned_teacher_id && Number(intervention.assigned_teacher_id) !== Number(actor.id)) {
+      throw new HttpError(403, "Teachers can only link targeted assessments to interventions assigned to them.")
+    }
+    await assertTeacherAssessmentAccess(connection, schoolId, {
+      class_id: intervention.class_id,
+      subject_id: intervention.subject_id,
+      academic_year_id: scope.academicYearId,
+      term_id: intervention.term_id,
+    }, actor, { exactSession: true })
+  }
+
+  let finding = null
+  if (hasReferenceValue(body.finding_ref)) {
+    const findingRef = String(body.finding_ref).trim()
+    const [[row]] = await connection.query(
+      `SELECT 'alert' finding_type,public_ref,class_id,subject_id,topic_id,term_id
+       FROM academic_alerts WHERE school_id=? AND public_ref=?
+       UNION ALL
+       SELECT 'recommendation' finding_type,public_ref,class_id,subject_id,topic_id,term_id
+       FROM academic_recommendations WHERE school_id=? AND public_ref=?
+       LIMIT 1`,
+      [schoolId, findingRef, schoolId, findingRef],
+    )
+    if (!row) throw new HttpError(400, "The selected academic finding does not belong to this school.")
+    assertCompatibleTargetedLink(row, scope, "The selected academic finding")
+    finding = row
+  }
+
+  return {
+    interventionId: intervention ? Number(intervention.id) : null,
+    interventionRef: intervention?.public_ref || null,
+    findingRef: finding?.public_ref || null,
+    findingType: finding?.finding_type || null,
+  }
 }
 
 export async function createTargetedAssessmentDraft(schoolId, actor, body = {}) {
   const connection = await pool.getConnection()
   try {
     await connection.beginTransaction()
-    const classId = await resolveRef(connection, "classes", schoolId, body.class_ref, body.class_id)
-    const subjectId = await resolveRef(connection, "subjects", schoolId, body.subject_ref, body.subject_id)
-    const topicId = await resolveRef(connection, "syllabus_topics", schoolId, body.topic_ref, body.topic_id)
-    const requestedSubtopicId = body.subtopic_ref || body.subtopic_id ? await resolveRef(connection, "syllabus_topics", schoolId, body.subtopic_ref, body.subtopic_id) : null
-    if (!classId || !subjectId || !topicId) throw new HttpError(400, "Class, subject and target topic are required.")
-    const [[topic]] = await connection.query("SELECT id,subject_id,parent_topic_id FROM syllabus_topics WHERE school_id=? AND id=? AND is_active=1 LIMIT 1", [schoolId, topicId])
-    if (!topic || Number(topic.subject_id) !== Number(subjectId)) throw new HttpError(400, "The selected topic must belong to the selected subject syllabus.")
-    if (requestedSubtopicId) {
-      const [[subtopic]] = await connection.query("SELECT id,subject_id,parent_topic_id FROM syllabus_topics WHERE school_id=? AND id=? AND is_active=1 LIMIT 1", [schoolId, requestedSubtopicId])
-      if (!subtopic || Number(subtopic.subject_id) !== Number(subjectId) || Number(subtopic.parent_topic_id) !== Number(topicId)) throw new HttpError(400, "The selected subtopic must belong to the selected syllabus topic.")
-    }
-    const targetTopicId = Number(requestedSubtopicId || topicId)
+    const scope = await resolveTargetedAssessmentDraftScope(connection, schoolId, actor, body)
+    const { classId, subjectId, targetTopicId, academicYearId, termId } = scope
+    const links = await resolveTargetedAssessmentLinks(connection, schoolId, actor, body, scope)
     const purpose = String(body.purpose || "diagnostic")
     if (!GENERATED_PURPOSES.has(purpose)) throw new HttpError(400, "Targeted assessment purpose is invalid.")
     const totalMarks = Math.max(1, Number(body.total_marks || 20)); const questionCount = Math.max(1, Math.min(30, Number(body.question_count || 5))); const duration = Math.max(5, Number(body.duration_minutes || 20))
     const ref = randomUUID()
-    await connection.query(`INSERT INTO generated_assessments (public_ref,school_id,source_finding_ref,intervention_id,academic_year_id,term_id,class_id,subject_id,topic_id,purpose,title,duration_minutes,total_marks,question_count,difficulty_distribution_json,target_objectives_json,prerequisite_topics_json,baseline_evidence_json,status,generation_source,created_by,updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'draft',?,?,?)`, [ref, schoolId, body.finding_ref || null, body.intervention_id || null, body.academic_year_id || null, body.term_id || null, classId, subjectId, targetTopicId, purpose, String(body.title || "Targeted diagnostic assessment").trim(), duration, totalMarks, questionCount, JSON.stringify(body.difficulty_distribution || { easy: 30, medium: 50, challenging: 20 }), JSON.stringify(body.target_objectives || []), JSON.stringify(body.prerequisite_topics || []), JSON.stringify(body.previous_evidence || {}), body.use_ai ? "ai_draft" : "deterministic", actor.id, actor.id])
+    await connection.query(`INSERT INTO generated_assessments (public_ref,school_id,source_finding_ref,intervention_id,academic_year_id,term_id,class_id,subject_id,topic_id,purpose,title,duration_minutes,total_marks,question_count,difficulty_distribution_json,target_objectives_json,prerequisite_topics_json,baseline_evidence_json,status,generation_source,created_by,updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'draft',?,?,?)`, [ref, schoolId, links.findingRef, links.interventionId, academicYearId, termId, classId, subjectId, targetTopicId, purpose, String(body.title || "Targeted diagnostic assessment").trim(), duration, totalMarks, questionCount, JSON.stringify(body.difficulty_distribution || { easy: 30, medium: 50, challenging: 20 }), JSON.stringify(body.target_objectives || []), JSON.stringify(body.prerequisite_topics || []), JSON.stringify(body.previous_evidence || {}), body.use_ai ? "ai_draft" : "deterministic", actor.id, actor.id])
     const [[generated]] = await connection.query("SELECT id FROM generated_assessments WHERE school_id=? AND public_ref=?", [schoolId, ref])
     let learners = Array.isArray(body.learners) ? body.learners : []
-    if (!learners.length && (body.auto_select_below_threshold || body.finding_ref)) {
+    if (!learners.length && (body.auto_select_below_threshold || links.findingRef)) {
       const config = await getAcademicEngineConfig(schoolId, connection)
       const [suggested] = await connection.query(
         `SELECT DISTINCT s.id student_id,s.public_ref student_ref,amr.mastery_score,amr.confidence_score,amr.mastery_status,s.last_name student_last_name,s.first_name student_first_name
@@ -716,20 +1003,16 @@ export async function createTargetedAssessmentDraft(schoolId, actor, body = {}) 
            ORDER BY recent.last_recalculated_at DESC,recent.updated_at DESC,recent.id DESC LIMIT 1
          )
          WHERE se.school_id=? AND se.class_id=? AND se.enrollment_status='active'
-           AND (? IS NULL OR se.academic_year_id=?) AND (? IS NULL OR se.term_id=?)
+           AND se.academic_year_id=? AND se.term_id=?
            AND (amr.mastery_score IS NULL OR amr.mastery_score<?)
          ORDER BY amr.mastery_score IS NULL,amr.mastery_score,student_last_name,student_first_name LIMIT 60`,
-        [subjectId,targetTopicId,schoolId,classId,body.academic_year_id || null,body.academic_year_id || null,body.term_id || null,body.term_id || null,Number(config.mastery_threshold || 70)],
+        [subjectId,targetTopicId,schoolId,classId,academicYearId,termId,Number(config.mastery_threshold || 70)],
       )
       learners = suggested.map((learner) => ({ student_id: learner.student_id, student_ref: learner.student_ref, reason: learner.mastery_score === null ? "Valid recent topic evidence is missing" : `Topic mastery is ${Number(learner.mastery_score).toFixed(1)}%, below the secure threshold`, confidence: learner.confidence_score, evidence: { mastery_score: learner.mastery_score, mastery_status: learner.mastery_status, source: "academic_mastery_record" } }))
     }
-    learners = dedupeTargetedLearners(learners)
+    learners = await resolveCanonicalTargetedLearners(connection, schoolId, learners, scope)
     for (const learner of learners) {
-      const studentId = await resolveRef(connection, "students", schoolId, learner.student_ref, learner.student_id)
-      if (!studentId) throw new HttpError(400, "One selected learner is invalid.")
-      const [[eligible]] = await connection.query("SELECT id FROM student_enrollments WHERE school_id=? AND student_id=? AND class_id=? AND enrollment_status='active' AND (? IS NULL OR academic_year_id=?) AND (? IS NULL OR term_id=?) LIMIT 1", [schoolId, studentId, classId, body.academic_year_id || null, body.academic_year_id || null, body.term_id || null, body.term_id || null])
-      if (!eligible) throw new HttpError(400, "Every selected learner must be actively enrolled in the selected class.")
-      await connection.query(`INSERT INTO generated_assessment_learners (public_ref,school_id,generated_assessment_id,student_id,selection_reason,evidence_json,confidence_score,confirmed_by,confirmed_at) VALUES (?,?,?,?,?,?,?,?,?)`, [randomUUID(), schoolId, generated.id, studentId, String(learner.reason || "Teacher-selected for targeted evidence review"), JSON.stringify(learner.evidence || {}), learner.confidence ?? null, body.confirm_learners ? actor.id : null, body.confirm_learners ? new Date() : null])
+      await connection.query(`INSERT INTO generated_assessment_learners (public_ref,school_id,generated_assessment_id,student_id,selection_reason,evidence_json,confidence_score,confirmed_by,confirmed_at) VALUES (?,?,?,?,?,?,?,?,?)`, [randomUUID(), schoolId, generated.id, learner.student_id, String(learner.reason || "Teacher-selected for targeted evidence review"), JSON.stringify(learner.evidence || {}), learner.confidence ?? null, body.confirm_learners ? actor.id : null, body.confirm_learners ? new Date() : null])
     }
     await audit(connection, schoolId, actor, "TARGETED_ASSESSMENT_DRAFT_CREATED", "generated_assessment", generated.id, { public_ref: ref, purpose, learner_count: learners.length, status: "draft" })
     await connection.commit()
@@ -762,6 +1045,7 @@ export async function generateTargetedAssessment(schoolId, ref, actor, body = {}
   try {
     await connection.beginTransaction()
     const generated = await generatedContext(connection, schoolId, ref, true)
+    await assertTargetedAssessmentMutationAccess(connection, schoolId, generated, actor)
     if (["approved", "published", "archived"].includes(generated.status)) throw new HttpError(409, "Approved targeted assessments cannot be regenerated.")
     const count = Number(generated.question_count); const allocations = distributeMarks(Number(generated.total_marks), count)
     const [library] = await connection.query(`SELECT q.id,q.public_ref,q.question_text,q.question_type,q.options_json,q.correct_answer,q.explanation,q.difficulty,q.cognitive_level,q.skill_type,q.marks,q.learning_objective_id,q.topic_id,q.subtopic_id,p.permission_status,p.reuse_allowed,p.transformation_allowed,p.attribution_text FROM question_bank q JOIN question_source_permissions p ON p.question_bank_id=q.id AND p.school_id=q.school_id WHERE q.school_id=? AND q.subject_id=? AND ((? IS NOT NULL AND (q.subtopic_id=? OR q.topic_id=?)) OR (? IS NULL AND q.topic_id=?)) AND q.approval_status='approved' AND q.archived_at IS NULL AND p.reuse_allowed=1 AND p.permission_status NOT IN ('unknown_permission','prohibited_reuse') ORDER BY (q.subtopic_id=?) DESC,q.times_attempted ASC,q.updated_at DESC LIMIT ?`, [schoolId, generated.subject_id, generated.subtopic_id, generated.subtopic_id, generated.target_topic_id, generated.subtopic_id, generated.broad_topic_id, generated.subtopic_id, count])
@@ -799,6 +1083,7 @@ export async function saveTargetedAssessmentReview(schoolId, ref, actor, body = 
   try {
     await connection.beginTransaction()
     const generated = await generatedContext(connection, schoolId, ref, true)
+    await assertTargetedAssessmentMutationAccess(connection, schoolId, generated, actor)
     if (["approved", "published", "archived"].includes(generated.status)) throw new HttpError(409, "Approved targeted assessments cannot be edited.")
     const paper = body.paper
     if (!paper || typeof paper !== "object") throw new HttpError(400, "A reviewed paper is required.")
@@ -817,6 +1102,7 @@ export async function replaceTargetedAssessmentQuestion(schoolId, ref, actor, bo
   try {
     await connection.beginTransaction()
     const generated = await generatedContext(connection, schoolId, ref, true)
+    await assertTargetedAssessmentMutationAccess(connection, schoolId, generated, actor)
     if (["approved", "published", "archived"].includes(generated.status)) throw new HttpError(409, "Approved targeted assessments cannot be edited.")
     const [[version]] = await connection.query("SELECT * FROM generated_assessment_versions WHERE school_id=? AND generated_assessment_id=? ORDER BY version_number DESC LIMIT 1 FOR UPDATE", [schoolId, generated.id])
     if (!version) throw new HttpError(409, "Generate the assessment before replacing a question.")
@@ -844,7 +1130,7 @@ export async function replaceTargetedAssessmentQuestion(schoolId, ref, actor, bo
 
 export async function getTargetedAssessment(schoolId, ref, actor = null) {
   const generated = await generatedContext(pool, schoolId, ref)
-  await assertTeacherAssessmentAccess(pool, schoolId, generated, actor)
+  await assertTeacherAssessmentAccess(pool, schoolId, generated, actor, { exactSession: true })
   const [[version]] = await pool.query("SELECT public_ref,version_number,paper_json,validation_json,approval_status,change_summary,created_at FROM generated_assessment_versions WHERE school_id=? AND generated_assessment_id=? ORDER BY version_number DESC LIMIT 1", [schoolId, generated.id])
   const [learners] = await pool.query(`SELECT gal.public_ref,s.public_ref student_ref,CONCAT(s.first_name,' ',s.last_name) student_name,gal.selection_reason,gal.evidence_json,gal.confidence_score,gal.confirmed_at FROM generated_assessment_learners gal JOIN students s ON s.id=gal.student_id AND s.school_id=gal.school_id WHERE gal.school_id=? AND gal.generated_assessment_id=? ORDER BY s.last_name,s.first_name`, [schoolId, generated.id])
   return { assessment: { public_ref: generated.public_ref, source_finding_ref: generated.source_finding_ref, class_name: generated.class_name, subject_name: generated.subject_name, topic_ref: generated.topic_ref, topic_name: generated.topic_name, subtopic_ref: generated.subtopic_ref, subtopic_name: generated.subtopic_name, purpose: generated.purpose, title: generated.title, duration_minutes: generated.duration_minutes, total_marks: Number(generated.total_marks), question_count: generated.question_count, status: generated.status, generation_source: generated.generation_source, provider: generated.provider, model: generated.model, published_assessment_id: generated.assessment_id }, version: version ? { ...version, paper: parseJson(version.paper_json, {}), validation: parseJson(version.validation_json, {}), paper_json: undefined, validation_json: undefined } : null, learners: learners.map((learner) => ({ ...learner, evidence: parseJson(learner.evidence_json, {}), evidence_json: undefined, confirmed: Boolean(learner.confirmed_at) })) }
@@ -852,6 +1138,7 @@ export async function getTargetedAssessment(schoolId, ref, actor = null) {
 
 export async function confirmTargetedLearners(schoolId, ref, actor, body = {}) {
   const generated = await generatedContext(pool, schoolId, ref)
+  await assertTargetedAssessmentMutationAccess(pool, schoolId, generated, actor)
   const refs = Array.isArray(body.student_refs) ? body.student_refs : []
   if (!refs.length) throw new HttpError(400, "Select at least one learner to confirm.")
   const [result] = await pool.query(`UPDATE generated_assessment_learners gal JOIN students s ON s.id=gal.student_id AND s.school_id=gal.school_id SET gal.confirmed_by=?,gal.confirmed_at=CURRENT_TIMESTAMP WHERE gal.school_id=? AND gal.generated_assessment_id=? AND s.public_ref IN (${refs.map(() => "?").join(",")})`, [actor.id, schoolId, generated.id, ...refs])
@@ -863,6 +1150,7 @@ export async function approveTargetedAssessment(schoolId, ref, actor) {
   try {
     await connection.beginTransaction()
     const generated = await generatedContext(connection, schoolId, ref, true)
+    await assertTargetedAssessmentMutationAccess(connection, schoolId, generated, actor)
     const [[version]] = await connection.query("SELECT * FROM generated_assessment_versions WHERE school_id=? AND generated_assessment_id=? ORDER BY version_number DESC LIMIT 1 FOR UPDATE", [schoolId, generated.id])
     if (!version) throw new HttpError(409, "Generate the targeted assessment before approval.")
     const paper = parseJson(version.paper_json, {})
@@ -883,6 +1171,7 @@ export async function publishTargetedAssessment(schoolId, ref, actor) {
   try {
     await connection.beginTransaction()
     const generated = await generatedContext(connection, schoolId, ref, true)
+    await assertTargetedAssessmentMutationAccess(connection, schoolId, generated, actor)
     if (generated.status === "published" && generated.assessment_id) { await connection.commit(); return { public_ref: ref, status: "published", assessment_id: generated.assessment_id, duplicate: true } }
     if (generated.status !== "approved") throw new HttpError(409, "Teacher approval is required before publication.")
     const [[version]] = await connection.query("SELECT * FROM generated_assessment_versions WHERE school_id=? AND generated_assessment_id=? AND approval_status='approved' ORDER BY version_number DESC LIMIT 1", [schoolId, generated.id])
@@ -908,7 +1197,8 @@ export async function publishTargetedAssessment(schoolId, ref, actor) {
     await connection.query("UPDATE generated_assessments SET assessment_id=?,status='published',updated_by=? WHERE id=? AND school_id=?", [assessmentResult.insertId, actor.id, generated.id, schoolId])
     const publishedAssessment = { ...generated, id: assessmentResult.insertId, academic_year_id: generated.academic_year_id, term_id: generated.term_id, class_id: generated.class_id, subject_id: generated.subject_id }
     const markSheet = await ensureMarkSheet(connection, schoolId, publishedAssessment, "question", actor, `targeted-assessment:${generated.public_ref}`)
-    if (generated.intervention_id && generated.purpose === "intervention_reassessment") {
+    const generatedSupportCaseRef = String(parseJson(generated.baseline_evidence_json, {})?.support_case_ref || "")
+    if (generated.intervention_id && generated.purpose === "intervention_reassessment" && !generatedSupportCaseRef) {
       const [[baseline]] = await connection.query(`SELECT ams.id FROM academic_mark_sheets ams JOIN learner_topic_results ltr ON ltr.mark_sheet_id=ams.id AND ltr.school_id=ams.school_id AND ltr.topic_id=? AND ltr.is_official=1 WHERE ams.school_id=? AND ams.class_id=? AND ams.subject_id=? AND ams.status IN ('published','locked') GROUP BY ams.id,ams.published_at ORDER BY ams.published_at DESC LIMIT 1`, [generated.topic_id, schoolId, generated.class_id, generated.subject_id])
       await connection.query(`INSERT INTO academic_intervention_reassessments (public_ref,school_id,intervention_id,generated_assessment_id,baseline_mark_sheet_id,success_criterion_json) VALUES (UUID(),?,?,?,?,?)`, [schoolId, generated.intervention_id, generated.id, baseline?.id || null, JSON.stringify({ success_threshold: 60, minimum_change: 5 })]).catch((error) => { if (error.code !== "ER_DUP_ENTRY") throw error })
     }
@@ -920,7 +1210,11 @@ export async function publishTargetedAssessment(schoolId, ref, actor) {
 
 export async function listTargetedAssessments(schoolId, filters = {}, actor = null) {
   const params = [schoolId]; const clauses = []
-  if (String(actor?.role || '').toLowerCase() === 'teacher') { clauses.push("EXISTS (SELECT 1 FROM teacher_class_subject_assignments tcsa WHERE tcsa.school_id=ga.school_id AND tcsa.teacher_id=? AND tcsa.class_id=ga.class_id AND tcsa.subject_id=ga.subject_id AND tcsa.role='subject_teacher' AND tcsa.is_active=1)"); params.push(Number(actor.id)) }
+  if (String(actor?.role || '').toLowerCase() === 'teacher') {
+    const session = await requireActiveAcademicSession(schoolId, pool)
+    clauses.push("ga.academic_year_id=? AND ga.term_id=? AND EXISTS (SELECT 1 FROM teacher_class_subject_assignments tcsa WHERE tcsa.school_id=ga.school_id AND tcsa.teacher_id=? AND tcsa.class_id=ga.class_id AND tcsa.subject_id=ga.subject_id AND tcsa.academic_year_id=ga.academic_year_id AND tcsa.term_id=ga.term_id AND tcsa.role='subject_teacher' AND tcsa.is_active=1)")
+    params.push(session.academicYearId, session.termId, Number(actor.id))
+  }
   if (filters.status) { clauses.push("ga.status=?"); params.push(String(filters.status)) }
   if (filters.class_ref) { clauses.push("c.public_ref=?"); params.push(String(filters.class_ref)) }
   const [rows] = await pool.query(`SELECT ga.public_ref,ga.source_finding_ref,ga.title,ga.purpose,ga.duration_minutes,ga.total_marks,ga.question_count,ga.status,ga.generation_source,ga.assessment_id,ga.created_at,ga.updated_at,c.public_ref class_ref,c.name class_name,s.public_ref subject_ref,s.name subject_name,COALESCE(parent.public_ref,t.public_ref) topic_ref,COALESCE(parent.topic_name,t.topic_name) topic_name,IF(parent.id IS NULL,NULL,t.public_ref) subtopic_ref,IF(parent.id IS NULL,NULL,t.topic_name) subtopic_name,(SELECT COUNT(*) FROM generated_assessment_learners gal WHERE gal.school_id=ga.school_id AND gal.generated_assessment_id=ga.id) learner_count,(SELECT COUNT(*) FROM generated_assessment_learners gal WHERE gal.school_id=ga.school_id AND gal.generated_assessment_id=ga.id AND gal.confirmed_at IS NOT NULL) confirmed_learner_count FROM generated_assessments ga JOIN classes c ON c.id=ga.class_id AND c.school_id=ga.school_id JOIN subjects s ON s.id=ga.subject_id AND s.school_id=ga.school_id LEFT JOIN syllabus_topics t ON t.id=ga.topic_id AND t.school_id=ga.school_id LEFT JOIN syllabus_topics parent ON parent.id=t.parent_topic_id AND parent.school_id=t.school_id WHERE ga.school_id=?${clauses.length ? ` AND ${clauses.join(" AND ")}` : ""} ORDER BY ga.updated_at DESC LIMIT 100`, params)
@@ -931,8 +1225,13 @@ export async function updateQuestionSourcePermission(schoolId, questionRef, acto
   const allowed = new Set(["school_owned", "teacher_authored", "public_domain", "licensed", "internal_use_only", "attribution_required", "unknown_permission", "prohibited_reuse"])
   const status = String(body.permission_status || "")
   if (!allowed.has(status)) throw new HttpError(400, "Question source permission status is invalid.")
-  const [[question]] = await pool.query("SELECT id FROM question_bank WHERE school_id=? AND public_ref=? LIMIT 1", [schoolId, String(questionRef)])
+  const [[question]] = await pool.query("SELECT id,subject_id,grade_id,created_by FROM question_bank WHERE school_id=? AND public_ref=? LIMIT 1", [schoolId, String(questionRef)])
   if (!question) throw new HttpError(404, "Question source was not found.")
+  await assertTeacherCanAuthorSubjectGrade({ user: actor }, schoolId, {
+    subjectId: question.subject_id,
+    gradeId: question.grade_id,
+    createdBy: question.created_by,
+  })
   const reuseAllowed = ["unknown_permission", "prohibited_reuse"].includes(status) ? 0 : body.reuse_allowed ? 1 : 0
   const transformationAllowed = reuseAllowed && body.transformation_allowed ? 1 : 0
   await pool.query(`INSERT INTO question_source_permissions (public_ref,school_id,question_bank_id,permission_status,attribution_text,licence_reference,reuse_allowed,transformation_allowed,reviewed_by,reviewed_at,created_by,updated_by) VALUES (UUID(),?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP,?,?) ON DUPLICATE KEY UPDATE permission_status=VALUES(permission_status),attribution_text=VALUES(attribution_text),licence_reference=VALUES(licence_reference),reuse_allowed=VALUES(reuse_allowed),transformation_allowed=VALUES(transformation_allowed),reviewed_by=VALUES(reviewed_by),reviewed_at=CURRENT_TIMESTAMP,updated_by=VALUES(updated_by)`, [schoolId, question.id, status, body.attribution_text || null, body.licence_reference || null, reuseAllowed, transformationAllowed, actor.id, actor.id, actor.id])

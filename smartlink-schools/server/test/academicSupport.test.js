@@ -4,9 +4,12 @@ import {
   buildCaseNarrative,
   classifySupportScope,
   compareAcademicEvidence,
+  deriveSupportEvidenceReconciliation,
+  deriveSupportCaseOutcomeTransition,
   evaluateInterventionDelivery,
   normalizeEscalationPolicy,
   recommendAlternativeStrategy,
+  summarizeOfficialReassessmentEvidence,
 } from "../src/services/academicSupportService.js"
 
 const evidence = (overrides = {}) => ({
@@ -49,6 +52,31 @@ test("absent, draft, tiny and stale evidence is not comparable", () => {
   assert.ok(result.reasons.includes("publication_state"))
   assert.ok(result.reasons.includes("mapped_marks"))
   assert.ok(result.reasons.includes("interval"))
+})
+
+test("a reassessment cannot predate or equal its baseline", () => {
+  const result = compareAcademicEvidence(evidence(), evidence({ observed_at: "2026-01-09T08:00:00Z" }))
+  assert.equal(result.comparable, false)
+  assert.ok(result.reasons.includes("chronology"))
+})
+
+test("withdrawing the only valid trigger closes an active support case as inconclusive", () => {
+  const state = deriveSupportEvidenceReconciliation({ status: "teacher_follow_up", escalation_level: 1 }, { validEvidenceCount: 0, failureCount: 0, confidence: 0 })
+  assert.equal(state.status, "closed_inconclusive")
+  assert.equal(state.failureCount, 0)
+  assert.equal(state.closeCase, true)
+})
+
+test("corrected weak evidence reopens the case to its pre-correction workflow", () => {
+  const state = deriveSupportEvidenceReconciliation(
+    { status: "closed_inconclusive", escalation_level: 0, intervention_cycle_count: 1 },
+    { validEvidenceCount: 2, failureCount: 1, confidence: 78 },
+    {},
+    { previousCaseState: { status: "intervention_active", escalationLevel: 2 } },
+  )
+  assert.equal(state.status, "intervention_active")
+  assert.equal(state.level, 2)
+  assert.equal(state.reopenCase, true)
 })
 
 test("widespread failure becomes one class issue", () => {
@@ -95,6 +123,44 @@ test("completed support with no progress triggers strategy review", () => {
   const outcome = evaluateInterventionDelivery({ plannedSessions: 4, completedSessions: 4, attendanceEligible: 4, attendedSessions: 4, reassessmentPublished: true, reassessmentComparable: true, baselineScore: 40, reassessmentScore: 42, successCriterion: 70 })
   assert.equal(outcome.outcome, "ineffective")
   assert.equal(outcome.recommendedEscalation, "strategy_review")
+})
+
+test("partially-effective support continues when the strategy was not repeated", () => {
+  const diagnostic = evaluateInterventionDelivery({ plannedSessions: 4, completedSessions: 4, attendanceEligible: 4, attendedSessions: 4, reassessmentPublished: true, reassessmentComparable: true, baselineScore: 40, reassessmentScore: 48, successCriterion: 70, minimumMeaningfulChange: 5, strategyRepeated: false })
+  const transition = deriveSupportCaseOutcomeTransition({ status: "reassessment_pending", escalation_level: 2, successful_cycle_count: 0, unsuccessful_cycle_count: 0 }, diagnostic)
+  assert.equal(diagnostic.outcome, "partially_effective")
+  assert.equal(diagnostic.recommendedEscalation, "continued_support")
+  assert.equal(transition.status, "continued_support")
+  assert.equal(transition.unsuccessfulCycles, 0)
+})
+
+test("a repeated partially-effective strategy persists the evaluator's strategy review", () => {
+  const diagnostic = evaluateInterventionDelivery({ plannedSessions: 4, completedSessions: 4, attendanceEligible: 4, attendedSessions: 4, reassessmentPublished: true, reassessmentComparable: true, baselineScore: 40, reassessmentScore: 48, successCriterion: 70, minimumMeaningfulChange: 5, strategyRepeated: true })
+  const transition = deriveSupportCaseOutcomeTransition({ status: "reassessment_pending", escalation_level: 2, successful_cycle_count: 0, unsuccessful_cycle_count: 0 }, diagnostic)
+  assert.equal(diagnostic.outcome, "partially_effective")
+  assert.equal(diagnostic.recommendedEscalation, "strategy_review")
+  assert.equal(transition.status, "strategy_review")
+  assert.equal(transition.unsuccessfulCycles, 1)
+})
+
+test("official persisted learner-topic evidence derives scores and comparability", () => {
+  const baselineRows = [evidence({ student_id: 1, marks_awarded: 4, marks_available: 10, score_percentage: 40 })]
+  const reassessmentRows = [evidence({ student_id: 1, marks_awarded: 7, marks_available: 10, score_percentage: 70, observed_at: "2026-02-01T08:00:00Z" })]
+  const result = summarizeOfficialReassessmentEvidence({ expectedLearnerIds: [1], baselineRows, reassessmentRows, minimumMeaningfulChange: 5 })
+  assert.equal(result.reassessmentPublished, true)
+  assert.equal(result.reassessmentComparable, true)
+  assert.equal(result.baselineScore, 40)
+  assert.equal(result.reassessmentScore, 70)
+  assert.deepEqual(result.improvedComponents, ["learner:1"])
+})
+
+test("missing or draft persisted learner evidence cannot be claimed as comparable", () => {
+  const baselineRows = [evidence({ student_id: 1, marks_awarded: 4, marks_available: 10, score_percentage: 40 })]
+  const reassessmentRows = [evidence({ student_id: 1, publication_state: "draft", marks_awarded: 9, marks_available: 10, score_percentage: 90 })]
+  const result = summarizeOfficialReassessmentEvidence({ expectedLearnerIds: [1, 2], baselineRows, reassessmentRows })
+  assert.equal(result.reassessmentPublished, false)
+  assert.equal(result.reassessmentComparable, false)
+  assert.ok(result.comparisons.some((item) => item.student_id === 2 && item.reasons.includes("baseline_missing")))
 })
 
 test("strategy recommendation does not repeat a used strategy when alternatives exist", () => {

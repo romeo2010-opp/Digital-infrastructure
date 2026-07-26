@@ -3,6 +3,7 @@ import { pool } from "../config/db.js"
 import { HttpError } from "../utils/http.js"
 import { createInAppNotification } from "./operationalCommunicationService.js"
 import { validateSyllabusTopicScope } from "./curriculumScopeService.js"
+import { requireActiveAcademicSession } from "./academicSessionService.js"
 
 const DAY_MS = 86_400_000
 
@@ -458,8 +459,8 @@ async function validateAcademicWriteEntityScope(db, {
     const assignment = await firstScopeRow(db, `SELECT id FROM teacher_class_subject_assignments
       WHERE school_id=? AND teacher_id=? AND subject_id=? AND role='subject_teacher' AND is_active=1
         AND (? IS NULL OR class_id=?)
-        AND (? IS NULL OR academic_year_id IS NULL OR academic_year_id=?)
-        AND (? IS NULL OR term_id IS NULL OR term_id=?) LIMIT 1`,
+        AND (? IS NULL OR academic_year_id=?)
+        AND (? IS NULL OR term_id=?) LIMIT 1`,
     [school, teacherId, subject, classId, classId, termRow?.academic_year_id || null, termRow?.academic_year_id || null, termId, termId])
     if (!assignment) throw new HttpError(400, "The assigned teacher is not assigned to the selected class, subject and term.")
   }
@@ -492,29 +493,27 @@ export async function assertAcademicActorWriteScope(db, schoolId, actor, scope =
   if (scope.teacherId && Number(scope.teacherId) !== actorId) {
     throw new HttpError(403, "Teachers cannot assign an academic intervention to another teacher.")
   }
-  let academicYearId = scope.term?.academic_year_id || scope.academicYearId || null
-  let termId = scope.termId || null
-  if (!academicYearId || !termId) {
-    const activeSession = await firstScopeRow(db, `SELECT academic_year.id academic_year_id,term.id term_id
-      FROM academic_years academic_year
-      JOIN terms term ON term.school_id=academic_year.school_id AND term.academic_year_id=academic_year.id
-        AND term.status IN ('open','marking')
-      WHERE academic_year.school_id=? AND academic_year.is_active=1 AND academic_year.status<>'archived'
-      ORDER BY academic_year.status='active' DESC,term.start_date DESC LIMIT 1`, [schoolId])
-    academicYearId ||= activeSession?.academic_year_id || null
-    termId ||= activeSession?.term_id || null
-  }
+  const activeSession = await firstScopeRow(db, `SELECT academic_year.id academic_year_id,term.id term_id
+    FROM academic_years academic_year
+    JOIN terms term ON term.school_id=academic_year.school_id AND term.academic_year_id=academic_year.id
+      AND term.status IN ('open','marking')
+    WHERE academic_year.school_id=? AND academic_year.is_active=1 AND academic_year.status<>'archived'
+    ORDER BY academic_year.status='active' DESC,term.start_date DESC LIMIT 1`, [schoolId])
+  let academicYearId = scope.term?.academic_year_id || scope.academicYearId || activeSession?.academic_year_id || null
+  let termId = scope.termId || activeSession?.term_id || null
   if (!academicYearId || !termId) throw new HttpError(409, "Open an academic term before managing academic support.")
+  if (Number(academicYearId) !== Number(activeSession?.academic_year_id)
+    || Number(termId) !== Number(activeSession?.term_id)) {
+    throw new HttpError(403, "Teachers can only manage academic support in the current open academic session.")
+  }
   const assignment = await firstScopeRow(db, `SELECT id FROM teacher_class_subject_assignments
     WHERE school_id=? AND teacher_id=? AND class_id=? AND subject_id=?
       AND role='subject_teacher' AND is_active=1
-      AND (? IS NULL OR academic_year_id IS NULL OR academic_year_id=?)
-      AND (? IS NULL OR term_id IS NULL OR term_id=?)
+      AND academic_year_id=? AND term_id=?
     LIMIT 1`,
-  [schoolId, actorId, scope.classId, scope.subjectId,
-    academicYearId, academicYearId, termId, termId])
+  [schoolId, actorId, scope.classId, scope.subjectId, academicYearId, termId])
   if (!assignment) throw new HttpError(403, "Teachers can only manage academic support for their assigned class and subject.")
-  return { assignedTeacherId: actorId }
+  return { assignedTeacherId: actorId, academicYearId: Number(academicYearId), termId: Number(termId) }
 }
 
 export async function validateAcademicInterventionScope(db, schoolId, body = {}) {
@@ -915,8 +914,9 @@ export async function getCanonicalAcademicEvidence(schoolId, filters = {}, actor
   const clauses = []
   const teacherId = String(actor?.role || '').toLowerCase() === 'teacher' ? Number(actor.id) : null
   if (teacherId) {
-    clauses.push(`EXISTS (SELECT 1 FROM teacher_class_subject_assignments tcsa WHERE tcsa.school_id=me.school_id AND tcsa.teacher_id=? AND tcsa.class_id=me.class_id AND tcsa.subject_id=me.subject_id AND tcsa.role='subject_teacher' AND tcsa.is_active=1)`)
-    params.push(teacherId)
+    const activeSession = await requireActiveAcademicSession(schoolId, pool)
+    clauses.push(`me.academic_year_id=? AND me.term_id=? AND EXISTS (SELECT 1 FROM teacher_class_subject_assignments tcsa WHERE tcsa.school_id=me.school_id AND tcsa.teacher_id=? AND tcsa.class_id=me.class_id AND tcsa.subject_id=me.subject_id AND tcsa.academic_year_id=me.academic_year_id AND tcsa.term_id=me.term_id AND tcsa.role='subject_teacher' AND tcsa.is_active=1)`)
+    params.push(activeSession.academicYearId, activeSession.termId, teacherId)
   }
   const addRefFilter = async (table, column, queryKey) => {
     if (!filters[queryKey]) return
@@ -1286,89 +1286,127 @@ export async function getStudentAcademicIntelligence(schoolId, studentRef, actor
     [schoolId, studentRef],
   )
   if (!student) throw new HttpError(404, "Student was not found")
-  let allowedSubjects = null
+  let teacherReadScope = null
+  let availableSubjects = []
   if (String(actor?.role || '').toLowerCase() === 'teacher') {
-    const [assigned] = await pool.query(`SELECT DISTINCT subj.name subject_name FROM student_enrollments se
+    const activeSession = await requireActiveAcademicSession(schoolId, pool)
+    const [assigned] = await pool.query(`SELECT DISTINCT subj.id subject_id,subj.public_ref subject_ref,subj.name subject_name FROM student_enrollments se
+      JOIN academic_years current_year ON current_year.id=se.academic_year_id AND current_year.school_id=se.school_id AND current_year.id=? AND current_year.is_active=1 AND current_year.status<>'archived'
+      JOIN terms current_term ON current_term.id=se.term_id AND current_term.school_id=se.school_id AND current_term.academic_year_id=current_year.id AND current_term.id=? AND current_term.status IN ('open','marking')
       JOIN teacher_class_subject_assignments tcsa ON tcsa.school_id=se.school_id AND tcsa.class_id=se.class_id AND tcsa.teacher_id=? AND tcsa.subject_id IS NOT NULL AND tcsa.role='subject_teacher' AND tcsa.is_active=1
+        AND tcsa.academic_year_id=se.academic_year_id AND tcsa.term_id=se.term_id
       JOIN subjects subj ON subj.id=tcsa.subject_id AND subj.school_id=tcsa.school_id
-      WHERE se.school_id=? AND se.student_id=? AND se.enrollment_status='active'`, [actor.id, schoolId, student.id])
+      WHERE se.school_id=? AND se.student_id=? AND se.enrollment_status='active'`, [activeSession.academicYearId, activeSession.termId, actor.id, schoolId, student.id])
     if (!assigned.length) throw new HttpError(403, 'Teachers can only view learner intelligence for their assigned class subjects.')
-    allowedSubjects = new Set(assigned.map((row) => row.subject_name))
+    teacherReadScope = {
+      academicYearId: Number(activeSession.academicYearId),
+      termId: Number(activeSession.termId),
+      subjectIds: assigned.map((row) => Number(row.subject_id)),
+    }
+    availableSubjects = assigned.map((row) => ({ public_ref: row.subject_ref, name: row.subject_name }))
   }
+  const subjectPlaceholders = teacherReadScope?.subjectIds.map(() => '?').join(',') || ''
+  const masteryTeacherClause = teacherReadScope ? ` AND amr.academic_year_id=? AND amr.term_id=? AND amr.subject_id IN (${subjectPlaceholders})` : ''
+  const evidenceTeacherClause = teacherReadScope ? ` AND me.academic_year_id=? AND me.term_id=? AND me.subject_id IN (${subjectPlaceholders})` : ''
+  const interventionTeacherClause = teacherReadScope ? ` AND ai.term_id=? AND ai.subject_id IN (${subjectPlaceholders})` : ''
+  const recommendationTeacherClause = teacherReadScope ? ` AND ar.term_id=? AND ar.subject_id IN (${subjectPlaceholders})` : ''
+  const readinessTeacherClause = teacherReadScope ? ` AND ers.academic_year_id=? AND ers.term_id=? AND ers.subject_id IN (${subjectPlaceholders})` : ''
+  const parentInsightTeacherClause = teacherReadScope ? ` AND pai.subject_id IN (${subjectPlaceholders})` : ''
+  const teacherParams = (includeYear, includeTerm) => teacherReadScope
+    ? [
+        ...(includeYear ? [teacherReadScope.academicYearId] : []),
+        ...(includeTerm ? [teacherReadScope.termId] : []),
+        ...teacherReadScope.subjectIds,
+      ]
+    : []
   const [mastery, evidence, interventions, recommendations, readiness, parentInsights] = await Promise.all([
     pool.query(
       `SELECT amr.public_ref,amr.mastery_level,amr.mastery_score,amr.confidence_score,amr.mastery_status,amr.trend,
-        amr.evidence_count,amr.last_evidence_at,subj.name subject_name,t.topic_name,su.topic_name subtopic_name,
+        amr.evidence_count,amr.last_evidence_at,subj.public_ref subject_ref,subj.name subject_name,t.topic_name,su.topic_name subtopic_name,
         lo.objective_text,amr.calculation_explanation_json
        FROM academic_mastery_records amr
        JOIN subjects subj ON subj.id=amr.subject_id AND subj.school_id=amr.school_id
        LEFT JOIN syllabus_topics t ON t.id=amr.topic_id AND t.school_id=amr.school_id
        LEFT JOIN syllabus_topics su ON su.id=amr.subtopic_id AND su.school_id=amr.school_id
        LEFT JOIN learning_objectives lo ON lo.id=amr.learning_objective_id AND lo.school_id=amr.school_id
-       WHERE amr.school_id=? AND amr.student_id=? ORDER BY subj.name,FIELD(amr.mastery_level,'subject','topic','subtopic','objective'),t.order_number`,
-      [schoolId, student.id],
+       WHERE amr.school_id=? AND amr.student_id=?${masteryTeacherClause} ORDER BY subj.name,FIELD(amr.mastery_level,'subject','topic','subtopic','objective'),t.order_number`,
+      [schoolId, student.id, ...teacherParams(true, true)],
     ),
     pool.query(
       `SELECT me.public_ref,me.evidence_type,me.score_percentage,me.evidence_granularity,me.evidence_at,
-        subj.name subject_name,t.topic_name,lo.objective_text,me.metadata_json
+        subj.public_ref subject_ref,subj.name subject_name,t.topic_name,lo.objective_text,me.metadata_json
        FROM mastery_evidence me JOIN subjects subj ON subj.id=me.subject_id AND subj.school_id=me.school_id
        LEFT JOIN syllabus_topics t ON t.id=me.topic_id AND t.school_id=me.school_id
        LEFT JOIN learning_objectives lo ON lo.id=me.learning_objective_id AND lo.school_id=me.school_id
-       WHERE me.school_id=? AND me.student_id=? ORDER BY me.evidence_at DESC LIMIT 80`,
-      [schoolId, student.id],
+       WHERE me.school_id=? AND me.student_id=?${evidenceTeacherClause} ORDER BY me.evidence_at DESC LIMIT 80`,
+      [schoolId, student.id, ...teacherParams(true, true)],
     ),
     pool.query(
       `SELECT ai.public_ref,ai.intervention_type,ai.issue,ai.priority,ai.start_date,ai.review_date,ai.outcome,ai.status,
-        subj.name subject_name,t.topic_name
+        subj.public_ref subject_ref,subj.name subject_name,t.topic_name
        FROM academic_interventions ai JOIN subjects subj ON subj.id=ai.subject_id AND subj.school_id=ai.school_id
        LEFT JOIN syllabus_topics t ON t.id=ai.topic_id AND t.school_id=ai.school_id
-       WHERE ai.school_id=? AND ai.student_id=? ORDER BY ai.created_at DESC`,
-      [schoolId, student.id],
+       WHERE ai.school_id=? AND ai.student_id=?${interventionTeacherClause} ORDER BY ai.created_at DESC`,
+      [schoolId, student.id, ...teacherParams(false, true)],
     ),
     pool.query(
-      `SELECT ar.public_ref,ar.title,ar.reason,ar.suggested_action,ar.priority,ar.confidence_score,ar.status,ar.due_at,subj.name subject_name
-       FROM academic_recommendations ar LEFT JOIN subjects subj ON subj.id=ar.subject_id AND subj.school_id=ar.school_id WHERE ar.school_id=? AND ar.student_id=? ORDER BY FIELD(ar.status,'NEW','ACCEPTED','IN_PROGRESS','COMPLETED','DISMISSED'),ar.created_at DESC LIMIT 30`,
-      [schoolId, student.id],
+      `SELECT ar.public_ref,ar.title,ar.reason,ar.suggested_action,ar.priority,ar.confidence_score,ar.status,ar.due_at,subj.public_ref subject_ref,subj.name subject_name
+       FROM academic_recommendations ar LEFT JOIN subjects subj ON subj.id=ar.subject_id AND subj.school_id=ar.school_id WHERE ar.school_id=? AND ar.student_id=?${recommendationTeacherClause} ORDER BY FIELD(ar.status,'NEW','ACCEPTED','IN_PROGRESS','COMPLETED','DISMISSED'),ar.created_at DESC LIMIT 30`,
+      [schoolId, student.id, ...teacherParams(false, true)],
     ),
     pool.query(
       `SELECT ers.public_ref,ers.readiness_score,ers.confidence_score,ers.factors_json,ers.risks_json,
-        ers.missing_data_json,ers.recommendations_json,ers.calculated_at,subj.name subject_name
+        ers.missing_data_json,ers.recommendations_json,ers.calculated_at,subj.public_ref subject_ref,subj.name subject_name
        FROM exam_readiness_snapshots ers LEFT JOIN subjects subj ON subj.id=ers.subject_id AND subj.school_id=ers.school_id
-       WHERE ers.school_id=? AND ers.student_id=? ORDER BY ers.calculated_at DESC LIMIT 20`,
-      [schoolId, student.id],
+        WHERE ers.school_id=? AND ers.student_id=?${readinessTeacherClause} ORDER BY ers.calculated_at DESC LIMIT 20`,
+      [schoolId, student.id, ...teacherParams(true, true)],
     ),
     pool.query(`SELECT pai.public_ref,pai.reporting_period,pai.headline,pai.summary_text,pai.strengths_json,pai.focus_areas_json,
       pai.attendance_effect_text,pai.home_support_json,pai.completed_interventions_json,pai.status,pai.created_at,pai.published_at,
-      subj.name subject_name
+      subj.public_ref subject_ref,subj.name subject_name
       FROM parent_academic_insights pai LEFT JOIN subjects subj ON subj.id=pai.subject_id AND subj.school_id=pai.school_id
-      WHERE pai.school_id=? AND pai.student_id=? ORDER BY pai.created_at DESC LIMIT 30`,[schoolId,student.id]),
+      WHERE pai.school_id=? AND pai.student_id=?${parentInsightTeacherClause} ORDER BY pai.created_at DESC LIMIT 30`,[schoolId,student.id,...teacherParams(false,false)]),
   ])
-  const visible = (rows) => allowedSubjects === null ? rows : rows.filter((row) => row.subject_name && allowedSubjects.has(row.subject_name))
   return {
     student: { public_ref: student.public_ref, name: `${student.first_name} ${student.last_name}`, class_name: student.class_name },
-    mastery: visible(mastery[0]).map((row) => ({ ...row, calculation_explanation: jsonValue(row.calculation_explanation_json, {}) })),
-    evidence: visible(evidence[0]).map((row) => ({ ...row, metadata: jsonValue(row.metadata_json, {}) })),
-    interventions: visible(interventions[0]),
-    recommendations: visible(recommendations[0]),
-    exam_readiness: visible(readiness[0]).map((row) => ({ ...row, factors: jsonValue(row.factors_json, {}), risks: jsonValue(row.risks_json, []), missing_data: jsonValue(row.missing_data_json, []), recommendations: jsonValue(row.recommendations_json, []) })),
-    parent_insights: visible(parentInsights[0]).map((row)=>({...row,strengths:jsonValue(row.strengths_json,[]),focus_areas:jsonValue(row.focus_areas_json,[]),home_support:jsonValue(row.home_support_json,[]),completed_interventions:jsonValue(row.completed_interventions_json,[]),strengths_json:undefined,focus_areas_json:undefined,home_support_json:undefined,completed_interventions_json:undefined})),
+    available_subjects: availableSubjects,
+    mastery: mastery[0].map((row) => ({ ...row, calculation_explanation: jsonValue(row.calculation_explanation_json, {}) })),
+    evidence: evidence[0].map((row) => ({ ...row, metadata: jsonValue(row.metadata_json, {}) })),
+    interventions: interventions[0],
+    recommendations: recommendations[0],
+    exam_readiness: readiness[0].map((row) => ({ ...row, factors: jsonValue(row.factors_json, {}), risks: jsonValue(row.risks_json, []), missing_data: jsonValue(row.missing_data_json, []), recommendations: jsonValue(row.recommendations_json, []) })),
+    parent_insights: parentInsights[0].map((row)=>({...row,strengths:jsonValue(row.strengths_json,[]),focus_areas:jsonValue(row.focus_areas_json,[]),home_support:jsonValue(row.home_support_json,[]),completed_interventions:jsonValue(row.completed_interventions_json,[]),strengths_json:undefined,focus_areas_json:undefined,home_support_json:undefined,completed_interventions_json:undefined})),
   }
 }
 
 export async function createParentAcademicInsight(schoolId,actor,body={}) {
   const studentRef=String(body.student_ref||'')
+  if(String(actor?.role||'').toLowerCase()==='teacher'&&!String(body.subject_ref||'').trim())throw new HttpError(400,'Select one of your assigned subjects before preparing a parent update.')
   const intelligence=await getStudentAcademicIntelligence(schoolId,studentRef,actor)
-  const [[student]]=await pool.query("SELECT id,first_name,last_name FROM students WHERE school_id=? AND public_ref=? LIMIT 1",[schoolId,studentRef])
+  const [[student]]=await pool.query(`SELECT student.id,student.first_name,student.last_name,
+    COALESCE(CASE WHEN current_term.id IS NOT NULL THEN enrollment.class_id END,student.class_id) class_id,
+    CASE WHEN current_term.id IS NOT NULL THEN enrollment.academic_year_id END academic_year_id,
+    CASE WHEN current_term.id IS NOT NULL THEN enrollment.term_id END term_id
+    FROM students student
+    LEFT JOIN student_enrollments enrollment ON enrollment.school_id=student.school_id AND enrollment.student_id=student.id
+      AND enrollment.enrollment_status='active'
+    LEFT JOIN academic_years current_year ON current_year.school_id=enrollment.school_id
+      AND current_year.id=enrollment.academic_year_id AND current_year.is_active=1 AND current_year.status<>'archived'
+    LEFT JOIN terms current_term ON current_term.school_id=enrollment.school_id AND current_term.id=enrollment.term_id
+      AND current_term.academic_year_id=current_year.id AND current_term.status IN ('open','marking')
+    WHERE student.school_id=? AND student.public_ref=? AND student.status='active'
+    ORDER BY current_term.id IS NULL,enrollment.id DESC LIMIT 1`,[schoolId,studentRef])
   if(!student)throw new HttpError(404,'Student was not found.')
   let subjectId=null
-  let subjectName=null
+  let subjectRef=null
   if(body.subject_ref){
-    const [[subject]]=await pool.query("SELECT id,name FROM subjects WHERE school_id=? AND public_ref=? LIMIT 1",[schoolId,String(body.subject_ref)])
+    const [[subject]]=await pool.query("SELECT id,public_ref FROM subjects WHERE school_id=? AND public_ref=? LIMIT 1",[schoolId,String(body.subject_ref)])
     if(!subject)throw new HttpError(400,'The selected subject was not found.')
     subjectId=subject.id
-    subjectName=subject.name
+    subjectRef=subject.public_ref
+    await assertAcademicActorWriteScope(pool,schoolId,actor,{classId:student.class_id,subjectId,academicYearId:student.academic_year_id,termId:student.term_id,teacherId:null})
   }
-  const mastery=(intelligence.mastery||[]).filter((row)=>!subjectName||row.subject_name===subjectName)
+  const mastery=(intelligence.mastery||[]).filter((row)=>!subjectRef||row.subject_ref===subjectRef)
   const strengths=mastery.filter((row)=>['MASTERED','ADVANCED'].includes(row.mastery_status)).slice(0,4).map((row)=>row.objective_text||row.subtopic_name||row.topic_name||row.subject_name).filter(Boolean)
   const focusAreas=mastery.filter((row)=>['REQUIRES_INTERVENTION','EMERGING','DEVELOPING','PARTIALLY_MASTERED'].includes(row.mastery_status)).slice(0,4).map((row)=>row.objective_text||row.subtopic_name||row.topic_name||row.subject_name).filter(Boolean)
   const improving=mastery.some((row)=>row.trend==='IMPROVING')
@@ -1376,7 +1414,7 @@ export async function createParentAcademicInsight(schoolId,actor,body={}) {
   const [[attendance]]=await pool.query(`SELECT COUNT(*) marked,SUM(status IN ('present','late')) attended
     FROM attendance_records WHERE school_id=? AND student_id=? AND attendance_date>=DATE_SUB(CURDATE(),INTERVAL 30 DAY)`,[schoolId,student.id])
   const attendanceRate=Number(attendance?.marked||0)?Math.round(Number(attendance.attended||0)*100/Number(attendance.marked)):null
-  const completed=(intelligence.interventions||[]).filter((row)=>row.status==='completed').map((row)=>row.issue).slice(0,4)
+  const completed=(intelligence.interventions||[]).filter((row)=>row.status==='completed'&&(!subjectRef||row.subject_ref===subjectRef)).map((row)=>row.issue).slice(0,4)
   const firstName=student.first_name
   const progressText=improving?`${firstName} is improving in the recent learning evidence.`:declining?`${firstName}'s recent work shows a decline that the teacher is monitoring.`:`${firstName}'s progress is being monitored using recent schoolwork and assessments.`
   const focusText=focusAreas.length?` The main area for practice is ${focusAreas.slice(0,2).join(' and ')}.`:' No specific weak topic has enough evidence to report yet.'
@@ -1399,6 +1437,32 @@ export async function updateParentAcademicInsight(schoolId,ref,actor,body={}) {
   if(!['draft','approved','published','withdrawn'].includes(status))throw new HttpError(400,'Parent insight status is invalid.')
   if(status==='published'&&!['approved','published'].includes(before.status))throw new HttpError(409,'Approve the parent insight before publishing it.')
   if(!validateParentInsightTransition(before.status,status))throw new HttpError(409,`A ${before.status} parent update cannot move to ${status}.`)
+  if(String(actor?.role||'').toLowerCase()==='teacher'){
+    if(Number(before.created_by)!==Number(actor.id))throw new HttpError(403,'Teachers can only edit parent updates they drafted themselves.')
+    if(before.status!=='draft'||status!=='draft')throw new HttpError(403,'Parent updates must be approved and published by academic leadership.')
+    const [[studentScope]]=await pool.query(`SELECT COALESCE(CASE WHEN current_term.id IS NOT NULL THEN enrollment.class_id END,student.class_id) class_id,
+      CASE WHEN current_term.id IS NOT NULL THEN enrollment.academic_year_id END academic_year_id,
+      CASE WHEN current_term.id IS NOT NULL THEN enrollment.term_id END term_id
+      FROM students student
+      LEFT JOIN student_enrollments enrollment ON enrollment.school_id=student.school_id AND enrollment.student_id=student.id
+        AND enrollment.enrollment_status='active'
+      LEFT JOIN academic_years current_year ON current_year.school_id=enrollment.school_id
+        AND current_year.id=enrollment.academic_year_id AND current_year.is_active=1 AND current_year.status<>'archived'
+      LEFT JOIN terms current_term ON current_term.school_id=enrollment.school_id AND current_term.id=enrollment.term_id
+        AND current_term.academic_year_id=current_year.id AND current_term.status IN ('open','marking')
+      WHERE student.school_id=? AND student.id=? AND student.status='active'
+      ORDER BY current_term.id IS NULL,enrollment.id DESC LIMIT 1`,[schoolId,before.student_id])
+    if(!studentScope)throw new HttpError(409,'The learner is no longer active in this school.')
+    if(before.subject_id)await assertAcademicActorWriteScope(pool,schoolId,actor,{classId:studentScope.class_id,subjectId:before.subject_id,academicYearId:studentScope.academic_year_id,termId:studentScope.term_id,teacherId:null})
+    else {
+      const [[assignment]]=await pool.query(`SELECT assignment.id FROM teacher_class_subject_assignments assignment
+        WHERE assignment.school_id=? AND assignment.teacher_id=? AND assignment.class_id=?
+          AND assignment.subject_id IS NOT NULL AND assignment.role='subject_teacher' AND assignment.is_active=1
+          AND assignment.academic_year_id=? AND assignment.term_id=? LIMIT 1`,
+      [schoolId,actor.id,studentScope.class_id,studentScope.academic_year_id,studentScope.term_id])
+      if(!assignment)throw new HttpError(403,'Teachers can only edit parent updates for learners they currently teach.')
+    }
+  }
   await pool.query(`UPDATE parent_academic_insights SET headline=COALESCE(?,headline),summary_text=COALESCE(?,summary_text),strengths_json=COALESCE(?,strengths_json),focus_areas_json=COALESCE(?,focus_areas_json),attendance_effect_text=COALESCE(?,attendance_effect_text),home_support_json=COALESCE(?,home_support_json),status=?,approved_by=CASE WHEN ?='approved' THEN ? ELSE approved_by END,approved_at=CASE WHEN ?='approved' THEN CURRENT_TIMESTAMP ELSE approved_at END,published_by=CASE WHEN ?='published' THEN ? ELSE published_by END,published_at=CASE WHEN ?='published' THEN CURRENT_TIMESTAMP ELSE published_at END WHERE school_id=? AND public_ref=?`,[body.headline||null,body.summary_text||null,body.strengths?JSON.stringify(body.strengths):null,body.focus_areas?JSON.stringify(body.focus_areas):null,body.attendance_effect_text||null,body.home_support?JSON.stringify(body.home_support):null,status,status,actor.id,status,status,actor.id,status,schoolId,ref])
   await audit(pool,schoolId,actor,'PARENT_ACADEMIC_INSIGHT_UPDATED','parent_academic_insight',before.id,{status:before.status},{status})
   const becameParentVisible=['approved','published'].includes(status)&&!['approved','published'].includes(before.status)
@@ -1463,25 +1527,50 @@ export async function getParentPortalAcademicInsights(schoolId,actor,filters={})
 
 export async function getAcademicCommandCentre(schoolId, filters = {}, actor = null) {
   const teacherId = String(actor?.role || "").toLowerCase() === "teacher" ? Number(actor.id) : null
+  const teacherScopePredicate = (columns = {}) => {
+    if (!teacherId || !columns.school_id || !columns.subject_id) return ""
+    const classScope = columns.class_id ? ` AND tcsa.class_id=${columns.class_id}` : ""
+    const yearScope = columns.academic_year_id ? ` AND ${columns.academic_year_id}=current_year.id` : ""
+    const termScope = columns.term_id ? ` AND ${columns.term_id}=current_term.id` : ""
+    const gradeJoins = columns.grade_id ? `
+      JOIN classes assigned_class ON assigned_class.school_id=tcsa.school_id AND assigned_class.id=tcsa.class_id
+      LEFT JOIN grade_levels assigned_grade ON assigned_grade.school_id=assigned_class.school_id
+        AND LOWER(TRIM(assigned_grade.name))=LOWER(TRIM(assigned_class.grade_level))` : ""
+    const gradeScope = columns.grade_id ? ` AND (${columns.grade_id} IS NULL OR ${columns.grade_id}=assigned_grade.id)` : ""
+    return `EXISTS (SELECT 1 FROM teacher_class_subject_assignments tcsa
+      JOIN academic_years current_year ON current_year.school_id=tcsa.school_id
+        AND current_year.is_active=1 AND current_year.status<>'archived'
+      JOIN terms current_term ON current_term.school_id=current_year.school_id
+        AND current_term.academic_year_id=current_year.id AND current_term.status IN ('open','marking')${gradeJoins}
+      WHERE tcsa.school_id=${columns.school_id} AND tcsa.teacher_id=?${classScope}
+        AND tcsa.subject_id=${columns.subject_id} AND tcsa.role='subject_teacher' AND tcsa.is_active=1
+        AND tcsa.academic_year_id=current_year.id AND tcsa.term_id=current_term.id${yearScope}${termScope}${gradeScope})`
+  }
   const params = [schoolId]
   let clause = ""
   if (filters.term_id) { clause += " AND cdr.term_id=?"; params.push(Number(filters.term_id)) }
   if (filters.class_id) { clause += " AND cdr.class_id=?"; params.push(Number(filters.class_id)) }
   if (filters.subject_id) { clause += " AND cdr.subject_id=?"; params.push(Number(filters.subject_id)) }
-  if (teacherId) { clause += " AND EXISTS (SELECT 1 FROM teacher_class_subject_assignments tcsa WHERE tcsa.school_id=cdr.school_id AND tcsa.teacher_id=? AND tcsa.class_id=cdr.class_id AND tcsa.subject_id=cdr.subject_id AND tcsa.role='subject_teacher' AND tcsa.is_active=1)"; params.push(teacherId) }
+  if (teacherId) {
+    clause += ` AND ${teacherScopePredicate({ school_id: "cdr.school_id", academic_year_id: "cdr.academic_year_id", term_id: "cdr.term_id", class_id: "cdr.class_id", subject_id: "cdr.subject_id" })}`
+    params.push(teacherId)
+  }
   const scopedFilter = (columns) => {
     const values = [schoolId]
     let sql = ''
     if (filters.term_id && columns.term_id) { sql += ` AND ${columns.term_id}=?`; values.push(Number(filters.term_id)) }
     if (filters.class_id && columns.class_id) { sql += ` AND ${columns.class_id}=?`; values.push(Number(filters.class_id)) }
     if (filters.subject_id && columns.subject_id) { sql += ` AND ${columns.subject_id}=?`; values.push(Number(filters.subject_id)) }
-    if (teacherId && columns.class_id && columns.subject_id) { sql += ` AND EXISTS (SELECT 1 FROM teacher_class_subject_assignments tcsa WHERE tcsa.school_id=? AND tcsa.teacher_id=? AND tcsa.class_id=${columns.class_id} AND tcsa.subject_id=${columns.subject_id} AND tcsa.role='subject_teacher' AND tcsa.is_active=1)`; values.push(schoolId, teacherId) }
+    if (teacherId && columns.class_id && columns.subject_id) {
+      sql += ` AND ${teacherScopePredicate({ school_id: columns.school_id, academic_year_id: columns.academic_year_id, term_id: columns.term_id, class_id: columns.class_id, subject_id: columns.subject_id })}`
+      values.push(teacherId)
+    }
     return { sql, values }
   }
-  const alertScope = scopedFilter({ term_id: 'aa.term_id', class_id: 'aa.class_id', subject_id: 'aa.subject_id' })
-  const recommendationScope = scopedFilter({ term_id: 'ar.term_id', class_id: 'ar.class_id', subject_id: 'ar.subject_id' })
-  const interventionScope = scopedFilter({ term_id: 'ai.term_id', class_id: 'ai.class_id', subject_id: 'ai.subject_id' })
-  const readinessScope = scopedFilter({ term_id: 'ers.term_id', class_id: 'ers.class_id', subject_id: 'ers.subject_id' })
+  const alertScope = scopedFilter({ school_id: 'aa.school_id', term_id: 'aa.term_id', class_id: 'aa.class_id', subject_id: 'aa.subject_id' })
+  const recommendationScope = scopedFilter({ school_id: 'ar.school_id', term_id: 'ar.term_id', class_id: 'ar.class_id', subject_id: 'ar.subject_id' })
+  const interventionScope = scopedFilter({ school_id: 'ai.school_id', term_id: 'ai.term_id', class_id: 'ai.class_id', subject_id: 'ai.subject_id' })
+  const readinessScope = scopedFilter({ school_id: 'ers.school_id', academic_year_id: 'ers.academic_year_id', term_id: 'ers.term_id', class_id: 'ers.class_id', subject_id: 'ers.subject_id' })
   const [coverage, alerts, recommendations, interventions, readiness, migrationReports, questionAnalytics, meaningfulChanges, positiveSignals] = await Promise.all([
     pool.query(
       `SELECT c.public_ref class_ref,c.name class_name,s.public_ref subject_ref,s.name subject_name,
@@ -1537,15 +1626,15 @@ export async function getAcademicCommandCentre(schoolId, filters = {}, actor = n
       JOIN question_bank q ON q.id=qa.question_id AND q.school_id=qa.school_id
       JOIN subjects s ON s.id=q.subject_id AND s.school_id=q.school_id
       LEFT JOIN syllabus_topics t ON t.id=q.topic_id AND t.school_id=q.school_id
-      WHERE qa.school_id=?${teacherId ? " AND EXISTS (SELECT 1 FROM teacher_class_subject_assignments tcsa WHERE tcsa.school_id=qa.school_id AND tcsa.teacher_id=? AND tcsa.subject_id=q.subject_id AND tcsa.role='subject_teacher' AND tcsa.is_active=1)" : ""} ORDER BY JSON_LENGTH(COALESCE(qa.flags_json,JSON_ARRAY())) DESC,qa.total_attempts DESC LIMIT 50`,teacherId?[schoolId,teacherId]:[schoolId]),
+      WHERE qa.school_id=?${teacherId ? ` AND ${teacherScopePredicate({ school_id: "qa.school_id", subject_id: "q.subject_id", grade_id: "q.grade_id" })}` : ""} ORDER BY JSON_LENGTH(COALESCE(qa.flags_json,JSON_ARRAY())) DESC,qa.total_attempts DESC LIMIT 50`,teacherId?[schoolId,teacherId]:[schoolId]),
     pool.query(`SELECT public_ref,scope_type,scope_ref,metric_key,metric_value,confidence_score,evidence_state,reason,evidence_summary_json,created_at
       FROM academic_intelligence_snapshots WHERE school_id=? ORDER BY created_at DESC LIMIT 30`,[schoolId]),
     pool.query(`SELECT 'intervention' signal_type,ai.public_ref,CONCAT('Support succeeded: ',ai.issue) title,
       JSON_OBJECT('outcome',ai.outcome,'completed_at',ai.completed_at) evidence,ai.completed_at changed_at
-      FROM academic_interventions ai WHERE ai.school_id=? AND ai.status='completed' AND ai.outcome='improved'${teacherId ? " AND EXISTS (SELECT 1 FROM teacher_class_subject_assignments tcsa WHERE tcsa.school_id=ai.school_id AND tcsa.teacher_id=? AND tcsa.class_id=ai.class_id AND tcsa.subject_id=ai.subject_id AND tcsa.role='subject_teacher' AND tcsa.is_active=1)" : ""}
+      FROM academic_interventions ai WHERE ai.school_id=? AND ai.status='completed' AND ai.outcome='improved'${teacherId ? ` AND ${teacherScopePredicate({ school_id: "ai.school_id", term_id: "ai.term_id", class_id: "ai.class_id", subject_id: "ai.subject_id" })}` : ""}
       UNION ALL
       SELECT 'resolved_risk',aa.public_ref,CONCAT('Risk resolved: ',aa.title),aa.evidence_json,aa.resolved_at
-      FROM academic_alerts aa WHERE aa.school_id=? AND aa.status='resolved'${teacherId ? " AND EXISTS (SELECT 1 FROM teacher_class_subject_assignments tcsa WHERE tcsa.school_id=aa.school_id AND tcsa.teacher_id=? AND tcsa.class_id=aa.class_id AND tcsa.subject_id=aa.subject_id AND tcsa.role='subject_teacher' AND tcsa.is_active=1)" : ""}
+      FROM academic_alerts aa WHERE aa.school_id=? AND aa.status='resolved'${teacherId ? ` AND ${teacherScopePredicate({ school_id: "aa.school_id", term_id: "aa.term_id", class_id: "aa.class_id", subject_id: "aa.subject_id" })}` : ""}
       ORDER BY changed_at DESC LIMIT 20`,teacherId?[schoolId,teacherId,schoolId,teacherId]:[schoolId,schoolId]),
   ])
   const alertRows=alerts[0].map((row)=>({...row,evidence:jsonValue(row.evidence_json,{}),evidence_json:undefined}))
@@ -1590,14 +1679,31 @@ export async function getAcademicIntelligenceHistory(schoolId, filters = {}) {
 export async function getAcademicFindingExplanation(schoolId, findingRef, actor = null) {
   const ref = String(findingRef || '')
   if (String(actor?.role || '').toLowerCase() === 'teacher') {
-    const scopeTables = ['academic_mastery_records', 'academic_alerts', 'academic_recommendations', 'exam_readiness_snapshots']
+    const scopeTables = [
+      ['academic_mastery_records', 'academic_year_id', 'term_id'],
+      ['academic_alerts', null, 'term_id'],
+      ['academic_recommendations', null, 'term_id'],
+      ['exam_readiness_snapshots', 'academic_year_id', 'term_id'],
+    ]
     let scope = null
-    for (const table of scopeTables) {
-      const [[row]] = await pool.query(`SELECT class_id,subject_id FROM ${table} WHERE school_id=? AND public_ref=? LIMIT 1`, [schoolId, ref])
+    for (const [table, yearColumn, termColumn] of scopeTables) {
+      const [[row]] = await pool.query(`SELECT class_id,subject_id,
+        ${yearColumn || 'NULL'} academic_year_id,${termColumn || 'NULL'} term_id
+        FROM ${table} WHERE school_id=? AND public_ref=? LIMIT 1`, [schoolId, ref])
       if (row) { scope = row; break }
     }
     if (!scope?.class_id || !scope?.subject_id) throw new HttpError(404, 'Academic finding was not found.')
-    const [[assignment]] = await pool.query(`SELECT id FROM teacher_class_subject_assignments WHERE school_id=? AND teacher_id=? AND class_id=? AND subject_id=? AND role='subject_teacher' AND is_active=1 LIMIT 1`, [schoolId, actor.id, scope.class_id, scope.subject_id])
+    const [[assignment]] = await pool.query(`SELECT assignment.id FROM teacher_class_subject_assignments assignment
+      JOIN academic_years current_year ON current_year.school_id=assignment.school_id
+        AND current_year.is_active=1 AND current_year.status<>'archived'
+      JOIN terms current_term ON current_term.school_id=current_year.school_id
+        AND current_term.academic_year_id=current_year.id AND current_term.status IN ('open','marking')
+      WHERE assignment.school_id=? AND assignment.teacher_id=? AND assignment.class_id=? AND assignment.subject_id=?
+        AND assignment.role='subject_teacher' AND assignment.is_active=1
+        AND assignment.academic_year_id=current_year.id AND assignment.term_id=current_term.id
+        AND (? IS NULL OR ?=current_year.id) AND (? IS NULL OR ?=current_term.id)
+      LIMIT 1`, [schoolId, actor.id, scope.class_id, scope.subject_id,
+      scope.academic_year_id, scope.academic_year_id, scope.term_id, scope.term_id])
     if (!assignment) throw new HttpError(404, 'Academic finding was not found.')
   }
   const queries = [
@@ -1703,7 +1809,10 @@ export async function updateCurriculumLifecycle(schoolId, publicRef, actor, body
 
 export async function createIntervention(schoolId, actor, body = {}) {
   if (!String(body.issue || '').trim() || !String(body.action_plan || '').trim()) throw new HttpError(400, "Subject, issue and action plan are required")
-  const scope = await validateAcademicInterventionScope(pool, schoolId, body)
+  const activeSession = await requireActiveAcademicSession(schoolId, pool)
+  const requestedTermId = suppliedScopeId(body.term_id, 'Term') || activeSession.termId
+  if (Number(requestedTermId) !== Number(activeSession.termId)) throw new HttpError(409, 'Academic interventions can only be created in the current open term.')
+  const scope = await validateAcademicInterventionScope(pool, schoolId, { ...body, term_id: requestedTermId })
   const actorScope = await assertAcademicActorWriteScope(pool, schoolId, actor, scope)
   const interventionType = body.intervention_type || 'individual_remediation'
   const priority = body.priority || 'medium'
@@ -1760,7 +1869,9 @@ export async function patchIntervention(schoolId, publicRef, actor, body = {}) {
 
 export async function getAcademicAuthoringSetup(schoolId, actor) {
   const teacher = String(actor?.role || '').toLowerCase() === 'teacher'
-  const assignmentJoin = teacher ? "JOIN teacher_class_subject_assignments a ON a.school_id=c.school_id AND a.class_id=c.id AND a.subject_id=s.id AND a.teacher_id=? AND a.is_active=1" : ""
+  const assignmentJoin = teacher ? `JOIN teacher_class_subject_assignments a ON a.school_id=c.school_id AND a.class_id=c.id AND a.subject_id=s.id AND a.teacher_id=? AND a.role='subject_teacher' AND a.is_active=1
+    JOIN academic_years current_year ON current_year.school_id=a.school_id AND current_year.is_active=1 AND current_year.status<>'archived' AND a.academic_year_id=current_year.id
+    JOIN terms current_term ON current_term.school_id=current_year.school_id AND current_term.academic_year_id=current_year.id AND current_term.status IN ('open','marking') AND a.term_id=current_term.id` : ""
   const params = teacher ? [actor.id, schoolId] : [schoolId]
   const [pairs] = await pool.query(`SELECT DISTINCT c.public_ref class_ref,c.name class_name,c.grade_level,s.public_ref subject_ref,s.name subject_name
     FROM classes c JOIN subjects s ON s.school_id=c.school_id ${assignmentJoin}
@@ -1797,8 +1908,11 @@ export async function createAssessmentBlueprint(schoolId,actor,body={}){
   if(!classId&&body.class_ref)classId=Number(await scopedIdByRef('classes',schoolId,body.class_ref)||0)
   if(!subjectId&&body.subject_ref)subjectId=Number(await scopedIdByRef('subjects',schoolId,body.subject_ref)||0)
   if(!classId||!subjectId)throw new HttpError(400,'Class and subject are required.')
-  const scope=await validateAcademicInterventionScope(pool,schoolId,{class_id:classId,subject_id:subjectId,term_id:body.term_id})
-  const academicYearId=suppliedScopeId(body.academic_year_id,'Academic year')||scope.term?.academic_year_id||null
+  const activeSession=await requireActiveAcademicSession(schoolId,pool)
+  const requestedTermId=suppliedScopeId(body.term_id,'Term')||activeSession.termId
+  const scope=await validateAcademicInterventionScope(pool,schoolId,{class_id:classId,subject_id:subjectId,term_id:requestedTermId})
+  const academicYearId=suppliedScopeId(body.academic_year_id,'Academic year')||scope.term?.academic_year_id||activeSession.academicYearId
+  if(Number(academicYearId)!==Number(activeSession.academicYearId)||Number(scope.termId)!==Number(activeSession.termId))throw new HttpError(409,'Assessment blueprints can only be created in the current open academic session.')
   if(academicYearId){const academicYear=await firstScopeRow(pool,"SELECT id FROM academic_years WHERE school_id=? AND id=? LIMIT 1",[schoolId,academicYearId]);if(!academicYear)throw new HttpError(400,'The selected academic year does not belong to this school.');if(scope.term?.academic_year_id&&Number(scope.term.academic_year_id)!==academicYearId)throw new HttpError(400,'The selected term does not belong to the selected academic year.')}
   await assertAcademicActorWriteScope(pool,schoolId,actor,{...scope,academicYearId,teacherId:null})
   const inputTopics=Array.isArray(body.topics)?body.topics:[]
@@ -1808,12 +1922,12 @@ export async function createAssessmentBlueprint(schoolId,actor,body={}){
   const validation=validateAssessmentBlueprintInput(normalized)
   if(!validation.valid)throw new HttpError(400,'Assessment blueprint is not valid.',{details:{errors:validation.errors,warnings:validation.warnings}})
   const topicIds=topics.map((item)=>Number(item.topic_id||0)).filter(Boolean)
-  if(topicIds.length){const [rows]=await pool.query(`SELECT id FROM syllabus_topics WHERE school_id=? AND subject_id=? AND id IN (${topicIds.map(()=>'?').join(',')})`,[schoolId,subjectId,...topicIds]);if(rows.length!==new Set(topicIds).size)throw new HttpError(400,'One or more blueprint topics do not belong to this school and subject.')}
+  if(topicIds.length){const [rows]=await pool.query(`SELECT topic.id FROM syllabus_topics topic LEFT JOIN grade_levels grade ON grade.school_id=topic.school_id AND grade.id=topic.grade_id WHERE topic.school_id=? AND topic.subject_id=? AND topic.id IN (${topicIds.map(()=>'?').join(',')}) AND (topic.grade_id IS NULL OR LOWER(TRIM(grade.name))=LOWER(TRIM(?)))`,[schoolId,subjectId,...topicIds,scope.class?.grade_level||'']);if(rows.length!==new Set(topicIds).size)throw new HttpError(400,'One or more blueprint topics do not belong to this school, subject and class year level.')}
   if(body.taught_topic_restriction!==false&&topicIds.length){const [untaught]=await pool.query(`SELECT st.topic_name FROM syllabus_topics st LEFT JOIN curriculum_delivery_records cdr ON cdr.school_id=st.school_id AND cdr.topic_id=st.id AND cdr.class_id=? AND cdr.subject_id=? AND cdr.lifecycle_status IN ('TAUGHT','ASSESSED','PARTIALLY_MASTERED','MASTERED','REQUIRES_REVISION') WHERE st.school_id=? AND st.id IN (${topicIds.map(()=>'?').join(',')}) AND cdr.id IS NULL`,[classId,subjectId,schoolId,...topicIds]);if(untaught.length)validation.warnings.push(`Untaught topics included: ${untaught.map((row)=>row.topic_name).join(', ')}.`)}
   const ref=randomUUID();await pool.query(`INSERT INTO assessment_blueprints (public_ref,school_id,academic_year_id,term_id,class_id,stream_section,subject_id,title,total_marks,duration_minutes,topics_json,difficulty_distribution_json,cognitive_distribution_json,question_types_json,section_configuration_json,taught_topic_restriction,mastery_focused,examination_board_style,validation_warnings_json,status,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,[ref,schoolId,academicYearId,scope.termId,classId,body.stream_section||null,subjectId,String(body.title||'Assessment blueprint').trim(),validation.summary.total_marks,validation.summary.duration_minutes,JSON.stringify(topics),JSON.stringify(body.difficulty_distribution||{}),JSON.stringify(body.cognitive_distribution||{}),JSON.stringify(body.question_types||[]),JSON.stringify(body.section_configuration||{}),body.taught_topic_restriction===false?0:1,body.mastery_focused?1:0,body.examination_board_style||null,JSON.stringify(validation.warnings),'validated',actor.id]);const [[row]]=await pool.query("SELECT id,public_ref,title,total_marks,duration_minutes,status,validation_warnings_json,created_at FROM assessment_blueprints WHERE school_id=? AND public_ref=?",[schoolId,ref]);await audit(pool,schoolId,actor,'ASSESSMENT_BLUEPRINT_CREATED','assessment_blueprint',row.id,null,{public_ref:ref,title:row.title,warnings:validation.warnings});delete row.id;return {...row,validation_warnings:jsonValue(row.validation_warnings_json,[]),validation_warnings_json:undefined}
 }
 
-export async function listAssessmentBlueprints(schoolId,actor,query={}){const params=[schoolId];let clause='';if(String(actor?.role||'').toLowerCase()==='teacher'){clause+=` AND EXISTS (SELECT 1 FROM teacher_class_subject_assignments tcsa JOIN academic_years current_year ON current_year.school_id=tcsa.school_id AND current_year.is_active=1 AND current_year.status<>'archived' JOIN terms current_term ON current_term.school_id=current_year.school_id AND current_term.academic_year_id=current_year.id AND current_term.status IN ('open','marking') WHERE tcsa.school_id=ab.school_id AND tcsa.teacher_id=? AND tcsa.class_id=ab.class_id AND tcsa.subject_id=ab.subject_id AND tcsa.role='subject_teacher' AND tcsa.is_active=1 AND (tcsa.academic_year_id IS NULL OR tcsa.academic_year_id=current_year.id) AND (tcsa.term_id IS NULL OR tcsa.term_id=current_term.id))`;params.push(Number(actor.id))}if(query.class_id){clause+=' AND ab.class_id=?';params.push(Number(query.class_id))}if(query.subject_id){clause+=' AND ab.subject_id=?';params.push(Number(query.subject_id))}const [rows]=await pool.query(`SELECT ab.public_ref,ab.title,ab.total_marks,ab.duration_minutes,ab.mastery_focused,ab.examination_board_style,ab.validation_warnings_json,ab.status,ab.created_at,c.name class_name,s.name subject_name,u.full_name created_by_name FROM assessment_blueprints ab JOIN classes c ON c.id=ab.class_id AND c.school_id=ab.school_id JOIN subjects s ON s.id=ab.subject_id AND s.school_id=ab.school_id JOIN users u ON u.id=ab.created_by AND u.school_id=ab.school_id WHERE ab.school_id=?${clause} ORDER BY ab.created_at DESC LIMIT 100`,params);return {blueprints:rows.map((row)=>({...row,validation_warnings:jsonValue(row.validation_warnings_json,[]),validation_warnings_json:undefined}))}}
+export async function listAssessmentBlueprints(schoolId,actor,query={}){const params=[schoolId];let clause='';if(String(actor?.role||'').toLowerCase()==='teacher'){clause+=` AND EXISTS (SELECT 1 FROM teacher_class_subject_assignments tcsa JOIN academic_years current_year ON current_year.school_id=tcsa.school_id AND current_year.is_active=1 AND current_year.status<>'archived' JOIN terms current_term ON current_term.school_id=current_year.school_id AND current_term.academic_year_id=current_year.id AND current_term.status IN ('open','marking') WHERE tcsa.school_id=ab.school_id AND tcsa.teacher_id=? AND tcsa.class_id=ab.class_id AND tcsa.subject_id=ab.subject_id AND tcsa.role='subject_teacher' AND tcsa.is_active=1 AND tcsa.academic_year_id=current_year.id AND tcsa.term_id=current_term.id AND ab.academic_year_id=current_year.id AND ab.term_id=current_term.id)`;params.push(Number(actor.id))}if(query.class_id){clause+=' AND ab.class_id=?';params.push(Number(query.class_id))}if(query.subject_id){clause+=' AND ab.subject_id=?';params.push(Number(query.subject_id))}const [rows]=await pool.query(`SELECT ab.public_ref,ab.title,ab.total_marks,ab.duration_minutes,ab.mastery_focused,ab.examination_board_style,ab.validation_warnings_json,ab.status,ab.created_at,c.name class_name,s.name subject_name,u.full_name created_by_name FROM assessment_blueprints ab JOIN classes c ON c.id=ab.class_id AND c.school_id=ab.school_id JOIN subjects s ON s.id=ab.subject_id AND s.school_id=ab.school_id JOIN users u ON u.id=ab.created_by AND u.school_id=ab.school_id WHERE ab.school_id=?${clause} ORDER BY ab.created_at DESC LIMIT 100`,params);return {blueprints:rows.map((row)=>({...row,validation_warnings:jsonValue(row.validation_warnings_json,[]),validation_warnings_json:undefined}))}}
 
 export async function createRemediationPack(schoolId,actor,body={}){
   const title=String(body.title||'Remediation pack').trim()
@@ -1830,6 +1944,6 @@ export async function createRemediationPack(schoolId,actor,body={}){
   return row
 }
 
-export async function listRemediationPacks(schoolId,actor,query={}){const params=[schoolId];let clause='';if(String(actor?.role||'').toLowerCase()==='teacher'){clause+=` AND EXISTS (SELECT 1 FROM teacher_class_subject_assignments tcsa WHERE tcsa.school_id=rp.school_id AND tcsa.teacher_id=? AND tcsa.class_id=rp.class_id AND tcsa.subject_id=rp.subject_id AND tcsa.role='subject_teacher' AND tcsa.is_active=1)`;params.push(Number(actor.id))}if(query.student_id){clause+=' AND rp.student_id=?';params.push(Number(query.student_id))}if(query.class_id){clause+=' AND rp.class_id=?';params.push(Number(query.class_id))}if(query.status){clause+=' AND rp.approval_status=?';params.push(query.status)}const [rows]=await pool.query(`SELECT rp.public_ref,rp.title,rp.generation_source,rp.approval_status,rp.created_at,s.name subject_name,t.topic_name,c.name class_name,CONCAT(st.first_name,' ',st.last_name) student_name,u.full_name created_by_name FROM remediation_packs rp JOIN subjects s ON s.id=rp.subject_id AND s.school_id=rp.school_id LEFT JOIN syllabus_topics t ON t.id=rp.topic_id AND t.school_id=rp.school_id LEFT JOIN classes c ON c.id=rp.class_id AND c.school_id=rp.school_id LEFT JOIN students st ON st.id=rp.student_id AND st.school_id=rp.school_id JOIN users u ON u.id=rp.created_by AND u.school_id=rp.school_id WHERE rp.school_id=?${clause} ORDER BY rp.created_at DESC LIMIT 100`,params);return {remediation_packs:rows}}
+export async function listRemediationPacks(schoolId,actor,query={}){const params=[schoolId];let clause='';if(String(actor?.role||'').toLowerCase()==='teacher'){clause+=` AND EXISTS (SELECT 1 FROM teacher_class_subject_assignments tcsa JOIN academic_years current_year ON current_year.school_id=tcsa.school_id AND current_year.is_active=1 AND current_year.status<>'archived' JOIN terms current_term ON current_term.school_id=current_year.school_id AND current_term.academic_year_id=current_year.id AND current_term.status IN ('open','marking') WHERE tcsa.school_id=rp.school_id AND tcsa.teacher_id=? AND tcsa.class_id=rp.class_id AND tcsa.subject_id=rp.subject_id AND tcsa.role='subject_teacher' AND tcsa.is_active=1 AND tcsa.academic_year_id=current_year.id AND tcsa.term_id=current_term.id)`;params.push(Number(actor.id))}if(query.student_id){clause+=' AND rp.student_id=?';params.push(Number(query.student_id))}if(query.class_id){clause+=' AND rp.class_id=?';params.push(Number(query.class_id))}if(query.status){clause+=' AND rp.approval_status=?';params.push(query.status)}const [rows]=await pool.query(`SELECT rp.public_ref,rp.title,rp.generation_source,rp.approval_status,rp.created_at,s.name subject_name,t.topic_name,c.name class_name,CONCAT(st.first_name,' ',st.last_name) student_name,u.full_name created_by_name FROM remediation_packs rp JOIN subjects s ON s.id=rp.subject_id AND s.school_id=rp.school_id LEFT JOIN syllabus_topics t ON t.id=rp.topic_id AND t.school_id=rp.school_id LEFT JOIN classes c ON c.id=rp.class_id AND c.school_id=rp.school_id LEFT JOIN students st ON st.id=rp.student_id AND st.school_id=rp.school_id JOIN users u ON u.id=rp.created_by AND u.school_id=rp.school_id WHERE rp.school_id=?${clause} ORDER BY rp.created_at DESC LIMIT 100`,params);return {remediation_packs:rows}}
 
 export async function patchRemediationPack(schoolId,ref,actor,body={}){const [[pack]]=await pool.query("SELECT * FROM remediation_packs WHERE school_id=? AND public_ref=? LIMIT 1",[schoolId,ref]);if(!pack)throw new HttpError(404,'Remediation pack was not found.');await assertAcademicActorWriteScope(pool,schoolId,actor,{classId:pack.class_id,subjectId:pack.subject_id,teacherId:null});const status=body.approval_status||pack.approval_status;if(!['draft','pending_teacher_review','approved','rejected','archived'].includes(status))throw new HttpError(400,'Remediation approval status is invalid.');await pool.query(`UPDATE remediation_packs SET title=COALESCE(?,title),explanation_text=COALESCE(?,explanation_text),worked_examples_json=COALESCE(?,worked_examples_json),guided_practice_json=COALESCE(?,guided_practice_json),independent_practice_json=COALESCE(?,independent_practice_json),exit_ticket_json=COALESCE(?,exit_ticket_json),marking_guide_json=COALESCE(?,marking_guide_json),teacher_strategy=COALESCE(?,teacher_strategy),parent_summary=COALESCE(?,parent_summary),approval_status=?,reviewed_by=CASE WHEN ? IN ('approved','rejected') THEN ? ELSE reviewed_by END,reviewed_at=CASE WHEN ? IN ('approved','rejected') THEN CURRENT_TIMESTAMP ELSE reviewed_at END WHERE school_id=? AND public_ref=?`,[body.title||null,body.explanation_text||null,body.worked_examples?JSON.stringify(body.worked_examples):null,body.guided_practice?JSON.stringify(body.guided_practice):null,body.independent_practice?JSON.stringify(body.independent_practice):null,body.exit_ticket?JSON.stringify(body.exit_ticket):null,body.marking_guide?JSON.stringify(body.marking_guide):null,body.teacher_strategy||null,body.parent_summary||null,status,status,actor.id,status,schoolId,ref]);await audit(pool,schoolId,actor,'REMEDIATION_PACK_UPDATED','remediation_pack',pack.id,{status:pack.approval_status},{status});return {public_ref:ref,approval_status:status}}

@@ -21,9 +21,21 @@ test("calendar search roles and teacher event scope match calendar access", () =
   assert.match(teacher.sql, /calendar_assignment\.class_id=se\.class_id/)
   assert.match(teacher.sql, /calendar_assignment\.subject_id=se\.subject_id/)
   assert.match(teacher.sql, /calendar_assignment\.role='subject_teacher'/)
+  assert.match(teacher.sql, /se\.academic_year_id=\? AND se\.term_id=\?/)
   assert.match(teacher.sql, /calendar_assignment\.academic_year_id=\?/)
   assert.match(teacher.sql, /calendar_assignment\.term_id=\?/)
-  assert.deepEqual(teacher.params, [8, 8, 4, 9, 8, 12, 34])
+  assert.deepEqual(teacher.params, [12, 34, 8, 8, 4, 9, 8, 12, 34])
+})
+
+test("teacher calendar search fails closed without a current academic session", () => {
+  const teacher = buildCalendarSearchScope({
+    user: { id: 8, role: "teacher" },
+    teacherClassIds: [4, 9],
+    session: { setupRequired: true, academicYearId: 12, termId: null },
+  })
+  assert.equal(teacher.allowed, true)
+  assert.equal(teacher.sql, " AND 1=0")
+  assert.deepEqual(teacher.params, [])
 })
 
 test("roles without calendar access receive neither calendar records nor navigation", async () => {
@@ -58,7 +70,7 @@ test("teacher calendar search excludes non-public lifecycle states and applies a
   assert.equal(calls.length, 1)
   assert.match(calls[0].sql, /se\.status IN \('scheduled','active','completed'\)/)
   assert.match(calls[0].sql, /calendar_assignment\.teacher_id=\?/)
-  assert.deepEqual(calls[0].params, [3, 8, 8, 4, 9, 8, 12, 34, 100])
+  assert.deepEqual(calls[0].params, [3, 12, 34, 8, 8, 4, 9, 8, 12, 34, 100])
 })
 
 function feeDependencies(row, whatsapp = null) {

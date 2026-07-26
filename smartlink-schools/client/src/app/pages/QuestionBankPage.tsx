@@ -47,6 +47,10 @@ function statusTone(value: any) {
   return 'border-[#fed7aa] bg-[#fff7ed] text-[#9a3412]'
 }
 
+function roleCanModerateQuestions(user: any) {
+  return ['super_admin', 'school_owner', 'owner', 'director', 'headteacher'].includes(String(user?.role || '').toLowerCase())
+}
+
 function listItems(value: any) {
   if (!Array.isArray(value)) return []
   return value
@@ -86,7 +90,8 @@ function parseOptionLines(value: any) {
 
 export function QuestionBankPage() {
   const navigate = useNavigate()
-  const { token, api } = usePortal()
+  const { token, api, user } = usePortal()
+  const canModerateQuestions = roleCanModerateQuestions(user)
   const [questions, setQuestions] = useState<any[]>([])
   const [setup, setSetup] = useState<any>({ curricula: [], grades: [], subjects: [] })
   const [topics, setTopics] = useState<any[]>([])
@@ -456,7 +461,7 @@ export function QuestionBankPage() {
   const renderSourceReviewModal = () => {
     if (!sourceReview) return null
     const sourcedQuestions = Array.isArray(sourceReview.questions) ? sourceReview.questions : []
-    const selectableIds = sourcedQuestions
+    const selectableIds = (canModerateQuestions ? sourcedQuestions : [])
       .filter((question: any) => question.approval_status === 'pending_review' && question.approval_ready !== false)
       .map((question: any) => Number(question.question_id || question.id))
       .filter(Boolean)
@@ -479,7 +484,7 @@ export function QuestionBankPage() {
                 Review Sourced Assessment Questions
               </div>
               <div className="mt-1 text-[12px] font-medium text-[#64748b]">
-                {Number(sourceReview.imported || sourcedQuestions.length)} imported from {Number(sourceReview.scanned || 0)} scanned. Approve only relevant questions for Daily Drills.
+                {Number(sourceReview.imported || sourcedQuestions.length)} imported from {Number(sourceReview.scanned || 0)} scanned. {canModerateQuestions ? 'Approve only relevant questions for Daily Drills.' : 'The questions are pending school leadership review.'}
               </div>
               {skippedRows.length ? (
                 <div className="mt-2 flex flex-wrap gap-1.5">
@@ -497,11 +502,15 @@ export function QuestionBankPage() {
           </div>
 
           <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-[#e2e8f0] bg-[#f8fafc] px-6 py-3">
-            <label className="flex cursor-pointer items-center gap-2 text-[12px] font-bold text-[#334155]">
-              <input type="checkbox" className="size-4 rounded border-[#cbd5e1] accent-[#2563eb]" checked={allSelectableAreSelected} disabled={!selectableIds.length} onChange={toggleAllSelectable} />
-              Select all approval-ready questions
-            </label>
-            <span className="text-[11px] font-medium text-[#64748b]">{selectedSourceQuestionIds.filter((id) => selectableIds.includes(id)).length} selected</span>
+            {canModerateQuestions ? (
+              <>
+                <label className="flex cursor-pointer items-center gap-2 text-[12px] font-bold text-[#334155]">
+                  <input type="checkbox" className="size-4 rounded border-[#cbd5e1] accent-[#2563eb]" checked={allSelectableAreSelected} disabled={!selectableIds.length} onChange={toggleAllSelectable} />
+                  Select all approval-ready questions
+                </label>
+                <span className="text-[11px] font-medium text-[#64748b]">{selectedSourceQuestionIds.filter((id) => selectableIds.includes(id)).length} selected</span>
+              </>
+            ) : <span className="text-[11px] font-semibold text-[#475569]">Teachers can inspect their sourced questions; final moderation remains with school leadership.</span>}
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto bg-[#f6f8fb] px-5 py-4">
@@ -518,16 +527,18 @@ export function QuestionBankPage() {
                     <article key={questionId || index} className="overflow-hidden rounded-[9px] border border-[#d7deea] bg-white shadow-[0_16px_35px_-30px_rgba(15,23,42,0.75)]">
                       <div className="flex flex-wrap items-start justify-between gap-3 border-b border-[#e2e8f0] px-4 py-3">
                         <div className="flex min-w-0 items-start gap-3">
-                          <input
-                            type="checkbox"
-                            className="mt-1 size-4 shrink-0 rounded border-[#cbd5e1] accent-[#2563eb]"
-                            checked={selectedSourceQuestionIds.includes(questionId)}
-                            disabled={!isPending || !isReady || isBusy}
-                            aria-label={`Select sourced question ${index + 1}`}
-                            onChange={(event) => setSelectedSourceQuestionIds((current) => event.target.checked
-                              ? [...new Set([...current, questionId])]
-                              : current.filter((id) => id !== questionId))}
-                          />
+                          {canModerateQuestions ? (
+                            <input
+                              type="checkbox"
+                              className="mt-1 size-4 shrink-0 rounded border-[#cbd5e1] accent-[#2563eb]"
+                              checked={selectedSourceQuestionIds.includes(questionId)}
+                              disabled={!isPending || !isReady || isBusy}
+                              aria-label={`Select sourced question ${index + 1}`}
+                              onChange={(event) => setSelectedSourceQuestionIds((current) => event.target.checked
+                                ? [...new Set([...current, questionId])]
+                                : current.filter((id) => id !== questionId))}
+                            />
+                          ) : null}
                           <div className="min-w-0">
                             <div className="truncate text-[13px] font-bold text-[#0f172a]">
                               {question.source_assessment || 'Assessment'}{question.source_question_number ? ` · Question ${question.source_question_number}` : ''}
@@ -590,7 +601,7 @@ export function QuestionBankPage() {
                         ) : null}
                       </div>
 
-                      {isPending ? (
+                      {isPending && canModerateQuestions ? (
                         <div className="flex flex-wrap justify-end gap-2 border-t border-[#e2e8f0] bg-[#f8fafc] px-4 py-3">
                           <Button type="button" variant="outline" className="h-8 rounded-[6px] border-[#fecaca] text-[11px] text-[#b91c1c]" disabled={isBusy} onClick={() => reviewSourcedQuestion(question, 'reject')}>
                             {isBusy ? <Loader2 className="size-3 animate-spin" /> : <X className="size-3" />} Reject
@@ -613,13 +624,15 @@ export function QuestionBankPage() {
           </div>
 
           <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t border-[#e2e8f0] bg-white px-6 py-4">
-            <div className="text-[11px] font-medium text-[#64748b]">Approved questions become eligible for Daily Drill selection.</div>
+            <div className="text-[11px] font-medium text-[#64748b]">{canModerateQuestions ? 'Approved questions become eligible for Daily Drill selection.' : 'Pending questions become eligible only after leadership moderation.'}</div>
             <div className="flex items-center gap-2">
               <Button type="button" variant="outline" className="h-9 rounded-[7px] text-[12px]" onClick={() => setSourceReview(null)}>Close</Button>
-              <Button type="button" className="h-9 rounded-[7px] text-[12px]" disabled={bulkApprovingSource || !selectedSourceQuestionIds.some((id) => selectableIds.includes(id))} onClick={approveSelectedSourcedQuestions}>
-                {bulkApprovingSource ? <Loader2 className="size-3.5 animate-spin" /> : <CheckCircle2 className="size-3.5" />}
-                Approve Selected
-              </Button>
+              {canModerateQuestions ? (
+                <Button type="button" className="h-9 rounded-[7px] text-[12px]" disabled={bulkApprovingSource || !selectedSourceQuestionIds.some((id) => selectableIds.includes(id))} onClick={approveSelectedSourcedQuestions}>
+                  {bulkApprovingSource ? <Loader2 className="size-3.5 animate-spin" /> : <CheckCircle2 className="size-3.5" />}
+                  Approve Selected
+                </Button>
+              ) : null}
             </div>
           </div>
         </section>

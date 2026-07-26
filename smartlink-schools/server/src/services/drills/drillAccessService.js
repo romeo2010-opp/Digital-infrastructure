@@ -29,8 +29,8 @@ export function drillActorScopeSql(actor, aliases = {}) {
           AND drill_tcsa.subject_id = ${sessionAlias}.subject_id
           AND drill_tcsa.role = 'subject_teacher'
           AND drill_tcsa.is_active = 1
-          AND (drill_tcsa.academic_year_id IS NULL OR drill_tcsa.academic_year_id = ${enrollmentAlias}.academic_year_id)
-          AND (drill_tcsa.term_id IS NULL OR drill_tcsa.term_id = ${enrollmentAlias}.term_id)
+          AND drill_tcsa.academic_year_id = ${enrollmentAlias}.academic_year_id
+          AND drill_tcsa.term_id = ${enrollmentAlias}.term_id
       )`,
       params: [Number(actor?.id || 0)],
     }
@@ -60,11 +60,11 @@ function academicSessionSql(academicYearId, termId, alias) {
   const clauses = []
   const params = []
   if (Number(academicYearId || 0)) {
-    clauses.push(` AND (${alias}.academic_year_id = ? OR ${alias}.academic_year_id IS NULL)`)
+    clauses.push(` AND ${alias}.academic_year_id = ?`)
     params.push(Number(academicYearId))
   }
   if (Number(termId || 0)) {
-    clauses.push(` AND (${alias}.term_id = ? OR ${alias}.term_id IS NULL)`)
+    clauses.push(` AND ${alias}.term_id = ?`)
     params.push(Number(termId))
   }
   return { clause: clauses.join(""), params }
@@ -114,8 +114,8 @@ async function teacherLearnerAssignments({
        AND tcsa.role = 'subject_teacher'
        AND tcsa.subject_id IS NOT NULL
        AND tcsa.is_active = 1
-       AND (tcsa.academic_year_id IS NULL OR tcsa.academic_year_id = se.academic_year_id)
-       AND (tcsa.term_id IS NULL OR tcsa.term_id = se.term_id)
+       AND tcsa.academic_year_id = se.academic_year_id
+       AND tcsa.term_id = se.term_id
      WHERE s.school_id = ? AND s.id = ? AND s.status = 'active'${enrollmentScope.clause}${subjectClause}
      ORDER BY se.class_id, tcsa.subject_id`,
     [

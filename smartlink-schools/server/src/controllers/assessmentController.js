@@ -366,23 +366,22 @@ async function assertTeacherProfile(connection, req, schoolId) {
 async function assertTeacherAssigned(connection, req, schoolId, classId, subjectId, academicYearId, termId) {
   if (!isTeacher(req)) return
   await assertTeacherProfile(connection, req, schoolId)
-  const params = [schoolId, req.user.id, classId, subjectId]
-  let sessionClause = ""
-  if (academicYearId) {
-    sessionClause += " AND (academic_year_id = ? OR academic_year_id IS NULL)"
-    params.push(academicYearId)
+  if (!academicYearId || !termId) {
+    throw new HttpError(409, "This assessment is not linked to a complete academic session.")
   }
-  if (termId) {
-    sessionClause += " AND (term_id = ? OR term_id IS NULL)"
-    params.push(termId)
+  const activeSession = await getActiveAcademicSession(schoolId, connection)
+  if (activeSession.setupRequired) throw new HttpError(409, activeSession.message)
+  if (Number(academicYearId) !== Number(activeSession.academicYearId) || Number(termId) !== Number(activeSession.termId)) {
+    throw new HttpError(403, "Teachers can only access assessments in the current academic term.")
   }
   const [rows] = await connection.query(
     `SELECT id
      FROM teacher_class_subject_assignments
      WHERE school_id = ? AND teacher_id = ? AND class_id = ? AND subject_id = ?
-       AND role = 'subject_teacher' AND is_active = 1${sessionClause}
+       AND academic_year_id = ? AND term_id = ?
+       AND role = 'subject_teacher' AND is_active = 1
      LIMIT 1`,
-    params,
+    [schoolId, req.user.id, classId, subjectId, academicYearId, termId],
   )
   if (!rows.length) throw new HttpError(403, "You are not assigned to teach this subject in this class.")
 }
@@ -494,13 +493,12 @@ async function resolveAssignedTeacher(connection, req, schoolId, classId, subjec
      FROM teacher_class_subject_assignments a
      JOIN users u ON u.id = a.teacher_id AND u.school_id = a.school_id
      WHERE a.school_id = ? AND a.class_id = ? AND a.subject_id = ?
-       AND (a.academic_year_id = ? OR a.academic_year_id IS NULL)
-       AND (a.term_id = ? OR a.term_id IS NULL)
+       AND a.academic_year_id = ? AND a.term_id = ?
        AND a.role = 'subject_teacher' AND a.is_active = 1
        AND u.role = 'teacher' AND u.is_active = 1${teacherClause}
-     ORDER BY (a.academic_year_id = ?) DESC, (a.term_id = ?) DESC, a.updated_at DESC, a.id DESC
+     ORDER BY a.updated_at DESC, a.id DESC
      LIMIT 1`,
-    [...params, academicYearId, termId],
+    params,
   )
   if (!assignment) {
     throw new HttpError(400, requestedTeacherId
@@ -875,8 +873,8 @@ export async function getAssessmentBuilderSetup(req, res) {
   const schoolId = getScopedSchoolId(req)
   const session = await getActiveAcademicSession(schoolId)
   const sessionClause = session.setupRequired
-    ? ""
-    : " AND (a.academic_year_id = ? OR a.academic_year_id IS NULL) AND (a.term_id = ? OR a.term_id IS NULL)"
+    ? " AND 1 = 0"
+    : " AND a.academic_year_id = ? AND a.term_id = ?"
   const sessionParams = session.setupRequired ? [] : [session.academicYearId, session.termId]
 
   const [years] = await pool.query("SELECT * FROM academic_years WHERE school_id = ? AND status <> 'archived' ORDER BY start_date DESC, id DESC", [schoolId])
@@ -935,7 +933,7 @@ export async function getAssessmentBuilderSetup(req, res) {
      JOIN academic_years ay ON ay.id = es.academic_year_id AND ay.school_id = es.school_id
      JOIN terms t ON t.id = es.term_id AND t.school_id = es.school_id
      WHERE es.school_id = ? AND es.status NOT IN ('locked', 'archived')
-       ${isTeacher(req) && !session.setupRequired ? "AND es.academic_year_id = ? AND es.term_id = ?" : ""}
+       ${isTeacher(req) ? (session.setupRequired ? "AND 1 = 0" : "AND es.academic_year_id = ? AND es.term_id = ?") : ""}
      ORDER BY es.start_date DESC, es.id DESC`,
     examSessionParams,
   )
@@ -996,7 +994,7 @@ export async function getAssessmentBuilderSetup(req, res) {
 export async function listAssessments(req, res) {
   const schoolId = getScopedSchoolId(req)
   const session = await getActiveAcademicSession(schoolId)
-  const includeHistory = String(req.query.include_history || req.query.includeHistory || "").toLowerCase() === "true"
+  const includeHistory = !isTeacher(req) && String(req.query.include_history || req.query.includeHistory || "").toLowerCase() === "true"
   const includeArchived = String(req.query.include_archived || req.query.includeArchived || "").toLowerCase() === "true"
   const clauses = ["a.school_id = ?"]
   const params = [schoolId]
@@ -1049,14 +1047,15 @@ export async function listAssessments(req, res) {
     params.push(...Array(5).fill(`%${search}%`))
   }
   if (isTeacher(req)) {
+    if (session.setupRequired) clauses.push("1 = 0")
     clauses.push(
       `EXISTS (
         SELECT 1
         FROM teacher_class_subject_assignments ta
         WHERE ta.school_id = a.school_id AND ta.teacher_id = ? AND ta.class_id = a.class_id AND ta.subject_id = a.subject_id
           AND ta.role = 'subject_teacher' AND ta.is_active = 1
-          AND (ta.academic_year_id = a.academic_year_id OR ta.academic_year_id IS NULL)
-          AND (ta.term_id = a.term_id OR ta.term_id IS NULL)
+          AND ta.academic_year_id = a.academic_year_id
+          AND ta.term_id = a.term_id
       )`,
     )
     params.push(req.user.id)

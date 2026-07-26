@@ -65,7 +65,6 @@ const dataRows = [
 ]
 
 const fallbackReportTemplates = [
-  { id: 'ria_exact', name: 'RIA exact header', description: 'Uses the Reign International Academy header artwork from the reference report.' },
   { id: 'smartlink_word', name: 'Word-style crest', description: 'A close Word-export style with a generated school crest and assessment tables.' },
   { id: 'modern_academic', name: 'Modern academic', description: 'A cleaner leadership report with a restrained school heading.' },
   { id: 'compact_formal', name: 'Compact formal', description: 'A simpler formal report intended for dense printing and school files.' },
@@ -255,7 +254,7 @@ export function SettingsCenter({ section }: { section: SettingsSection }) {
   const [schoolFeatures, setSchoolFeatures] = useState<Record<SchoolFeatureKey, boolean>>({ ...DEFAULT_SCHOOL_FEATURES })
   const [featureLoading, setFeatureLoading] = useState(false)
   const [featureError, setFeatureError] = useState('')
-  const [reportTemplate, setReportTemplate] = useState('ria_exact')
+  const [reportTemplate, setReportTemplate] = useState('smartlink_word')
   const [reportTemplates, setReportTemplates] = useState<any[]>(fallbackReportTemplates)
   const [reportTemplateLoading, setReportTemplateLoading] = useState(false)
   const [reportTemplateError, setReportTemplateError] = useState('')
@@ -498,7 +497,7 @@ export function SettingsCenter({ section }: { section: SettingsSection }) {
     api.getReportSettings(token)
       .then((payload: any) => {
         if (cancelled) return
-        setReportTemplate(payload?.selected_template || 'ria_exact')
+        setReportTemplate(payload?.selected_template || 'smartlink_word')
         setReportTemplates(Array.isArray(payload?.templates) && payload.templates.length ? payload.templates : fallbackReportTemplates)
       })
       .catch((err: any) => {
@@ -1115,11 +1114,11 @@ export function SettingsCenter({ section }: { section: SettingsSection }) {
     }
 
     if (section === 'profile') {
-      const name = user?.fullName || user?.full_name || user?.name || 'Mr. Banda'
-      const email = user?.email || 'admin@greenhill.mw'
+      const name = user?.fullName || user?.full_name || user?.name || 'Profile not configured'
+      const email = user?.email || 'Email not configured'
       const role = roleLabelFor(user)
-      const schoolName = user?.schoolName || user?.school_name || 'SmartLink School'
-      const schoolLocation = [user?.schoolCity || user?.school_city, user?.schoolCountry || user?.school_country].filter(Boolean).join(', ') || 'Malawi'
+      const schoolName = user?.schoolName || user?.school_name || 'School not configured'
+      const schoolLocation = [user?.schoolCity || user?.school_city, user?.schoolCountry || user?.school_country].filter(Boolean).join(', ') || 'Location not configured'
       return (
         <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_360px]">
           <SectionCard title="Personal Profile" subtitle="This profile appears on school actions, exports and audit entries.">
@@ -1238,8 +1237,8 @@ export function SettingsCenter({ section }: { section: SettingsSection }) {
     }
 
     if (section === 'organization') {
-      const schoolName = user?.schoolName || user?.school_name || 'SmartLink School'
-      const schoolLocation = [user?.schoolCity || user?.school_city, user?.schoolCountry || user?.school_country].filter(Boolean).join(', ') || 'Malawi'
+      const schoolName = user?.schoolName || user?.school_name || 'School not configured'
+      const schoolLocation = [user?.schoolCity || user?.school_city, user?.schoolCountry || user?.school_country].filter(Boolean).join(', ') || 'Location not configured'
       return (
         <div className="grid gap-3">
           <SectionCard

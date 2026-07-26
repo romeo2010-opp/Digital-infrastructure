@@ -66,6 +66,9 @@ test("production diagnostic audit is explicitly read only", () => {
 test("academic diagnostic samples legacy global-id contamination without mutating data", () => {
   const audit = read(root, "scripts", "audit-academic-system.mjs")
   const checks = [
+    "active teacher assignments without one valid explicit academic session",
+    "teacher assignment tenant, role, class, or subject mismatches",
+    "duplicate active teacher assignment scopes",
     "question bank topic, subject, or school scope mismatches",
     "question bank assessment-import source scope mismatches",
     "assessment import question topic, subject, or school scope mismatches",
@@ -85,7 +88,6 @@ test("academic diagnostic samples legacy global-id contamination without mutatin
   assert.match(audit, /SELECT COUNT\(\*\) mismatch_count FROM \(\$\{baseSql\}\) audit_mismatches/)
   assert.match(audit, /const result = await rows\(`\$\{baseSql\}\\nLIMIT \$\{integritySampleLimit\}`/)
   assert.match(audit, /count: mismatchCount, rows: result\.slice\(0, integritySampleLimit\)/)
-  assert.ok((audit.match(/LIMIT 25/g) || []).length >= checks.length)
   assert.doesNotMatch(
     audit,
     /safeCheck\(\s*"[^"]+"\s*,\s*`\s*(?:INSERT|UPDATE|DELETE|REPLACE|ALTER|DROP|CREATE|TRUNCATE)\b/i,

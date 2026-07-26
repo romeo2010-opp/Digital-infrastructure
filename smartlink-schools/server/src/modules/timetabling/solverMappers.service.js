@@ -708,8 +708,8 @@ async function loadCurriculumRequirements(connection, schoolId, timetable) {
     `SELECT teacher_id, class_id, subject_id, stream_section
      FROM teacher_class_subject_assignments
      WHERE school_id = ? AND is_active = 1
-      AND (academic_year_id IS NULL OR academic_year_id = ?)
-      AND (term_id IS NULL OR term_id = ?)`,
+      AND academic_year_id = ?
+      AND term_id = ?`,
     [schoolId, timetable.academic_year_id, timetable.term_id],
   )
   const eligibleTeachersFor = (row) => {

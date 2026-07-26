@@ -90,12 +90,14 @@ async function getExamSessionOrThrow(connection, schoolId, sessionId) {
 
 async function assertTeacherCanViewExamSession(req, schoolId, sessionId) {
   if (!isTeacher(req)) return
+  const activeSession = await getActiveAcademicSession(schoolId)
+  if (activeSession.setupRequired) throw new HttpError(409, activeSession.message)
   const [rows] = await pool.query(
     `SELECT id
      FROM exam_sessions
-     WHERE school_id = ? AND id = ? AND status <> 'archived'
+     WHERE school_id = ? AND id = ? AND academic_year_id = ? AND term_id = ? AND status <> 'archived'
      LIMIT 1`,
-    [schoolId, sessionId],
+    [schoolId, sessionId, activeSession.academicYearId, activeSession.termId],
   )
   if (!rows.length) throw new HttpError(404, "Exam session was not found")
 }
@@ -120,12 +122,11 @@ async function getAssignedSubjectTeacher(connection, schoolId, classId, subjectI
      JOIN users u ON u.id = a.teacher_id AND u.school_id = a.school_id
      WHERE a.school_id = ? AND a.class_id = ? AND a.subject_id = ?
        AND a.role = 'subject_teacher' AND a.is_active = 1
-       AND (a.academic_year_id = ? OR a.academic_year_id IS NULL)
-       AND (a.term_id = ? OR a.term_id IS NULL)
+       AND a.academic_year_id = ? AND a.term_id = ?
        AND u.role = 'teacher' AND u.is_active = 1
-     ORDER BY (a.academic_year_id = ?) DESC, (a.term_id = ?) DESC, a.updated_at DESC, a.id DESC
+     ORDER BY a.updated_at DESC, a.id DESC
      LIMIT 1`,
-    [schoolId, classId, subjectId, academicYearId, termId, academicYearId, termId],
+    [schoolId, classId, subjectId, academicYearId, termId],
   )
   return rows[0] || null
 }
@@ -220,9 +221,16 @@ export async function listExamSessions(req, res) {
     return res.json({ sessions: [], session: sessionPayload(activeSession), setup_required: true })
   }
 
+  if (isTeacher(req) && activeSession.setupRequired) {
+    return res.json({ sessions: [], session: sessionPayload(activeSession), setup_required: true })
+  }
+
   const includeArchived = String(req.query.include_archived || "") === "true"
   const academicYearId = Number(req.query.academic_year_id || activeSession.academicYearId || 0)
   const termId = Number(req.query.term_id || activeSession.termId || 0)
+  if (isTeacher(req) && (academicYearId !== Number(activeSession.academicYearId) || termId !== Number(activeSession.termId))) {
+    throw new HttpError(403, "Teachers can only view exam sessions in the current academic term")
+  }
   const where = ["es.school_id = ?"]
   const params = [schoolId]
   if (academicYearId) {
@@ -472,13 +480,12 @@ export async function createExamPaper(req, res) {
   if (!subjectId) throw new HttpError(400, "Subject is required")
   if (!totalMarks || totalMarks <= 0) throw new HttpError(400, "Total marks are required")
   if (!durationMinutes || durationMinutes <= 0) throw new HttpError(400, "Duration is required")
-  await assertTeacherCanTeachSubject(req, schoolId, classId, subjectId, null)
-
   const connection = await pool.getConnection()
   try {
     await connection.beginTransaction()
     const examSession = await getExamSessionOrThrow(connection, schoolId, sessionId)
     if (["locked", "archived"].includes(examSession.status)) throw new HttpError(409, "Locked or archived exam sessions are read-only")
+    await assertTeacherCanTeachSubject(req, schoolId, classId, subjectId, examSession.term_id)
     const [[classRow]] = await connection.query("SELECT id FROM classes WHERE id = ? AND school_id = ? LIMIT 1", [classId, schoolId])
     const [[subjectRow]] = await connection.query("SELECT id FROM subjects WHERE id = ? AND school_id = ? LIMIT 1", [subjectId, schoolId])
     if (!classRow) throw new HttpError(400, "Class does not belong to this school")
@@ -572,11 +579,10 @@ export async function createBulkExamPapers(req, res) {
          AND a.role = 'subject_teacher'
          AND a.subject_id IS NOT NULL
          AND a.is_active = 1
-         AND (a.academic_year_id = ? OR a.academic_year_id IS NULL)
-         AND (a.term_id = ? OR a.term_id IS NULL)
+         AND a.academic_year_id = ? AND a.term_id = ?
          AND u.role = 'teacher' AND u.is_active = 1${classFilter}${subjectFilter}
-       ORDER BY c.name, subj.name, (a.academic_year_id = ?) DESC, (a.term_id = ?) DESC, a.updated_at DESC, a.id DESC`,
-      [schoolId, examSession.academic_year_id, examSession.term_id, ...classIds, ...subjectIds, examSession.academic_year_id, examSession.term_id],
+       ORDER BY c.name, subj.name, a.updated_at DESC, a.id DESC`,
+      [schoolId, examSession.academic_year_id, examSession.term_id, ...classIds, ...subjectIds],
     )
 
     const uniqueAssignments = []

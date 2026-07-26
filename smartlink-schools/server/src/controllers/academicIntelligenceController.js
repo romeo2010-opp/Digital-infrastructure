@@ -24,6 +24,7 @@ import {
 import { pool } from "../config/db.js"
 import { HttpError } from "../utils/http.js"
 import { narrateAcademicFindings } from "../services/academicIntelligenceNarrator.js"
+import { requireActiveAcademicSession } from "../services/academicSessionService.js"
 
 export async function academicCommandCentre(req,res){res.json(await getAcademicCommandCentre(getScopedSchoolId(req),req.query,req.user))}
 export async function academicOverview(req,res){res.json(await getAcademicCommandCentre(getScopedSchoolId(req),req.query,req.user))}
@@ -31,7 +32,8 @@ export async function academicClasses(req,res){const data=await getAcademicComma
 export async function academicClassDetail(req,res){
   const schoolId=getScopedSchoolId(req)
   const teacher=String(req.user?.role||'').toLowerCase()==='teacher'
-  const [[row]]=await pool.query(`SELECT c.id,c.public_ref,c.name,c.grade_level FROM classes c WHERE c.school_id=? AND c.public_ref=?${teacher?" AND EXISTS (SELECT 1 FROM teacher_class_subject_assignments tcsa WHERE tcsa.school_id=c.school_id AND tcsa.class_id=c.id AND tcsa.teacher_id=? AND tcsa.subject_id IS NOT NULL AND tcsa.role='subject_teacher' AND tcsa.is_active=1)":''} LIMIT 1`,teacher?[schoolId,String(req.params.classRef||''),req.user.id]:[schoolId,String(req.params.classRef||'')])
+  const session=teacher?await requireActiveAcademicSession(schoolId):null
+  const [[row]]=await pool.query(`SELECT c.id,c.public_ref,c.name,c.grade_level FROM classes c WHERE c.school_id=? AND c.public_ref=?${teacher?" AND EXISTS (SELECT 1 FROM teacher_class_subject_assignments tcsa WHERE tcsa.school_id=c.school_id AND tcsa.class_id=c.id AND tcsa.teacher_id=? AND tcsa.subject_id IS NOT NULL AND tcsa.role='subject_teacher' AND tcsa.is_active=1 AND tcsa.academic_year_id=? AND tcsa.term_id=?)":''} LIMIT 1`,teacher?[schoolId,String(req.params.classRef||''),req.user.id,session.academicYearId,session.termId]:[schoolId,String(req.params.classRef||'')])
   if(!row)throw new HttpError(404,'Academic class was not found.')
   const data=await getAcademicCommandCentre(schoolId,{...req.query,class_id:row.id},req.user)
   const [topicMatrix,learnerDistribution,upcomingAssessments]=await Promise.all([
@@ -47,17 +49,17 @@ export async function academicClassDetail(req,res){
       JOIN subjects s ON s.id=ams.subject_id AND s.school_id=ams.school_id
       JOIN syllabus_topics t ON t.id=ltr.topic_id AND t.school_id=ltr.school_id
       LEFT JOIN academic_engine_config aec ON aec.school_id=ltr.school_id
-      WHERE ltr.school_id=? AND ams.class_id=? AND ltr.is_official=1${teacher?" AND EXISTS (SELECT 1 FROM teacher_class_subject_assignments tcsa WHERE tcsa.school_id=ams.school_id AND tcsa.teacher_id=? AND tcsa.class_id=ams.class_id AND tcsa.subject_id=ams.subject_id AND tcsa.role='subject_teacher' AND tcsa.is_active=1)":''}
+      WHERE ltr.school_id=? AND ams.class_id=? AND ltr.is_official=1${teacher?" AND ams.academic_year_id=? AND ams.term_id=? AND EXISTS (SELECT 1 FROM teacher_class_subject_assignments tcsa WHERE tcsa.school_id=ams.school_id AND tcsa.teacher_id=? AND tcsa.class_id=ams.class_id AND tcsa.subject_id=ams.subject_id AND tcsa.role='subject_teacher' AND tcsa.is_active=1 AND tcsa.academic_year_id=ams.academic_year_id AND tcsa.term_id=ams.term_id)":''}
       GROUP BY s.id,s.public_ref,s.name,t.id,t.public_ref,t.topic_name,aec.mastery_threshold
-      ORDER BY learners_below_secure DESC,class_result,t.topic_name LIMIT 150`,teacher?[schoolId,row.id,req.user.id]:[schoolId,row.id]),
+      ORDER BY learners_below_secure DESC,class_result,t.topic_name LIMIT 150`,teacher?[schoolId,row.id,session.academicYearId,session.termId,req.user.id]:[schoolId,row.id]),
     pool.query(`SELECT amr.mastery_status,COUNT(DISTINCT amr.student_id) learner_count
       FROM academic_mastery_records amr JOIN student_enrollments se ON se.school_id=amr.school_id AND se.student_id=amr.student_id AND se.class_id=? AND se.enrollment_status='active'
-      WHERE amr.school_id=? AND amr.mastery_level='subject'${teacher?" AND EXISTS (SELECT 1 FROM teacher_class_subject_assignments tcsa WHERE tcsa.school_id=amr.school_id AND tcsa.teacher_id=? AND tcsa.class_id=se.class_id AND tcsa.subject_id=amr.subject_id AND tcsa.role='subject_teacher' AND tcsa.is_active=1)":''} GROUP BY amr.mastery_status`,teacher?[row.id,schoolId,req.user.id]:[row.id,schoolId]),
+      WHERE amr.school_id=? AND amr.mastery_level='subject'${teacher?" AND amr.academic_year_id=? AND amr.term_id=? AND se.academic_year_id=amr.academic_year_id AND se.term_id=amr.term_id AND EXISTS (SELECT 1 FROM teacher_class_subject_assignments tcsa WHERE tcsa.school_id=amr.school_id AND tcsa.teacher_id=? AND tcsa.class_id=se.class_id AND tcsa.subject_id=amr.subject_id AND tcsa.role='subject_teacher' AND tcsa.is_active=1 AND tcsa.academic_year_id=amr.academic_year_id AND tcsa.term_id=amr.term_id)":''} GROUP BY amr.mastery_status`,teacher?[row.id,schoolId,session.academicYearId,session.termId,req.user.id]:[row.id,schoolId]),
     pool.query(`SELECT a.id,a.name,a.assessment_type,a.status,a.total_marks,s.public_ref subject_ref,s.name subject_name,ete.exam_date
       FROM assessments a JOIN subjects s ON s.id=a.subject_id AND s.school_id=a.school_id
       LEFT JOIN exam_timetable_entries ete ON ete.assessment_id=a.id AND ete.school_id=a.school_id
       WHERE a.school_id=? AND a.class_id=? AND a.status IN ('open','approved','scheduled')
-        AND (ete.exam_date IS NULL OR ete.exam_date>=CURDATE())${teacher?" AND EXISTS (SELECT 1 FROM teacher_class_subject_assignments tcsa WHERE tcsa.school_id=a.school_id AND tcsa.teacher_id=? AND tcsa.class_id=a.class_id AND tcsa.subject_id=a.subject_id AND tcsa.role='subject_teacher' AND tcsa.is_active=1)":''} ORDER BY COALESCE(ete.exam_date,'9999-12-31'),a.updated_at DESC LIMIT 20`,teacher?[schoolId,row.id,req.user.id]:[schoolId,row.id]),
+        AND (ete.exam_date IS NULL OR ete.exam_date>=CURDATE())${teacher?" AND a.academic_year_id=? AND a.term_id=? AND EXISTS (SELECT 1 FROM teacher_class_subject_assignments tcsa WHERE tcsa.school_id=a.school_id AND tcsa.teacher_id=? AND tcsa.class_id=a.class_id AND tcsa.subject_id=a.subject_id AND tcsa.role='subject_teacher' AND tcsa.is_active=1 AND tcsa.academic_year_id=a.academic_year_id AND tcsa.term_id=a.term_id)":''} ORDER BY COALESCE(ete.exam_date,'9999-12-31'),a.updated_at DESC LIMIT 20`,teacher?[schoolId,row.id,session.academicYearId,session.termId,req.user.id]:[schoolId,row.id]),
   ])
   res.json({
     class:{public_ref:row.public_ref,name:row.name,grade_level:row.grade_level},
@@ -72,7 +74,8 @@ export async function academicTopicDetail(req,res){
   const schoolId=getScopedSchoolId(req)
   const topicRef=String(req.params.topicRef||'')
   const teacher=isTeacher(req)
-  const [[topic]]=await pool.query(`SELECT st.public_ref,st.topic_name,st.description,st.order_number,s.public_ref subject_ref,s.name subject_name FROM syllabus_topics st JOIN subjects s ON s.id=st.subject_id AND s.school_id=st.school_id WHERE st.school_id=? AND st.public_ref=?${teacher?" AND EXISTS (SELECT 1 FROM teacher_class_subject_assignments tcsa WHERE tcsa.school_id=st.school_id AND tcsa.teacher_id=? AND tcsa.subject_id=st.subject_id AND tcsa.role='subject_teacher' AND tcsa.is_active=1)":''} LIMIT 1`,teacher?[schoolId,topicRef,req.user.id]:[schoolId,topicRef])
+  const session=teacher?await requireActiveAcademicSession(schoolId):null
+  const [[topic]]=await pool.query(`SELECT st.public_ref,st.topic_name,st.description,st.order_number,s.public_ref subject_ref,s.name subject_name FROM syllabus_topics st JOIN subjects s ON s.id=st.subject_id AND s.school_id=st.school_id WHERE st.school_id=? AND st.public_ref=?${teacher?" AND EXISTS (SELECT 1 FROM teacher_class_subject_assignments tcsa WHERE tcsa.school_id=st.school_id AND tcsa.teacher_id=? AND tcsa.subject_id=st.subject_id AND tcsa.role='subject_teacher' AND tcsa.is_active=1 AND tcsa.academic_year_id=? AND tcsa.term_id=?)":''} LIMIT 1`,teacher?[schoolId,topicRef,req.user.id,session.academicYearId,session.termId]:[schoolId,topicRef])
   if(!topic)throw new HttpError(404,'Academic topic was not found.')
   const [evidence,data]=await Promise.all([
     getCanonicalAcademicEvidence(schoolId,{...req.query,topic_ref:topicRef,limit:req.query.limit||100},req.user),
@@ -80,7 +83,7 @@ export async function academicTopicDetail(req,res){
   ])
   const [prerequisites,delivery]=await Promise.all([
     pool.query(`SELECT pt.public_ref prerequisite_ref,pt.topic_name prerequisite_name,p.strength FROM syllabus_topic_prerequisites p JOIN syllabus_topics pt ON pt.id=p.prerequisite_topic_id AND pt.school_id=p.school_id JOIN syllabus_topics t ON t.id=p.topic_id AND t.school_id=p.school_id WHERE p.school_id=? AND t.public_ref=?`,[schoolId,topicRef]),
-    pool.query(`SELECT c.public_ref class_ref,c.name class_name,s.public_ref subject_ref,s.name subject_name,SHA2(CONCAT('term:',cdr.school_id,':',cdr.term_id),256) term_ref,cdr.lifecycle_status,cdr.assessed_status,cdr.class_mastery_score,cdr.mastery_confidence_score,cdr.students_assessed,cdr.students_below_threshold,cdr.revision_required,cdr.last_recalculated_at FROM curriculum_delivery_records cdr JOIN classes c ON c.id=cdr.class_id AND c.school_id=cdr.school_id JOIN subjects s ON s.id=cdr.subject_id AND s.school_id=cdr.school_id JOIN syllabus_topics st ON st.id=cdr.topic_id AND st.school_id=cdr.school_id WHERE cdr.school_id=? AND st.public_ref=?${teacher?" AND EXISTS (SELECT 1 FROM teacher_class_subject_assignments tcsa WHERE tcsa.school_id=cdr.school_id AND tcsa.teacher_id=? AND tcsa.class_id=cdr.class_id AND tcsa.subject_id=cdr.subject_id AND tcsa.role='subject_teacher' AND tcsa.is_active=1)":''} ORDER BY c.name,s.name,cdr.term_id DESC`,teacher?[schoolId,topicRef,req.user.id]:[schoolId,topicRef]),
+    pool.query(`SELECT c.public_ref class_ref,c.name class_name,s.public_ref subject_ref,s.name subject_name,SHA2(CONCAT('term:',cdr.school_id,':',cdr.term_id),256) term_ref,cdr.lifecycle_status,cdr.assessed_status,cdr.class_mastery_score,cdr.mastery_confidence_score,cdr.students_assessed,cdr.students_below_threshold,cdr.revision_required,cdr.last_recalculated_at FROM curriculum_delivery_records cdr JOIN classes c ON c.id=cdr.class_id AND c.school_id=cdr.school_id JOIN subjects s ON s.id=cdr.subject_id AND s.school_id=cdr.school_id JOIN syllabus_topics st ON st.id=cdr.topic_id AND st.school_id=cdr.school_id WHERE cdr.school_id=? AND st.public_ref=?${teacher?" AND cdr.academic_year_id=? AND cdr.term_id=? AND EXISTS (SELECT 1 FROM teacher_class_subject_assignments tcsa WHERE tcsa.school_id=cdr.school_id AND tcsa.teacher_id=? AND tcsa.class_id=cdr.class_id AND tcsa.subject_id=cdr.subject_id AND tcsa.role='subject_teacher' AND tcsa.is_active=1 AND tcsa.academic_year_id=cdr.academic_year_id AND tcsa.term_id=cdr.term_id)":''} ORDER BY c.name,s.name,cdr.term_id DESC`,teacher?[schoolId,topicRef,session.academicYearId,session.termId,req.user.id]:[schoolId,topicRef]),
   ])
   res.json({topic, evidence:evidence.evidence, evidence_quality:evidence.evidence_quality, prerequisites:prerequisites[0], delivery:delivery[0], coverage:data.coverage||[], risks:data.alerts||[], recommendations:data.recommendations||[], evidence_state:evidence.evidence_quality.state, message:evidence.evidence_quality.limitations?.[0]||null})
 }

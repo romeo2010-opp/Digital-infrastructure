@@ -1,6 +1,11 @@
 import { pool } from "../config/db.js"
 import { HttpError } from "../utils/http.js"
-import { getScopedSchoolId, getTeacherClassSubjectPairs, isTeacher } from "../utils/tenantScope.js"
+import {
+  assertTeacherCanAuthorSubjectGrade,
+  getScopedSchoolId,
+  getTeacherSubjectGradeScopes,
+  isTeacher,
+} from "../utils/tenantScope.js"
 import { generateDraftQuestions } from "../services/questions/questionDraftingService.js"
 import { validateSyllabusTopicScope } from "../services/curriculumScopeService.js"
 
@@ -113,6 +118,39 @@ export function assessmentMarkingKey(question, options = []) {
     // instead of importing a question that can never leave pending review.
     explanation: explanationRows.join("\n\n") || (resolvedAnswer ? `Correct answer: ${resolvedAnswer}` : null),
   }
+}
+
+const QUESTION_REVIEWER_ROLES = new Set(["super_admin", "school_owner", "owner", "director", "headteacher"])
+
+export function canReviewQuestionBank(req) {
+  return QUESTION_REVIEWER_ROLES.has(String(req.user?.role || "").toLowerCase())
+}
+
+function assertQuestionBankReviewer(req) {
+  if (!canReviewQuestionBank(req)) {
+    throw new HttpError(403, "Only school leadership can approve or reject question-bank content")
+  }
+}
+
+function uniqueSubjectGradeScopes(scopes = []) {
+  const unique = new Map()
+  for (const scope of scopes) {
+    const subjectId = Number(scope.subjectId || 0)
+    const gradeId = scope.gradeId === null || scope.gradeId === undefined ? null : Number(scope.gradeId)
+    if (!subjectId) continue
+    unique.set(`${subjectId}:${gradeId ?? "general"}`, { subjectId, gradeId })
+  }
+  return [...unique.values()]
+}
+
+function addTeacherSubjectGradeFilter(filters, params, scopes, alias) {
+  const uniqueScopes = uniqueSubjectGradeScopes(scopes)
+  if (!uniqueScopes.length) {
+    filters.push("1 = 0")
+    return
+  }
+  filters.push(`(${uniqueScopes.map(() => `(${alias}.subject_id = ? AND (${alias}.grade_id IS NULL OR ${alias}.grade_id <=> ?))`).join(" OR ")})`)
+  params.push(...uniqueScopes.flatMap((scope) => [scope.subjectId, scope.gradeId]))
 }
 
 function questionNumberKey(value) {
@@ -432,6 +470,10 @@ export async function listQuestions(req, res) {
   if (req.query.subject_id) { filters.push("q.subject_id = ?"); params.push(Number(req.query.subject_id)) }
   if (req.query.topic_id) { filters.push("q.topic_id = ?"); params.push(Number(req.query.topic_id)) }
   if (req.query.approval_status) { filters.push("q.approval_status = ?"); params.push(String(req.query.approval_status)) }
+  if (isTeacher(req)) {
+    const scopes = await getTeacherSubjectGradeScopes(req, schoolId)
+    addTeacherSubjectGradeFilter(filters, params, scopes, "q")
+  }
   if (!showAll) params.push(limit)
   const [questions] = await pool.query(
     `SELECT q.*, subj.name AS subject_name, gl.name AS grade_name, st.topic_name, sub.topic_name AS subtopic_name,
@@ -465,12 +507,6 @@ export async function createQuestion(req, res) {
   const correctAnswer = cleanMarkingText(req.body.correct_answer)
   const explanation = cleanMarkingText(req.body.explanation)
   if (!correctAnswer && !explanation) throw new HttpError(400, "Add an answer or marking key before saving this question")
-  if (isTeacher(req)) {
-    const pairs = await getTeacherClassSubjectPairs(req, schoolId)
-    if (!pairs?.some((pair) => Number(pair.subjectId) === subjectId)) {
-      throw new HttpError(403, "Teachers can only add questions for subjects they teach")
-    }
-  }
   const topicScope = await validateSyllabusTopicScope(pool, {
     schoolId,
     subjectId,
@@ -478,8 +514,12 @@ export async function createQuestion(req, res) {
     subtopicId: req.body.subtopic_id || null,
     requireTopic: true,
   })
+  await assertTeacherCanAuthorSubjectGrade(req, schoolId, {
+    subjectId,
+    gradeId: topicScope.topic?.grade_id || null,
+  })
   const requestedStatus = cleanText(req.body.approval_status || "pending_review") || "pending_review"
-  const approvalStatus = isTeacher(req) && requestedStatus === "approved" ? "pending_review" : requestedStatus
+  const approvalStatus = isTeacher(req) ? "pending_review" : requestedStatus
   const [result] = await pool.query(
     `INSERT INTO question_bank (
       public_ref, school_id, curriculum_id, grade_id, subject_id, topic_id, subtopic_id, question_type, question_text,
@@ -528,6 +568,7 @@ export async function sourceAssessmentQuestions(req, res) {
       ))`,
   ]
   const params = [schoolId]
+  let teacherAssessmentScopes = null
   if (subjectId) {
     clauses.push("a.subject_id = ?")
     params.push(subjectId)
@@ -541,14 +582,16 @@ export async function sourceAssessmentQuestions(req, res) {
     params.push(Number(req.body.topic_id || req.query.topic_id))
   }
   if (isTeacher(req)) {
-    const pairs = await getTeacherClassSubjectPairs(req, schoolId)
+    const scopes = await getTeacherSubjectGradeScopes(req, schoolId)
+    const pairs = [...new Map((scopes || []).map((scope) => [`${scope.classId}:${scope.subjectId}`, scope])).values()]
+    teacherAssessmentScopes = pairs
     if (!pairs?.length) {
       res.json({ ok: true, imported: 0, scanned: 0, skipped: { no_teacher_scope: 1 }, questions: [] })
       return
     }
     const pairClause = pairs.map(() => "(a.class_id = ? AND a.subject_id = ?)").join(" OR ")
-    clauses.push(`(a.teacher_id = ? OR a.created_by = ? OR ${pairClause})`)
-    params.push(req.user.id, req.user.id, ...pairs.flatMap((pair) => [pair.classId, pair.subjectId]))
+    clauses.push(`(${pairClause})`)
+    params.push(...pairs.flatMap((pair) => [pair.classId, pair.subjectId]))
   }
 
   const connection = await pool.getConnection()
@@ -617,6 +660,18 @@ export async function sourceAssessmentQuestions(req, res) {
         skipped.no_topic += 1
         continue
       }
+      if (teacherAssessmentScopes) {
+        const exactScope = teacherAssessmentScopes.find((scope) => (
+          scope.classId === Number(question.class_id) && scope.subjectId === Number(question.subject_id)
+        ))
+        if (!exactScope || (topic.grade_id && exactScope.gradeId !== Number(topic.grade_id))) {
+          throw new HttpError(403, "Teachers can only source questions whose topic year matches their currently assigned assessment class")
+        }
+      }
+      await assertTeacherCanAuthorSubjectGrade(req, schoolId, {
+        subjectId: question.subject_id,
+        gradeId: topic.grade_id || null,
+      }, { db: connection })
       const subtopicId = await resolveQuestionBankSubtopic(connection, schoolId, question, Number(topic.id))
       const tables = assessmentTableMap.get(Number(row.id)) || []
       const [[duplicate]] = await connection.query(
@@ -719,13 +774,20 @@ export async function generateDraftQuestionBatch(req, res) {
      JOIN subjects subj ON subj.id = st.subject_id AND subj.school_id = st.school_id
      LEFT JOIN grade_levels gl ON gl.id = st.grade_id AND gl.school_id = st.school_id
      LEFT JOIN curricula c ON c.id = st.curriculum_id AND c.school_id = st.school_id
-     WHERE st.school_id = ? AND st.id = ?
+     WHERE st.school_id = ? AND st.id = ? AND st.is_active = 1
      LIMIT 1`,
     [schoolId, topicId],
   )
   if (!topic) throw new HttpError(404, "Topic was not found")
+  if (Number(topic.subject_id) !== requestedSubjectId) {
+    throw new HttpError(400, "The selected topic does not belong to the selected subject")
+  }
   const subjectId = Number(topic.subject_id || requestedSubjectId)
   const effectiveGradeId = topic.grade_id || req.body.grade_id || null
+  await assertTeacherCanAuthorSubjectGrade(req, schoolId, {
+    subjectId,
+    gradeId: effectiveGradeId,
+  })
   const numberRequested = Math.max(1, Math.min(20, Number(req.body.number_of_questions || req.body.number_requested || 5)))
   const requestedQuestionType = cleanText(req.body.question_type || req.body.questionType || "mixed") || "mixed"
   const context = {
@@ -854,17 +916,24 @@ export async function generateDraftQuestionBatch(req, res) {
 export async function getQuestionBatchReview(req, res) {
   const schoolId = getScopedSchoolId(req)
   const batchId = Number(req.params.id || 0)
+  const teacherClause = isTeacher(req) ? " AND gqb.teacher_id = ?" : ""
+  const batchParams = isTeacher(req) ? [schoolId, batchId, req.user.id] : [schoolId, batchId]
   const [[batch]] = await pool.query(
     `SELECT gqb.*, subj.name AS subject_name, gl.name AS grade_name, st.topic_name
      FROM generated_question_batches gqb
      JOIN subjects subj ON subj.id = gqb.subject_id AND subj.school_id = gqb.school_id
      LEFT JOIN grade_levels gl ON gl.id = gqb.grade_id AND gl.school_id = gqb.school_id
      JOIN syllabus_topics st ON st.id = gqb.topic_id AND st.school_id = gqb.school_id
-     WHERE gqb.school_id = ? AND gqb.id = ?
+     WHERE gqb.school_id = ? AND gqb.id = ?${teacherClause}
      LIMIT 1`,
-    [schoolId, batchId],
+    batchParams,
   )
   if (!batch) throw new HttpError(404, "Question batch was not found")
+  await assertTeacherCanAuthorSubjectGrade(req, schoolId, {
+    subjectId: batch.subject_id,
+    gradeId: batch.grade_id,
+    createdBy: batch.teacher_id,
+  })
   const [questions] = await pool.query(
     `SELECT q.*
      FROM generated_question_batch_items item
@@ -882,57 +951,97 @@ export async function getQuestionBatchReview(req, res) {
 export async function updateQuestion(req, res) {
   const schoolId = getScopedSchoolId(req)
   const questionId = Number(req.params.id || 0)
-  const [[current]] = await pool.query(
-    "SELECT id,subject_id,topic_id,subtopic_id FROM question_bank WHERE school_id=? AND id=? LIMIT 1",
-    [schoolId, questionId],
-  )
-  if (!current) throw new HttpError(404, "Question was not found")
-  const topicScope = await validateSyllabusTopicScope(pool, {
-    schoolId,
-    subjectId: current.subject_id,
-    topicId: req.body.topic_id === undefined ? current.topic_id : req.body.topic_id,
-    subtopicId: req.body.subtopic_id === undefined ? current.subtopic_id : req.body.subtopic_id,
-    requireTopic: true,
-  })
-  const [result] = await pool.query(
-    `UPDATE question_bank
-     SET question_text = COALESCE(?, question_text),
-       question_type = COALESCE(?, question_type),
-       options_json = COALESCE(?, options_json),
-       correct_answer = COALESCE(?, correct_answer),
-       accepted_answers_json = COALESCE(?, accepted_answers_json),
-       explanation = COALESCE(?, explanation),
-       difficulty = COALESCE(?, difficulty),
-       skill_type = COALESCE(?, skill_type),
-       marks = COALESCE(?, marks),
-       common_mistake = COALESCE(?, common_mistake),
-       confidence = COALESCE(?, confidence),
-       topic_id = ?,
-       subtopic_id = ?
-     WHERE school_id = ? AND id = ?`,
-    [
-      req.body.question_text === undefined ? null : cleanText(req.body.question_text),
-      req.body.question_type === undefined ? null : cleanText(req.body.question_type),
-      req.body.options === undefined && req.body.options_json === undefined ? null : JSON.stringify(req.body.options_json || req.body.options || []),
-      req.body.correct_answer === undefined ? null : cleanText(req.body.correct_answer),
-      req.body.accepted_answers === undefined && req.body.accepted_answers_json === undefined ? null : normalizeJsonArray(req.body.accepted_answers || req.body.accepted_answers_json),
-      req.body.explanation === undefined ? null : cleanText(req.body.explanation),
-      req.body.difficulty === undefined ? null : cleanText(req.body.difficulty),
-      req.body.skill_type === undefined ? null : cleanText(req.body.skill_type),
-      req.body.marks === undefined ? null : Number(req.body.marks || 1),
-      req.body.common_mistake === undefined ? null : cleanText(req.body.common_mistake),
-      req.body.confidence === undefined ? null : Number(req.body.confidence || 0),
-      topicScope.topicId,
-      topicScope.subtopicId,
+  const materialFields = [
+    "question_text", "question_type", "options", "options_json", "correct_answer",
+    "accepted_answers", "accepted_answers_json", "explanation", "difficulty", "skill_type",
+    "marks", "common_mistake", "confidence", "topic_id", "subtopic_id",
+  ]
+  const invalidatesApproval = materialFields.some((field) => Object.prototype.hasOwnProperty.call(req.body || {}, field)) ? 1 : 0
+  const connection = await pool.getConnection()
+  try {
+    await connection.beginTransaction()
+    const [[current]] = await connection.query(
+      "SELECT id,subject_id,topic_id,subtopic_id,created_by,approval_status FROM question_bank WHERE school_id=? AND id=? LIMIT 1 FOR UPDATE",
+      [schoolId, questionId],
+    )
+    if (!current) throw new HttpError(404, "Question was not found")
+    const topicScope = await validateSyllabusTopicScope(connection, {
       schoolId,
-      questionId,
-    ],
-  )
-  if (!result.affectedRows) throw new HttpError(404, "Question was not found")
-  res.json({ ok: true })
+      subjectId: current.subject_id,
+      topicId: req.body.topic_id === undefined ? current.topic_id : req.body.topic_id,
+      subtopicId: req.body.subtopic_id === undefined ? current.subtopic_id : req.body.subtopic_id,
+      requireTopic: true,
+    })
+    await assertTeacherCanAuthorSubjectGrade(req, schoolId, {
+      subjectId: current.subject_id,
+      gradeId: topicScope.topic?.grade_id || null,
+      createdBy: current.created_by,
+    }, { db: connection })
+    const [result] = await connection.query(
+      `UPDATE question_bank
+       SET question_text = COALESCE(?, question_text),
+         question_type = COALESCE(?, question_type),
+         options_json = COALESCE(?, options_json),
+         correct_answer = COALESCE(?, correct_answer),
+         accepted_answers_json = COALESCE(?, accepted_answers_json),
+         explanation = COALESCE(?, explanation),
+         difficulty = COALESCE(?, difficulty),
+         skill_type = COALESCE(?, skill_type),
+         marks = COALESCE(?, marks),
+         common_mistake = COALESCE(?, common_mistake),
+         confidence = COALESCE(?, confidence),
+         curriculum_id = ?,
+         grade_id = ?,
+         topic_id = ?,
+         subtopic_id = ?,
+         approval_status = CASE WHEN ? = 1 THEN 'pending_review' ELSE approval_status END,
+         approved_by = CASE WHEN ? = 1 THEN NULL ELSE approved_by END,
+         approved_at = CASE WHEN ? = 1 THEN NULL ELSE approved_at END
+       WHERE school_id = ? AND id = ?`,
+      [
+        req.body.question_text === undefined ? null : cleanText(req.body.question_text),
+        req.body.question_type === undefined ? null : cleanText(req.body.question_type),
+        req.body.options === undefined && req.body.options_json === undefined ? null : JSON.stringify(req.body.options_json || req.body.options || []),
+        req.body.correct_answer === undefined ? null : cleanText(req.body.correct_answer),
+        req.body.accepted_answers === undefined && req.body.accepted_answers_json === undefined ? null : normalizeJsonArray(req.body.accepted_answers || req.body.accepted_answers_json),
+        req.body.explanation === undefined ? null : cleanText(req.body.explanation),
+        req.body.difficulty === undefined ? null : cleanText(req.body.difficulty),
+        req.body.skill_type === undefined ? null : cleanText(req.body.skill_type),
+        req.body.marks === undefined ? null : Number(req.body.marks || 1),
+        req.body.common_mistake === undefined ? null : cleanText(req.body.common_mistake),
+        req.body.confidence === undefined ? null : Number(req.body.confidence || 0),
+        topicScope.topic?.curriculum_id || null,
+        topicScope.topic?.grade_id || null,
+        topicScope.topicId,
+        topicScope.subtopicId,
+        invalidatesApproval,
+        invalidatesApproval,
+        invalidatesApproval,
+        schoolId,
+        questionId,
+      ],
+    )
+    if (!result.affectedRows) throw new HttpError(404, "Question was not found")
+    if (invalidatesApproval) {
+      await connection.query(
+        `UPDATE question_explanations
+         SET approval_status='pending_review',approved_by=NULL
+         WHERE question_id=? AND approval_status='approved'`,
+        [questionId],
+      )
+    }
+    await connection.commit()
+    res.json({ ok: true, approval_status: invalidatesApproval ? "pending_review" : current.approval_status })
+  } catch (error) {
+    await connection.rollback()
+    throw error
+  } finally {
+    connection.release()
+  }
 }
 
 export async function approveQuestion(req, res) {
+  assertQuestionBankReviewer(req)
   const schoolId = getScopedSchoolId(req)
   const questionId = Number(req.params.id || 0)
   const connection = await pool.getConnection()
@@ -962,11 +1071,12 @@ export async function approveQuestion(req, res) {
 }
 
 export async function rejectQuestion(req, res) {
+  assertQuestionBankReviewer(req)
   const schoolId = getScopedSchoolId(req)
   const questionId = Number(req.params.id || 0)
   const [result] = await pool.query(
-    "UPDATE question_bank SET approval_status = 'rejected' WHERE school_id = ? AND id = ?",
-    [schoolId, questionId],
+    "UPDATE question_bank SET approval_status = 'rejected', approved_by = ?, approved_at = CURRENT_TIMESTAMP WHERE school_id = ? AND id = ?",
+    [req.user.id, schoolId, questionId],
   )
   if (!result.affectedRows) throw new HttpError(404, "Question was not found")
   res.json({ ok: true })

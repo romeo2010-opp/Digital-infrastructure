@@ -61,8 +61,8 @@ export async function listClasses(req, res) {
   )
 
   const assignmentSessionClause = session.setupRequired
-    ? ""
-    : " AND (a.academic_year_id = ? OR a.academic_year_id IS NULL) AND (a.term_id = ? OR a.term_id IS NULL)"
+    ? " AND 1 = 0"
+    : " AND a.academic_year_id = ? AND a.term_id = ?"
   const assignmentSessionParams = session.setupRequired ? [] : [session.academicYearId, session.termId]
   const [assignmentRows] = await pool.query(
     `SELECT a.id, a.teacher_id, a.class_id, a.subject_id, a.academic_year_id, a.term_id,
@@ -103,7 +103,7 @@ export async function listClasses(req, res) {
       const subjectAssignments = assignments.filter((assignment) => assignment.role === "subject_teacher")
       return {
         ...row,
-        class_teacher: classTeacherAssignment?.teacher_name || row.teacher_name || null,
+        class_teacher: classTeacherAssignment?.teacher_name || null,
         subject_assignments: subjectAssignments,
         subject_assignment_summary: subjectAssignments.map((assignment) => `${assignment.subject_name} - ${assignment.teacher_name}`).join(", "),
         student_count: Number(row.student_count || students.length || 0),
@@ -149,11 +149,11 @@ export async function getClass(req, res) {
   const supportIndicators = await listLearnerSupportIndicators(schoolId, req.user, classId)
   const supportByLearner = new Map(supportIndicators.map((item) => [item.learner_ref, item]))
   const assignmentSessionClause = session.setupRequired
-    ? ""
-    : " AND (a.academic_year_id = ? OR a.academic_year_id IS NULL) AND (a.term_id = ? OR a.term_id IS NULL)"
+    ? " AND 1 = 0"
+    : " AND a.academic_year_id = ? AND a.term_id = ?"
   const assignmentSessionParams = session.setupRequired ? [] : [session.academicYearId, session.termId]
   const [assignments] = await pool.query(
-    `SELECT a.id, a.role, a.is_active, a.academic_year, a.term, a.notes,
+    `SELECT a.id, a.teacher_id, a.role, a.is_active, a.academic_year, a.term, a.notes,
       a.academic_year_id, a.term_id, u.full_name AS teacher_name,
       subj.name AS subject_name, ay.name AS academic_year_name, t.name AS term_name
      FROM teacher_class_subject_assignments a
@@ -161,11 +161,22 @@ export async function getClass(req, res) {
      LEFT JOIN subjects subj ON subj.id = a.subject_id AND subj.school_id = a.school_id
      LEFT JOIN academic_years ay ON ay.id = a.academic_year_id AND ay.school_id = a.school_id
      LEFT JOIN terms t ON t.id = a.term_id AND t.school_id = a.school_id
-     WHERE a.school_id = ? AND a.class_id = ?${assignmentSessionClause}
+     WHERE a.school_id = ? AND a.class_id = ? AND a.is_active = 1${assignmentSessionClause}
      ORDER BY a.is_active DESC, a.role, subj.name`,
     [schoolId, classId, ...assignmentSessionParams],
   )
-  res.json({ class: { ...classRow, students: students.map((student) => ({ ...student, learner_support: supportByLearner.get(student.public_ref) || null })), assignments }, session: sessionPayload(session), setup_required: session.setupRequired })
+  const classTeacherAssignment = assignments.find((assignment) => assignment.role === "class_teacher") || null
+  res.json({
+    class: {
+      ...classRow,
+      teacher_user_id: classTeacherAssignment?.teacher_id ? Number(classTeacherAssignment.teacher_id) : null,
+      teacher_name: classTeacherAssignment?.teacher_name || null,
+      students: students.map((student) => ({ ...student, learner_support: supportByLearner.get(student.public_ref) || null })),
+      assignments,
+    },
+    session: sessionPayload(session),
+    setup_required: session.setupRequired,
+  })
 }
 
 export async function createClass(req, res) {

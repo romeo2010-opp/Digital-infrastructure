@@ -9,8 +9,33 @@ import { ASSESSMENT_VISION_PROMPT_VERSION, generateReviewWarnings, matchQuestion
 import { extractCoverTemplateFromImport } from "./assessmentTemplateService.js"
 import { cropPdfVisualRegions, extractEmbeddedPdfImages } from "./pdfImageExtractionService.js"
 import { validateSyllabusTopicScope } from "./curriculumScopeService.js"
+import { getActiveAcademicSession } from "./academicSessionService.js"
 
 const run=promisify(execFile),clean=(value,max=2000)=>String(value??"").trim().slice(0,max)
+const ASSESSMENT_IMPORT_QUESTION_REVIEWER_ROLES=new Set(["super_admin","school_owner","owner","director","headteacher"])
+
+export function importedQuestionExplanation(answerText,markingPointsJson){
+  const answer=clean(answerText,60000)
+  const points=parseDbJson(markingPointsJson,[])
+  const rows=(Array.isArray(points)?points:[]).map((point)=>{
+    if(typeof point==="string"||typeof point==="number")return clean(point,4000)
+    if(!point||typeof point!=="object")return ""
+    return clean(point.text??point.point??point.description??point.answer??point.criterion,4000)
+  }).filter(Boolean)
+  return rows.join("\n")||(answer?`Correct answer: ${answer}`:null)
+}
+
+export function importedQuestionBankModeration({actorRole,correctAnswer,explanation,topicId,gradeId,subjectId}={}){
+  const missing=[]
+  if(!clean(correctAnswer,60000))missing.push("correct answer")
+  if(!clean(explanation,60000))missing.push("explanation")
+  if(!Number(topicId||0))missing.push("topic")
+  if(!Number(gradeId||0))missing.push("grade")
+  if(!Number(subjectId||0))missing.push("subject")
+  const canModerate=ASSESSMENT_IMPORT_QUESTION_REVIEWER_ROLES.has(String(actorRole||"").toLowerCase())
+  return {approvalStatus:canModerate&&!missing.length?"approved":"pending_review",approvalReady:!missing.length,missing}
+}
+
 function decodePdf(value,label){const match=String(value||"").match(/^data:application\/pdf;base64,(.+)$/s);if(!match)throw new HttpError(400,`${label} must be a PDF file`);const buffer=Buffer.from(match[1],"base64");if(buffer.length<5||buffer.subarray(0,5).toString()!=="%PDF-")throw new HttpError(400,`${label} is not a valid PDF`);if(buffer.length>20*1024*1024)throw new HttpError(413,`${label} exceeds the 20MB limit`);return buffer}
 function regexQuestions(pages){const results=[];for(const page of pages){const blocks=String(page.text_content||"").split(/\n(?=\s*\d+(?:\s*[.(]|\s+))/);for(const block of blocks){const match=block.match(/^\s*(\d+(?:\s*\([a-zivx]+\))*)[.)]?\s+([\s\S]{8,})/i);if(!match)continue;const marks=match[2].match(/(?:\[|\()\s*(\d+(?:\.\d+)?)\s*(?:marks?)?\s*(?:\]|\))/i);results.push({tempQuestionId:`Q${results.length+1}`,questionNumber:match[1].replace(/\s/g,""),questionText:match[2].trim(),marks:marks?Number(marks[1]):null,pageStart:page.page_number,pageEnd:page.page_number,formulaCandidates:/[=±√∑∫^]/.test(match[2])?[match[2].match(/[^.!?\n]*[=±√∑∫^][^.!?\n]*/)?.[0]||""]:[],assets:[],confidence:.55})}}return results}
 function regexMarking(pages){return regexQuestions(pages).map((q)=>({tempQuestionId:q.tempQuestionId,questionNumber:q.questionNumber,answerText:q.questionText,markingPoints:[],totalMarks:q.marks,pageNumber:q.pageStart,confidence:.48}))}
@@ -78,20 +103,24 @@ async function jobByRef(connection,schoolId,ref,lock=false){const [[job]]=await 
 async function resolveImportAssessmentTeacher(connection,schoolId,userId,job,term){
   const [[actor]]=await connection.query("SELECT id,role FROM users WHERE school_id=? AND id=? AND is_active=1 LIMIT 1",[schoolId,userId])
   if(!actor)throw new HttpError(403,"Your active school account could not be verified")
-  const teacherClause=actor.role==="teacher"?" AND assignment.teacher_id=?":""
-  const params=[schoolId,job.class_id,job.subject_id,term.academic_year_id,job.term_id]
-  if(actor.role==="teacher")params.push(userId)
+  const actorRole=String(actor.role||"").toLowerCase()
+  const activeSession=await getActiveAcademicSession(schoolId,connection)
+  if(activeSession.setupRequired||Number(term.academic_year_id)!==Number(activeSession.academicYearId)||Number(job.term_id)!==Number(activeSession.termId)){
+    throw new HttpError(actorRole==="teacher"?403:400,"Assessment imports can only be approved for the current academic year and term")
+  }
+  const teacherClause=actorRole==="teacher"?" AND assignment.teacher_id=?":""
+  const params=[schoolId,job.class_id,job.subject_id,activeSession.academicYearId,activeSession.termId]
+  if(actorRole==="teacher")params.push(userId)
   const [[assignment]]=await connection.query(`SELECT assignment.teacher_id
     FROM teacher_class_subject_assignments assignment
     JOIN users teacher ON teacher.id=assignment.teacher_id AND teacher.school_id=assignment.school_id
     WHERE assignment.school_id=? AND assignment.class_id=? AND assignment.subject_id=?
-      AND (assignment.academic_year_id=? OR assignment.academic_year_id IS NULL)
-      AND (assignment.term_id=? OR assignment.term_id IS NULL)
+      AND assignment.academic_year_id=? AND assignment.term_id=?
       AND assignment.role='subject_teacher' AND assignment.is_active=1
       AND teacher.role='teacher' AND teacher.is_active=1${teacherClause}
-    ORDER BY (assignment.academic_year_id=?) DESC,(assignment.term_id=?) DESC,assignment.updated_at DESC,assignment.id DESC
-    LIMIT 1`,[...params,term.academic_year_id,job.term_id])
-  if(!assignment)throw new HttpError(actor.role==="teacher"?403:400,actor.role==="teacher"?"Teachers can only approve imports for assigned classes and subjects":"Assign an active subject teacher to this class and subject before approving the assessment")
+    ORDER BY assignment.updated_at DESC,assignment.id DESC
+    LIMIT 1`,params)
+  if(!assignment)throw new HttpError(actorRole==="teacher"?403:400,actorRole==="teacher"?"Teachers can only approve imports for their current academic-year and term assignments":"Assign an active subject teacher to this class and subject for the current academic year and term before approving the assessment")
   return Number(assignment.teacher_id)
 }
 
@@ -187,9 +216,11 @@ export async function createAssessmentImport(schoolId,userId,body={}){
     JOIN terms term ON term.school_id=actor.school_id AND term.id=?
     WHERE actor.school_id=? AND actor.id=? AND actor.is_active=1 LIMIT 1`,[classId,subjectId,termId,schoolId,userId])
   if(!scope)throw new HttpError(400,"Select a class, subject and term from this school")
-  if(scope.role==="teacher"){
-    const [[assignment]]=await pool.query("SELECT id FROM teacher_class_subject_assignments WHERE school_id=? AND teacher_id=? AND class_id=? AND subject_id=? AND (academic_year_id=? OR academic_year_id IS NULL) AND (term_id=? OR term_id IS NULL) AND role='subject_teacher' AND is_active=1 LIMIT 1",[schoolId,userId,classId,subjectId,scope.academic_year_id,termId])
-    if(!assignment)throw new HttpError(403,"Teachers can only import assessments for assigned classes and subjects")
+  if(String(scope.role||"").toLowerCase()==="teacher"){
+    const activeSession=await getActiveAcademicSession(schoolId)
+    if(activeSession.setupRequired||Number(scope.academic_year_id)!==Number(activeSession.academicYearId)||termId!==Number(activeSession.termId))throw new HttpError(403,"Teachers can only import assessments for the current academic year and term")
+    const [[assignment]]=await pool.query("SELECT id FROM teacher_class_subject_assignments WHERE school_id=? AND teacher_id=? AND class_id=? AND subject_id=? AND academic_year_id=? AND term_id=? AND role='subject_teacher' AND is_active=1 LIMIT 1",[schoolId,userId,classId,subjectId,activeSession.academicYearId,activeSession.termId])
+    if(!assignment)throw new HttpError(403,"Teachers can only import assessments for their current academic-year and term assignments")
   }
   const student=decodePdf(body.student_pdf_data_url||body.studentPdfDataUrl,"Student question paper"),marking=decodePdf(body.marking_scheme_pdf_data_url||body.markingSchemePdfDataUrl,"Marking scheme"),ref=randomUUID(),folder=path.resolve(process.cwd(),"uploads","assessment-imports",String(schoolId),ref)
   await fs.mkdir(folder,{recursive:true})
@@ -199,7 +230,21 @@ export async function createAssessmentImport(schoolId,userId,body={}){
   return {import_job:{public_ref:ref,status:"uploaded",progress_percentage:0,id:undefined}}
 }
 
-export async function listAssessmentImports(schoolId,viewer={}){const teacher=String(viewer.role||"")==="teacher";const [rows]=await pool.query(`SELECT public_ref,title,assessment_type,status,progress_percentage,error_message,created_at,updated_at,assessment_id FROM assessment_import_jobs WHERE school_id=?${teacher?" AND created_by=?":""} ORDER BY created_at DESC LIMIT 100`,teacher?[schoolId,viewer.id]:[schoolId]);return {imports:rows}}
+export async function listAssessmentImports(schoolId,viewer={}){
+  const teacher=String(viewer.role||"").toLowerCase()==="teacher"
+  if(!teacher){const [rows]=await pool.query("SELECT public_ref,title,assessment_type,status,progress_percentage,error_message,created_at,updated_at,assessment_id FROM assessment_import_jobs WHERE school_id=? ORDER BY created_at DESC LIMIT 100",[schoolId]);return {imports:rows}}
+  const session=await getActiveAcademicSession(schoolId)
+  if(session.setupRequired)return {imports:[]}
+  const [rows]=await pool.query(`SELECT DISTINCT job.public_ref,job.title,job.assessment_type,job.status,job.progress_percentage,job.error_message,job.created_at,job.updated_at,job.assessment_id
+    FROM assessment_import_jobs job
+    JOIN teacher_class_subject_assignments assignment
+      ON assignment.school_id=job.school_id AND assignment.teacher_id=? AND assignment.class_id=job.class_id
+      AND assignment.subject_id=job.subject_id AND assignment.academic_year_id=? AND assignment.term_id=job.term_id
+      AND assignment.term_id=? AND assignment.role='subject_teacher' AND assignment.is_active=1
+    WHERE job.school_id=? AND job.created_by=? AND job.term_id=?
+    ORDER BY job.created_at DESC LIMIT 100`,[viewer.id,session.academicYearId,session.termId,schoolId,viewer.id,session.termId])
+  return {imports:rows}
+}
 
 export async function getAssessmentImport(schoolId,ref){const job=await jobByRef(pool,schoolId,ref);return {import_job:{...job,id:undefined,school_id:undefined,created_by:undefined,student_pdf_file_path:undefined,marking_scheme_pdf_file_path:undefined}}}
 
@@ -399,7 +444,8 @@ async function installImportedAssessmentBlocks(connection,{schoolId,assessmentId
   }
 }
 
-export async function approveAssessmentImport(schoolId,userId,ref){
+export async function approveAssessmentImport(schoolId,actor,ref){
+  const userId=Number(actor?.id||actor||0)
   const connection=await pool.getConnection()
   try{
     await connection.beginTransaction()
@@ -407,18 +453,30 @@ export async function approveAssessmentImport(schoolId,userId,ref){
     if(job.status!=="review_required")throw new HttpError(409,"Import must be reviewed before approval")
     const [questions]=await connection.query("SELECT * FROM assessment_import_questions WHERE school_id=? AND import_job_id=? AND review_status<>'rejected' ORDER BY id",[schoolId,job.id])
     if(!questions.length)throw new HttpError(409,"Approve at least one extracted question")
-    const validatedTopicPairs=new Set()
+    const validatedTopicPairs=new Map()
     for(const question of questions){
       if(!question.topic_id&&!question.subtopic_id)continue
       const key=`${question.topic_id||""}:${question.subtopic_id||""}`
       if(validatedTopicPairs.has(key))continue
-      await validateSyllabusTopicScope(connection,{schoolId,subjectId:job.subject_id,topicId:question.topic_id,subtopicId:question.subtopic_id,requireTopic:true})
-      validatedTopicPairs.add(key)
+      const topicScope=await validateSyllabusTopicScope(connection,{schoolId,subjectId:job.subject_id,topicId:question.topic_id,subtopicId:question.subtopic_id,requireTopic:true})
+      validatedTopicPairs.set(key,topicScope)
     }
     const [[term]]=await connection.query("SELECT id,academic_year_id,name FROM terms WHERE school_id=? AND id=?",[schoolId,job.term_id])
     if(!term)throw new HttpError(400,"Select a valid term")
-    const [[scope]]=await connection.query("SELECT c.id class_id,s.id subject_id FROM classes c JOIN subjects s ON s.school_id=c.school_id WHERE c.school_id=? AND c.id=? AND s.id=?",[schoolId,job.class_id,job.subject_id])
+    const [[scope]]=await connection.query(`SELECT c.id class_id,s.id subject_id,grade.id grade_id,grade.curriculum_id
+      FROM classes c
+      JOIN subjects s ON s.school_id=c.school_id
+      LEFT JOIN grade_levels grade ON grade.school_id=c.school_id AND LOWER(TRIM(grade.name))=LOWER(TRIM(c.grade_level))
+      WHERE c.school_id=? AND c.id=? AND s.id=?`,[schoolId,job.class_id,job.subject_id])
     if(!scope)throw new HttpError(400,"Select a valid class and subject")
+    for(const question of questions){
+      if(!question.topic_id||!question.daily_drill_eligible)continue
+      const topicScope=validatedTopicPairs.get(`${question.topic_id||""}:${question.subtopic_id||""}`)
+      const topicGradeId=Number(topicScope?.topic?.grade_id||0)||null
+      const topicCurriculumId=Number(topicScope?.topic?.curriculum_id||0)||null
+      if(scope.grade_id&&topicGradeId&&Number(scope.grade_id)!==topicGradeId)throw new HttpError(400,"A Daily Drill question topic does not belong to the assessment class year level")
+      if(scope.curriculum_id&&topicCurriculumId&&Number(scope.curriculum_id)!==topicCurriculumId)throw new HttpError(400,"A Daily Drill question topic does not belong to the assessment class curriculum")
+    }
     const typeMap={exam:"end_of_term_exam",test:"class_test",homework:"assignment",quiz:"quiz",other:"class_test",daily_drill_source:"class_test"}
     const total=questions.reduce((sum,question)=>sum+Number(question.marks||0),0)||questions.length
     const teacherId=await resolveImportAssessmentTeacher(connection,schoolId,userId,job,term)
@@ -427,10 +485,25 @@ export async function approveAssessmentImport(schoolId,userId,ref){
     for(let index=0;index<questions.length;index++){
       const question=questions[index]
       const [[linked]]=await connection.query(`SELECT m.answer_text,m.marking_points_json FROM assessment_import_question_answer_links l JOIN assessment_import_marking_items m ON m.id=l.marking_item_id WHERE l.import_question_id=? LIMIT 1`,[question.id])
+      const correctAnswer=clean(linked?.answer_text,60000)||null
+      const explanation=importedQuestionExplanation(correctAnswer,linked?.marking_points_json)
       const firstDiagram=questionMediaMap.get(question.temp_question_id)?.[0]
-      await connection.query(`INSERT INTO assessment_questions (school_id,assessment_id,question_number,display_number,source_import_question_id,question_text,question_type,marks,topic_id,subtopic_id,difficulty,attachment_url,correct_answer,marking_scheme,sort_order) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,[schoolId,assessment.insertId,index+1,question.question_number,question.id,question.question_text,"structured",Number(question.marks||1),question.topic_id||null,question.subtopic_id||null,question.difficulty||"medium",firstDiagram?.url||null,linked?.answer_text||null,linked?.marking_points_json||linked?.answer_text||null,index])
+      await connection.query(`INSERT INTO assessment_questions (school_id,assessment_id,question_number,display_number,source_import_question_id,question_text,question_type,marks,topic_id,subtopic_id,difficulty,attachment_url,correct_answer,marking_scheme,sort_order) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,[schoolId,assessment.insertId,index+1,question.question_number,question.id,question.question_text,"structured",Number(question.marks||1),question.topic_id||null,question.subtopic_id||null,question.difficulty||"medium",firstDiagram?.url||null,correctAnswer,linked?.marking_points_json||correctAnswer,index])
       if(question.topic_id&&question.daily_drill_eligible){
-        await connection.query(`INSERT INTO question_bank (public_ref,school_id,subject_id,topic_id,subtopic_id,question_type,question_text,correct_answer,difficulty,marks,confidence,source_type,source_import_job_id,is_daily_drill_eligible,formula_json,assets_json,approval_status,created_by,approved_by,approved_at) VALUES (UUID(),?,?,?,?,?,?,?,?,?,?,'assessment_import',?,1,?,?,'approved',?,?,CURRENT_TIMESTAMP)`,[schoolId,job.subject_id,question.topic_id,question.subtopic_id||null,"structured",question.question_text,linked?.answer_text||null,question.difficulty||"medium",Math.max(1,Math.round(Number(question.marks||1))),question.confidence,job.id,question.formula_json,JSON.stringify(questionBankAssets(question)),userId,userId])
+        const topicScope=validatedTopicPairs.get(`${question.topic_id||""}:${question.subtopic_id||""}`)
+        const curriculumId=Number(topicScope?.topic?.curriculum_id||0)||null
+        const gradeId=Number(topicScope?.topic?.grade_id||0)||null
+        const moderation=importedQuestionBankModeration({actorRole:actor?.role,correctAnswer,explanation,topicId:topicScope?.topicId,gradeId,subjectId:job.subject_id})
+        const approvedBy=moderation.approvalStatus==="approved"?userId:null
+        await connection.query(`INSERT INTO question_bank (
+          public_ref,school_id,curriculum_id,grade_id,subject_id,topic_id,subtopic_id,question_type,question_text,
+          correct_answer,explanation,difficulty,marks,confidence,source_type,source_import_job_id,is_daily_drill_eligible,
+          formula_json,assets_json,approval_status,created_by,approved_by,approved_at
+        ) VALUES (UUID(),?,?,?,?,?,?,?,?,?,?,?,?,?,'assessment_import',?,1,?,?,?,?,?,CASE WHEN ? IS NULL THEN NULL ELSE CURRENT_TIMESTAMP END)`,[
+          schoolId,curriculumId,gradeId,job.subject_id,topicScope?.topicId,topicScope?.subtopicId||null,"structured",question.question_text,
+          correctAnswer,explanation,question.difficulty||"medium",Math.max(1,Math.round(Number(question.marks||1))),question.confidence,
+          job.id,question.formula_json,JSON.stringify(questionBankAssets(question)),moderation.approvalStatus,userId,approvedBy,approvedBy,
+        ])
       }
     }
     const coverMediaId=await copyImportedCoverToAssessment(connection,{schoolId,userId,job,assessmentId:assessment.insertId})

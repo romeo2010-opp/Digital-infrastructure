@@ -24,6 +24,10 @@ function statusTone(value: any) {
   return 'border-[#fed7aa] bg-[#fff7ed] text-[#9a3412]'
 }
 
+function roleCanModerateQuestions(user: any) {
+  return ['super_admin', 'school_owner', 'owner', 'director', 'headteacher'].includes(String(user?.role || '').toLowerCase())
+}
+
 function jsonLines(value: any) {
   if (!Array.isArray(value)) return ''
   return value.map((item) => typeof item === 'string' ? item : `${item.label || ''}. ${item.text || ''}`.trim()).filter(Boolean).join('\n')
@@ -36,7 +40,8 @@ function parseLines(value: string) {
 export function QuestionBatchEditorPage() {
   const { batchId } = useParams()
   const navigate = useNavigate()
-  const { token, api } = usePortal()
+  const { token, api, user } = usePortal()
+  const canModerateQuestions = roleCanModerateQuestions(user)
   const [payload, setPayload] = useState<any>(null)
   const [questions, setQuestions] = useState<any[]>([])
   const [activeId, setActiveId] = useState<any>(null)
@@ -230,18 +235,25 @@ export function QuestionBatchEditorPage() {
                   <Textarea className="min-h-16 text-[12px] normal-case tracking-normal text-[#111827]" value={question.common_mistake || ''} onChange={(event) => updateQuestion(question.id, { common_mistake: event.target.value })} />
                 </label>
                 <div className="flex flex-wrap justify-end gap-2">
+                  {!canModerateQuestions && question.approval_status === 'pending_review' ? (
+                    <span className="mr-auto self-center text-[11px] font-semibold text-[#64748b]">Your saved edits return to school leadership for final moderation.</span>
+                  ) : null}
                   <Button type="button" variant="outline" className="h-8 rounded-[5px] text-[12px]" disabled={Boolean(busyKey)} onClick={() => saveQuestion(question)}>
                     {busyKey === `save-${question.id}` ? <Loader2 className="size-3.5 animate-spin" /> : <Save className="size-3.5" />}
                     Save
                   </Button>
-                  <Button type="button" variant="outline" className="h-8 rounded-[5px] text-[12px]" disabled={Boolean(busyKey)} onClick={() => transitionQuestion(question, 'reject')}>
-                    {busyKey === `reject-${question.id}` ? <Loader2 className="size-3.5 animate-spin" /> : <XCircle className="size-3.5" />}
-                    Reject
-                  </Button>
-                  <Button type="button" className="h-8 rounded-[5px] text-[12px]" disabled={Boolean(busyKey)} onClick={() => transitionQuestion(question, 'approve')}>
-                    {busyKey === `approve-${question.id}` ? <Loader2 className="size-3.5 animate-spin" /> : <CheckCircle2 className="size-3.5" />}
-                    Approve
-                  </Button>
+                  {canModerateQuestions ? (
+                    <>
+                      <Button type="button" variant="outline" className="h-8 rounded-[5px] text-[12px]" disabled={Boolean(busyKey)} onClick={() => transitionQuestion(question, 'reject')}>
+                        {busyKey === `reject-${question.id}` ? <Loader2 className="size-3.5 animate-spin" /> : <XCircle className="size-3.5" />}
+                        Reject
+                      </Button>
+                      <Button type="button" className="h-8 rounded-[5px] text-[12px]" disabled={Boolean(busyKey)} onClick={() => transitionQuestion(question, 'approve')}>
+                        {busyKey === `approve-${question.id}` ? <Loader2 className="size-3.5 animate-spin" /> : <CheckCircle2 className="size-3.5" />}
+                        Approve
+                      </Button>
+                    </>
+                  ) : null}
                 </div>
               </div>
             </section>

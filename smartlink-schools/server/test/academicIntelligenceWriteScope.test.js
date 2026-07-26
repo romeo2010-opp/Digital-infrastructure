@@ -1,5 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
+import { readFile } from "node:fs/promises"
 import {
   assertAcademicActorWriteScope,
   validateAcademicInterventionScope,
@@ -64,11 +65,10 @@ function scopeDb(overrides = {}) {
       }
       if (/ FROM teacher_class_subject_assignments /i.test(` ${sql} `)) {
         if (/teacher_id=\? AND class_id=\? AND subject_id=\?/i.test(sql)) {
-          const [schoolId, teacherId, classId, subjectId, yearFilter, yearId, termFilter, termId] = params.map((value) => value === null ? null : Number(value))
+          const [schoolId, teacherId, classId, subjectId, academicYearId, termId] = params.map((value) => value === null ? null : Number(value))
           return [data.assignments.filter((row) => row.school_id === schoolId && row.teacher_id === teacherId && row.class_id === classId && row.subject_id === subjectId
             && row.role === "subject_teacher" && Number(row.is_active) === 1
-            && (yearFilter === null || row.academic_year_id === null || row.academic_year_id === yearId)
-            && (termFilter === null || row.term_id === null || row.term_id === termId))]
+            && row.academic_year_id === academicYearId && row.term_id === termId)]
         }
         const [schoolId, teacherId, subjectId, classFilter, classId, yearFilter, yearId, termFilter, termId] = params.map((value) => value === null ? null : Number(value))
         return [data.assignments.filter((row) => row.school_id === schoolId && row.teacher_id === teacherId && row.subject_id === subjectId && row.role === "subject_teacher" && Number(row.is_active) === 1
@@ -175,6 +175,8 @@ test("teacher actors can write only within their exact active class-subject assi
     classId: 20, subjectId: 10, termId: 40, term: { academic_year_id: 50 }, teacherId: null,
   })
   assert.equal(allowed.assignedTeacherId, 60)
+  assert.equal(allowed.academicYearId, 50)
+  assert.equal(allowed.termId, 40)
   await assert.rejects(
     assertAcademicActorWriteScope(scopeDb(), 1, { id: 60, role: "teacher" }, { classId: 20, subjectId: 11 }),
     /only manage academic support for their assigned class and subject/i,
@@ -217,4 +219,60 @@ test("remediation links must belong to the tenant and share the selected scope",
     validateRemediationPackScope(scopeDb(), 1, { subject_id: 10, topic_id: 71, recommendation_id: 80 }),
     /topic does not match the linked recommendation or intervention/i,
   )
+})
+
+test("teacher blueprint reads and writes use current exact class-subject scope", async () => {
+  const [engine, controller] = await Promise.all([
+    readFile(new URL("../src/services/academicIntelligenceEngine.js", import.meta.url), "utf8"),
+    readFile(new URL("../src/controllers/academicIntelligenceController.js", import.meta.url), "utf8"),
+  ])
+  const createStart = engine.indexOf("export async function createAssessmentBlueprint")
+  const listStart = engine.indexOf("export async function listAssessmentBlueprints", createStart)
+  const remediationStart = engine.indexOf("export async function createRemediationPack", listStart)
+  const create = engine.slice(createStart, listStart)
+  const list = engine.slice(listStart, remediationStart)
+  assert.match(create, /validateAcademicInterventionScope/)
+  assert.match(create, /assertAcademicActorWriteScope/)
+  assert.match(create, /requireActiveAcademicSession/)
+  assert.match(create, /activeSession\.academicYearId/)
+  assert.match(create, /activeSession\.termId/)
+  assert.match(create, /academic_years WHERE school_id=\? AND id=\?/)
+  assert.match(create, /LEFT JOIN grade_levels grade/)
+  assert.match(create, /LOWER\(TRIM\(grade\.name\)\)=LOWER\(TRIM\(\?\)\)/)
+  assert.match(list, /tcsa\.class_id=ab\.class_id AND tcsa\.subject_id=ab\.subject_id/)
+  assert.match(list, /tcsa\.role='subject_teacher'/)
+  assert.match(list, /current_term\.status IN \('open','marking'\)/)
+  assert.match(list, /u\.id=ab\.created_by AND u\.school_id=ab\.school_id/)
+  assert.match(controller, /listAssessmentBlueprints\(getScopedSchoolId\(req\),req\.user,req\.query\)/)
+  const authoringStart = engine.indexOf("export async function getAcademicAuthoringSetup")
+  const authoring = engine.slice(authoringStart, createStart)
+  assert.match(authoring, /a\.role='subject_teacher'/)
+  assert.match(authoring, /current_term\.status IN \('open','marking'\)/)
+  const remediationStartIndex = engine.indexOf("export async function listRemediationPacks")
+  const remediation = engine.slice(remediationStartIndex, engine.indexOf("export async function patchRemediationPack", remediationStartIndex))
+  assert.match(remediation, /current_year\.is_active=1/)
+  assert.match(remediation, /current_term\.status IN \('open','marking'\)/)
+})
+
+test("teacher command-centre insights are restricted to the current assignment session", async () => {
+  const engine = await readFile(new URL("../src/services/academicIntelligenceEngine.js", import.meta.url), "utf8")
+  const start = engine.indexOf("export async function getAcademicCommandCentre")
+  const end = engine.indexOf("export async function getAcademicIntelligenceHistory", start)
+  const commandCentre = engine.slice(start, end)
+  assert.match(commandCentre, /teacherScopePredicate/)
+  assert.match(commandCentre, /current_year\.is_active=1/)
+  assert.match(commandCentre, /current_term\.status IN \('open','marking'\)/)
+  assert.match(commandCentre, /tcsa\.academic_year_id=current_year\.id/)
+  assert.match(commandCentre, /tcsa\.term_id=current_term\.id/)
+  assert.doesNotMatch(commandCentre, /tcsa\.academic_year_id IS NULL/)
+  assert.doesNotMatch(commandCentre, /tcsa\.term_id IS NULL/)
+  assert.match(commandCentre, /academic_year_id: "cdr\.academic_year_id"/)
+  assert.match(commandCentre, /academic_year_id: 'ers\.academic_year_id'/)
+  assert.match(commandCentre, /grade_id: "q\.grade_id"/)
+  const explanationStart = engine.indexOf("export async function getAcademicFindingExplanation")
+  const explanationEnd = engine.indexOf("export async function queueAcademicRecalculation", explanationStart)
+  const explanation = engine.slice(explanationStart, explanationEnd)
+  assert.match(explanation, /JOIN academic_years current_year/)
+  assert.match(explanation, /JOIN terms current_term/)
+  assert.match(explanation, /scope\.academic_year_id, scope\.academic_year_id, scope\.term_id, scope\.term_id/)
 })

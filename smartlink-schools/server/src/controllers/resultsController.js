@@ -88,6 +88,32 @@ async function getAssessmentOrThrow(schoolId, assessmentId) {
   return assessment
 }
 
+async function resolveAssignedResultTeacher(req, schoolId, assessment, requestedTeacherId = null) {
+  if (isTeacher(req)) return Number(req.user.id)
+  const activeSession = await getActiveAcademicSession(schoolId)
+  const isCurrentSession = !activeSession.setupRequired
+    && Number(assessment.academic_year_id) === Number(activeSession.academicYearId)
+    && Number(assessment.term_id) === Number(activeSession.termId)
+  const teacherId = Number(requestedTeacherId || assessment.teacher_id || 0) || null
+  const teacherClause = teacherId ? " AND assignment.teacher_id = ?" : ""
+  const activeClause = isCurrentSession ? " AND assignment.is_active = 1 AND teacher.is_active = 1" : ""
+  const params = [schoolId, assessment.class_id, assessment.subject_id, assessment.academic_year_id, assessment.term_id, ...(teacherId ? [teacherId] : [])]
+  const [[assignment]] = await pool.query(
+    `SELECT assignment.teacher_id
+     FROM teacher_class_subject_assignments assignment
+     JOIN users teacher ON teacher.id = assignment.teacher_id AND teacher.school_id = assignment.school_id
+     WHERE assignment.school_id = ? AND assignment.class_id = ? AND assignment.subject_id = ?
+       AND assignment.academic_year_id = ? AND assignment.term_id = ?
+       AND assignment.role = 'subject_teacher'
+       AND teacher.role = 'teacher'${activeClause}${teacherClause}
+     ORDER BY assignment.updated_at DESC, assignment.id DESC
+     LIMIT 1`,
+    params,
+  )
+  if (!assignment) throw new HttpError(400, "Assign an active subject teacher for this academic term before entering results")
+  return Number(assignment.teacher_id)
+}
+
 function teacherScopeClause(pairs, classColumn = "a.class_id", subjectColumn = "a.subject_id") {
   if (!Array.isArray(pairs)) return { clause: "", params: [] }
   if (!pairs.length) return { clause: " AND 1 = 0", params: [] }
@@ -197,8 +223,8 @@ export async function listResultsSetup(req, res) {
   const [years] = await pool.query("SELECT * FROM academic_years WHERE school_id = ? ORDER BY start_date DESC", [schoolId])
   const [terms] = await pool.query("SELECT * FROM terms WHERE school_id = ? ORDER BY start_date DESC", [schoolId])
   const teacherAssignmentSessionClause = session.setupRequired
-    ? ""
-    : " AND (a.academic_year_id = ? OR a.academic_year_id IS NULL) AND (a.term_id = ? OR a.term_id IS NULL)"
+    ? " AND 1 = 0"
+    : " AND a.academic_year_id = ? AND a.term_id = ?"
   const teacherAssignmentSessionParams = session.setupRequired ? [] : [session.academicYearId, session.termId]
   const [classes] = Array.isArray(teacherPairs)
     ? await pool.query(
@@ -259,7 +285,7 @@ export async function listResultsSetup(req, res) {
      JOIN subjects subj ON subj.id = rb.subject_id AND subj.school_id = rb.school_id
      JOIN users u ON u.id = rb.teacher_id AND u.school_id = rb.school_id
      LEFT JOIN result_entries re ON re.result_batch_id = rb.id AND re.school_id = rb.school_id
-     WHERE rb.school_id = ? AND rb.academic_year_id = ? AND rb.term_id = ?${isTeacher(req) ? " AND rb.teacher_id = ?" : ""}
+     WHERE rb.school_id = ? AND rb.academic_year_id = ? AND rb.term_id = ?${isTeacher(req) ? " AND EXISTS (SELECT 1 FROM teacher_class_subject_assignments tcsa WHERE tcsa.school_id=rb.school_id AND tcsa.teacher_id=? AND tcsa.class_id=rb.class_id AND tcsa.subject_id=rb.subject_id AND tcsa.academic_year_id=rb.academic_year_id AND tcsa.term_id=rb.term_id AND tcsa.role='subject_teacher' AND tcsa.is_active=1)" : ""}
      GROUP BY rb.id, a.name, c.name, subj.name, u.full_name
      ORDER BY rb.updated_at DESC`,
     isTeacher(req) ? [schoolId, session.academicYearId, session.termId, req.user.id] : [schoolId, session.academicYearId, session.termId],
@@ -288,7 +314,7 @@ export async function listResultBatches(req, res) {
      JOIN terms t ON t.id = rb.term_id AND t.school_id = rb.school_id
      LEFT JOIN exam_sessions es ON es.id = rb.exam_session_id AND es.school_id = rb.school_id
      LEFT JOIN result_entries re ON re.result_batch_id = rb.id AND re.school_id = rb.school_id
-     WHERE rb.school_id = ? AND rb.academic_year_id = ? AND rb.term_id = ?${isTeacher(req) ? " AND rb.teacher_id = ?" : ""}
+     WHERE rb.school_id = ? AND rb.academic_year_id = ? AND rb.term_id = ?${isTeacher(req) ? " AND EXISTS (SELECT 1 FROM teacher_class_subject_assignments tcsa WHERE tcsa.school_id=rb.school_id AND tcsa.teacher_id=? AND tcsa.class_id=rb.class_id AND tcsa.subject_id=rb.subject_id AND tcsa.academic_year_id=rb.academic_year_id AND tcsa.term_id=rb.term_id AND tcsa.role='subject_teacher' AND tcsa.is_active=1)" : ""}
      GROUP BY rb.id, a.name, a.total_marks, c.name, subj.name, u.full_name, ay.name, t.name, es.name
      ORDER BY rb.updated_at DESC`,
     isTeacher(req) ? [schoolId, session.academicYearId, session.termId, req.user.id] : [schoolId, session.academicYearId, session.termId],
@@ -303,7 +329,7 @@ export async function getResultSheet(req, res) {
   const assessment = await getAssessmentOrThrow(schoolId, assessmentId)
   await assertTeacherCanTeachSubject(req, schoolId, assessment.class_id, assessment.subject_id, assessment.term_id)
   assertAssessmentAllowsResultEntry(req, assessment)
-  const teacherId = isTeacher(req) ? req.user.id : Number(req.query.teacher_id || assessment.teacher_id || assessment.created_by)
+  const teacherId = await resolveAssignedResultTeacher(req, schoolId, assessment, req.query.teacher_id)
   const [[batch]] = await pool.query(
     `SELECT * FROM result_batches
      WHERE school_id = ? AND assessment_id = ? AND teacher_id = ? AND term_id = ?
@@ -684,7 +710,7 @@ export async function saveResultDraft(req, res) {
   const assessment = await getAssessmentOrThrow(schoolId, assessmentId)
   await assertTeacherCanTeachSubject(req, schoolId, assessment.class_id, assessment.subject_id, assessment.term_id)
   assertAssessmentAllowsResultEntry(req, assessment)
-  const teacherId = isTeacher(req) ? req.user.id : Number(req.body.teacher_id || assessment.teacher_id || assessment.created_by)
+  const teacherId = await resolveAssignedResultTeacher(req, schoolId, assessment, req.body.teacher_id)
   const connection = await pool.getConnection()
 
   try {
@@ -722,7 +748,7 @@ export async function submitResults(req, res) {
   const assessment = await getAssessmentOrThrow(schoolId, assessmentId)
   await assertTeacherCanTeachSubject(req, schoolId, assessment.class_id, assessment.subject_id, assessment.term_id)
   assertAssessmentAllowsResultEntry(req, assessment)
-  const teacherId = isTeacher(req) ? req.user.id : Number(req.body.teacher_id || assessment.teacher_id || assessment.created_by)
+  const teacherId = await resolveAssignedResultTeacher(req, schoolId, assessment, req.body.teacher_id)
   const connection = await pool.getConnection()
 
   try {

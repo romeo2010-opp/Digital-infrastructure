@@ -372,6 +372,19 @@ export function StudentProfilePage() {
   const [academicIntelligence, setAcademicIntelligence] = useState<any>(null)
   const [learnerSupport, setLearnerSupport] = useState<any>(null)
   const [parentInsightBusy, setParentInsightBusy] = useState('')
+  const [parentInsightSubjectRef, setParentInsightSubjectRef] = useState('')
+
+  const parentInsightSubjects = useMemo(
+    () => Array.isArray(academicIntelligence?.available_subjects) ? academicIntelligence.available_subjects : [],
+    [academicIntelligence?.available_subjects],
+  )
+
+  useEffect(() => {
+    if (user?.role !== 'teacher') return
+    if (!parentInsightSubjects.some((subject: any) => subject.public_ref === parentInsightSubjectRef)) {
+      setParentInsightSubjectRef(parentInsightSubjects[0]?.public_ref || '')
+    }
+  }, [parentInsightSubjectRef, parentInsightSubjects, user?.role])
 
   useEffect(() => {
     if (!token || !studentId) return
@@ -405,7 +418,10 @@ export function StudentProfilePage() {
     setParentInsightBusy('create')
     setError('')
     try {
-      await api.createParentAcademicInsight(token, { student_ref: studentId })
+      await api.createParentAcademicInsight(token, {
+        student_ref: studentId,
+        ...(user?.role === 'teacher' ? { subject_ref: parentInsightSubjectRef } : {}),
+      })
       await refreshAcademicIntelligence()
     } catch (err: any) {
       setError(err?.message || 'Unable to prepare the parent-safe progress update.')
@@ -785,9 +801,22 @@ export function StudentProfilePage() {
               title="Parent-safe academic updates"
               subtitle="Prepare a plain-language summary from school evidence. Approval makes the update visible in the linked parent portal."
               actions={(user?.permissions || []).includes('ACADEMIC_INTERVENTION_MANAGE') ? (
-                <Button type="button" onClick={prepareParentInsight} disabled={Boolean(parentInsightBusy)} className="h-8 rounded-[6px] text-[11px]">
-                  {parentInsightBusy === 'create' ? 'Preparing...' : 'Prepare update'}
-                </Button>
+                <div className="flex flex-wrap items-center gap-2">
+                  {user?.role === 'teacher' ? (
+                    <select
+                      aria-label="Subject for parent update"
+                      value={parentInsightSubjectRef}
+                      onChange={(event) => setParentInsightSubjectRef(event.target.value)}
+                      className="h-8 min-w-40 rounded-[6px] border border-[#d8dee8] bg-white px-2 text-[11px] font-semibold text-[#334155] outline-none focus:border-[#94a3b8]"
+                    >
+                      <option value="">Select subject</option>
+                      {parentInsightSubjects.map((subject: any) => <option key={subject.public_ref} value={subject.public_ref}>{subject.name}</option>)}
+                    </select>
+                  ) : null}
+                  <Button type="button" onClick={prepareParentInsight} disabled={Boolean(parentInsightBusy) || (user?.role === 'teacher' && !parentInsightSubjectRef)} className="h-8 rounded-[6px] text-[11px]">
+                    {parentInsightBusy === 'create' ? 'Preparing...' : 'Prepare update'}
+                  </Button>
+                </div>
               ) : null}
             >
               <div className="divide-y divide-[#e2e8f0]">

@@ -26,7 +26,7 @@ export function PageHeader({
   const navigate = useNavigate()
   const { data } = usePortal()
   const [notificationsOpen, setNotificationsOpen] = useState(false)
-  const name = user?.fullName || user?.full_name || user?.email || 'Mr. Banda'
+  const name = user?.fullName || user?.full_name || user?.email || 'Staff member'
   const role = roleLabelFor(user)
   const initials = String(name)
     .split(' ')

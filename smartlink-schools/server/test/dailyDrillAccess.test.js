@@ -32,8 +32,10 @@ test("Daily Drill list scope requires an exact active teacher class and subject 
   assert.match(scope.clause, /drill_tcsa\.subject_id = ds\.subject_id/)
   assert.match(scope.clause, /drill_tcsa\.role = 'subject_teacher'/)
   assert.match(scope.clause, /drill_tcsa\.is_active = 1/)
-  assert.match(scope.clause, /academic_year_id IS NULL/)
-  assert.match(scope.clause, /term_id IS NULL/)
+  assert.match(scope.clause, /drill_tcsa\.academic_year_id = se\.academic_year_id/)
+  assert.match(scope.clause, /drill_tcsa\.term_id = se\.term_id/)
+  assert.doesNotMatch(scope.clause, /academic_year_id IS NULL/)
+  assert.doesNotMatch(scope.clause, /term_id IS NULL/)
   assert.deepEqual(scope.params, [17])
 })
 
@@ -141,7 +143,16 @@ test("session access binds the drill subject to the teacher relationship", async
 })
 
 test("class drill generation uses subject-teacher assignments only", async () => {
-  const db = relationshipDb({ teacherAssignments: [{ subject_id: 12 }, { subject_id: 12 }, { subject_id: 14 }] })
+  let assignmentSql = ""
+  let assignmentParams = []
+  const base = relationshipDb({ teacherAssignments: [{ subject_id: 12 }, { subject_id: 12 }, { subject_id: 14 }] })
+  const db = {
+    async query(sql, params) {
+      assignmentSql = sql
+      assignmentParams = params
+      return base.query(sql, params)
+    },
+  }
   const ids = await getTeacherSubjectIdsForClass({
     db,
     schoolId: 3,
@@ -151,6 +162,11 @@ test("class drill generation uses subject-teacher assignments only", async () =>
     termId: 9,
   })
   assert.deepEqual(ids, [12, 14])
+  assert.match(assignmentSql, /tcsa\.academic_year_id = \?/)
+  assert.match(assignmentSql, /tcsa\.term_id = \?/)
+  assert.doesNotMatch(assignmentSql, /academic_year_id IS NULL/)
+  assert.doesNotMatch(assignmentSql, /term_id IS NULL/)
+  assert.deepEqual(assignmentParams, [3, 17, 8, 6, 9])
 })
 
 test("Daily Drill controller and generator apply relationship scope on every workflow", () => {

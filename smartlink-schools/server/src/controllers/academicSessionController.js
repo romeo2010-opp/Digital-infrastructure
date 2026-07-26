@@ -1196,12 +1196,6 @@ export async function openTerm(req, res) {
       }
     }
 
-    await connection.query(
-      `UPDATE teacher_class_subject_assignments
-       SET academic_year_id = COALESCE(academic_year_id, ?), term_id = COALESCE(term_id, ?)
-       WHERE school_id = ? AND is_active = 1`,
-      [academicYearId, termId, schoolId],
-    )
     await connection.commit()
     res.status(201).json({
       term: { id: termId, school_id: schoolId, academic_year_id: academicYearId, name, term_number: termNumber, start_date: startDate, end_date: endDate, status: "open" },

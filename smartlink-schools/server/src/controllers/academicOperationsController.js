@@ -28,7 +28,7 @@ const assessmentId = (req) => {
 }
 
 export async function academicAuthoringTopics(req, res) {
-  res.json(await listAuthoringTopics(getScopedSchoolId(req), req.query))
+  res.json(await listAuthoringTopics(getScopedSchoolId(req), req.query, req.user))
 }
 
 export async function putQuestionMappings(req, res) {

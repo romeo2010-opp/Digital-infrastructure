@@ -81,6 +81,36 @@ export function structuredTablesFromAssets(value) {
     })
 }
 
+export async function resolveDrillMasterySessionScope(connection, schoolId, studentId, activeSession) {
+  if (activeSession?.setupRequired || !Number(activeSession?.academicYearId) || !Number(activeSession?.termId)) {
+    throw new HttpError(409, activeSession?.message || "An active academic year and term are required before recording Daily Drill evidence")
+  }
+  const [[enrollment]] = await connection.query(
+    `SELECT enrollment.academic_year_id,enrollment.term_id,enrollment.class_id
+     FROM student_enrollments enrollment
+     JOIN students student ON student.school_id=enrollment.school_id AND student.id=enrollment.student_id
+       AND student.status='active'
+     JOIN academic_years academic_year ON academic_year.school_id=enrollment.school_id
+       AND academic_year.id=enrollment.academic_year_id AND academic_year.is_active=1 AND academic_year.status<>'archived'
+     JOIN terms term ON term.school_id=enrollment.school_id AND term.id=enrollment.term_id
+       AND term.academic_year_id=academic_year.id AND term.status IN ('open','marking')
+     WHERE enrollment.school_id=? AND enrollment.student_id=?
+       AND enrollment.academic_year_id=? AND enrollment.term_id=?
+       AND enrollment.enrollment_status='active'
+     ORDER BY enrollment.id DESC
+     LIMIT 1`,
+    [schoolId, studentId, activeSession.academicYearId, activeSession.termId],
+  )
+  if (!enrollment) {
+    throw new HttpError(409, "The learner must have an active enrollment in the current academic year and term before Daily Drill evidence can be recorded")
+  }
+  return {
+    academicYearId: Number(enrollment.academic_year_id),
+    termId: Number(enrollment.term_id),
+    classId: Number(enrollment.class_id),
+  }
+}
+
 function studentIdForRequest(req) {
   if (req.user?.role === "student") return Number(req.user.studentId || req.user.id || 0)
   return Number(req.params.studentId || req.params.student_id || req.query.student_id || req.body.student_id || 0)
@@ -485,16 +515,15 @@ export async function answerDrillQuestion(req, res) {
   const answer = req.body.answer ?? req.body.student_answer ?? ""
   if (!sessionId) throw new HttpError(400, "Drill session is required")
   if (!sessionQuestionId && !questionId) throw new HttpError(400, "Question is required")
-  const activeSession = await getActiveAcademicSession(schoolId)
-
   const connection = await pool.getConnection()
   try {
     await connection.beginTransaction()
+    const activeSession = await getActiveAcademicSession(schoolId, connection)
     const [[row]] = await connection.query(
       `SELECT ds.student_id, ds.subject_id AS drill_subject_id, ds.status, dsq.id AS session_question_id, q.*
        FROM drill_sessions ds
        JOIN drill_session_questions dsq ON dsq.drill_session_id = ds.id
-       JOIN question_bank q ON q.id = dsq.question_id
+       JOIN question_bank q ON q.id = dsq.question_id AND q.school_id = ds.school_id AND q.subject_id = ds.subject_id
        WHERE ds.school_id = ? AND ds.id = ?
          AND (${sessionQuestionId ? "dsq.id = ?" : "q.id = ?"})
        LIMIT 1 FOR UPDATE`,
@@ -507,6 +536,7 @@ export async function answerDrillQuestion(req, res) {
       subjectId: row.drill_subject_id,
       action: "answer",
     })
+    const masterySession = await resolveDrillMasterySessionScope(connection, schoolId, row.student_id, activeSession)
     if (row.status === "completed") throw new HttpError(409, "This drill has already been submitted")
     let mark = markAnswer(row, answer)
     if (
@@ -524,8 +554,8 @@ export async function answerDrillQuestion(req, res) {
     await connection.query(
       `UPDATE drill_session_questions
        SET student_answer = ?, is_correct = ?, marks_awarded = ?, mistake_type = ?, ai_feedback = ?, answered_at = CURRENT_TIMESTAMP
-       WHERE id = ?`,
-      [String(answer), mark.is_correct, mark.marks_awarded, mark.mistake_type, mark.ai_feedback || null, row.session_question_id],
+       WHERE id = ? AND drill_session_id = ?`,
+      [String(answer), mark.is_correct, mark.marks_awarded, mark.mistake_type, mark.ai_feedback || null, row.session_question_id, sessionId],
     )
     await updateMasteryFromAnswer(connection, schoolId, row.student_id, row, mark)
     if (mark.is_correct !== null && mark.is_correct !== undefined) {
@@ -541,16 +571,18 @@ export async function answerDrillQuestion(req, res) {
         marks_awarded=VALUES(marks_awarded),marks_available=VALUES(marks_available),misconception_code=VALUES(misconception_code),attempted_at=CURRENT_TIMESTAMP`,
       [schoolId,row.student_id,row.id,sessionId,row.subject_id,row.topic_id,row.subtopic_id||null,row.learning_objective_id||null,String(answer),responseStatus,awarded,maxMarks,mark.mistake_type||null])
       await connection.query(`INSERT INTO mastery_evidence (
-        public_ref,school_id,student_id,subject_id,topic_id,subtopic_id,learning_objective_id,evidence_type,
+        public_ref,school_id,academic_year_id,term_id,student_id,class_id,subject_id,topic_id,subtopic_id,learning_objective_id,evidence_type,
         source_entity_type,source_entity_id,score_percentage,marks_awarded,marks_available,difficulty_weight,
         assessment_weight,independence_weight,evidence_granularity,evidence_at,metadata_json
-      ) VALUES (UUID(),?,?,?,?,?,?,'daily_drill','drill_session_question',?,?,?,?,?,0.5,1,?,CURRENT_TIMESTAMP,?)
-      ON DUPLICATE KEY UPDATE score_percentage=VALUES(score_percentage),marks_awarded=VALUES(marks_awarded),
-        marks_available=VALUES(marks_available),evidence_at=CURRENT_TIMESTAMP,metadata_json=VALUES(metadata_json)`,
-      [schoolId,row.student_id,row.subject_id,row.topic_id,row.subtopic_id||null,row.learning_objective_id||null,row.session_question_id,scorePercentage,awarded,maxMarks,row.difficulty==='hard'?1.2:row.difficulty==='medium'?1:0.85,row.learning_objective_id?'objective':row.subtopic_id?'subtopic':'topic',JSON.stringify({mistake_type:mark.mistake_type||null,reason:row.reason||null})])
-      await recalculateStudentMastery(schoolId,row.student_id,row.subject_id,{topic_id:row.topic_id},connection)
-      if(row.subtopic_id)await recalculateStudentMastery(schoolId,row.student_id,row.subject_id,{topic_id:row.topic_id,subtopic_id:row.subtopic_id},connection)
-      if(row.learning_objective_id)await recalculateStudentMastery(schoolId,row.student_id,row.subject_id,{topic_id:row.topic_id,subtopic_id:row.subtopic_id||null,learning_objective_id:row.learning_objective_id},connection)
+      ) VALUES (UUID(),?,?,?,?,?,?,?,?,?,'daily_drill','drill_session_question',?,?,?,?,?,0.5,1,?,CURRENT_TIMESTAMP,?)
+      ON DUPLICATE KEY UPDATE academic_year_id=VALUES(academic_year_id),term_id=VALUES(term_id),class_id=VALUES(class_id),
+        score_percentage=VALUES(score_percentage),marks_awarded=VALUES(marks_awarded),marks_available=VALUES(marks_available),
+        publication_state='published',evidence_status='valid',evidence_at=CURRENT_TIMESTAMP,metadata_json=VALUES(metadata_json)`,
+      [schoolId,masterySession.academicYearId,masterySession.termId,row.student_id,masterySession.classId,row.subject_id,row.topic_id,row.subtopic_id||null,row.learning_objective_id||null,row.session_question_id,scorePercentage,awarded,maxMarks,row.difficulty==='hard'?1.2:row.difficulty==='medium'?1:0.85,row.learning_objective_id?'objective':row.subtopic_id?'subtopic':'topic',JSON.stringify({mistake_type:mark.mistake_type||null,reason:row.reason||null,drill_session_id:sessionId})])
+      const academicScope={academic_year_id:masterySession.academicYearId,term_id:masterySession.termId}
+      await recalculateStudentMastery(schoolId,row.student_id,row.subject_id,{...academicScope,topic_id:row.topic_id},connection)
+      if(row.subtopic_id)await recalculateStudentMastery(schoolId,row.student_id,row.subject_id,{...academicScope,topic_id:row.topic_id,subtopic_id:row.subtopic_id},connection)
+      if(row.learning_objective_id)await recalculateStudentMastery(schoolId,row.student_id,row.subject_id,{...academicScope,topic_id:row.topic_id,subtopic_id:row.subtopic_id||null,learning_objective_id:row.learning_objective_id},connection)
       await recalculateQuestionAnalytics(schoolId,row.id,connection)
     }
     await connection.commit()

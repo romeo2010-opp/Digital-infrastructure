@@ -49,10 +49,9 @@ async function resolveClassGradeId(connection, schoolId, classId) {
 }
 
 function sessionClause(session, alias = "a") {
-  if (!session || session.setupRequired) return { clause: "", params: [] }
+  if (!session || session.setupRequired || !Number(session.academicYearId) || !Number(session.termId)) return { clause: " AND 1=0", params: [] }
   return {
-    clause: ` AND (${alias}.academic_year_id = ? OR ${alias}.academic_year_id IS NULL)
-      AND (${alias}.term_id = ? OR ${alias}.term_id IS NULL)`,
+    clause: ` AND ${alias}.academic_year_id = ? AND ${alias}.term_id = ?`,
     params: [session.academicYearId, session.termId],
   }
 }
@@ -79,32 +78,29 @@ async function getAssignments(connection, schoolId, user, session) {
     [...params, ...scoped.params],
   )
 
-  if (rows.length || !isTeacher) return rows.filter((row) => row.subject_id)
-
-  const [classTeacherRows] = await connection.query(
-    `SELECT c.id AS class_id, c.name AS class_name, c.grade_level,
-      subj.id AS subject_id, subj.name AS subject_name, c.teacher_user_id AS teacher_id, u.full_name AS teacher_name
-     FROM classes c
-     JOIN subjects subj ON subj.school_id = c.school_id
-     LEFT JOIN users u ON u.id = c.teacher_user_id AND u.school_id = c.school_id
-     WHERE c.school_id = ? AND c.teacher_user_id = ?
-     ORDER BY c.name, subj.name`,
-    [schoolId, user.id],
-  )
-  return classTeacherRows
+  return rows.filter((row) => row.subject_id)
 }
 
 export async function getLessonLogSuggestions(connection, schoolId, user, session, filters = {}) {
   const lessonDate = isoDate(filters.lesson_date || filters.date || new Date())
   const assignments = await getAssignments(connection, schoolId, user, session)
+  const teacher = String(user?.role || "").toLowerCase() === "teacher"
+  const sessionReady = !session?.setupRequired && Number(session?.academicYearId) > 0 && Number(session?.termId) > 0
+  const requestedClassId = idOrNull(filters.class_id)
+  const requestedSubjectId = idOrNull(filters.subject_id)
   const selectedAssignment = assignments.find((row) => {
-    const classOk = filters.class_id ? Number(row.class_id) === Number(filters.class_id) : true
-    const subjectOk = filters.subject_id ? Number(row.subject_id) === Number(filters.subject_id) : true
+    const classOk = requestedClassId ? Number(row.class_id) === requestedClassId : true
+    const subjectOk = requestedSubjectId ? Number(row.subject_id) === requestedSubjectId : true
     return classOk && subjectOk
   }) || assignments[0] || null
-  const classId = idOrNull(filters.class_id) || idOrNull(selectedAssignment?.class_id)
-  const subjectId = idOrNull(filters.subject_id) || idOrNull(selectedAssignment?.subject_id)
-  const teacherId = idOrNull(filters.teacher_id) || idOrNull(selectedAssignment?.teacher_id) || idOrNull(user?.id)
+  if (teacher && (requestedClassId || requestedSubjectId) && (!selectedAssignment
+    || (requestedClassId && Number(selectedAssignment.class_id) !== requestedClassId)
+    || (requestedSubjectId && Number(selectedAssignment.subject_id) !== requestedSubjectId))) {
+    throw new HttpError(403, "Teachers can only request lesson suggestions for their currently assigned class and subject.")
+  }
+  const classId = sessionReady ? (teacher ? idOrNull(selectedAssignment?.class_id) : requestedClassId || idOrNull(selectedAssignment?.class_id)) : null
+  const subjectId = sessionReady ? (teacher ? idOrNull(selectedAssignment?.subject_id) : requestedSubjectId || idOrNull(selectedAssignment?.subject_id)) : null
+  const teacherId = teacher ? idOrNull(user?.id) : idOrNull(filters.teacher_id) || idOrNull(selectedAssignment?.teacher_id) || idOrNull(user?.id)
   const gradeId = await resolveClassGradeId(connection, schoolId, classId)
 
   const plannedParams = [schoolId, classId || 0, subjectId || 0]
@@ -135,11 +131,12 @@ export async function getLessonLogSuggestions(connection, schoolId, user, sessio
          LEFT JOIN teacher_lesson_log_topics tlt ON tlt.lesson_log_id = l.id
          LEFT JOIN syllabus_topics st ON st.id = COALESCE(tlt.syllabus_subtopic_id, tlt.syllabus_topic_id, l.main_topic_id)
          WHERE l.school_id = ? AND l.class_id = ? AND l.subject_id = ?
+           AND l.academic_year_id=? AND l.term_id=?
            AND l.status = 'finalized'
            AND l.coverage_status IN ('introduced', 'partially_taught')
          ORDER BY l.lesson_date DESC, FIELD(tlt.topic_role, 'main', 'supporting', 'revision', 'prerequisite')
          LIMIT 6`,
-        [schoolId, classId, subjectId],
+        [schoolId, classId, subjectId, session.academicYearId, session.termId],
       )
     : [[]]
 
@@ -151,9 +148,10 @@ export async function getLessonLogSuggestions(connection, schoolId, user, sessio
          LEFT JOIN syllabus_topics st ON st.id = l.main_topic_id AND st.school_id = l.school_id
          LEFT JOIN users u ON u.id = l.teacher_id
          WHERE l.school_id = ? AND l.class_id = ? AND l.subject_id = ?
+           AND l.academic_year_id=? AND l.term_id=?
          ORDER BY l.lesson_date DESC, l.updated_at DESC
          LIMIT 5`,
-        [schoolId, classId, subjectId],
+        [schoolId, classId, subjectId, session.academicYearId, session.termId],
       )
     : [[]]
 
@@ -197,10 +195,11 @@ export async function getLessonLogSuggestions(connection, schoolId, user, sessio
         `SELECT id, name, status, total_marks, expected_difficulty, created_at
          FROM assessments
          WHERE school_id = ? AND class_id = ? AND subject_id = ?
+           AND academic_year_id=? AND term_id=?
            AND status NOT IN ('cancelled', 'archived')
          ORDER BY created_at DESC
          LIMIT 5`,
-        [schoolId, classId, subjectId],
+        [schoolId, classId, subjectId, session.academicYearId, session.termId],
       )
     : [[]]
 
@@ -233,3 +232,4 @@ export async function getLessonLogSuggestions(connection, schoolId, user, sessio
     },
   }
 }
+import { HttpError } from "../../utils/http.js"

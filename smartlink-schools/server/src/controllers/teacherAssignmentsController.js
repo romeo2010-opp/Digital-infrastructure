@@ -1,5 +1,5 @@
 import { pool } from "../config/db.js"
-import { getScopedSchoolId, getTeacherClassIds, scopedInClause } from "../utils/tenantScope.js"
+import { getScopedSchoolId, getTeacherClassIds, isTeacher, scopedInClause } from "../utils/tenantScope.js"
 import { HttpError } from "../utils/http.js"
 import { getActiveAcademicSession, sessionPayload } from "../services/academicSessionService.js"
 import {
@@ -34,13 +34,15 @@ function rowToAssignment(row) {
 
 export async function listTeacherAssignments(req, res) {
   const schoolId = getScopedSchoolId(req)
-  const includeHistory = String(req.query.include_history || req.query.includeHistory || "").toLowerCase() === "true"
+  const includeHistory = !isTeacher(req) && String(req.query.include_history || req.query.includeHistory || "").toLowerCase() === "true"
   const session = await getActiveAcademicSession(schoolId)
   const teacherClassIds = await getTeacherClassIds(req, schoolId)
   const classScope = scopedInClause(teacherClassIds, "a.class_id")
-  const sessionClause = includeHistory || session.setupRequired
+  const sessionClause = includeHistory
     ? ""
-    : " AND (a.academic_year_id = ? OR a.academic_year_id IS NULL) AND (a.term_id = ? OR a.term_id IS NULL)"
+    : session.setupRequired
+      ? " AND 1 = 0"
+      : " AND a.academic_year_id = ? AND a.term_id = ?"
   const sessionParams = includeHistory || session.setupRequired ? [] : [session.academicYearId, session.termId]
   const [rows] = await pool.query(
     `SELECT a.*, u.full_name AS teacher_name, c.name AS class_name, subj.name AS subject_name,
@@ -71,6 +73,9 @@ export async function createTeacherAssignment(req, res) {
       assignment.termId = session.termId
       assignment.academicYear = session.academicYear.name
       assignment.term = session.term.name
+    }
+    if (assignment.isActive && (!assignment.academicYearId || !assignment.termId)) {
+      throw new HttpError(409, session.message || "Active teacher assignments require an academic year and term")
     }
     await assertAssignmentScope(connection, schoolId, assignment)
     await assertNoDuplicateActiveAssignment(connection, schoolId, assignment)
@@ -129,6 +134,9 @@ export async function updateTeacherAssignment(req, res) {
       assignment.termId = session.termId
       assignment.academicYear = session.academicYear.name
       assignment.term = session.term.name
+    }
+    if (assignment.isActive && (!assignment.academicYearId || !assignment.termId)) {
+      throw new HttpError(409, session.message || "Active teacher assignments require an academic year and term")
     }
     await assertAssignmentScope(connection, schoolId, assignment)
     await assertNoDuplicateActiveAssignment(connection, schoolId, assignment, assignmentId)

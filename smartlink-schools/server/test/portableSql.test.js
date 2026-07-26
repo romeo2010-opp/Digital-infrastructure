@@ -86,7 +86,31 @@ test("lesson-log timetable correction is idempotent and targets the school timet
   const connection = { async query(sql) { calls.push(sql); return [[], []] } }
   const result = await applyPortableSql(connection, source, { dialect: "mysql" })
   assert.equal(result.applied, 3)
+  assert.ok(calls.some((sql) => /information_schema\.key_column_usage/.test(sql)))
+  assert.ok(calls.some((sql) => /referenced_table_name='exam_timetable_entries'/.test(sql)))
   assert.ok(calls.some((sql) => /DROP FOREIGN KEY fk_lesson_logs_timetable/.test(sql)))
   assert.ok(calls.some((sql) => /REFERENCES timetable_entries\(id\)/.test(sql)))
   assert.ok(calls.every((sql) => !/REFERENCES exam_timetable_entries\(id\)/.test(sql)))
+})
+
+test("legacy teacher assignments are backfilled only into a deterministic session", async () => {
+  const source = await readFile(new URL("../database/065_teacher_assignment_session_backfill.sql", import.meta.url), "utf8")
+  const calls = []
+  const connection = { async query(sql) { calls.push(sql); return [[], []] } }
+  const result = await applyPortableSql(connection, source, { dialect: "mysql" })
+  assert.equal(result.applied, 3)
+  assert.equal(calls.length, 3)
+  assert.ok(calls.some((sql) => /JOIN terms term[\s\S]*term\.id=assignment\.term_id/.test(sql)))
+  const labelSession = calls.find((sql) => /resolved_session/.test(sql))
+  assert.ok(labelSession)
+  assert.match(labelSession, /HAVING COUNT\(DISTINCT academic_year\.id\)=1/)
+  assert.match(labelSession, /COUNT\(DISTINCT term\.id\)=1/)
+  const activeSession = calls.find((sql) => /active_session/.test(sql))
+  assert.ok(activeSession)
+  assert.match(activeSession, /HAVING COUNT\(DISTINCT id\)=1/)
+  assert.match(activeSession, /HAVING COUNT\(DISTINCT term\.id\)=1/)
+  assert.match(activeSession, /assignment\.academic_year_id IS NULL/)
+  assert.match(activeSession, /assignment\.term_id IS NULL/)
+  assert.match(activeSession, /TRIM\(COALESCE\(assignment\.academic_year,''\)\)=''/)
+  assert.match(activeSession, /TRIM\(COALESCE\(assignment\.term,''\)\)=''/)
 })

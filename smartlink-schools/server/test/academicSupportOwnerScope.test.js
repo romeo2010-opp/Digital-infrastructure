@@ -12,11 +12,12 @@ function ownerDb({ user, assignments = [], primaryClassTeacherId = null } = {}) 
           && allowed.includes(user.role) && user.is_active === 1 && user.employment_status === "active" ? user : null].filter(Boolean)]
       }
       if (/ FROM teacher_class_subject_assignments /i.test(` ${sql} `)) {
-        const [schoolId, teacherId, classId, subjectPresent, subjectId, yearPresent, yearId, termPresent, termId] = params.map((value) => value === null ? null : Number(value))
+        const [schoolId, teacherId, classId, subjectPresent, subjectId, yearId, termId] = params.map((value) => value === null ? null : Number(value))
         return [assignments.filter((row) => row.school_id === schoolId && row.teacher_id === teacherId && row.class_id === classId && row.is_active === 1
           && ((row.role === "subject_teacher" && subjectPresent !== null && row.subject_id === subjectId) || row.role === "class_teacher")
-          && (row.academic_year_id === null || yearPresent === null || row.academic_year_id === yearId)
-          && (row.term_id === null || termPresent === null || row.term_id === termId))]
+          && yearId !== null && termId !== null
+          && row.academic_year_id === yearId
+          && row.term_id === termId)]
       }
       if (/ FROM classes /i.test(` ${sql} `)) {
         return [primaryClassTeacherId === Number(params[2]) ? [{ id: Number(params[1]) }] : []]
@@ -43,6 +44,14 @@ test("ordinary teacher owners require the case class-subject or class-teacher re
   assert.equal((await validateSupportCaseOwner(ownerDb({ user: teacher, assignments: [assignment] }), 1, record, 4)).id, 4)
   await assert.rejects(
     validateSupportCaseOwner(ownerDb({ user: teacher, assignments: [{ ...assignment, subject_id: 11 }] }), 1, record, 4),
+    /not assigned to this learner-support class and subject/i,
+  )
+  await assert.rejects(
+    validateSupportCaseOwner(ownerDb({ user: teacher, assignments: [{ ...assignment, academic_year_id: null, term_id: null }] }), 1, record, 4),
+    /not assigned to this learner-support class and subject/i,
+  )
+  await assert.rejects(
+    validateSupportCaseOwner(ownerDb({ user: teacher, assignments: [{ ...assignment, academic_year_id: null, term_id: null }] }), 1, { ...record, academic_year_id: null, current_term_id: null }, 4),
     /not assigned to this learner-support class and subject/i,
   )
 })

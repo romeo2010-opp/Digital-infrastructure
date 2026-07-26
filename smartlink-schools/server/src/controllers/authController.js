@@ -146,18 +146,16 @@ async function decorateSessionUser(user) {
 
   if (user.role !== "teacher") return baseUser
   const sessionClause = session.setupRequired
-    ? ""
-    : " AND (a.academic_year_id = ? OR a.academic_year_id IS NULL) AND (a.term_id = ? OR a.term_id IS NULL)"
+    ? " AND 1 = 0"
+    : " AND a.academic_year_id = ? AND a.term_id = ?"
   const sessionParams = session.setupRequired ? [] : [session.academicYearId, session.termId]
   const [classes] = await pool.query(
-    `SELECT id, name FROM classes WHERE school_id = ? AND teacher_user_id = ?
-     UNION
-     SELECT c.id, c.name
+    `SELECT DISTINCT c.id, c.name
      FROM teacher_class_subject_assignments a
      JOIN classes c ON c.id = a.class_id AND c.school_id = a.school_id
      WHERE a.school_id = ? AND a.teacher_id = ? AND a.is_active = 1${sessionClause}
      ORDER BY name`,
-    [user.schoolId, user.id, user.schoolId, user.id, ...sessionParams],
+    [user.schoolId, user.id, ...sessionParams],
   )
   return {
     ...baseUser,

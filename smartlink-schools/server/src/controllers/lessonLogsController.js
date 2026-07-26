@@ -232,17 +232,25 @@ async function assertStudentsBelongToClass(connection, schoolId, scope, studentR
 }
 
 async function assertLessonLogEntityScope(connection, schoolId, scope) {
-  const [[validScope]] = await connection.query(`SELECT class.id
-    FROM classes class
-    JOIN subjects subject ON subject.school_id=class.school_id AND subject.id=?
-    JOIN users teacher ON teacher.school_id=class.school_id AND teacher.id=?
-      AND teacher.role IN ('teacher','headteacher') AND teacher.is_active=1 AND teacher.employment_status='active'
-    JOIN academic_years academic_year ON academic_year.school_id=class.school_id AND academic_year.id=?
-    JOIN terms term ON term.school_id=class.school_id AND term.id=? AND term.academic_year_id=academic_year.id
-    WHERE class.school_id=? AND class.id=? LIMIT 1`, [scope.subject_id, scope.teacher_id,
+  const [[validScope]] = await connection.query(`SELECT class_record.id
+    FROM classes class_record
+    JOIN subjects subject_record ON subject_record.school_id=class_record.school_id AND subject_record.id=?
+    JOIN users teacher_record ON teacher_record.school_id=class_record.school_id AND teacher_record.id=?
+      AND teacher_record.role IN ('teacher','headteacher') AND teacher_record.is_active=1 AND teacher_record.employment_status='active'
+    JOIN academic_years academic_year_record ON academic_year_record.school_id=class_record.school_id AND academic_year_record.id=?
+    JOIN terms term_record ON term_record.school_id=class_record.school_id AND term_record.id=? AND term_record.academic_year_id=academic_year_record.id
+    WHERE class_record.school_id=? AND class_record.id=? LIMIT 1`, [scope.subject_id, scope.teacher_id,
     scope.academic_year_id, scope.term_id, schoolId, scope.class_id])
   if (!validScope) throw new HttpError(400, "The lesson teacher, class, subject or academic session does not belong to this school.")
   if (!scope.timetable_entry_id) return
+  const [[constraint]] = await connection.query(`SELECT REFERENCED_TABLE_NAME referenced_table
+    FROM information_schema.key_column_usage
+    WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='teacher_lesson_logs'
+      AND COLUMN_NAME='timetable_entry_id' AND REFERENCED_TABLE_NAME IS NOT NULL LIMIT 1`)
+  if (String(constraint?.referenced_table || "").toLowerCase() !== "timetable_entries") {
+    scope.timetable_entry_id = null
+    return
+  }
   const [[period]] = await connection.query(`SELECT entry.id FROM timetable_entries entry
     JOIN timetable_versions version ON version.id=entry.timetable_version_id
     JOIN timetables timetable ON timetable.id=version.timetable_id AND timetable.school_id=?

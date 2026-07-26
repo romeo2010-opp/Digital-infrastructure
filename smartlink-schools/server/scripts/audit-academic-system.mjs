@@ -193,6 +193,55 @@ try {
   )
 
   const integrityChecks = []
+  if (hasTables("teacher_class_subject_assignments", "academic_years", "terms")) {
+    integrityChecks.push(await safeCheck(
+      "active teacher assignments without one valid explicit academic session",
+      `SELECT assignment.id assignment_id,assignment.school_id,assignment.teacher_id,
+              assignment.class_id,assignment.subject_id,assignment.academic_year_id,assignment.term_id,
+              academic_year.school_id academic_year_school_id,
+              scoped_term.school_id term_school_id,scoped_term.academic_year_id term_academic_year_id
+         FROM teacher_class_subject_assignments assignment
+         LEFT JOIN academic_years academic_year ON academic_year.id=assignment.academic_year_id
+         LEFT JOIN terms scoped_term ON scoped_term.id=assignment.term_id
+        WHERE assignment.is_active=1 AND (
+              assignment.academic_year_id IS NULL OR assignment.term_id IS NULL
+              OR academic_year.id IS NULL OR academic_year.school_id<>assignment.school_id
+              OR scoped_term.id IS NULL OR scoped_term.school_id<>assignment.school_id
+              OR scoped_term.academic_year_id<>assignment.academic_year_id
+        )
+        ORDER BY assignment.id`,
+    ))
+  }
+  if (hasTables("teacher_class_subject_assignments", "users", "classes", "subjects")) {
+    integrityChecks.push(await safeCheck(
+      "teacher assignment tenant, role, class, or subject mismatches",
+      `SELECT assignment.id assignment_id,assignment.school_id,assignment.teacher_id,
+              assignment.class_id,assignment.subject_id,assignment.role,
+              teacher.school_id teacher_school_id,teacher.role teacher_role,
+              scoped_class.school_id class_school_id,scoped_subject.school_id subject_school_id
+         FROM teacher_class_subject_assignments assignment
+         LEFT JOIN users teacher ON teacher.id=assignment.teacher_id
+         LEFT JOIN classes scoped_class ON scoped_class.id=assignment.class_id
+         LEFT JOIN subjects scoped_subject ON scoped_subject.id=assignment.subject_id
+        WHERE teacher.id IS NULL OR teacher.school_id<>assignment.school_id OR teacher.role<>'teacher'
+           OR scoped_class.id IS NULL OR scoped_class.school_id<>assignment.school_id
+           OR (assignment.subject_id IS NOT NULL AND (
+                scoped_subject.id IS NULL OR scoped_subject.school_id<>assignment.school_id
+           ))
+           OR (assignment.role='subject_teacher' AND assignment.subject_id IS NULL)
+           OR (assignment.role='class_teacher' AND assignment.subject_id IS NOT NULL)
+        ORDER BY assignment.id`,
+    ))
+    integrityChecks.push(await safeCheck(
+      "duplicate active teacher assignment scopes",
+      `SELECT school_id,class_id,subject_id,academic_year_id,term_id,role,
+              COUNT(*) duplicate_count,GROUP_CONCAT(id ORDER BY id) assignment_ids
+         FROM teacher_class_subject_assignments
+        WHERE is_active=1 AND academic_year_id IS NOT NULL AND term_id IS NOT NULL
+        GROUP BY school_id,class_id,subject_id,academic_year_id,term_id,role
+       HAVING COUNT(*)>1`,
+    ))
+  }
   if (hasTables("question_bank", "subjects", "syllabus_topics")) {
     integrityChecks.push(await safeCheck(
       "question bank topic, subject, or school scope mismatches",
@@ -551,12 +600,10 @@ try {
                     AND assignment.role = 'subject_teacher'
                     AND assignment.is_active = 1
                     AND (intervention.class_id IS NULL OR assignment.class_id = intervention.class_id)
-                    AND (scoped_term.academic_year_id IS NULL
-                         OR assignment.academic_year_id IS NULL
-                         OR assignment.academic_year_id = scoped_term.academic_year_id)
-                    AND (intervention.term_id IS NULL
-                         OR assignment.term_id IS NULL
-                         OR assignment.term_id = intervention.term_id)
+                    AND (intervention.term_id IS NULL OR (
+                         assignment.academic_year_id = scoped_term.academic_year_id
+                         AND assignment.term_id = intervention.term_id
+                    ))
                ))
         ORDER BY intervention.id
         LIMIT 25`,

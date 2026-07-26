@@ -50,13 +50,21 @@ export async function assertAssignmentScope(connection, schoolId, assignment) {
   }
 
   if (assignment.academicYearId) {
-    const [[year]] = await connection.query("SELECT id FROM academic_years WHERE id = ? AND school_id = ? LIMIT 1", [assignment.academicYearId, schoolId])
+    const [[year]] = await connection.query("SELECT id, name FROM academic_years WHERE id = ? AND school_id = ? LIMIT 1", [assignment.academicYearId, schoolId])
     if (!year) throw new HttpError(400, "Select an academic year from this school")
+    assignment.academicYear = String(year.name || assignment.academicYear || "").trim()
   }
 
   if (assignment.termId) {
-    const [[term]] = await connection.query("SELECT id FROM terms WHERE id = ? AND school_id = ? LIMIT 1", [assignment.termId, schoolId])
-    if (!term) throw new HttpError(400, "Select a term from this school")
+    const termParams = [assignment.termId, schoolId]
+    const yearClause = assignment.academicYearId ? " AND academic_year_id = ?" : ""
+    if (assignment.academicYearId) termParams.push(assignment.academicYearId)
+    const [[term]] = await connection.query(
+      `SELECT id, name FROM terms WHERE id = ? AND school_id = ?${yearClause} LIMIT 1`,
+      termParams,
+    )
+    if (!term) throw new HttpError(400, "Select a term that belongs to the selected academic year")
+    assignment.term = String(term.name || assignment.term || "").trim()
   }
 }
 
@@ -69,12 +77,12 @@ export async function assertNoDuplicateActiveAssignment(connection, schoolId, as
        WHERE school_id = ? AND class_id = ? AND role = 'class_teacher'
         AND COALESCE(academic_year_id, 0) = COALESCE(?, 0)
         AND COALESCE(term_id, 0) = COALESCE(?, 0)
-        AND academic_year = ? AND term = ? AND is_active = 1
+        AND is_active = 1
         ${ignoreId ? "AND id <> ?" : ""}
        LIMIT 1`,
       ignoreId
-        ? [schoolId, assignment.classId, assignment.academicYearId, assignment.termId, assignment.academicYear, assignment.term, ignoreId]
-        : [schoolId, assignment.classId, assignment.academicYearId, assignment.termId, assignment.academicYear, assignment.term],
+        ? [schoolId, assignment.classId, assignment.academicYearId, assignment.termId, ignoreId]
+        : [schoolId, assignment.classId, assignment.academicYearId, assignment.termId],
     )
     if (rows.length) throw new HttpError(409, "This class already has an active class teacher for the selected year and term")
     return
@@ -86,12 +94,12 @@ export async function assertNoDuplicateActiveAssignment(connection, schoolId, as
       AND role = 'subject_teacher'
       AND COALESCE(academic_year_id, 0) = COALESCE(?, 0)
       AND COALESCE(term_id, 0) = COALESCE(?, 0)
-      AND academic_year = ? AND term = ? AND is_active = 1
+      AND is_active = 1
       ${ignoreId ? "AND id <> ?" : ""}
      LIMIT 1`,
     ignoreId
-      ? [schoolId, assignment.teacherId, assignment.classId, assignment.subjectId, assignment.academicYearId, assignment.termId, assignment.academicYear, assignment.term, ignoreId]
-      : [schoolId, assignment.teacherId, assignment.classId, assignment.subjectId, assignment.academicYearId, assignment.termId, assignment.academicYear, assignment.term],
+      ? [schoolId, assignment.teacherId, assignment.classId, assignment.subjectId, assignment.academicYearId, assignment.termId, ignoreId]
+      : [schoolId, assignment.teacherId, assignment.classId, assignment.subjectId, assignment.academicYearId, assignment.termId],
   )
   if (exactDuplicates.length) throw new HttpError(409, "This active teacher/class/subject assignment already exists")
 
@@ -101,12 +109,12 @@ export async function assertNoDuplicateActiveAssignment(connection, schoolId, as
       AND role = 'subject_teacher'
       AND COALESCE(academic_year_id, 0) = COALESCE(?, 0)
       AND COALESCE(term_id, 0) = COALESCE(?, 0)
-      AND academic_year = ? AND term = ? AND is_active = 1
+      AND is_active = 1
       ${ignoreId ? "AND id <> ?" : ""}
      LIMIT 1`,
     ignoreId
-      ? [schoolId, assignment.classId, assignment.subjectId, assignment.academicYearId, assignment.termId, assignment.academicYear, assignment.term, ignoreId]
-      : [schoolId, assignment.classId, assignment.subjectId, assignment.academicYearId, assignment.termId, assignment.academicYear, assignment.term],
+      ? [schoolId, assignment.classId, assignment.subjectId, assignment.academicYearId, assignment.termId, ignoreId]
+      : [schoolId, assignment.classId, assignment.subjectId, assignment.academicYearId, assignment.termId],
   )
   if (subjectDuplicates.length) throw new HttpError(409, "This subject already has an active teacher in the selected class, year, and term")
 }

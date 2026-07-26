@@ -305,7 +305,7 @@ function initialsFor(user: any) {
 }
 
 function displayNameFor(user: any) {
-  return user?.fullName || user?.full_name || user?.name || user?.email || 'Mr. Banda'
+  return user?.fullName || user?.full_name || user?.name || user?.email || 'Staff member'
 }
 
 function roleNameFor(user: any) {

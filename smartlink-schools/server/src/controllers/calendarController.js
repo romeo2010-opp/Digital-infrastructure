@@ -279,32 +279,22 @@ function teacherEventCondition(scope) {
 
 async function loadTeacherScope(connection, req, schoolId, academicYearId, termId) {
   if (!isTeacher(req)) return null
-  const params = [schoolId, req.user.id]
-  let sessionClause = ""
-  if (academicYearId) {
-    sessionClause += " AND (academic_year_id = ? OR academic_year_id IS NULL)"
-    params.push(academicYearId)
-  }
-  if (termId) {
-    sessionClause += " AND (term_id = ? OR term_id IS NULL)"
-    params.push(termId)
-  }
+  if (!academicYearId || !termId) return { teacherId: Number(req.user.id), pairs: [], classIds: [] }
+  const params = [schoolId, req.user.id, academicYearId, termId]
   const [pairs] = await connection.query(
     `SELECT class_id, subject_id
      FROM teacher_class_subject_assignments
      WHERE school_id = ? AND teacher_id = ? AND role = 'subject_teacher'
-       AND subject_id IS NOT NULL AND is_active = 1${sessionClause}`,
+       AND subject_id IS NOT NULL AND is_active = 1
+       AND academic_year_id = ? AND term_id = ?`,
     params,
   )
   const [classes] = await connection.query(
-    `SELECT id AS class_id
-     FROM classes
-     WHERE school_id = ? AND teacher_user_id = ?
-     UNION
-     SELECT class_id
+    `SELECT DISTINCT class_id
      FROM teacher_class_subject_assignments
-     WHERE school_id = ? AND teacher_id = ? AND is_active = 1${sessionClause}`,
-    [schoolId, req.user.id, schoolId, req.user.id, ...params.slice(2)],
+     WHERE school_id = ? AND teacher_id = ? AND is_active = 1
+       AND academic_year_id = ? AND term_id = ?`,
+    params,
   )
   return {
     teacherId: Number(req.user.id),
@@ -718,8 +708,16 @@ export async function getSchoolCalendar(req, res) {
   const connection = await pool.getConnection()
   try {
     const activeSession = await getActiveAcademicSession(schoolId, connection)
-    const academicYearId = idValue(req.query.academic_year_id) || activeSession.academicYearId
-    const termId = idValue(req.query.term_id) || activeSession.termId
+    const requestedAcademicYearId = idValue(req.query.academic_year_id)
+    const requestedTermId = idValue(req.query.term_id)
+    if (isTeacher(req) && !activeSession.setupRequired) {
+      if ((requestedAcademicYearId && requestedAcademicYearId !== Number(activeSession.academicYearId))
+        || (requestedTermId && requestedTermId !== Number(activeSession.termId))) {
+        throw new HttpError(403, "Teachers can only view the current academic term calendar")
+      }
+    }
+    const academicYearId = isTeacher(req) ? activeSession.academicYearId : requestedAcademicYearId || activeSession.academicYearId
+    const termId = isTeacher(req) ? activeSession.termId : requestedTermId || activeSession.termId
     const includeArchived = boolValue(req.query.include_archived)
     if (!academicYearId || !termId) {
       const setup = await loadSetupOptions(connection, schoolId, null)
@@ -846,7 +844,7 @@ async function validateSchoolRelations(connection, schoolId, values) {
 export async function createSchoolEvent(req, res) {
   const schoolId = getScopedSchoolId(req)
   const activeSession = await getActiveAcademicSession(schoolId)
-  if (activeSession.setupRequired && (!req.body.academic_year_id || !req.body.term_id)) throw new HttpError(409, activeSession.message)
+  if (activeSession.setupRequired && (isTeacher(req) || (!req.body.academic_year_id || !req.body.term_id))) throw new HttpError(409, activeSession.message)
 
   const connection = await pool.getConnection()
   try {
@@ -861,8 +859,14 @@ export async function createSchoolEvent(req, res) {
     const halfDayClosingTime = classImpact === "HALF_DAY"
       ? normalizeTime(req.body.half_day_closing_time || req.body.halfDayClosingTime || "12:00", "Half-day closing time", false)
       : null
-    const academicYearId = idValue(req.body.academic_year_id) || activeSession.academicYearId
-    const termId = idValue(req.body.term_id) || activeSession.termId
+    const requestedAcademicYearId = idValue(req.body.academic_year_id)
+    const requestedTermId = idValue(req.body.term_id)
+    if (isTeacher(req) && ((requestedAcademicYearId && requestedAcademicYearId !== Number(activeSession.academicYearId))
+      || (requestedTermId && requestedTermId !== Number(activeSession.termId)))) {
+      throw new HttpError(403, "Teachers can only create events in the current academic term")
+    }
+    const academicYearId = isTeacher(req) ? activeSession.academicYearId : requestedAcademicYearId || activeSession.academicYearId
+    const termId = isTeacher(req) ? activeSession.termId : requestedTermId || activeSession.termId
     const classId = idValue(req.body.class_id)
     const subjectId = idValue(req.body.subject_id)
     const teacherId = isTeacher(req) ? Number(req.user.id) : idValue(req.body.teacher_id)
@@ -942,6 +946,18 @@ export async function updateSchoolEvent(req, res) {
     if (isTeacher(req) && Number(event.created_by) !== Number(req.user.id) && Number(event.teacher_id) !== Number(req.user.id)) {
       throw new HttpError(403, "Teachers can only edit events they created or own")
     }
+    if (isTeacher(req)) {
+      const activeSession = await getActiveAcademicSession(schoolId, connection)
+      if (activeSession.setupRequired) throw new HttpError(409, activeSession.message)
+      if (Number(event.academic_year_id) !== Number(activeSession.academicYearId) || Number(event.term_id) !== Number(activeSession.termId)) {
+        throw new HttpError(403, "Teachers can only edit events in the current academic term")
+      }
+      if (event.class_id && event.subject_id) {
+        await assertTeacherCanTeachSubject(req, schoolId, Number(event.class_id), Number(event.subject_id), Number(event.term_id))
+      } else if (event.class_id) {
+        await assertTeacherCanUseClass(req, schoolId, Number(event.class_id))
+      }
+    }
     const patch = {
       title: req.body.title !== undefined ? cleanText(req.body.title) : event.title,
       description: req.body.description !== undefined ? cleanText(req.body.description) || null : event.description,
@@ -984,16 +1000,16 @@ async function resolveTemplateTeacher(connection, req, schoolId, classId, subjec
     await assertTeacherCanTeachSubject(req, schoolId, classId, subjectId, termId)
     return Number(req.user.id)
   }
-  if (requestedTeacherId) return requestedTeacherId
+  const teacherClause = requestedTeacherId ? " AND teacher_id = ?" : ""
+  const params = [schoolId, classId, subjectId, academicYearId, termId, ...(requestedTeacherId ? [requestedTeacherId] : [])]
   const [[assignment]] = await connection.query(
     `SELECT teacher_id
      FROM teacher_class_subject_assignments
      WHERE school_id = ? AND class_id = ? AND subject_id = ? AND role = 'subject_teacher' AND is_active = 1
-       AND (academic_year_id = ? OR academic_year_id IS NULL)
-       AND (term_id = ? OR term_id IS NULL)
-     ORDER BY (academic_year_id = ?) DESC, (term_id = ?) DESC, updated_at DESC, id DESC
+       AND academic_year_id = ? AND term_id = ?${teacherClause}
+     ORDER BY updated_at DESC, id DESC
      LIMIT 1`,
-    [schoolId, classId, subjectId, academicYearId, termId, academicYearId, termId],
+    params,
   )
   if (!assignment) throw new HttpError(400, "No assigned subject teacher was found for this class and subject")
   return Number(assignment.teacher_id)
@@ -1075,7 +1091,7 @@ async function generateInstancesForTemplate(connection, schoolId, templateId) {
 export async function createRecurringAssessmentTemplate(req, res) {
   const schoolId = getScopedSchoolId(req)
   const activeSession = await getActiveAcademicSession(schoolId)
-  if (activeSession.setupRequired && (!req.body.academic_year_id || !req.body.term_id)) throw new HttpError(409, activeSession.message)
+  if (activeSession.setupRequired && (isTeacher(req) || (!req.body.academic_year_id || !req.body.term_id))) throw new HttpError(409, activeSession.message)
 
   const connection = await pool.getConnection()
   try {
@@ -1085,8 +1101,14 @@ export async function createRecurringAssessmentTemplate(req, res) {
     const assessmentType = TEMPLATE_TYPES.has(cleanText(req.body.assessment_type)) ? cleanText(req.body.assessment_type) : "weekly_test"
     const frequency = FREQUENCIES.has(cleanText(req.body.frequency)) ? cleanText(req.body.frequency) : "weekly"
     const status = TEMPLATE_STATUSES.has(cleanText(req.body.status)) ? cleanText(req.body.status) : "active"
-    const academicYearId = idValue(req.body.academic_year_id) || activeSession.academicYearId
-    const termId = idValue(req.body.term_id) || activeSession.termId
+    const requestedAcademicYearId = idValue(req.body.academic_year_id)
+    const requestedTermId = idValue(req.body.term_id)
+    if (isTeacher(req) && ((requestedAcademicYearId && requestedAcademicYearId !== Number(activeSession.academicYearId))
+      || (requestedTermId && requestedTermId !== Number(activeSession.termId)))) {
+      throw new HttpError(403, "Teachers can only create recurring assessments in the current academic term")
+    }
+    const academicYearId = isTeacher(req) ? activeSession.academicYearId : requestedAcademicYearId || activeSession.academicYearId
+    const termId = isTeacher(req) ? activeSession.termId : requestedTermId || activeSession.termId
     const classId = idValue(req.body.class_id)
     const subjectId = idValue(req.body.subject_id)
     if (!classId || !subjectId) throw new HttpError(400, "Class and subject are required")
