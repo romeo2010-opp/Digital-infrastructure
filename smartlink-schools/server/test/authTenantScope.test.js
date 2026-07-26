@@ -3,6 +3,7 @@ import assert from "node:assert/strict"
 import { EventEmitter } from "node:events"
 import { readFile } from "node:fs/promises"
 import { rateLimitLogin, resetLoginRateLimitForTests } from "../src/middleware/loginRateLimit.js"
+import { schoolCodeFromStudentId } from "../src/controllers/authController.js"
 
 function response() {
   const res = new EventEmitter()
@@ -12,7 +13,7 @@ function response() {
   return res
 }
 
-test("student login is scoped by an explicit unique school code", async () => {
+test("student login derives its tenant from the school prefix embedded in the student id", async () => {
   const [controller, client, routes] = await Promise.all([
     readFile(new URL("../src/controllers/authController.js", import.meta.url), "utf8"),
     readFile(new URL("../../client/src/app/components/LoginScreen.tsx", import.meta.url), "utf8"),
@@ -21,14 +22,26 @@ test("student login is scoped by an explicit unique school code", async () => {
   const start = controller.indexOf("async function loginStudent")
   const end = controller.indexOf("function dateOnly", start)
   const login = controller.slice(start, end)
-  assert.match(login, /school_code \|\| req\.body\.schoolCode/)
+  assert.match(login, /schoolCodeFromStudentId\(studentCode\)/)
+  assert.match(login, /embeddedSchoolCode\.toLowerCase\(\) !== suppliedSchoolCode\.toLowerCase\(\)/)
   assert.match(login, /JOIN schools school ON school\.id=s\.school_id AND school\.status='active'/)
   assert.match(login, /LOWER\(school\.code\)=LOWER\(\?\)/)
   assert.match(login, /LOWER\(school\.school_prefix\)=LOWER\(\?\)/)
+  assert.match(login, /const user = schoolCode \? rows\[0\] : rows\.length === 1 \? rows\[0\] : null/)
+  assert.match(login, /LIMIT 2/)
   assert.doesNotMatch(login, /WHERE s\.status = 'active'\s+AND \(s\.student_id/)
-  assert.match(client, /School Code/)
-  assert.match(client, /school_code: schoolCode\.trim\(\)/)
+  assert.doesNotMatch(client, />School Code</)
+  assert.doesNotMatch(client, /school_code: schoolCode\.trim\(\)/)
+  assert.match(client, /placeholder="RIA-2026-0032"/)
   assert.match(routes, /router\.post\("\/login", rateLimitLogin, asyncHandler\(login\)\)/)
+})
+
+test("student id parsing supports generated IDs and rejects unscoped values", () => {
+  assert.equal(schoolCodeFromStudentId("RIA-2026-0032"), "RIA")
+  assert.equal(schoolCodeFromStudentId("ST-MARY-2026-00032"), "ST-MARY")
+  assert.equal(schoolCodeFromStudentId(" ria-2026-0032 "), "ria")
+  assert.equal(schoolCodeFromStudentId("0032"), "")
+  assert.equal(schoolCodeFromStudentId("RIA/2026/0032"), "")
 })
 
 test("login throttling blocks repeated failures and clears after success", () => {

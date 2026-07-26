@@ -164,32 +164,40 @@ async function decorateSessionUser(user) {
   }
 }
 
+export function schoolCodeFromStudentId(value = "") {
+  const studentCode = String(value || "").trim()
+  const match = studentCode.match(/^([A-Za-z0-9]+(?:-[A-Za-z0-9]+)*)-\d{4}-\d+$/)
+  return match ? match[1] : ""
+}
+
 async function loginStudent(req) {
-  const schoolCode = String(req.body.school_code || req.body.schoolCode || req.body.school_prefix || req.body.schoolPrefix || "").trim()
   const studentCode = String(
     req.body.student_code || req.body.studentCode || req.body.admission_no || req.body.admissionNo || req.body.email || "",
   ).trim()
+  const embeddedSchoolCode = schoolCodeFromStudentId(studentCode)
+  const suppliedSchoolCode = String(req.body.school_code || req.body.schoolCode || req.body.school_prefix || req.body.schoolPrefix || "").trim()
+  const schoolCode = embeddedSchoolCode || suppliedSchoolCode
   const password = String(req.body.password || "")
-  if (!schoolCode || !studentCode || !password) throw new HttpError(401, "Invalid credentials")
+  if (embeddedSchoolCode && suppliedSchoolCode && embeddedSchoolCode.toLowerCase() !== suppliedSchoolCode.toLowerCase()) {
+    throw new HttpError(401, "Invalid credentials")
+  }
+  if (!studentCode || !password) throw new HttpError(401, "Invalid credentials")
 
   const [rows] = await pool.query(
     `SELECT s.id, s.school_id, 'student' AS role, NULL AS email,
       CONCAT(s.first_name, ' ', s.last_name) AS full_name, 0 AS must_change_password,
       s.id AS student_db_id, COALESCE(s.student_id, s.admission_no) AS student_code,
-      s.admission_no, s.date_of_birth, COALESCE(se.class_id, s.class_id) AS class_id, c.name AS class_name
+      s.admission_no, s.date_of_birth, s.class_id, NULL AS class_name
      FROM students s
      JOIN schools school ON school.id=s.school_id AND school.status='active'
-     LEFT JOIN student_enrollments se ON se.student_id = s.id AND se.school_id = s.school_id
-      AND se.enrollment_status = 'active'
-     LEFT JOIN classes c ON c.id = COALESCE(se.class_id, s.class_id) AND c.school_id = s.school_id
      WHERE s.status = 'active'
-       AND (LOWER(school.code)=LOWER(?) OR LOWER(school.school_prefix)=LOWER(?))
+       AND (?='' OR LOWER(school.code)=LOWER(?) OR LOWER(school.school_prefix)=LOWER(?))
        AND (s.student_id = ? OR s.admission_no = ?)
-     ORDER BY se.created_at DESC, se.id DESC
-     LIMIT 1`,
-    [schoolCode, schoolCode, studentCode, studentCode],
+     ORDER BY s.id
+     LIMIT 2`,
+    [schoolCode, schoolCode, schoolCode, studentCode, studentCode],
   )
-  const user = rows[0]
+  const user = schoolCode ? rows[0] : rows.length === 1 ? rows[0] : null
   if (!user || !studentDatePasswordCandidates(user.date_of_birth).has(password.trim())) {
     throw new HttpError(401, "Invalid credentials")
   }
